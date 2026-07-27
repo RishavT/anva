@@ -201,6 +201,10 @@ services:
       ANVA_OBJECT_STORAGE_BUCKET: anva-test
       ANVA_OBJECT_STORAGE_ACCESS_KEY: anva-test
       ANVA_OBJECT_STORAGE_SECRET_KEY: anva-test-only
+      COVERAGE_FILE: /tmp/anva-coverage
+      MYPY_CACHE_DIR: /tmp/anva-mypy-cache
+      PYTEST_ADDOPTS: "-o cache_dir=/tmp/anva-pytest-cache"
+      RUFF_CACHE_DIR: /tmp/anva-ruff-cache
     depends_on:
       test-postgres:
         condition: service_healthy

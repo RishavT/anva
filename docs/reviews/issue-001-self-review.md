@@ -77,6 +77,17 @@ Command results and acceptance mappings are recorded here and in the pull reques
 8. Supply-chain wording overstated pinning. The threat model now explicitly records
    remaining image and CI-action digest pinning work.
 
+## Pull-request review follow-up
+
+1. Compose test tooling initially wrote caches under the bind-mounted checkout while using
+   a configurable numeric UID. Hosted CI checkouts can have a different owner. Ruff, mypy,
+   pytest, and coverage now write only to container-local `/tmp` paths; the same checks pass
+   as an unrelated non-root UID with the checkout mounted read-only.
+2. The ADR template and accepted ADRs initially combined security and privacy and omitted
+   explicit operations and revisit criteria. Every ADR now uses the full v3 section
+   contract: Context, Decision, Alternatives considered, Consequences, Security impact,
+   Privacy impact, Operational impact, and Revisit conditions.
+
 ## Known limitations
 
 - MCP protocol/tool schemas, tenant identity, authorization, knowledge/provenance models,

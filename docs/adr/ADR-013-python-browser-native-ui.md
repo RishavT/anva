@@ -19,13 +19,6 @@ JavaScript modules or focused browser libraries may be introduced only through a
 when a concrete interaction requires them. No server or developer workflow may require a
 host JavaScript runtime.
 
-## Consequences
-
-- A fresh clone requires only Docker and Compose.
-- UI delivery remains simple, cacheable, and accessible.
-- Complex canvas behavior will require a deliberate architecture decision later.
-- Browser support must target standards implemented by the supported evergreen browsers.
-
 ## Alternatives considered
 
 - Separate single-page application: deferred because the foundation has no validated canvas
@@ -33,8 +26,35 @@ host JavaScript runtime.
 - Go backend: not selected because Django's application, ORM, migrations, admin primitives,
   and Python model ecosystem better fit the approved implementation plan.
 
-## Security and privacy
+## Consequences
+
+- A fresh clone requires only Docker and Compose.
+- UI delivery remains simple, cacheable, and accessible.
+- Complex canvas behavior will require a deliberate architecture decision later.
+- Browser support must target standards implemented by the supported evergreen browsers.
+
+## Security impact
 
 Removing a frontend supply chain reduces foundation attack surface. Server-side
 authorization remains mandatory; hidden or absent controls must never be treated as
 authorization.
+
+## Privacy impact
+
+Server-rendered pages and browser scripts must receive only data the current principal may
+access. Templates must not serialize broader organization context into markup for
+client-side filtering, and future canvas telemetry must be documented and minimized.
+
+## Operational impact
+
+The image runs Django `collectstatic`; WhiteNoise serves fingerprinted assets without a
+separate frontend runtime. UI changes use the Python lock/build path and are verified by
+Compose smoke and static-delivery checks. Browser support and accessibility remain release
+criteria.
+
+## Revisit conditions
+
+Revisit when measured canvas interaction, rendering performance, offline behavior, or
+accessibility requirements cannot be met with browser-native code. Any package manager,
+bundler, or client framework requires a replacement ADR with supply-chain and deployment
+impact.

@@ -22,13 +22,6 @@ The foundation may establish API, background worker, MCP, and CLI process bounda
 it must not introduce a coding-agent runtime, general workflow engine, graph database,
 customer-code sandbox, or a claim that code is production-ready without stored evidence.
 
-## Consequences
-
-- Agent execution remains the customer's choice.
-- Trustworthy knowledge, authorization, provenance, and evidence remain Anva's core.
-- The MCP process exists before its protocol so deployment topology can stabilize, but its
-  protocol route explicitly reports that it is not implemented.
-
 ## Alternatives considered
 
 - Hosted coding-agent harness: rejected because it expands scope and competes with developer
@@ -36,7 +29,33 @@ customer-code sandbox, or a claim that code is production-ready without stored e
 - General orchestration platform: rejected because it weakens the organizational-context
   focus.
 
-## Security and privacy
+## Consequences
+
+- Agent execution remains the customer's choice.
+- Trustworthy knowledge, authorization, provenance, and evidence remain Anva's core.
+- The MCP process exists before its protocol so deployment topology can stabilize, but its
+  protocol route explicitly reports that it is not implemented.
+
+## Security impact
 
 The boundary avoids executing customer code. Later knowledge and assurance features must
-enforce tenant scope in domain operations and preserve provenance, retention, and deletion.
+enforce tenant scope inside domain operations. Introducing customer-code execution would
+create a new trust boundary and requires a separate sandbox decision.
+
+## Privacy impact
+
+No customer content is ingested by this foundation. Later knowledge features must minimize
+content sent to external systems, preserve provenance and access scope, and implement
+tenant-level retention, correction, and deletion.
+
+## Operational impact
+
+API, worker, MCP, and CLI processes share one image and dependency lock. Operators must not
+treat process health as evidence that MCP, knowledge, or assurance behavior exists. The MCP
+protocol route remains an explicit `501 Not Implemented` until its milestone is complete.
+
+## Revisit conditions
+
+Revisit if a validated pilot cannot work through existing coding agents and CI, if Anva is
+asked to execute customer code, or if the product boundary changes to hosted orchestration.
+Any change requires a new ADR and threat model before implementation.
