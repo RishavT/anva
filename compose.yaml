@@ -1,0 +1,212 @@
+name: anva
+
+x-app-environment: &app-environment
+  ANVA_ENV: ${ANVA_ENV:-development}
+  ANVA_DEBUG: ${ANVA_DEBUG:-true}
+  ANVA_SECRET_KEY: ${ANVA_SECRET_KEY:-local-only-change-me}
+  ANVA_ALLOWED_HOSTS: ${ANVA_ALLOWED_HOSTS:-localhost,127.0.0.1,api,mcp}
+  ANVA_DATABASE_URL: ${ANVA_DATABASE_URL:-postgresql://anva:anva-local-only@postgres:5432/anva}
+  ANVA_OBJECT_STORAGE_ENDPOINT: ${ANVA_OBJECT_STORAGE_ENDPOINT:-http://minio:9000}
+  ANVA_OBJECT_STORAGE_BUCKET: ${ANVA_OBJECT_STORAGE_BUCKET:-anva}
+  ANVA_OBJECT_STORAGE_ACCESS_KEY: ${ANVA_OBJECT_STORAGE_ACCESS_KEY:-anva-local}
+  ANVA_OBJECT_STORAGE_SECRET_KEY: ${ANVA_OBJECT_STORAGE_SECRET_KEY:-anva-local-only}
+  ANVA_LOG_LEVEL: ${ANVA_LOG_LEVEL:-INFO}
+
+x-app-dependencies: &app-dependencies
+  postgres:
+    condition: service_healthy
+  minio:
+    condition: service_healthy
+  minio-init:
+    condition: service_completed_successfully
+  migrate:
+    condition: service_completed_successfully
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ${ANVA_POSTGRES_DB:-anva}
+      POSTGRES_USER: ${ANVA_POSTGRES_USER:-anva}
+      POSTGRES_PASSWORD: ${ANVA_POSTGRES_PASSWORD:-anva-local-only}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  minio:
+    image: minio/minio:RELEASE.2025-07-23T15-54-02Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${ANVA_MINIO_ROOT_USER:-anva-local}
+      MINIO_ROOT_PASSWORD: ${ANVA_MINIO_ROOT_PASSWORD:-anva-local-only}
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:9000/minio/health/live"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - minio-data:/data
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-07-21T05-28-08Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command:
+      - >
+        mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}";
+        mc mb --ignore-existing "local/$${ANVA_OBJECT_STORAGE_BUCKET}";
+    environment:
+      MINIO_ROOT_USER: ${ANVA_MINIO_ROOT_USER:-anva-local}
+      MINIO_ROOT_PASSWORD: ${ANVA_MINIO_ROOT_PASSWORD:-anva-local-only}
+      ANVA_OBJECT_STORAGE_BUCKET: ${ANVA_OBJECT_STORAGE_BUCKET:-anva}
+    restart: "no"
+
+  migrate:
+    build:
+      context: .
+      target: runtime
+    command: ["python", "-m", "anva.manage", "migrate", "--noinput"]
+    environment: *app-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      target: runtime
+    environment: *app-environment
+    depends_on: *app-dependencies
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready', timeout=2)",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  worker:
+    build:
+      context: .
+      target: runtime
+    command: ["python", "-m", "anva.entrypoints.worker"]
+    environment:
+      <<: *app-environment
+      ANVA_WORKER_POLL_SECONDS: ${ANVA_WORKER_POLL_SECONDS:-5}
+    depends_on: *app-dependencies
+    healthcheck:
+      test: ["CMD", "test", "-f", "/app/run/worker-ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  mcp:
+    build:
+      context: .
+      target: runtime
+    command:
+      [
+        "gunicorn",
+        "anva.entrypoints.mcp:application",
+        "--bind=0.0.0.0:8001",
+        "--access-logfile=-",
+        "--error-logfile=-",
+      ]
+    environment: *app-environment
+    depends_on: *app-dependencies
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8001/health/ready', timeout=2)",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  cli:
+    build:
+      context: .
+      target: runtime
+    profiles: ["tools"]
+    command: ["python", "-m", "anva.entrypoints.cli", "status"]
+    environment: *app-environment
+    depends_on: *app-dependencies
+
+  lock:
+    image: ghcr.io/astral-sh/uv:0.8.13-python3.12-bookworm-slim
+    profiles: ["tools"]
+    working_dir: /workspace
+    command: ["uv", "lock", "--python", "3.12"]
+    volumes:
+      - .:/workspace
+
+  test-postgres:
+    image: pgvector/pgvector:pg16
+    profiles: ["test"]
+    environment:
+      POSTGRES_DB: anva_test
+      POSTGRES_USER: anva_test
+      POSTGRES_PASSWORD: anva-test-only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  test-minio:
+    image: minio/minio:RELEASE.2025-07-23T15-54-02Z
+    profiles: ["test"]
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: anva-test
+      MINIO_ROOT_PASSWORD: anva-test-only
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:9000/minio/health/live"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  test:
+    build:
+      context: .
+      target: test
+    profiles: ["test"]
+    working_dir: /workspace
+    user: "${ANVA_HOST_UID:-1000}:${ANVA_HOST_GID:-1000}"
+    volumes:
+      - .:/workspace
+    environment:
+      ANVA_ENV: test
+      ANVA_DEBUG: "false"
+      ANVA_SECRET_KEY: test-only-not-a-secret
+      ANVA_ALLOWED_HOSTS: testserver,localhost
+      ANVA_DATABASE_URL: postgresql://anva_test:anva-test-only@test-postgres:5432/anva_test
+      ANVA_OBJECT_STORAGE_ENDPOINT: http://test-minio:9000
+      ANVA_OBJECT_STORAGE_BUCKET: anva-test
+      ANVA_OBJECT_STORAGE_ACCESS_KEY: anva-test
+      ANVA_OBJECT_STORAGE_SECRET_KEY: anva-test-only
+    depends_on:
+      test-postgres:
+        condition: service_healthy
+      test-minio:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  minio-data:
