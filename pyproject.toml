@@ -1,0 +1,93 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "anva"
+version = "0.1.0"
+description = "The connective intelligence behind how organizations build."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "Proprietary" }
+authors = [{ name = "Anva" }]
+dependencies = [
+  "Django==5.2.5",
+  "gunicorn==23.0.0",
+  "psycopg[binary]==3.2.9",
+  "whitenoise==6.9.0",
+]
+
+[dependency-groups]
+dev = [
+  "coverage[toml]==7.10.3",
+  "django-stubs[compatible-mypy]==5.2.2",
+  "mypy==1.17.1",
+  "pytest==8.4.1",
+  "pytest-django==4.11.1",
+  "ruff==0.12.9",
+]
+
+[project.scripts]
+anva = "anva.entrypoints.cli:main"
+anva-mcp = "anva.entrypoints.mcp:main"
+anva-worker = "anva.entrypoints.worker:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/anva"]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "S", "UP", "B", "A", "C4", "DTZ", "PTH", "RUF"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/anva/config/settings.py" = ["S105"]
+"tests/**/*.py" = ["S106"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["mypy_django_plugin.main"]
+mypy_path = "src"
+exclude = ["src/anva/foundation/migrations/"]
+
+[tool.django-stubs]
+django_settings_module = "anva.config.settings"
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "anva.config.settings"
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "--strict-config --strict-markers -ra"
+markers = [
+  "unit: isolated business and service behavior",
+  "integration: persistence and infrastructure boundaries",
+  "contract: externally visible request/response contracts",
+  "smoke: deployable-process smoke checks",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["anva"]
+omit = [
+  "src/anva/config/asgi.py",
+  "src/anva/config/wsgi.py",
+  "src/anva/foundation/migrations/*",
+  "src/anva/manage.py",
+]
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+skip_covered = true

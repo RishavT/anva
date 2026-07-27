@@ -1,0 +1,15 @@
+# Optional host-port mappings. The base topology intentionally publishes no ports so
+# `docker compose up --build -d` is reliable on shared development and CI hosts.
+services:
+  api:
+    ports:
+      - "${ANVA_API_PORT:-18080}:8000"
+
+  mcp:
+    ports:
+      - "${ANVA_MCP_PORT:-18081}:8001"
+
+  minio:
+    ports:
+      - "${ANVA_MINIO_API_PORT:-19000}:9000"
+      - "${ANVA_MINIO_CONSOLE_PORT:-19001}:9001"

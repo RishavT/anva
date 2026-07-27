@@ -1,0 +1,56 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Anva — connective intelligence for how organizations build.">
+    <title>Anva</title>
+    <link rel="stylesheet" href="{% static 'anva/app.css' %}">
+    <script src="{% static 'anva/app.js' %}" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="Anva home">
+        <span class="brand-mark" aria-hidden="true">A</span>
+        <span>Anva</span>
+      </a>
+      <span class="version">Foundation v{{ version }}</span>
+    </header>
+    <main id="main">
+      <section class="hero" aria-labelledby="hero-title">
+        <p class="eyebrow">Connect intent to implementation</p>
+        <h1 id="hero-title">The connective intelligence behind how your organization builds.</h1>
+        <p class="hero-copy">
+          Anva makes the relationships between goals, decisions, systems, requirements, and code
+          available to people and AI.
+        </p>
+        <div class="status-card" aria-labelledby="status-heading">
+          <div>
+            <p class="status-label" id="status-heading">Local installation</p>
+            <p class="status-value" data-health-message>Checking service readiness…</p>
+          </div>
+          <span class="status-dot" data-health-indicator aria-hidden="true"></span>
+          <button class="status-retry" type="button" data-health-retry hidden>
+            Check again
+          </button>
+        </div>
+      </section>
+      <section class="boundary" aria-labelledby="boundary-title">
+        <p class="eyebrow">Foundation boundary</p>
+        <h2 id="boundary-title">Ready for the knowledge layer, without pretending it exists yet.</h2>
+        <ul>
+          <li>Python and Django modular monolith</li>
+          <li>PostgreSQL with pgvector available</li>
+          <li>S3-compatible object storage</li>
+          <li>Independent API, worker, MCP, and CLI processes</li>
+        </ul>
+      </section>
+    </main>
+    <footer>
+      <span>Anva</span>
+      <span>Connection · continuity · relationship</span>
+    </footer>
+  </body>
+</html>
