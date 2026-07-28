@@ -4,6 +4,10 @@ x-app-environment: &app-environment
   ANVA_ENV: ${ANVA_ENV:-development}
   ANVA_DEBUG: ${ANVA_DEBUG:-true}
   ANVA_SECRET_KEY: ${ANVA_SECRET_KEY:-local-only-change-me}
+  ANVA_TOKEN_PEPPER: ${ANVA_TOKEN_PEPPER:-local-only-token-pepper}
+  ANVA_TOKEN_ISSUER: ${ANVA_TOKEN_ISSUER:-anva-local}
+  ANVA_TOKEN_AUDIENCE: ${ANVA_TOKEN_AUDIENCE:-anva-api}
+  ANVA_BOOTSTRAP_SECRET: ${ANVA_BOOTSTRAP_SECRET:-anva-local-bootstrap}
   ANVA_ALLOWED_HOSTS: ${ANVA_ALLOWED_HOSTS:-localhost,127.0.0.1,api,mcp}
   ANVA_DATABASE_URL: ${ANVA_DATABASE_URL:-postgresql://anva:anva-local-only@postgres:5432/anva}
   ANVA_OBJECT_STORAGE_ENDPOINT: ${ANVA_OBJECT_STORAGE_ENDPOINT:-http://minio:9000}
@@ -195,6 +199,10 @@ services:
       ANVA_ENV: test
       ANVA_DEBUG: "false"
       ANVA_SECRET_KEY: test-only-not-a-secret
+      ANVA_TOKEN_PEPPER: test-only-token-pepper
+      ANVA_TOKEN_ISSUER: anva-test
+      ANVA_TOKEN_AUDIENCE: anva-test-api
+      ANVA_BOOTSTRAP_SECRET: test-only-bootstrap-secret
       ANVA_ALLOWED_HOSTS: testserver,localhost
       ANVA_DATABASE_URL: postgresql://anva_test:anva-test-only@test-postgres:5432/anva_test
       ANVA_OBJECT_STORAGE_ENDPOINT: http://test-minio:9000

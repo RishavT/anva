@@ -51,6 +51,16 @@ DEBUG = env_bool("ANVA_DEBUG", default=ENVIRONMENT == "development")
 SECRET_KEY = os.getenv("ANVA_SECRET_KEY", "local-only-change-me")
 if ENVIRONMENT == "production" and SECRET_KEY == "local-only-change-me":
     raise ImproperlyConfigured("ANVA_SECRET_KEY must be changed in production")
+TOKEN_PEPPER = os.getenv("ANVA_TOKEN_PEPPER", SECRET_KEY)
+TOKEN_ISSUER = os.getenv("ANVA_TOKEN_ISSUER", "anva-local")
+TOKEN_AUDIENCE = os.getenv("ANVA_TOKEN_AUDIENCE", "anva-api")
+BOOTSTRAP_SECRET = os.getenv("ANVA_BOOTSTRAP_SECRET", "anva-local-bootstrap")
+if not all((TOKEN_PEPPER, TOKEN_ISSUER, TOKEN_AUDIENCE, BOOTSTRAP_SECRET)):
+    raise ImproperlyConfigured("Token and bootstrap settings must not be empty")
+if ENVIRONMENT == "production" and TOKEN_PEPPER == SECRET_KEY:
+    raise ImproperlyConfigured("ANVA_TOKEN_PEPPER must be separate in production")
+if ENVIRONMENT == "production" and BOOTSTRAP_SECRET == "anva-local-bootstrap":
+    raise ImproperlyConfigured("ANVA_BOOTSTRAP_SECRET must be changed in production")
 
 ALLOWED_HOSTS = [
     host.strip()
@@ -133,14 +143,21 @@ LOGGING = {
     "disable_existing_loggers": False,
     "formatters": {
         "structured": {
-            "format": (
-                '{"timestamp":"%(asctime)s","level":"%(levelname)s",'
-                '"logger":"%(name)s","message":"%(message)s"}'
-            ),
-            "style": "%",
+            "()": "anva.core.logging.StructuredJsonFormatter",
         }
     },
-    "handlers": {"console": {"class": "logging.StreamHandler", "formatter": "structured"}},
+    "filters": {
+        "redact_secrets": {
+            "()": "anva.core.logging.SecretRedactionFilter",
+        }
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "structured",
+            "filters": ["redact_secrets"],
+        }
+    },
     "root": {
         "handlers": ["console"],
         "level": os.getenv("ANVA_LOG_LEVEL", "INFO").upper(),

@@ -24,7 +24,7 @@ knowledge ingestion exists in this slice.
 | --- | --- | --- |
 | Default credentials used outside local development | Examples label them local-only; production rejects the default Django key | Deployment secret management is a later issue |
 | Secrets leaked through health output | Readiness returns dependency names and sanitized details only | Structured logging policy must be extended with request context |
-| Unauthorized data access | No tenant data or data API exists yet | Domain authorization and tenant-scope tests are mandatory when models arrive |
+| Unauthorized data access | Central tenant/repository/action authorization and pre-retrieval access scopes | See the tenancy and authorization threat model; database RLS is deferred |
 | Supply-chain drift | Python dependencies and core runtime/MinIO tags are version-pinned; CI builds the lock | Pin all image and CI-action digests, including the pgvector major tag, before production |
 | Clickjacking or content sniffing | Django security headers deny framing and MIME sniffing | Add production TLS/HSTS and CSP after deployment topology is selected |
 | Prompt injection | No model call, ingestion, or prompt exists | Treat retrieved content as untrusted when model features are introduced |
@@ -33,9 +33,9 @@ knowledge ingestion exists in this slice.
 
 ## Retention and deletion
 
-The foundation stores only Django migration metadata and operator-created MinIO objects.
-`make reset` deletes local database and object volumes. Tenant-level retention and deletion
-do not yet apply because tenant data models are out of scope.
+The foundation stores tenant identity, authorization, knowledge-state foundations, audit, jobs,
+and operator-created MinIO objects. `make reset` deletes local database and object volumes.
+Production tenant retention and deletion workflows remain out of scope.
 
 ## Verification
 

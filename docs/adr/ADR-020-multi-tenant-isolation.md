@@ -14,8 +14,10 @@ context and corrupt the organizational graph.
 
 Externally addressable records use opaque UUIDs. Every tenant-owned row carries an explicit
 organization foreign key. Mutation services require actor context and reject tenant mismatch.
-PostgreSQL composite foreign keys enforce same-organization links for source syncs and
-assurance artifacts; tenant-scoped uniqueness protects idempotency and content identity.
+PostgreSQL composite foreign keys enforce same-organization links for source syncs, assurance
+artifacts, roles, memberships, teams, access scopes, snapshots, grants, repositories, service
+identities, and credential rotation; a trigger protects the implicit access-scope derivation
+table. Tenant-scoped uniqueness protects idempotency and content identity.
 
 ## Alternatives considered
 

@@ -4,8 +4,39 @@ from __future__ import annotations
 
 import uuid
 
+from anva.core.logging import redact_text
 from anva.core.models import AuditEvent, Organization, OutboxEvent
 from anva.core.services.context import ActorContext
+
+FORBIDDEN_AUDIT_KEYS = frozenset(
+    {
+        "authorization",
+        "credential",
+        "password",
+        "raw_source",
+        "raw_source_content",
+        "secret",
+        "token",
+    }
+)
+
+
+def _validate_audit_value(value: object, *, key: str = "") -> None:
+    normalized_key = key.lower().replace("-", "_")
+    if normalized_key in FORBIDDEN_AUDIT_KEYS or normalized_key.endswith(
+        ("_password", "_secret", "_token")
+    ):
+        raise ValueError("Audit metadata contains a forbidden secret field")
+    if isinstance(value, dict):
+        for child_key, child_value in value.items():
+            _validate_audit_value(child_value, key=str(child_key))
+        return
+    if isinstance(value, list | tuple):
+        for child_value in value:
+            _validate_audit_value(child_value)
+        return
+    if isinstance(value, str) and redact_text(value) != value:
+        raise ValueError("Audit metadata contains credential material")
 
 
 def record_transition(
@@ -20,6 +51,10 @@ def record_transition(
     metadata: dict[str, object] | None = None,
 ) -> None:
     """Persist audit truth and an idempotent external effect together."""
+    safe_metadata = metadata or {}
+    _validate_audit_value(safe_metadata)
+    _validate_audit_value(actor.actor_id)
+    _validate_audit_value(actor.authorization_path)
     event_type = f"{target_type}.transitioned"
     AuditEvent.objects.create(
         organization=organization,
@@ -33,7 +68,7 @@ def record_transition(
         authorization_path=actor.authorization_path,
         request_id=actor.request_id,
         source_ip_hash=actor.source_ip_hash,
-        metadata=metadata or {},
+        metadata=safe_metadata,
     )
     OutboxEvent.objects.create(
         organization=organization,
@@ -44,7 +79,7 @@ def record_transition(
             "from_state": from_state,
             "to_state": to_state,
             "revision": revision,
-            **(metadata or {}),
+            **safe_metadata,
         },
         idempotency_key=(
             f"transition:{target_type}:{target_id}:{revision}:{from_state}:{to_state}"
