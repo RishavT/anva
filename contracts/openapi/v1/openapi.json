@@ -1,0 +1,1247 @@
+{
+  "components": {
+    "parameters": {
+      "CorrelationId": {
+        "in": "header",
+        "name": "X-Correlation-ID",
+        "required": true,
+        "schema": {
+          "format": "uuid",
+          "type": "string"
+        }
+      }
+    },
+    "responses": {
+      "StructuredError": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/structured-error"
+            }
+          }
+        },
+        "description": "Structured error with a stable code."
+      }
+    },
+    "schemas": {
+      "context-packet": {
+        "$defs": {
+          "context_item": {
+            "additionalProperties": false,
+            "properties": {
+              "anva_sources": {
+                "items": {
+                  "$ref": "#/$defs/source_reference"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              "freshness": {
+                "enum": [
+                  "CURRENT",
+                  "STALE",
+                  "UNKNOWN"
+                ],
+                "type": "string"
+              },
+              "is_inferred": {
+                "type": "boolean"
+              },
+              "item_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "REQUIREMENT",
+                  "DECISION",
+                  "POLICY",
+                  "ENTITY",
+                  "RISK",
+                  "ASSUMPTION"
+                ],
+                "type": "string"
+              },
+              "summary": {
+                "maxLength": 10000,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "item_id",
+              "kind",
+              "summary",
+              "is_inferred",
+              "freshness",
+              "anva_sources"
+            ],
+            "type": "object"
+          },
+          "source_reference": {
+            "additionalProperties": false,
+            "properties": {
+              "canonical_url": {
+                "oneOf": [
+                  {
+                    "format": "uri",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "content_hash": {
+                "oneOf": [
+                  {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "locator": {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              "observed_at": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "revision_id": {
+                "oneOf": [
+                  {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "source_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "source_type": {
+                "enum": [
+                  "DOCUMENT",
+                  "CODE",
+                  "POLICY",
+                  "DECISION",
+                  "HUMAN_APPROVAL",
+                  "EVIDENCE"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "source_id",
+              "source_type",
+              "revision_id",
+              "canonical_url",
+              "content_hash",
+              "observed_at",
+              "locator"
+            ],
+            "type": "object"
+          }
+        },
+        "$id": "https://schemas.anva.dev/v1/context-packet.schema.json",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "content_hash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "generated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/$defs/context_item"
+            },
+            "maxItems": 500,
+            "type": "array"
+          },
+          "limitations": {
+            "items": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "packet_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": "1.0",
+            "type": "string"
+          },
+          "work_item_id": {
+            "oneOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "schema_version",
+          "packet_id",
+          "organization_id",
+          "work_item_id",
+          "revision",
+          "generated_at",
+          "content_hash",
+          "items",
+          "limitations"
+        ],
+        "title": "Anva Context Packet",
+        "type": "object"
+      },
+      "evaluator-request": {
+        "$id": "https://schemas.anva.dev/v1/evaluator-request.schema.json",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "commit_sha": {
+            "pattern": "^[a-f0-9]{7,64}$",
+            "type": "string"
+          },
+          "context_packet_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "evidence_manifest_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "policy_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "policy_version": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "request_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "1.0",
+            "type": "string"
+          },
+          "untrusted_change": {
+            "additionalProperties": false,
+            "properties": {
+              "description": {
+                "maxLength": 50000,
+                "type": "string"
+              },
+              "diff_reference": {
+                "format": "uri",
+                "type": "string"
+              },
+              "title": {
+                "maxLength": 1000,
+                "type": "string"
+              }
+            },
+            "required": [
+              "title",
+              "description",
+              "diff_reference"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "schema_version",
+          "request_id",
+          "organization_id",
+          "commit_sha",
+          "policy_id",
+          "policy_version",
+          "context_packet_id",
+          "evidence_manifest_id",
+          "untrusted_change"
+        ],
+        "title": "Anva Evaluator Request",
+        "type": "object"
+      },
+      "evaluator-result": {
+        "$defs": {
+          "finding": {
+            "additionalProperties": false,
+            "properties": {
+              "anva_sources": {
+                "items": {
+                  "$ref": "#/$defs/source_reference"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              "code": {
+                "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+                "type": "string"
+              },
+              "description": {
+                "maxLength": 10000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "evidence_ids": {
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              "finding_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "limitations": {
+                "items": {
+                  "maxLength": 2000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "organization_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "schema_version": {
+                "const": "1.0",
+                "type": "string"
+              },
+              "severity": {
+                "enum": [
+                  "BLOCKING",
+                  "ADVISORY"
+                ],
+                "type": "string"
+              },
+              "title": {
+                "maxLength": 300,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "schema_version",
+              "finding_id",
+              "organization_id",
+              "code",
+              "severity",
+              "title",
+              "description",
+              "anva_sources",
+              "evidence_ids",
+              "limitations"
+            ],
+            "title": "Anva Assurance Finding",
+            "type": "object"
+          },
+          "source_reference": {
+            "additionalProperties": false,
+            "properties": {
+              "canonical_url": {
+                "oneOf": [
+                  {
+                    "format": "uri",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "content_hash": {
+                "oneOf": [
+                  {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "locator": {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              "observed_at": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "revision_id": {
+                "oneOf": [
+                  {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "source_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "source_type": {
+                "enum": [
+                  "DOCUMENT",
+                  "CODE",
+                  "POLICY",
+                  "DECISION",
+                  "HUMAN_APPROVAL",
+                  "EVIDENCE"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "source_id",
+              "source_type",
+              "revision_id",
+              "canonical_url",
+              "content_hash",
+              "observed_at",
+              "locator"
+            ],
+            "type": "object"
+          }
+        },
+        "$id": "https://schemas.anva.dev/v1/evaluator-result.schema.json",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "commit_sha": {
+            "pattern": "^[a-f0-9]{7,64}$",
+            "type": "string"
+          },
+          "evaluated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/$defs/finding"
+            },
+            "maxItems": 500,
+            "type": "array"
+          },
+          "limitations": {
+            "items": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "READY",
+              "NOT_READY",
+              "UNKNOWN"
+            ],
+            "type": "string"
+          },
+          "request_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "1.0",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "request_id",
+          "organization_id",
+          "commit_sha",
+          "outcome",
+          "findings",
+          "limitations",
+          "evaluated_at"
+        ],
+        "title": "Anva Evaluator Result",
+        "type": "object"
+      },
+      "evidence-manifest": {
+        "$defs": {
+          "evidence_entry": {
+            "additionalProperties": false,
+            "properties": {
+              "artifact_uri": {
+                "format": "uri",
+                "type": "string"
+              },
+              "content_hash": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "created_at": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "evidence_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "TEST",
+                  "LINT",
+                  "TYPECHECK",
+                  "BUILD",
+                  "MIGRATION",
+                  "BROWSER",
+                  "MANUAL"
+                ],
+                "type": "string"
+              },
+              "producer": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "PASSED",
+                  "FAILED",
+                  "UNKNOWN"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "evidence_id",
+              "kind",
+              "status",
+              "artifact_uri",
+              "content_hash",
+              "created_at",
+              "producer"
+            ],
+            "type": "object"
+          }
+        },
+        "$id": "https://schemas.anva.dev/v1/evidence-manifest.schema.json",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "commit_sha": {
+            "pattern": "^[a-f0-9]{7,64}$",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/$defs/evidence_entry"
+            },
+            "maxItems": 2000,
+            "type": "array"
+          },
+          "manifest_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "1.0",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "manifest_id",
+          "organization_id",
+          "commit_sha",
+          "created_at",
+          "entries"
+        ],
+        "title": "Anva Evidence Manifest",
+        "type": "object"
+      },
+      "finding": {
+        "$defs": {
+          "source_reference": {
+            "additionalProperties": false,
+            "properties": {
+              "canonical_url": {
+                "oneOf": [
+                  {
+                    "format": "uri",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "content_hash": {
+                "oneOf": [
+                  {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "locator": {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              "observed_at": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "revision_id": {
+                "oneOf": [
+                  {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "source_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "source_type": {
+                "enum": [
+                  "DOCUMENT",
+                  "CODE",
+                  "POLICY",
+                  "DECISION",
+                  "HUMAN_APPROVAL",
+                  "EVIDENCE"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "source_id",
+              "source_type",
+              "revision_id",
+              "canonical_url",
+              "content_hash",
+              "observed_at",
+              "locator"
+            ],
+            "type": "object"
+          }
+        },
+        "$id": "https://schemas.anva.dev/v1/finding.schema.json",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "anva_sources": {
+            "items": {
+              "$ref": "#/$defs/source_reference"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "code": {
+            "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+            "type": "string"
+          },
+          "description": {
+            "maxLength": 10000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "evidence_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "finding_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "limitations": {
+            "items": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "1.0",
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "BLOCKING",
+              "ADVISORY"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 300,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "finding_id",
+          "organization_id",
+          "code",
+          "severity",
+          "title",
+          "description",
+          "anva_sources",
+          "evidence_ids",
+          "limitations"
+        ],
+        "title": "Anva Assurance Finding",
+        "type": "object"
+      },
+      "knowledge-proposal": {
+        "$defs": {
+          "source_reference": {
+            "additionalProperties": false,
+            "properties": {
+              "canonical_url": {
+                "oneOf": [
+                  {
+                    "format": "uri",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "content_hash": {
+                "oneOf": [
+                  {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "locator": {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              "observed_at": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "revision_id": {
+                "oneOf": [
+                  {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "source_id": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "source_type": {
+                "enum": [
+                  "DOCUMENT",
+                  "CODE",
+                  "POLICY",
+                  "DECISION",
+                  "HUMAN_APPROVAL",
+                  "EVIDENCE"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "source_id",
+              "source_type",
+              "revision_id",
+              "canonical_url",
+              "content_hash",
+              "observed_at",
+              "locator"
+            ],
+            "type": "object"
+          }
+        },
+        "$id": "https://schemas.anva.dev/v1/knowledge-proposal.schema.json",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "anva_sources": {
+            "items": {
+              "$ref": "#/$defs/source_reference"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "changes": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "is_inferred": {
+                  "type": "boolean"
+                },
+                "operation": {
+                  "enum": [
+                    "ADD",
+                    "CORRECT",
+                    "SUPERSEDE"
+                  ],
+                  "type": "string"
+                },
+                "predicate": {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "target_id": {
+                  "oneOf": [
+                    {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "value": {}
+              },
+              "required": [
+                "operation",
+                "target_id",
+                "predicate",
+                "value",
+                "is_inferred"
+              ],
+              "type": "object"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "proposal_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "proposal_version": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": "1.0",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "PROPOSED",
+              "VALIDATING",
+              "AWAITING_REVIEW",
+              "ACCEPTED",
+              "REJECTED",
+              "SUPERSEDED",
+              "FAILED"
+            ],
+            "type": "string"
+          },
+          "submitted_by": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "summary": {
+            "maxLength": 5000,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "proposal_id",
+          "organization_id",
+          "proposal_version",
+          "state",
+          "summary",
+          "changes",
+          "anva_sources",
+          "submitted_by",
+          "created_at"
+        ],
+        "title": "Anva Knowledge Proposal",
+        "type": "object"
+      },
+      "policy": {
+        "$defs": {
+          "policy_requirement": {
+            "additionalProperties": false,
+            "properties": {
+              "check_type": {
+                "enum": [
+                  "DETERMINISTIC",
+                  "EVIDENCE",
+                  "MODEL_REVIEW",
+                  "MANUAL_APPROVAL"
+                ],
+                "type": "string"
+              },
+              "code": {
+                "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+                "type": "string"
+              },
+              "description": {
+                "maxLength": 5000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "enforcement": {
+                "enum": [
+                  "BLOCKING",
+                  "ADVISORY"
+                ],
+                "type": "string"
+              },
+              "required_evidence": {
+                "items": {
+                  "enum": [
+                    "TEST",
+                    "LINT",
+                    "TYPECHECK",
+                    "BUILD",
+                    "MIGRATION",
+                    "BROWSER",
+                    "MANUAL"
+                  ],
+                  "type": "string"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              "requirement_id": {
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "requirement_id",
+              "code",
+              "description",
+              "enforcement",
+              "check_type",
+              "required_evidence"
+            ],
+            "type": "object"
+          }
+        },
+        "$id": "https://schemas.anva.dev/v1/policy.schema.json",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "effective_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 300,
+            "minLength": 1,
+            "type": "string"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "policy_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "requirements": {
+            "items": {
+              "$ref": "#/$defs/policy_requirement"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "type": "array"
+          },
+          "schema_version": {
+            "const": "1.0",
+            "type": "string"
+          },
+          "version": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "policy_id",
+          "organization_id",
+          "version",
+          "name",
+          "effective_at",
+          "requirements"
+        ],
+        "title": "Anva Assurance Policy",
+        "type": "object"
+      },
+      "structured-error": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "correlation_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "message": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "correlation_id"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "bearerFormat": "JWT",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "Versioned, authenticated Anva contract skeleton.",
+    "title": "Anva API",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/capabilities": {
+      "get": {
+        "operationId": "getCapabilities",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "api_version": {
+                      "const": "1"
+                    },
+                    "mcp_version": {
+                      "const": "1"
+                    },
+                    "schema_versions": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "api_version",
+                    "schema_versions",
+                    "mcp_version"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Supported external contract versions."
+          }
+        }
+      }
+    },
+    "/evaluator/evaluate": {
+      "post": {
+        "operationId": "evaluateChange",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/evaluator-request"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/evaluator-result"
+                }
+              }
+            },
+            "description": "Stored evaluator result."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/knowledge-proposals": {
+      "post": {
+        "operationId": "submitKnowledgeProposal",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/knowledge-proposal"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Proposal accepted for validation, not approved."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    }
+  },
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "servers": [
+    {
+      "url": "/api/v1"
+    }
+  ]
+}

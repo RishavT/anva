@@ -59,6 +59,8 @@ All application tooling executes inside Compose:
 make format-check
 make lint
 make type
+make migrations-check
+make contracts-check
 make unit
 make integration
 make contract
@@ -88,6 +90,10 @@ make lock
 ```
 
 Review and commit both `pyproject.toml` and `uv.lock`.
+
+Regenerate and verify the checked-in JSON Schema, OpenAPI, MCP, and example contracts with
+`make contracts` and `make contracts-check`. Generated contract files are deterministic and
+must not be edited directly.
 
 ## CLI and common operations
 
@@ -135,6 +141,8 @@ for trust boundaries and production hardening requirements.
 
 ```text
 src/anva/config/       Django settings and API process configuration
+src/anva/contracts/    Canonical versioned JSON/OpenAPI/MCP contract source
+src/anva/core/         Tenant models, state machines, artifacts, jobs, audit, and outbox
 src/anva/foundation/   Service-owned health and deployment invariants
 src/anva/entrypoints/  API-adjacent CLI, worker, and MCP process boundaries
 src/anva/templates/    Server-rendered semantic HTML

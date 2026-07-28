@@ -1,0 +1,1 @@
+"""Core domain database migrations."""

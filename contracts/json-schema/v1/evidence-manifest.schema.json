@@ -1,0 +1,102 @@
+{
+  "$defs": {
+    "evidence_entry": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_uri": {
+          "format": "uri",
+          "type": "string"
+        },
+        "content_hash": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "evidence_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "TEST",
+            "LINT",
+            "TYPECHECK",
+            "BUILD",
+            "MIGRATION",
+            "BROWSER",
+            "MANUAL"
+          ],
+          "type": "string"
+        },
+        "producer": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "PASSED",
+            "FAILED",
+            "UNKNOWN"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "evidence_id",
+        "kind",
+        "status",
+        "artifact_uri",
+        "content_hash",
+        "created_at",
+        "producer"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://schemas.anva.dev/v1/evidence-manifest.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "commit_sha": {
+      "pattern": "^[a-f0-9]{7,64}$",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "entries": {
+      "items": {
+        "$ref": "#/$defs/evidence_entry"
+      },
+      "maxItems": 2000,
+      "type": "array"
+    },
+    "manifest_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "organization_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "manifest_id",
+    "organization_id",
+    "commit_sha",
+    "created_at",
+    "entries"
+  ],
+  "title": "Anva Evidence Manifest",
+  "type": "object"
+}

@@ -1,0 +1,20 @@
+{
+  "effective_at": "2026-07-01T00:00:00Z",
+  "name": "Default repository assurance",
+  "organization_id": "00000000-0000-4000-8000-000000000001",
+  "policy_id": "00000000-0000-4000-8000-000000000502",
+  "requirements": [
+    {
+      "check_type": "EVIDENCE",
+      "code": "TESTS_PASS",
+      "description": "Repository tests must pass.",
+      "enforcement": "BLOCKING",
+      "required_evidence": [
+        "TEST"
+      ],
+      "requirement_id": "00000000-0000-4000-8000-000000000503"
+    }
+  ],
+  "schema_version": "1.0",
+  "version": 3
+}

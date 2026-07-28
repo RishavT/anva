@@ -1,0 +1,15 @@
+{
+  "commit_sha": "dddddddddddddddddddddddddddddddddddddddd",
+  "context_packet_id": "00000000-0000-4000-8000-000000000301",
+  "evidence_manifest_id": "00000000-0000-4000-8000-000000000401",
+  "organization_id": "00000000-0000-4000-8000-000000000001",
+  "policy_id": "00000000-0000-4000-8000-000000000502",
+  "policy_version": 3,
+  "request_id": "00000000-0000-4000-8000-000000000501",
+  "schema_version": "1.0",
+  "untrusted_change": {
+    "description": "Pull request text is untrusted input.",
+    "diff_reference": "https://example.test/pulls/17.diff",
+    "title": "Change checkout retry handling"
+  }
+}
