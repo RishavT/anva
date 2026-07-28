@@ -7,16 +7,22 @@ import uuid
 from pathlib import Path
 
 import pytest
-from django.db import DatabaseError, transaction
+from django.db import DatabaseError, connection, transaction
 from django.utils import timezone
 
-from anva.core.exceptions import ResourceNotFoundError
+from anva.core.exceptions import RequiredPolicyBudgetError, ResourceNotFoundError
 from anva.core.models import (
     AccessScope,
+    AccessScopeMembership,
     AccessScopeSource,
     AssertionConflict,
+    AssertionProvenance,
+    AssertionValidityInterval,
     AuditEvent,
     BackgroundJob,
+    ContextPacketInvalidation,
+    ContextPacketItem,
+    ContextPacketRecord,
     IngestionFailure,
     IngestionStageResult,
     KnowledgeAssertion,
@@ -27,6 +33,7 @@ from anva.core.models import (
     Repository,
     Role,
     SourceChunk,
+    SourceChunkSearchIndex,
     SourceChunkVisibility,
     SourceConnection,
     SourceContentArtifact,
@@ -39,6 +46,12 @@ from anva.core.models import (
 )
 from anva.core.services.authorization import Action
 from anva.core.services.context import ActorContext
+from anva.core.services.context_packets import (
+    PacketBudget,
+    build_context_packet,
+    get_context_packet,
+)
+from anva.core.services.graph import traverse_graph
 from anva.core.services.ingestion import (
     connect_filesystem_source,
     execute_ingestion_job,
@@ -51,6 +64,7 @@ from anva.core.services.retrieval import (
     authorized_source_chunks,
 )
 from anva.core.services.scopes import revoke_source_connection
+from anva.core.services.search import search_chunks
 from anva.ingestion.errors import IngestionError
 from anva.ingestion.filesystem import FilesystemConnector
 from anva.ingestion.limits import IngestionLimits
@@ -142,6 +156,361 @@ def _execute_requested(actor: ActorContext, source: SourceConnection) -> SyncRun
         now=timezone.now(),
     )
     return completed_run
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_ingestion_builds_versioned_indexes_and_hybrid_search_is_reproducible(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "policy.json").write_text(
+        json.dumps(
+            {
+                "policy": "deployments require two reviewers",
+                "service": "payments",
+            }
+        )
+    )
+    actor, source = _source_setup(tmp_path, monkeypatch, slug="retrieval-index")
+    _execute_requested(actor, source)
+    repository_id = source.repository_id
+    assert repository_id is not None
+
+    chunks = SourceChunk.objects.filter(organization=source.organization)
+    indexes = SourceChunkSearchIndex.objects.filter(organization=source.organization)
+    assert indexes.count() == chunks.count() == 1
+    assert indexes.get().indexed_text_hash == chunks.get().content_hash
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT extname FROM pg_extension WHERE extname IN ('pg_trgm', 'vector') "
+            "ORDER BY extname"
+        )
+        assert [row[0] for row in cursor.fetchall()] == ["pg_trgm", "vector"]
+        cursor.execute(
+            "SELECT indexname FROM pg_indexes "
+            "WHERE indexname IN ('core_chunk_search_fts_gin', "
+            "'core_chunk_embedding_hnsw') ORDER BY indexname"
+        )
+        assert [row[0] for row in cursor.fetchall()] == [
+            "core_chunk_embedding_hnsw",
+            "core_chunk_search_fts_gin",
+        ]
+    with pytest.raises(DatabaseError), transaction.atomic():
+        indexes.update(index_version="rewritten")
+
+    first = search_chunks(
+        actor=actor,
+        repository_id=repository_id,
+        query="two reviewers",
+        phase="PREFLIGHT",
+    )
+    second = search_chunks(
+        actor=actor,
+        repository_id=repository_id,
+        query="two reviewers",
+        phase="PREFLIGHT",
+    )
+
+    assert first.as_dict() == second.as_dict()
+    assert len(first.results) == 1
+    assert first.results[0].content_hash == chunks.get().content_hash
+    assert first.results[0].explanation.lexical_rank == 1
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_context_packet_is_budgeted_reconstructable_cached_and_invalidated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "policy.json").write_text(json.dumps({"service": "payments", "owner": "platform"}))
+    actor, source = _source_setup(tmp_path, monkeypatch, slug="context-packet")
+    _execute_requested(actor, source)
+    repository_id = source.repository_id
+    assert repository_id is not None
+    visibility = (
+        SourceChunkVisibility.objects.filter(organization=source.organization)
+        .select_related(
+            "source_location",
+            "source_observation__source_document",
+        )
+        .get()
+    )
+    policy = KnowledgeAssertion.objects.create(
+        organization=source.organization,
+        access_scope=visibility.access_scope,
+        subject_key="policy:deploy-review",
+        predicate="required_policy",
+        value={"rule": "deployments must have two reviewers"},
+        provenance=[{"source_id": str(visibility.source_observation_id)}],
+        review_state=KnowledgeAssertion.ReviewState.HUMAN_CONFIRMED,
+    )
+    AssertionProvenance.objects.create(
+        organization=source.organization,
+        assertion=policy,
+        source_location=visibility.source_location,
+        source_observation=visibility.source_observation,
+        access_snapshot=visibility.access_snapshot,
+        extraction_class=KnowledgeAssertion.ExtractionClass.HUMAN,
+        extraction_method="test",
+        confidence=1.0,
+        observed_at=visibility.observed_at,
+    )
+    AssertionValidityInterval.objects.create(
+        organization=source.organization,
+        assertion=policy,
+        source_document=visibility.source_observation.source_document,
+        source_observation=visibility.source_observation,
+        valid_from=visibility.observed_at,
+        observed_from=visibility.observed_at,
+    )
+    stale_policy = KnowledgeAssertion.objects.create(
+        organization=source.organization,
+        access_scope=visibility.access_scope,
+        subject_key="policy:legacy-deploy-review",
+        predicate="required_policy",
+        value={"rule": "deployments must follow the retired process"},
+        provenance=[{"source_id": str(visibility.source_observation_id)}],
+        staleness_state=KnowledgeAssertion.StalenessState.STALE,
+    )
+    AssertionProvenance.objects.create(
+        organization=source.organization,
+        assertion=stale_policy,
+        source_location=visibility.source_location,
+        source_observation=visibility.source_observation,
+        access_snapshot=visibility.access_snapshot,
+        extraction_class=KnowledgeAssertion.ExtractionClass.HUMAN,
+        extraction_method="test",
+        confidence=1.0,
+        observed_at=visibility.observed_at,
+    )
+    AssertionValidityInterval.objects.create(
+        organization=source.organization,
+        assertion=stale_policy,
+        source_document=visibility.source_observation.source_document,
+        source_observation=visibility.source_observation,
+        valid_from=visibility.observed_at,
+        observed_from=visibility.observed_at,
+    )
+
+    packet, created = build_context_packet(
+        actor=actor,
+        repository_id=repository_id,
+        task="prepare the payments deployment",
+        phase=ContextPacketRecord.Phase.PREFLIGHT,
+    )
+    cached, cached_created = build_context_packet(
+        actor=actor,
+        repository_id=repository_id,
+        task="prepare   the payments deployment",
+        phase=ContextPacketRecord.Phase.PREFLIGHT,
+    )
+
+    assert created is True
+    assert cached_created is False
+    assert cached.id == packet.id
+    assert (
+        get_context_packet(
+            actor=actor,
+            repository_id=repository_id,
+            packet_id=packet.id,
+        )
+        == packet.artifact.payload
+    )
+    first_item = ContextPacketItem.objects.filter(context_packet=packet).order_by("position")[0]
+    assert first_item.kind == ContextPacketItem.Kind.POLICY
+    assert first_item.selection_reason == "Applicable required current policy"
+    assert first_item.contextpacketcitation_set.count() >= 1
+    assert packet.selected_items <= packet.budget_max_items
+    assert packet.selected_bytes <= packet.budget_max_bytes
+    with pytest.raises(DatabaseError), transaction.atomic():
+        ContextPacketItem.objects.filter(id=first_item.id).update(summary="rewritten")
+
+    with pytest.raises(RequiredPolicyBudgetError):
+        build_context_packet(
+            actor=actor,
+            repository_id=repository_id,
+            task="prepare the payments deployment with two reviewers",
+            phase=ContextPacketRecord.Phase.PREFLIGHT,
+            budget=PacketBudget(
+                max_items=1,
+                max_tokens=1,
+                max_bytes=1,
+                max_citations=1,
+            ),
+        )
+
+    _execute_requested(actor, source)
+    assert ContextPacketInvalidation.objects.filter(context_packet=packet).exists()
+    rebuilt, rebuilt_created = build_context_packet(
+        actor=actor,
+        repository_id=repository_id,
+        task="prepare the payments deployment",
+        phase=ContextPacketRecord.Phase.PREFLIGHT,
+    )
+    assert rebuilt_created is True
+    assert rebuilt.id != packet.id
+    assert (
+        get_context_packet(
+            actor=actor,
+            repository_id=repository_id,
+            packet_id=packet.id,
+        )
+        == packet.artifact.payload
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_graph_traversal_is_typed_reproducible_and_bounded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "service.json").write_text(json.dumps({"service": "payments", "owner": "platform"}))
+    actor, source = _source_setup(tmp_path, monkeypatch, slug="retrieval-graph")
+    _execute_requested(actor, source)
+    repository_id = source.repository_id
+    assert repository_id is not None
+    relationship = KnowledgeRelationship.objects.get(organization=source.organization)
+
+    first = traverse_graph(
+        actor=actor,
+        repository_id=repository_id,
+        start_entity_id=relationship.source_entity_id,
+        depth=4,
+        degree=1,
+        edge_limit=1,
+    )
+    second = traverse_graph(
+        actor=actor,
+        repository_id=repository_id,
+        start_entity_id=relationship.source_entity_id,
+        depth=4,
+        degree=1,
+        edge_limit=1,
+    )
+
+    assert first.as_dict() == second.as_dict()
+    assert len(first.edges) == 1
+    assert first.edges[0].source_entity_type
+    assert first.edges[0].target_entity_type
+    assert first.depth_limit <= 4
+    assert first.degree_limit <= 100
+    assert first.edge_limit <= 500
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_hidden_chunks_never_enter_ranking_or_leak_canary_content(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    public_root = tmp_path / "public"
+    hidden_root = tmp_path / "hidden"
+    public_root.mkdir()
+    hidden_root.mkdir()
+    (public_root / "service.json").write_text(
+        json.dumps(
+            {
+                "service": "payments",
+                "owner": "platform",
+                "deployment": "reviewed",
+            }
+        )
+    )
+    (hidden_root / "secret.json").write_text(
+        json.dumps(
+            {
+                "title": "CANARY-HIDDEN-EXECUTIVE-PLAN",
+                "service": "payments",
+                "owner": "CANARY-HIDDEN-OWNER",
+                "deployment": "CANARY-SECRET",
+            }
+        )
+    )
+    monkeypatch.setenv("ANVA_FILESYSTEM_ALLOWED_ROOTS", str(tmp_path))
+    organization = Organization.objects.create(slug="ranking-canary", name="ranking-canary")
+    repository = Repository.objects.create(
+        organization=organization,
+        external_id="filesystem:ranking-canary",
+        name="ranking-canary",
+    )
+    admin = _actor(organization, repository, Role.Code.ORG_ADMIN, "ranking-admin")
+    viewer = _actor(organization, repository, Role.Code.VIEWER, "ranking-viewer")
+    viewer_membership = Membership.objects.get(user_id=viewer.actor_id)
+    public_scope = AccessScope.objects.create(
+        organization=organization,
+        name="viewer-visible",
+        all_repositories=True,
+    )
+    AccessScopeMembership.objects.create(
+        organization=organization,
+        access_scope=public_scope,
+        membership=viewer_membership,
+    )
+    hidden_scope = AccessScope.objects.create(
+        organization=organization,
+        name="viewer-hidden",
+        all_repositories=True,
+    )
+    public_source, _created = connect_filesystem_source(
+        actor=admin,
+        repository_id=repository.id,
+        access_scope_id=public_scope.id,
+        external_key="filesystem:ranking-public",
+        display_name="ranking-public",
+        root=str(public_root),
+    )
+    hidden_source, _created = connect_filesystem_source(
+        actor=admin,
+        repository_id=repository.id,
+        access_scope_id=hidden_scope.id,
+        external_key="filesystem:ranking-hidden",
+        display_name="ranking-hidden",
+        root=str(hidden_root),
+    )
+    _execute_requested(admin, public_source)
+    before = search_chunks(
+        actor=viewer,
+        repository_id=repository.id,
+        query="deployment",
+    )
+    public_relationship = KnowledgeRelationship.objects.get(
+        access_scope=public_scope,
+    )
+    graph_before = traverse_graph(
+        actor=viewer,
+        repository_id=repository.id,
+        start_entity_id=public_relationship.source_entity_id,
+    )
+    _execute_requested(admin, hidden_source)
+    after = search_chunks(
+        actor=viewer,
+        repository_id=repository.id,
+        query="deployment",
+    )
+    canary_query = search_chunks(
+        actor=viewer,
+        repository_id=repository.id,
+        query="CANARY-HIDDEN-EXECUTIVE-PLAN",
+    )
+    graph_after = traverse_graph(
+        actor=viewer,
+        repository_id=repository.id,
+        start_entity_id=public_relationship.source_entity_id,
+    )
+    hidden_hash = SourceChunk.objects.get(
+        parsed_source__source_revision__source_document__source_container__source_connection=(
+            hidden_source
+        )
+    ).content_hash
+
+    assert before.as_dict() == after.as_dict()
+    assert graph_before.as_dict() == graph_after.as_dict()
+    assert all(result.content_hash != hidden_hash for result in canary_query.results)
+    assert "CANARY" not in json.dumps([result.as_dict() for result in canary_query.results])
+    assert "CANARY" not in json.dumps(graph_after.as_dict())
 
 
 @pytest.mark.integration

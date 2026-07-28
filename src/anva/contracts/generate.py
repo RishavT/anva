@@ -83,6 +83,10 @@ def openapi_document() -> dict[str, object]:
         },
         **structured_errors,
     }
+    mcp_responses: dict[str, object] = {
+        "501": {"description": "MCP transport is not implemented."},
+        **structured_errors,
+    }
     return {
         "openapi": "3.1.0",
         "info": {
@@ -336,10 +340,7 @@ def openapi_document() -> dict[str, object]:
                     "operationId": "getMcpContext",
                     "description": "Reserved for issue #9; returns 501 after authorization.",
                     "parameters": [{"$ref": "#/components/parameters/CorrelationId"}],
-                    "responses": {
-                        "501": {"description": "MCP transport is not implemented."},
-                        **structured_errors,
-                    },
+                    "responses": mcp_responses,
                 }
             },
             "/artifacts/{resource_id}": {
