@@ -5,7 +5,7 @@ from __future__ import annotations
 from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import ValidationError
 
-from anva.contracts.catalog import SCHEMA_VERSION, SCHEMAS
+from anva.contracts.catalog import KNOWLEDGE_CHANGE, SCHEMA_VERSION, SCHEMAS
 
 
 class ContractValidationError(ValueError):
@@ -40,4 +40,21 @@ def validate_payload(schema_name: str, payload: object) -> None:
         location = ".".join(str(part) for part in error.absolute_path) or "<root>"
         raise ContractValidationError(
             f"Invalid {schema_name} payload at {location}: {error.message}"
+        ) from error
+
+
+def validate_knowledge_changes(payload: object) -> None:
+    """Validate proposed changes against the canonical KnowledgeProposal item contract."""
+    schema: dict[str, object] = {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 100,
+        "items": KNOWLEDGE_CHANGE,
+    }
+    try:
+        Draft202012Validator(schema, format_checker=FormatChecker()).validate(payload)
+    except ValidationError as error:
+        location = ".".join(str(part) for part in error.absolute_path) or "<root>"
+        raise ContractValidationError(
+            f"Invalid knowledge proposal changes at {location}: {error.message}"
         ) from error

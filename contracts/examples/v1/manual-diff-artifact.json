@@ -1,0 +1,30 @@
+{
+  "base_commit": "cccccccccccccccccccccccccccccccccccccccc",
+  "changed_paths": [
+    "src/checkout.py"
+  ],
+  "chunks": [
+    {
+      "classification": "SOURCE",
+      "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "new_count": 2,
+      "new_start": 10,
+      "old_count": 1,
+      "old_start": 10,
+      "path": "src/checkout.py",
+      "position": 1,
+      "text": "@@ -10,1 +10,2 @@\n old\n+new\n"
+    }
+  ],
+  "diff_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "head_commit": "dddddddddddddddddddddddddddddddddddddddd",
+  "limitations": [
+    "Manual diff provenance was supplied by an authorized operator."
+  ],
+  "organization_id": "00000000-0000-4000-8000-000000000001",
+  "parser_version": "unified-diff-v1",
+  "pull_request_number": 17,
+  "repository_id": "00000000-0000-4000-8000-000000000304",
+  "schema_version": "1.0",
+  "unified_diff": "diff --git a/src/checkout.py b/src/checkout.py\n--- a/src/checkout.py\n+++ b/src/checkout.py\n@@ -10,1 +10,2 @@\n old\n+new\n"
+}

@@ -1,0 +1,31 @@
+{
+  "assurance_run_id": "00000000-0000-4000-8000-000000000601",
+  "finding_fingerprints": [
+    "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  ],
+  "head_commit": "dddddddddddddddddddddddddddddddddddddddd",
+  "html": "<h1>Anva assurance</h1><p>Readiness: READY_WITH_WARNINGS</p>",
+  "limitations": [
+    "No code was executed."
+  ],
+  "markdown": "# Anva assurance\n\nReadiness: READY_WITH_WARNINGS\n",
+  "organization_id": "00000000-0000-4000-8000-000000000001",
+  "pull_request_revision_id": "00000000-0000-4000-8000-000000000602",
+  "readiness": "READY_WITH_WARNINGS",
+  "reason_codes": [
+    "MODEL_CONCERNS"
+  ],
+  "report_id": "00000000-0000-4000-8000-000000000603",
+  "repository_id": "00000000-0000-4000-8000-000000000304",
+  "schema_version": "1.0",
+  "versions": {
+    "context": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "diff": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "evaluator": "manual-evaluator-v1",
+    "evidence": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "policy": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "prompt": "assurance-prompt-v1",
+    "renderer": "assurance-report-v1",
+    "requirements": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }
+}

@@ -694,7 +694,7 @@ def _select(
     return PacketSelection(tuple(selected), tokens, byte_count, citations, limitations)
 
 
-def _seal_actor_scope(
+def seal_actor_scope(
     *,
     actor: ActorContext,
     repository_id: uuid.UUID,
@@ -1117,7 +1117,7 @@ def build_context_packet(
         "limitations": list(selection.limitations),
     }
     item_scopes = {
-        candidate.item_id: _seal_actor_scope(
+        candidate.item_id: seal_actor_scope(
             actor=actor,
             repository_id=repository_id,
             source_scope_ids=set(candidate.contributing_scope_ids),
@@ -1126,7 +1126,7 @@ def build_context_packet(
         for candidate in selection.candidates
     }
     selected_scope_ids = {scope.id for scope in item_scopes.values()} or {visible_scopes[0]}
-    sealed_scope = _seal_actor_scope(
+    sealed_scope = seal_actor_scope(
         actor=actor,
         repository_id=repository_id,
         source_scope_ids=selected_scope_ids,

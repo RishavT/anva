@@ -9,7 +9,10 @@ tenant identity, repository credentials, access scopes, permission-first hybrid 
 bounded graph traversal, immutable context packets, and read-only filesystem ingestion with
 immutable provenance, chunks, and normalized relationship edges. It also provides versioned work
 intent, deterministic additive policy calculation, authority-pinned overrides, and immutable
-commit-bound evidence manifests with criterion evidence/gaps. It intentionally
+commit-bound evidence manifests with criterion evidence/gaps. Independent assurance can ingest a
+bounded manual PR diff without executing it, pin exact policy/context/evidence/evaluator versions,
+run a context-limited manual evaluator queue, validate cited findings, compute server-owned
+readiness, and render immutable Markdown/HTML review reports. It intentionally
 does **not** contain a coding-agent runtime, workflow engine, graph database, or customer-code
 sandbox.
 
@@ -138,6 +141,10 @@ Connect, resync, revoke, failure recovery, and read-only mount setup are documen
 Versioned work import, policy simulation, evidence submission, deterministic replay, and current
 limitations are documented in
 [the intent/policy/evidence runbook](docs/runbooks/intent-policy-evidence.md).
+
+Manual diff ingestion, exact assurance starts, fresh evaluator claim/submit, reports, staleness,
+and post-merge proposal safety are documented in
+[the manual-diff assurance runbook](docs/runbooks/manual-diff-assurance.md).
 
 Permission-safe search, graph, context packet, CLI, evaluation, cache, and limitation details
 are documented in

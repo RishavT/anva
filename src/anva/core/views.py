@@ -21,11 +21,23 @@ from anva.core.exceptions import (
     ResourceNotFoundError,
 )
 from anva.core.models import (
+    AssuranceReport,
+    AssuranceRun,
+    EvaluatorTask,
     EvidenceManifest,
+    Finding,
     Organization,
     Policy,
     WorkItem,
     WorkItemRevision,
+)
+from anva.core.services.assurance import (
+    claim_evaluator_task,
+    decide_finding,
+    ingest_manual_diff,
+    propose_post_merge_knowledge,
+    start_assurance,
+    submit_evaluator_result,
 )
 from anva.core.services.authorization import (
     NOT_FOUND_MESSAGE,
@@ -87,6 +99,7 @@ from anva.core.services.tokens import (
 )
 
 MAX_JSON_BODY_BYTES = 64 * 1024
+MAX_DIFF_JSON_BODY_BYTES = 1_200_000
 
 
 def _correlation_id(request: HttpRequest) -> uuid.UUID:
@@ -133,6 +146,15 @@ def api_errors[**Parameters](
 
 def _json_body(request: HttpRequest) -> dict[str, object]:
     if len(request.body) > MAX_JSON_BODY_BYTES:
+        raise ValueError("Request body is too large")
+    payload = json.loads(request.body or b"{}")
+    if not isinstance(payload, dict):
+        raise ValueError("Request body must be an object")
+    return payload
+
+
+def _diff_json_body(request: HttpRequest) -> dict[str, object]:
+    if len(request.body) > MAX_DIFF_JSON_BODY_BYTES:
         raise ValueError("Request body is too large")
     payload = json.loads(request.body or b"{}")
     if not isinstance(payload, dict):
@@ -907,6 +929,354 @@ def review_knowledge(request: HttpRequest, assertion_id: uuid.UUID) -> JsonRespo
 
 @api_errors
 @require_http_methods(["POST"])
+def manual_diff_ingestion(
+    request: HttpRequest,
+    repository_id: uuid.UUID,
+    pull_request_number: int,
+) -> JsonResponse:
+    payload = _closed_payload(
+        _diff_json_body(request),
+        allowed=frozenset(
+            {
+                "access_scope_id",
+                "base_commit",
+                "head_commit",
+                "title",
+                "description",
+                "target_branch",
+                "is_draft",
+                "state",
+                "unified_diff",
+            }
+        ),
+        required=frozenset(
+            {
+                "access_scope_id",
+                "base_commit",
+                "head_commit",
+                "title",
+                "description",
+                "target_branch",
+                "is_draft",
+                "state",
+                "unified_diff",
+            }
+        ),
+    )
+    is_draft = payload["is_draft"]
+    if not isinstance(is_draft, bool):
+        raise ValueError("is_draft must be boolean")
+    result = ingest_manual_diff(
+        actor=_actor(request),
+        repository_id=repository_id,
+        access_scope_id=uuid.UUID(_string(payload, "access_scope_id")),
+        pull_request_number=pull_request_number,
+        base_commit=_string(payload, "base_commit"),
+        head_commit=_string(payload, "head_commit"),
+        title=_string(payload, "title"),
+        description=cast(str, payload["description"]),
+        target_branch=_string(payload, "target_branch"),
+        is_draft=is_draft,
+        state=_string(payload, "state"),
+        unified_diff=_string(payload, "unified_diff"),
+    )
+    return JsonResponse(
+        {
+            "pull_request_id": str(result.pull_request.id),
+            "pull_request_revision_id": str(result.revision.id),
+            "revision": result.revision.revision,
+            "head_commit": result.revision.head_commit,
+            "diff_artifact_id": str(result.revision.diff_artifact_id),
+            "diff_hash": result.revision.diff_hash,
+            "changed_paths": result.revision.changed_paths,
+            "classification_summary": result.revision.classification_summary,
+            "limitations": result.revision.limitations,
+            "created": result.created,
+        },
+        status=201 if result.created else 200,
+    )
+
+
+@api_errors
+@require_http_methods(["POST"])
+def assurance_start(
+    request: HttpRequest,
+    pull_request_revision_id: uuid.UUID,
+) -> JsonResponse:
+    payload = _closed_payload(
+        _json_body(request),
+        allowed=frozenset(
+            {
+                "policy_version_ids",
+                "reference_time",
+                "deterministic_checks",
+                "work_item_revision_id",
+                "evaluator_version",
+                "prompt_version",
+                "trigger_key",
+            }
+        ),
+        required=frozenset(
+            {
+                "policy_version_ids",
+                "reference_time",
+                "deterministic_checks",
+            }
+        ),
+    )
+    checks = payload["deterministic_checks"]
+    if not isinstance(checks, list) or not all(isinstance(item, dict) for item in checks):
+        raise ValueError("deterministic_checks must be a list of objects")
+    work_revision = _optional_string(payload, "work_item_revision_id")
+    result = start_assurance(
+        actor=_actor(request),
+        pull_request_revision_id=pull_request_revision_id,
+        policy_version_ids=_uuid_list(payload, "policy_version_ids"),
+        reference_time=_date_time(payload, "reference_time"),
+        deterministic_checks=cast(list[dict[str, object]], checks),
+        work_item_revision_id=uuid.UUID(work_revision) if work_revision else None,
+        evaluator_version=cast(
+            str,
+            payload.get("evaluator_version", "manual-evaluator-v1"),
+        ),
+        prompt_version=cast(str, payload.get("prompt_version", "assurance-prompt-v1")),
+        trigger_key=cast(str, payload.get("trigger_key", "")),
+    )
+    return JsonResponse(
+        {
+            "assurance_run_id": str(result.run.id),
+            "evaluator_task_id": str(result.evaluator_task.id),
+            "state": result.run.state,
+            "head_commit": result.run.head_commit,
+            "input_hash": result.run.input_hash,
+            "created": result.created,
+        },
+        status=201 if result.created else 200,
+    )
+
+
+@api_errors
+@require_http_methods(["POST"])
+def evaluator_task_claim(request: HttpRequest, repository_id: uuid.UUID) -> JsonResponse:
+    payload = _closed_payload(
+        _json_body(request),
+        allowed=frozenset({"claimant", "lease_seconds"}),
+        required=frozenset({"claimant"}),
+    )
+    claim = claim_evaluator_task(
+        actor=_actor(request),
+        repository_id=repository_id,
+        claimant=_string(payload, "claimant"),
+        lease_seconds=_optional_integer(payload, "lease_seconds", 900),
+    )
+    if claim is None:
+        return JsonResponse({"status": "EMPTY"}, status=200)
+    return JsonResponse(
+        {
+            "task_id": str(claim.task.id),
+            "attempt": claim.task.attempt_count,
+            "lease_expires_at": claim.task.lease_expires_at.isoformat()
+            if claim.task.lease_expires_at
+            else None,
+            "claim_token": claim.claim_token,
+            "request": claim.request,
+        }
+    )
+
+
+@api_errors
+@require_http_methods(["POST"])
+def evaluator_task_submit(request: HttpRequest, task_id: uuid.UUID) -> JsonResponse:
+    payload = _closed_payload(
+        _diff_json_body(request),
+        allowed=frozenset({"claimant", "claim_token", "result"}),
+        required=frozenset({"claimant", "claim_token", "result"}),
+    )
+    result_payload = payload["result"]
+    if not isinstance(result_payload, dict):
+        raise ValueError("result must be an object")
+    completion = submit_evaluator_result(
+        actor=_actor(request),
+        task_id=task_id,
+        claimant=_string(payload, "claimant"),
+        claim_token=_string(payload, "claim_token"),
+        result=cast(dict[str, object], result_payload),
+    )
+    return JsonResponse(
+        {
+            "assurance_run_id": str(completion.run.id),
+            "state": completion.run.state,
+            "readiness": completion.readiness.status,
+            "reason_codes": completion.readiness.reason_codes,
+            "report_id": str(completion.report.id),
+            "finding_ids": [str(finding.id) for finding in completion.findings],
+            "created": completion.created,
+        },
+        status=201 if completion.created else 200,
+    )
+
+
+def _authorized_assurance_run(request: HttpRequest, run_id: uuid.UUID) -> AssuranceRun:
+    actor = _actor(request)
+    run = get_tenant_record(
+        queryset=AssuranceRun.objects.select_related("repository", "context_packet"),
+        record_id=run_id,
+        organization_id=actor.organization_id,
+    )
+    if run.repository_id is None:
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    task = (
+        EvaluatorTask.objects.select_related("request_artifact")
+        .filter(
+            organization_id=actor.organization_id,
+            assurance_run=run,
+        )
+        .first()
+    )
+    packet = run.context_packet
+    if task is None or packet is None:
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    authorize_action(
+        actor=actor,
+        action=Action.ASSURANCE_EXECUTE,
+        repository_id=run.repository_id,
+        access_scope_id=task.request_artifact.access_scope_id,
+    )
+    authorize_action(
+        actor=actor,
+        action=Action.ASSURANCE_EXECUTE,
+        repository_id=run.repository_id,
+        access_scope_id=packet.access_scope_id,
+    )
+    return run
+
+
+@api_errors
+@require_http_methods(["GET"])
+def assurance_detail(request: HttpRequest, run_id: uuid.UUID) -> JsonResponse:
+    run = _authorized_assurance_run(request, run_id)
+    return JsonResponse(
+        {
+            "id": str(run.id),
+            "state": run.state,
+            "readiness": run.readiness or None,
+            "revision": run.revision,
+            "pull_request_number": run.pull_request_number,
+            "pull_request_revision_id": str(run.pull_request_revision_id),
+            "head_commit": run.head_commit,
+            "input_hash": run.input_hash,
+            "requirements_hash": run.requirements_hash,
+            "policy_bundle_hash": run.policy_bundle_hash,
+            "evidence_bundle_hash": run.evidence_bundle_hash,
+            "evaluator_version": run.evaluator_version,
+            "prompt_version": run.prompt_version,
+            "limitations": run.limitations,
+        }
+    )
+
+
+@api_errors
+@require_http_methods(["GET"])
+def assurance_findings(request: HttpRequest, run_id: uuid.UUID) -> JsonResponse:
+    run = _authorized_assurance_run(request, run_id)
+    findings = Finding.objects.filter(
+        organization_id=run.organization_id,
+        findingoccurrence__assurance_run=run,
+    ).order_by("severity", "fingerprint")
+    return JsonResponse(
+        {
+            "assurance_run_id": str(run.id),
+            "findings": [
+                {
+                    "id": str(finding.id),
+                    "fingerprint": finding.fingerprint,
+                    "code": finding.code,
+                    "kind": finding.kind,
+                    "severity": finding.severity,
+                    "confidence": finding.confidence,
+                    "title": finding.title,
+                    "explanation": finding.explanation,
+                    "path": finding.path,
+                    "line": finding.line,
+                    "citations": finding.citations,
+                    "evidence_ids": finding.evidence_ids,
+                    "criterion_codes": finding.criterion_codes,
+                    "uncertainty": finding.uncertainty,
+                    "suggested_resolution": finding.suggested_resolution,
+                    "state": finding.state,
+                    "revision": finding.revision,
+                }
+                for finding in findings
+            ],
+        }
+    )
+
+
+@api_errors
+@require_http_methods(["GET"])
+def assurance_report(request: HttpRequest, run_id: uuid.UUID) -> JsonResponse:
+    run = _authorized_assurance_run(request, run_id)
+    report = AssuranceReport.objects.filter(
+        organization_id=run.organization_id,
+        assurance_run=run,
+    ).first()
+    if report is None:
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    return JsonResponse(
+        {
+            "id": str(report.id),
+            "assurance_run_id": str(run.id),
+            "readiness": run.readiness,
+            "head_commit": run.head_commit,
+            "renderer_version": report.renderer_version,
+            "content_hash": report.content_hash,
+            "markdown": report.markdown,
+            "html": report.html,
+            "limitations": run.limitations,
+        }
+    )
+
+
+@api_errors
+@require_http_methods(["POST"])
+def assurance_post_merge_proposals(
+    request: HttpRequest,
+    run_id: uuid.UUID,
+) -> JsonResponse:
+    payload = _closed_payload(
+        _json_body(request),
+        allowed=frozenset({"proposals"}),
+        required=frozenset({"proposals"}),
+    )
+    proposals = payload["proposals"]
+    if not isinstance(proposals, list) or not all(isinstance(item, dict) for item in proposals):
+        raise ValueError("proposals must be a list of objects")
+    links = propose_post_merge_knowledge(
+        actor=_actor(request),
+        run_id=run_id,
+        proposals=cast(list[dict[str, object]], proposals),
+    )
+    return JsonResponse(
+        {
+            "assurance_run_id": str(run_id),
+            "proposals": [
+                {
+                    "link_id": str(link.id),
+                    "knowledge_proposal_id": str(link.knowledge_proposal_id),
+                    "state": link.knowledge_proposal.state,
+                    "classification": link.classification,
+                    "confidence": link.confidence,
+                }
+                for link in links
+            ],
+            "automatic_acceptance": False,
+        },
+        status=201,
+    )
+
+
+@api_errors
+@require_http_methods(["POST"])
 def transition_assurance(request: HttpRequest, run_id: uuid.UUID) -> JsonResponse:
     actor = _actor(request)
     payload = _json_body(request)
@@ -933,15 +1303,43 @@ def transition_assurance(request: HttpRequest, run_id: uuid.UUID) -> JsonRespons
 @api_errors
 @require_http_methods(["POST"])
 def dismiss_finding(request: HttpRequest, finding_id: uuid.UUID) -> JsonResponse:
-    del finding_id
     actor = _actor(request)
-    payload = _json_body(request)
+    raw_payload = _json_body(request)
+    repository_id = uuid.UUID(_string(raw_payload, "repository_id"))
     authorize_sensitive_placeholder(
         actor=actor,
-        repository_id=uuid.UUID(_string(payload, "repository_id")),
+        repository_id=repository_id,
         action=Action.FINDING_DISMISS,
     )
-    return JsonResponse({"status": "AUTHORIZED_NOT_IMPLEMENTED"}, status=202)
+    payload = _closed_payload(
+        raw_payload,
+        allowed=frozenset(
+            {
+                "repository_id",
+                "target_state",
+                "expected_revision",
+                "reason",
+            }
+        ),
+        required=frozenset({"repository_id"}),
+    )
+    target_state = _optional_string(payload, "target_state") or Finding.State.DISMISSED
+    reason = _optional_string(payload, "reason") or "Authorized finding dismissal."
+    finding = decide_finding(
+        actor=actor,
+        repository_id=repository_id,
+        finding_id=finding_id,
+        target_state=target_state,
+        expected_revision=_optional_integer(payload, "expected_revision", 1),
+        reason=reason,
+    )
+    return JsonResponse(
+        {
+            "id": str(finding.id),
+            "state": finding.state,
+            "revision": finding.revision,
+        }
+    )
 
 
 @api_errors

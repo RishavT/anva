@@ -102,6 +102,43 @@ def build_parser() -> argparse.ArgumentParser:
     evidence_submit.add_argument("--repository-id", required=True, type=uuid.UUID)
     evidence_submit.add_argument("--pull-request-number", required=True, type=int)
     evidence_submit.add_argument("--manifest", required=True, type=Path)
+    assurance = subparsers.add_parser(
+        "assurance",
+        help="Ingest and inspect independent manual-diff assurance",
+    )
+    assurance.add_argument(
+        "--api-url",
+        default=os.getenv("ANVA_API_URL", "http://localhost:8000/api/v1"),
+    )
+    assurance_commands = assurance.add_subparsers(dest="assurance_command", required=True)
+    assurance_ingest = assurance_commands.add_parser("ingest")
+    assurance_ingest.add_argument("--repository-id", required=True, type=uuid.UUID)
+    assurance_ingest.add_argument("--pull-request-number", required=True, type=int)
+    assurance_ingest.add_argument("--metadata", required=True, type=Path)
+    assurance_ingest.add_argument("--diff", required=True, type=Path)
+    assurance_start = assurance_commands.add_parser("start")
+    assurance_start.add_argument("--pull-request-revision-id", required=True, type=uuid.UUID)
+    assurance_start.add_argument("--inputs", required=True, type=Path)
+    for command in ("status", "report"):
+        assurance_read = assurance_commands.add_parser(command)
+        assurance_read.add_argument("assurance_run_id", type=uuid.UUID)
+    evaluator = subparsers.add_parser(
+        "evaluator",
+        help="Claim or submit a context-limited manual evaluator task",
+    )
+    evaluator.add_argument(
+        "--api-url",
+        default=os.getenv("ANVA_API_URL", "http://localhost:8000/api/v1"),
+    )
+    evaluator_commands = evaluator.add_subparsers(dest="evaluator_command", required=True)
+    evaluator_claim = evaluator_commands.add_parser("claim")
+    evaluator_claim.add_argument("--repository-id", required=True, type=uuid.UUID)
+    evaluator_claim.add_argument("--claimant", required=True)
+    evaluator_claim.add_argument("--lease-seconds", type=int, default=900)
+    evaluator_submit = evaluator_commands.add_parser("submit")
+    evaluator_submit.add_argument("task_id", type=uuid.UUID)
+    evaluator_submit.add_argument("--claimant", required=True)
+    evaluator_submit.add_argument("--result", required=True, type=Path)
     return parser
 
 
@@ -224,6 +261,119 @@ def _bounded_json_file(path: Path) -> dict[str, object]:
     return payload
 
 
+def _bounded_diff_file(path: Path) -> str:
+    """Read a bounded regular UTF-8 diff without following an operator symlink."""
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("Diff must be a regular non-symlink file")
+    raw = path.read_bytes()
+    if not raw or len(raw) > 1_000_000:
+        raise ValueError("Diff file must contain between 1 byte and 1,000,000 bytes")
+    return raw.decode("utf-8")
+
+
+def _api_request(
+    *,
+    api_url: str,
+    path: str,
+    method: str,
+    payload: dict[str, object] | None,
+) -> int:
+    token = os.getenv("ANVA_TOKEN", "")
+    if not token:
+        print(json.dumps({"code": "missing_token", "message": "ANVA_TOKEN is required"}))
+        return 2
+    request = Request(  # noqa: S310 - operator-selected Anva API endpoint
+        f"{api_url.rstrip('/')}{path}",
+        data=json.dumps(payload).encode() if payload is not None else None,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "X-Correlation-ID": str(uuid.uuid4()),
+        },
+    )
+    try:
+        with urlopen(request, timeout=30) as response:  # noqa: S310
+            result = json.loads(response.read())
+    except HTTPError as error:
+        result = json.loads(error.read() or b"{}")
+        print(json.dumps(result, sort_keys=True))
+        return 1
+    except (URLError, TimeoutError):
+        print(json.dumps({"code": "api_unavailable", "message": "Anva API is unavailable"}))
+        return 1
+    print(json.dumps(result, sort_keys=True))
+    return 0
+
+
+def _assurance_request(arguments: argparse.Namespace) -> int:
+    command = str(arguments.assurance_command)
+    if command == "ingest":
+        payload = _bounded_json_file(arguments.metadata)
+        payload["unified_diff"] = _bounded_diff_file(arguments.diff)
+        path = (
+            f"/repositories/{arguments.repository_id}/pull-requests/"
+            f"{arguments.pull_request_number}/manual-diff"
+        )
+        method = "POST"
+    elif command == "start":
+        payload = _bounded_json_file(arguments.inputs)
+        path = f"/pull-request-revisions/{arguments.pull_request_revision_id}/assurance-runs"
+        method = "POST"
+    elif command == "status":
+        payload = None
+        path = f"/assurance-runs/{arguments.assurance_run_id}"
+        method = "GET"
+    elif command == "report":
+        payload = None
+        path = f"/assurance-runs/{arguments.assurance_run_id}/report"
+        method = "GET"
+    else:
+        raise ValueError("Unknown assurance command")
+    return _api_request(
+        api_url=str(arguments.api_url),
+        path=path,
+        method=method,
+        payload=payload,
+    )
+
+
+def _evaluator_request(arguments: argparse.Namespace) -> int:
+    command = str(arguments.evaluator_command)
+    if command == "claim":
+        path = f"/repositories/{arguments.repository_id}/evaluator-tasks/claim"
+        payload: dict[str, object] = {
+            "claimant": arguments.claimant,
+            "lease_seconds": arguments.lease_seconds,
+        }
+    elif command == "submit":
+        claim_token = os.getenv("ANVA_EVALUATOR_CLAIM_TOKEN", "")
+        if not claim_token:
+            print(
+                json.dumps(
+                    {
+                        "code": "missing_claim_token",
+                        "message": "ANVA_EVALUATOR_CLAIM_TOKEN is required",
+                    }
+                )
+            )
+            return 2
+        path = f"/evaluator-tasks/{arguments.task_id}/submit"
+        payload = {
+            "claimant": arguments.claimant,
+            "claim_token": claim_token,
+            "result": _bounded_json_file(arguments.result),
+        }
+    else:
+        raise ValueError("Unknown evaluator command")
+    return _api_request(
+        api_url=str(arguments.api_url),
+        path=path,
+        method="POST",
+        payload=payload,
+    )
+
+
 def _governance_request(arguments: argparse.Namespace) -> int:
     token = os.getenv("ANVA_TOKEN", "")
     if not token:
@@ -290,6 +440,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             return _governance_request(arguments)
         except (json.JSONDecodeError, OSError, ValueError):
+            print(json.dumps({"code": "invalid_input", "message": "Input file is invalid"}))
+            return 2
+    if arguments.command in {"assurance", "evaluator"}:
+        try:
+            if arguments.command == "assurance":
+                return _assurance_request(arguments)
+            return _evaluator_request(arguments)
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError, ValueError):
             print(json.dumps({"code": "invalid_input", "message": "Input file is invalid"}))
             return 2
 

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from jsonschema import Draft202012Validator
 
-from anva.contracts.catalog import EXAMPLES, SCHEMA_VERSION, SCHEMAS
+from anva.contracts.catalog import EXAMPLES, KNOWLEDGE_CHANGE, SCHEMA_VERSION, SCHEMAS
 from anva.contracts.validation import validate_payload
 
 REPOSITORY_ROOT = Path.cwd()
@@ -229,6 +229,155 @@ def openapi_document() -> dict[str, object]:
             "commit_sha",
             "reason",
         ],
+    }
+    manual_diff_request = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "access_scope_id": {"type": "string", "format": "uuid"},
+            "base_commit": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+            "head_commit": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+            "title": {"type": "string", "minLength": 1, "maxLength": 1_000},
+            "description": {"type": "string", "maxLength": 50_000},
+            "target_branch": {"type": "string", "minLength": 1, "maxLength": 300},
+            "is_draft": {"type": "boolean"},
+            "state": {"type": "string", "enum": ["OPEN", "MERGED", "CLOSED"]},
+            "unified_diff": {"type": "string", "minLength": 1, "maxLength": 1_000_000},
+        },
+        "required": [
+            "access_scope_id",
+            "base_commit",
+            "head_commit",
+            "title",
+            "description",
+            "target_branch",
+            "is_draft",
+            "state",
+            "unified_diff",
+        ],
+    }
+    deterministic_check = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "code": {"type": "string", "minLength": 1, "maxLength": 100},
+            "status": {
+                "type": "string",
+                "enum": ["PASSED", "FAILED", "NOT_AVAILABLE"],
+            },
+            "blocking": {"type": "boolean"},
+            "summary": {"type": "string", "minLength": 1, "maxLength": 2_000},
+            "evidence_ids": {
+                "type": "array",
+                "items": {"type": "string", "format": "uuid"},
+                "uniqueItems": True,
+                "maxItems": 100,
+            },
+        },
+        "required": ["code", "status", "blocking", "summary", "evidence_ids"],
+    }
+    assurance_start_request = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "policy_version_ids": {
+                "type": "array",
+                "items": {"type": "string", "format": "uuid"},
+                "minItems": 1,
+                "maxItems": 100,
+                "uniqueItems": True,
+            },
+            "reference_time": {"type": "string", "format": "date-time"},
+            "deterministic_checks": {
+                "type": "array",
+                "items": deterministic_check,
+                "maxItems": 200,
+            },
+            "work_item_revision_id": {"type": "string", "format": "uuid"},
+            "evaluator_version": {"type": "string", "minLength": 1, "maxLength": 100},
+            "prompt_version": {"type": "string", "minLength": 1, "maxLength": 100},
+            "trigger_key": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        },
+        "required": ["policy_version_ids", "reference_time", "deterministic_checks"],
+    }
+    evaluator_claim_request = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "claimant": {"type": "string", "minLength": 1, "maxLength": 200},
+            "lease_seconds": {"type": "integer", "minimum": 60, "maximum": 3_600},
+        },
+        "required": ["claimant"],
+    }
+    evaluator_submit_request = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "claimant": {"type": "string", "minLength": 1, "maxLength": 200},
+            "claim_token": {"type": "string", "minLength": 1, "maxLength": 200},
+            "result": {"$ref": "#/components/schemas/evaluator-result"},
+        },
+        "required": ["claimant", "claim_token", "result"],
+    }
+    finding_decision_request = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "repository_id": {"type": "string", "format": "uuid"},
+            "target_state": {
+                "type": "string",
+                "enum": ["DISMISSED", "RISK_ACCEPTED", "RESOLVED", "OPEN"],
+            },
+            "expected_revision": {"type": "integer", "minimum": 1},
+            "reason": {"type": "string", "minLength": 1, "maxLength": 2_000},
+        },
+        "required": ["repository_id"],
+    }
+    post_merge_proposals_request = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "proposals": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 50,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "summary": {"type": "string", "minLength": 1, "maxLength": 5_000},
+                        "changes": {
+                            "type": "array",
+                            "items": KNOWLEDGE_CHANGE,
+                            "minItems": 1,
+                            "maxItems": 100,
+                        },
+                        "context_citation_ids": {
+                            "type": "array",
+                            "items": {"type": "string", "format": "uuid"},
+                            "minItems": 1,
+                            "uniqueItems": True,
+                        },
+                        "classification": {
+                            "type": "string",
+                            "enum": ["MECHANICAL", "INTERPRETIVE"],
+                        },
+                        "confidence": {
+                            "type": "string",
+                            "enum": ["HIGH", "MEDIUM", "LOW"],
+                        },
+                    },
+                    "required": [
+                        "summary",
+                        "changes",
+                        "context_citation_ids",
+                        "classification",
+                        "confidence",
+                    ],
+                },
+            }
+        },
+        "required": ["proposals"],
     }
     evaluator_responses: dict[str, object] = {
         "200": {
@@ -701,17 +850,113 @@ def openapi_document() -> dict[str, object]:
                     "responses": authorized_responses,
                 }
             },
-            "/findings/{resource_id}/dismiss": {
+            "/repositories/{repository_id}/pull-requests/{pull_request_number}/manual-diff": {
                 "post": {
-                    "operationId": "dismissFinding",
-                    "description": (
-                        "Authorization boundary; mutation arrives with the finding model."
-                    ),
+                    "operationId": "ingestManualPullRequestDiff",
+                    "parameters": [
+                        *mutation_parameters,
+                        repository_parameter,
+                        {
+                            "name": "pull_request_number",
+                            "in": "path",
+                            "required": True,
+                            "schema": {"type": "integer", "minimum": 1},
+                        },
+                    ],
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": manual_diff_request}},
+                    },
+                    "responses": created_or_replayed_responses,
+                }
+            },
+            "/pull-request-revisions/{resource_id}/assurance-runs": {
+                "post": {
+                    "operationId": "startManualDiffAssurance",
+                    "parameters": [*mutation_parameters, resource_parameter],
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": assurance_start_request}},
+                    },
+                    "responses": created_or_replayed_responses,
+                }
+            },
+            "/repositories/{repository_id}/evaluator-tasks/claim": {
+                "post": {
+                    "operationId": "claimManualEvaluatorTask",
+                    "parameters": [*mutation_parameters, repository_parameter],
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": evaluator_claim_request}},
+                    },
+                    "responses": authorized_responses,
+                }
+            },
+            "/evaluator-tasks/{resource_id}/submit": {
+                "post": {
+                    "operationId": "submitManualEvaluatorResult",
+                    "parameters": [*mutation_parameters, resource_parameter],
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": evaluator_submit_request}},
+                    },
+                    "responses": created_or_replayed_responses,
+                }
+            },
+            "/assurance-runs/{resource_id}": {
+                "get": {
+                    "operationId": "getAssuranceRun",
                     "parameters": [
                         resource_parameter,
                         {"$ref": "#/components/parameters/CorrelationId"},
                     ],
-                    "responses": accepted_responses,
+                    "responses": authorized_responses,
+                }
+            },
+            "/assurance-runs/{resource_id}/findings": {
+                "get": {
+                    "operationId": "listAssuranceFindings",
+                    "parameters": [
+                        resource_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": authorized_responses,
+                }
+            },
+            "/assurance-runs/{resource_id}/report": {
+                "get": {
+                    "operationId": "getAssuranceReport",
+                    "parameters": [
+                        resource_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": authorized_responses,
+                }
+            },
+            "/assurance-runs/{resource_id}/post-merge-proposals": {
+                "post": {
+                    "operationId": "proposePostMergeKnowledge",
+                    "parameters": [*mutation_parameters, resource_parameter],
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": post_merge_proposals_request}},
+                    },
+                    "responses": created_responses,
+                }
+            },
+            "/findings/{resource_id}/dismiss": {
+                "post": {
+                    "operationId": "dismissFinding",
+                    "description": "Apply an authorized explicit finding lifecycle decision.",
+                    "parameters": [
+                        resource_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": finding_decision_request}},
+                    },
+                    "responses": authorized_responses,
                 }
             },
             "/policies/{resource_id}/override": {

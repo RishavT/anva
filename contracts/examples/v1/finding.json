@@ -10,15 +10,32 @@
       "source_type": "DECISION"
     }
   ],
+  "citations": [
+    {
+      "line": 10,
+      "path": "src/anva/core/models.py",
+      "side": "NEW",
+      "type": "DIFF"
+    }
+  ],
   "code": "MISSING_MIGRATION_EVIDENCE",
+  "confidence": "PROVEN",
+  "criterion_codes": [
+    "MIGRATION_EVIDENCE"
+  ],
   "description": "The policy requires a migration compatibility check.",
   "evidence_ids": [],
   "finding_id": "00000000-0000-4000-8000-000000000201",
+  "fingerprint": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "kind": "EVIDENCE",
+  "lifecycle_state": "OPEN",
   "limitations": [
     "No deployment environment was evaluated."
   ],
   "organization_id": "00000000-0000-4000-8000-000000000001",
   "schema_version": "1.0",
   "severity": "BLOCKING",
-  "title": "Migration evidence is missing"
+  "suggested_resolution": "Submit migration evidence for the exact head commit.",
+  "title": "Migration evidence is missing",
+  "uncertainty": "No uncertainty; the exact evidence mapping contains a gap."
 }

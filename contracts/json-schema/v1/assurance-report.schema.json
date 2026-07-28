@@ -1,0 +1,150 @@
+{
+  "$id": "https://schemas.anva.dev/v1/assurance-report.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "assurance_run_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "finding_fingerprints": {
+      "items": {
+        "pattern": "^[a-f0-9]{64}$",
+        "type": "string"
+      },
+      "maxItems": 500,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "head_commit": {
+      "pattern": "^[a-f0-9]{40}$",
+      "type": "string"
+    },
+    "html": {
+      "maxLength": 300000,
+      "minLength": 1,
+      "type": "string"
+    },
+    "limitations": {
+      "items": {
+        "maxLength": 2000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "markdown": {
+      "maxLength": 200000,
+      "minLength": 1,
+      "type": "string"
+    },
+    "organization_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "pull_request_revision_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "readiness": {
+      "enum": [
+        "BLOCKED",
+        "READY_WITH_WARNINGS",
+        "READY_FOR_HUMAN_REVIEW",
+        "STALE",
+        "FAILED"
+      ],
+      "type": "string"
+    },
+    "reason_codes": {
+      "items": {
+        "maxLength": 100,
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "report_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "repository_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "type": "string"
+    },
+    "versions": {
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "diff": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "evaluator": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "evidence": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "policy": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "prompt": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "renderer": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "requirements": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "diff",
+        "context",
+        "requirements",
+        "policy",
+        "evidence",
+        "evaluator",
+        "prompt",
+        "renderer"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema_version",
+    "report_id",
+    "assurance_run_id",
+    "organization_id",
+    "repository_id",
+    "pull_request_revision_id",
+    "head_commit",
+    "readiness",
+    "reason_codes",
+    "finding_fingerprints",
+    "versions",
+    "limitations",
+    "markdown",
+    "html"
+  ],
+  "title": "Anva Manual Diff Assurance Report",
+  "type": "object"
+}
