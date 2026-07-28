@@ -7,9 +7,12 @@ import json
 import uuid
 from typing import Any, ClassVar
 
+from django.contrib.postgres.indexes import GinIndex
+from django.contrib.postgres.search import SearchVectorField
 from django.db import models
 from django.db.models import F, Q
 from django.utils import timezone
+from pgvector.django import HnswIndex, VectorField
 
 
 def canonical_payload_bytes(payload: object) -> bytes:
@@ -601,6 +604,51 @@ class SourceChunk(UUIDModel):
         super().save(*args, **kwargs)
 
 
+class SourceChunkSearchIndex(UUIDModel):
+    """Immutable versioned full-text and vector index for one source chunk."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    source_chunk = models.ForeignKey(SourceChunk, on_delete=models.PROTECT)
+    index_version = models.CharField(max_length=50)
+    embedding_provider = models.CharField(max_length=100)
+    embedding_version = models.CharField(max_length=50)
+    indexed_text_hash = models.CharField(max_length=64)
+    search_vector = SearchVectorField()
+    embedding = VectorField(dimensions=32)
+    indexed_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        indexes: ClassVar[list[models.Index]] = [
+            GinIndex(fields=["search_vector"], name="core_chunk_search_fts_gin"),
+            HnswIndex(
+                fields=["embedding"],
+                name="core_chunk_embedding_hnsw",
+                m=16,
+                ef_construction=64,
+                opclasses=["vector_cosine_ops"],
+            ),
+        ]
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=[
+                    "organization",
+                    "source_chunk",
+                    "index_version",
+                    "embedding_version",
+                ],
+                name="core_chunk_search_version_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_chunk_search_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(indexed_text_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_chunk_search_hash_sha256",
+            ),
+        ]
+
+
 class SourceChunkVisibility(UUIDModel):
     """Observation-specific index visibility for an immutable source chunk."""
 
@@ -971,6 +1019,10 @@ class AssertionConflict(TenantOwnedModel):
     class Meta:
         constraints: ClassVar[list[models.BaseConstraint]] = [
             models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_assertion_conflict_org_id_unique",
+            ),
+            models.UniqueConstraint(
                 fields=["organization", "left_assertion", "right_assertion"],
                 name="core_assertion_conflict_pair_unique",
             ),
@@ -1214,6 +1266,279 @@ class ImmutableArtifact(UUIDModel):
             raise ArtifactImmutableError("Artifact content_hash does not match canonical payload")
         self.content_hash = digest
         super().save(*args, **kwargs)
+
+
+class RetrievalWatermark(RevisionedTenantModel):
+    """Repository retrieval generation used to invalidate packet cache keys."""
+
+    repository = models.ForeignKey("Repository", on_delete=models.PROTECT)
+    value = models.PositiveBigIntegerField(default=1)
+    reason = models.CharField(max_length=100, default="INITIAL")
+
+    class Meta(RevisionedTenantModel.Meta):
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            *RevisionedTenantModel.Meta.constraints,
+            models.UniqueConstraint(
+                fields=["organization", "repository"],
+                name="core_retrieval_watermark_repo_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_retrieval_watermark_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(value__gte=1),
+                name="core_retrieval_watermark_value_gte_1",
+            ),
+        ]
+
+
+class ContextPacketRecord(UUIDModel):
+    """Immutable reconstructable retrieval result and cache identity."""
+
+    class Phase(models.TextChoices):
+        PREPARE = "PREPARE"
+        BUILD = "BUILD"
+        PREFLIGHT = "PREFLIGHT"
+        ASSURANCE = "ASSURANCE"
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    artifact = models.OneToOneField(ImmutableArtifact, on_delete=models.PROTECT)
+    repository = models.ForeignKey("Repository", on_delete=models.PROTECT)
+    access_scope = models.ForeignKey("AccessScope", on_delete=models.PROTECT)
+    actor_type = models.CharField(max_length=20)
+    actor_id = models.CharField(max_length=200)
+    phase = models.CharField(max_length=16, choices=Phase)
+    normalized_request = models.JSONField()
+    request_hash = models.CharField(max_length=64)
+    authorization_hash = models.CharField(max_length=64)
+    selection_hash = models.CharField(max_length=64)
+    retrieval_watermark = models.PositiveBigIntegerField()
+    retrieval_algorithm_version = models.CharField(max_length=50)
+    index_version = models.CharField(max_length=50)
+    embedding_version = models.CharField(max_length=50)
+    budget_max_items = models.PositiveIntegerField()
+    budget_max_tokens = models.PositiveIntegerField()
+    budget_max_bytes = models.PositiveIntegerField()
+    budget_max_citations = models.PositiveIntegerField()
+    selected_items = models.PositiveIntegerField()
+    selected_tokens = models.PositiveIntegerField()
+    selected_bytes = models.PositiveIntegerField()
+    selected_citations = models.PositiveIntegerField()
+    limitations = models.JSONField(default=list)
+    cache_key = models.CharField(max_length=64)
+    generated_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(
+                fields=["organization", "repository", "cache_key"],
+                name="core_packet_cache_lookup_idx",
+            )
+        ]
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "cache_key"],
+                name="core_context_packet_cache_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_context_packet_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(request_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_context_packet_request_sha256",
+            ),
+            models.CheckConstraint(
+                condition=Q(authorization_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_context_packet_auth_sha256",
+            ),
+            models.CheckConstraint(
+                condition=Q(selection_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_context_packet_selection_sha256",
+            ),
+            models.CheckConstraint(
+                condition=Q(cache_key__regex=r"^[a-f0-9]{64}$"),
+                name="core_context_packet_cache_sha256",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(selected_items__lte=F("budget_max_items"))
+                    & Q(selected_tokens__lte=F("budget_max_tokens"))
+                    & Q(selected_bytes__lte=F("budget_max_bytes"))
+                    & Q(selected_citations__lte=F("budget_max_citations"))
+                ),
+                name="core_context_packet_budget_coherent",
+            ),
+        ]
+
+
+class ContextPacketItem(UUIDModel):
+    """Immutable ordered material selected into one context packet."""
+
+    class Kind(models.TextChoices):
+        POLICY = "POLICY"
+        RELATIONSHIP = "RELATIONSHIP"
+        ASSERTION = "ASSERTION"
+        SOURCE_EXCERPT = "SOURCE_EXCERPT"
+        DECISION = "DECISION"
+        INCIDENT = "INCIDENT"
+        CONFLICT = "CONFLICT"
+
+    class Freshness(models.TextChoices):
+        CURRENT = "CURRENT"
+        STALE = "STALE"
+        UNKNOWN = "UNKNOWN"
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    context_packet = models.ForeignKey(ContextPacketRecord, on_delete=models.PROTECT)
+    position = models.PositiveIntegerField()
+    kind = models.CharField(max_length=24, choices=Kind)
+    item_key = models.CharField(max_length=500)
+    source_assertion = models.ForeignKey(
+        KnowledgeAssertion,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    source_relationship = models.ForeignKey(
+        KnowledgeRelationship,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    source_chunk = models.ForeignKey(
+        SourceChunk,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    source_conflict = models.ForeignKey(
+        AssertionConflict,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    summary = models.TextField()
+    freshness = models.CharField(max_length=16, choices=Freshness)
+    is_inferred = models.BooleanField(default=False)
+    selection_reason = models.CharField(max_length=500)
+    rank_score = models.FloatField()
+    token_count = models.PositiveIntegerField()
+    byte_count = models.PositiveIntegerField()
+    payload = models.JSONField()
+    content_hash = models.CharField(max_length=64, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "context_packet", "position"],
+                name="core_context_packet_item_position_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "context_packet", "item_key"],
+                name="core_context_packet_item_key_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_context_packet_item_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(content_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_context_packet_item_sha256",
+            ),
+            models.CheckConstraint(
+                condition=Q(rank_score__gte=0.0),
+                name="core_context_packet_item_score_gte_0",
+            ),
+        ]
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        digest = content_hash(self.payload)
+        if not self._state.adding:
+            raise ArtifactImmutableError("Context packet items cannot be updated")
+        if self.content_hash and self.content_hash != digest:
+            raise ArtifactImmutableError("Context packet item hash does not match payload")
+        self.content_hash = digest
+        super().save(*args, **kwargs)
+
+
+class ContextPacketCitation(UUIDModel):
+    """Immutable normalized citation for one selected packet item."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    context_packet = models.ForeignKey(ContextPacketRecord, on_delete=models.PROTECT)
+    context_item = models.ForeignKey(ContextPacketItem, on_delete=models.PROTECT)
+    position = models.PositiveIntegerField()
+    source_location = models.ForeignKey(
+        SourceLocation,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    source_observation = models.ForeignKey(
+        SourceObservation,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    access_snapshot = models.ForeignKey(
+        "AccessSnapshot",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    canonical_url = models.CharField(max_length=1_500)
+    locator = models.CharField(max_length=1_000)
+    source_content_hash = models.CharField(max_length=64)
+    observed_at = models.DateTimeField()
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "context_packet", "context_item", "position"],
+                name="core_context_packet_citation_position_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_context_packet_citation_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(source_content_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_context_packet_citation_sha256",
+            ),
+        ]
+
+
+class ContextPacketInvalidation(UUIDModel):
+    """Append-only reason that a historical packet cannot be reused."""
+
+    class Reason(models.TextChoices):
+        INGESTION = "INGESTION"
+        CORRECTION = "CORRECTION"
+        REVOCATION = "REVOCATION"
+        SCOPE_CHANGE = "SCOPE_CHANGE"
+        MANUAL = "MANUAL"
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    context_packet = models.ForeignKey(ContextPacketRecord, on_delete=models.PROTECT)
+    repository = models.ForeignKey("Repository", on_delete=models.PROTECT)
+    reason = models.CharField(max_length=24, choices=Reason)
+    watermark = models.PositiveBigIntegerField()
+    details = models.JSONField(default=dict)
+    invalidated_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "context_packet", "watermark", "reason"],
+                name="core_context_packet_invalidation_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_context_packet_inval_org_id_unique",
+            ),
+        ]
 
 
 class AssuranceRun(RevisionedTenantModel):
