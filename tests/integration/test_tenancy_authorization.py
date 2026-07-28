@@ -945,7 +945,7 @@ def test_api_filters_before_search_and_hides_foreign_ids_on_every_read_surface()
         ),
         content_type="application/json",
     )
-    assert foreign_mcp.status_code == missing_mcp.status_code == 404
+    assert foreign_mcp.status_code == missing_mcp.status_code == 501
     assert foreign_mcp.json() == missing_mcp.json()
     assert "CANARY" not in foreign_mcp.content.decode()
 

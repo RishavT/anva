@@ -43,6 +43,37 @@ urlpatterns = [
         name="api-v1-token-revoke",
     ),
     path("api/v1/search", core_views.search, name="api-v1-search"),
+    path("api/v1/query", core_views.query, name="api-v1-query"),
+    path(
+        "api/v1/context-packets",
+        core_views.context_packets,
+        name="api-v1-context-packets",
+    ),
+    path(
+        "api/v1/context-packets/<uuid:packet_id>",
+        core_views.context_packet_detail,
+        name="api-v1-context-packet",
+    ),
+    path(
+        "api/v1/entities/<uuid:entity_id>/relationships",
+        core_views.entity_relationships,
+        name="api-v1-entity-relationships",
+    ),
+    path(
+        "api/v1/entities/<uuid:entity_id>/history",
+        core_views.entity_history,
+        name="api-v1-entity-history",
+    ),
+    path(
+        "api/v1/entities/<uuid:entity_id>/sources",
+        core_views.entity_sources,
+        name="api-v1-entity-sources",
+    ),
+    path(
+        "api/v1/assertions/<uuid:assertion_id>/explanation",
+        core_views.assertion_explanation,
+        name="api-v1-assertion-explanation",
+    ),
     path(
         "api/v1/canvas/assertions/<uuid:assertion_id>",
         core_views.canvas_assertion,

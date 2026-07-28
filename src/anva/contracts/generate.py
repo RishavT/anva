@@ -83,6 +83,10 @@ def openapi_document() -> dict[str, object]:
         },
         **structured_errors,
     }
+    mcp_responses: dict[str, object] = {
+        "501": {"description": "MCP transport is not implemented."},
+        **structured_errors,
+    }
     return {
         "openapi": "3.1.0",
         "info": {
@@ -257,6 +261,70 @@ def openapi_document() -> dict[str, object]:
                     "responses": authorized_responses,
                 }
             },
+            "/query": {
+                "post": {
+                    "operationId": "queryAuthorizedKnowledge",
+                    "parameters": [{"$ref": "#/components/parameters/CorrelationId"}],
+                    "responses": authorized_responses,
+                }
+            },
+            "/context-packets": {
+                "post": {
+                    "operationId": "buildContextPacket",
+                    "parameters": mutation_parameters,
+                    "responses": created_responses,
+                }
+            },
+            "/context-packets/{resource_id}": {
+                "get": {
+                    "operationId": "getContextPacket",
+                    "parameters": [
+                        resource_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": authorized_responses,
+                }
+            },
+            "/entities/{resource_id}/relationships": {
+                "get": {
+                    "operationId": "getEntityRelationships",
+                    "parameters": [
+                        resource_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": authorized_responses,
+                }
+            },
+            "/entities/{resource_id}/history": {
+                "get": {
+                    "operationId": "getEntityHistory",
+                    "parameters": [
+                        resource_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": authorized_responses,
+                }
+            },
+            "/entities/{resource_id}/sources": {
+                "get": {
+                    "operationId": "getEntitySources",
+                    "parameters": [
+                        resource_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": authorized_responses,
+                }
+            },
+            "/assertions/{resource_id}/explanation": {
+                "get": {
+                    "operationId": "getAssertionExplanation",
+                    "parameters": [
+                        resource_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": authorized_responses,
+                }
+            },
             "/canvas/assertions/{resource_id}": {
                 "get": {
                     "operationId": "getCanvasAssertion",
@@ -270,8 +338,9 @@ def openapi_document() -> dict[str, object]:
             "/mcp/context": {
                 "post": {
                     "operationId": "getMcpContext",
+                    "description": "Reserved for issue #9; returns 501 after authorization.",
                     "parameters": [{"$ref": "#/components/parameters/CorrelationId"}],
-                    "responses": authorized_responses,
+                    "responses": mcp_responses,
                 }
             },
             "/artifacts/{resource_id}": {

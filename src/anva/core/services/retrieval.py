@@ -58,6 +58,25 @@ def visible_scope_ids(
     return scopes.distinct()
 
 
+def authorized_scope_ids(
+    *,
+    actor: ActorContext,
+    repository_id: uuid.UUID,
+    action: Action,
+) -> tuple[uuid.UUID, ...]:
+    """Return a stable scope snapshot after authorizing the repository action."""
+    authorize_action(
+        actor=actor,
+        action=action,
+        repository_id=repository_id,
+    )
+    return tuple(
+        visible_scope_ids(actor=actor, repository_id=repository_id)
+        .order_by("id")
+        .values_list("id", flat=True)
+    )
+
+
 def authorized_assertions(
     *,
     actor: ActorContext,

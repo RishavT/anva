@@ -68,6 +68,29 @@ SOURCE_REFERENCE: Final[dict[str, object]] = {
     ],
 }
 
+RETRIEVAL_CITATION: Final[dict[str, object]] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "source_location_id": UUID_FIELD,
+        "source_observation_id": UUID_FIELD,
+        "access_snapshot_id": UUID_FIELD,
+        "canonical_url": {"type": "string", "format": "uri"},
+        "locator": {"type": "string", "minLength": 1, "maxLength": 1_000},
+        "source_content_hash": SHA256_FIELD,
+        "observed_at": DATE_TIME_FIELD,
+    },
+    "required": [
+        "source_location_id",
+        "source_observation_id",
+        "access_snapshot_id",
+        "canonical_url",
+        "locator",
+        "source_content_hash",
+        "observed_at",
+    ],
+}
+
 CONTEXT_ITEM: Final[dict[str, object]] = {
     "type": "object",
     "additionalProperties": False,
@@ -75,18 +98,41 @@ CONTEXT_ITEM: Final[dict[str, object]] = {
         "item_id": UUID_FIELD,
         "kind": {
             "type": "string",
-            "enum": ["REQUIREMENT", "DECISION", "POLICY", "ENTITY", "RISK", "ASSUMPTION"],
+            "enum": [
+                "POLICY",
+                "RELATIONSHIP",
+                "ASSERTION",
+                "SOURCE_EXCERPT",
+                "DECISION",
+                "INCIDENT",
+                "CONFLICT",
+            ],
         },
+        "item_key": {"type": "string", "minLength": 1, "maxLength": 500},
         "summary": {"type": "string", "minLength": 1, "maxLength": 10_000},
         "is_inferred": {"type": "boolean"},
         "freshness": {"type": "string", "enum": ["CURRENT", "STALE", "UNKNOWN"]},
+        "selection_reason": {"type": "string", "minLength": 1, "maxLength": 500},
+        "rank_score": {"type": "number", "minimum": 0},
+        "payload": {"type": "object"},
         "anva_sources": {
             "type": "array",
-            "items": {"$ref": "#/$defs/source_reference"},
+            "items": {"$ref": "#/$defs/retrieval_citation"},
             "minItems": 1,
         },
     },
-    "required": ["item_id", "kind", "summary", "is_inferred", "freshness", "anva_sources"],
+    "required": [
+        "item_id",
+        "kind",
+        "item_key",
+        "summary",
+        "is_inferred",
+        "freshness",
+        "selection_reason",
+        "rank_score",
+        "payload",
+        "anva_sources",
+    ],
 }
 
 CONTEXT_PACKET_SCHEMA = versioned_schema(
@@ -95,10 +141,46 @@ CONTEXT_PACKET_SCHEMA = versioned_schema(
     {
         "packet_id": UUID_FIELD,
         "organization_id": UUID_FIELD,
+        "repository_id": UUID_FIELD,
         "work_item_id": {"oneOf": [UUID_FIELD, {"type": "null"}]},
         "revision": {"type": "integer", "minimum": 1},
         "generated_at": DATE_TIME_FIELD,
         "content_hash": SHA256_FIELD,
+        "phase": {
+            "type": "string",
+            "enum": ["PREPARE", "BUILD", "PREFLIGHT", "ASSURANCE"],
+        },
+        "request": {"type": "object"},
+        "authorization_hash": SHA256_FIELD,
+        "selection_hash": SHA256_FIELD,
+        "retrieval_watermark": {"type": "integer", "minimum": 1},
+        "retrieval_algorithm_version": {"type": "string", "minLength": 1},
+        "index_version": {"type": "string", "minLength": 1},
+        "embedding_version": {"type": "string", "minLength": 1},
+        "budget": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "max_items": {"type": "integer", "minimum": 1},
+                "max_tokens": {"type": "integer", "minimum": 1},
+                "max_bytes": {"type": "integer", "minimum": 1},
+                "max_citations": {"type": "integer", "minimum": 1},
+                "selected_items": {"type": "integer", "minimum": 0},
+                "selected_tokens": {"type": "integer", "minimum": 0},
+                "selected_bytes": {"type": "integer", "minimum": 0},
+                "selected_citations": {"type": "integer", "minimum": 0},
+            },
+            "required": [
+                "max_items",
+                "max_tokens",
+                "max_bytes",
+                "max_citations",
+                "selected_items",
+                "selected_tokens",
+                "selected_bytes",
+                "selected_citations",
+            ],
+        },
         "items": {
             "type": "array",
             "items": {"$ref": "#/$defs/context_item"},
@@ -112,14 +194,27 @@ CONTEXT_PACKET_SCHEMA = versioned_schema(
     [
         "packet_id",
         "organization_id",
+        "repository_id",
         "work_item_id",
         "revision",
         "generated_at",
         "content_hash",
+        "phase",
+        "request",
+        "authorization_hash",
+        "selection_hash",
+        "retrieval_watermark",
+        "retrieval_algorithm_version",
+        "index_version",
+        "embedding_version",
+        "budget",
         "items",
         "limitations",
     ],
-    definitions={"source_reference": SOURCE_REFERENCE, "context_item": CONTEXT_ITEM},
+    definitions={
+        "retrieval_citation": RETRIEVAL_CITATION,
+        "context_item": CONTEXT_ITEM,
+    },
 )
 
 EVIDENCE_ENTRY: Final[dict[str, object]] = {
@@ -422,23 +517,65 @@ FINDING_EXAMPLE: Final[dict[str, object]] = {
     "limitations": ["No deployment environment was evaluated."],
 }
 
+RETRIEVAL_CITATION_EXAMPLE: Final[dict[str, object]] = {
+    "source_location_id": "00000000-0000-4000-8000-000000000104",
+    "source_observation_id": "00000000-0000-4000-8000-000000000105",
+    "access_snapshot_id": "00000000-0000-4000-8000-000000000106",
+    "canonical_url": "https://example.test/decisions/checkout",
+    "locator": "ADR-42",
+    "source_content_hash": "a" * 64,
+    "observed_at": "2026-07-28T00:00:00Z",
+}
+
 EXAMPLES: Final[dict[str, dict[str, object]]] = {
     "context-packet": {
         "schema_version": SCHEMA_VERSION,
         "packet_id": "00000000-0000-4000-8000-000000000301",
         "organization_id": "00000000-0000-4000-8000-000000000001",
+        "repository_id": "00000000-0000-4000-8000-000000000304",
         "work_item_id": "00000000-0000-4000-8000-000000000302",
         "revision": 1,
         "generated_at": "2026-07-28T00:00:00Z",
         "content_hash": "b" * 64,
+        "phase": "PREFLIGHT",
+        "request": {
+            "task": "Prepare checkout for deployment",
+            "phase": "PREFLIGHT",
+            "budget": {
+                "max_items": 50,
+                "max_tokens": 8000,
+                "max_bytes": 100000,
+                "max_citations": 100,
+            },
+        },
+        "authorization_hash": "c" * 64,
+        "selection_hash": "b" * 64,
+        "retrieval_watermark": 1,
+        "retrieval_algorithm_version": "permission-first-rrf-v1",
+        "index_version": "fts-vector-v1",
+        "embedding_version": "hash-32-v1",
+        "budget": {
+            "max_items": 50,
+            "max_tokens": 8000,
+            "max_bytes": 100000,
+            "max_citations": 100,
+            "selected_items": 1,
+            "selected_tokens": 12,
+            "selected_bytes": 256,
+            "selected_citations": 1,
+        },
         "items": [
             {
                 "item_id": "00000000-0000-4000-8000-000000000303",
                 "kind": "DECISION",
+                "item_key": "assertion:00000000-0000-4000-8000-000000000303",
                 "summary": "Checkout is owned by the payments team.",
                 "is_inferred": False,
                 "freshness": "CURRENT",
-                "anva_sources": [SOURCE_EXAMPLE],
+                "selection_reason": "Relevant decision",
+                "rank_score": 1.0,
+                "payload": {"assertion_id": "00000000-0000-4000-8000-000000000303"},
+                "anva_sources": [RETRIEVAL_CITATION_EXAMPLE],
             }
         ],
         "limitations": [],

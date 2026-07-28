@@ -58,3 +58,9 @@ class IdempotencyConflictError(DomainOperationError):
     """An idempotency key was reused for different content."""
 
     code = "idempotency_conflict"
+
+
+class RequiredPolicyBudgetError(DomainOperationError):
+    """A packet budget cannot contain every applicable required policy."""
+
+    code = "required_policy_budget_exceeded"

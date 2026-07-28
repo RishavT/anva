@@ -6,7 +6,12 @@ import uuid
 from dataclasses import replace
 
 from anva.core.exceptions import ResourceNotFoundError
-from anva.core.models import AssuranceRun, KnowledgeAssertion, Repository
+from anva.core.models import (
+    AssuranceRun,
+    ContextPacketInvalidation,
+    KnowledgeAssertion,
+    Repository,
+)
 from anva.core.services.authorization import (
     NOT_FOUND_MESSAGE,
     Action,
@@ -40,12 +45,21 @@ def review_assertion(
         access_scope_id=assertion.access_scope_id,
     )
     authorized_actor = replace(actor, authorization_path=decision.authorization_path)
-    return transition_assertion_review(
+    reviewed = transition_assertion_review(
         actor=authorized_actor,
         assertion_id=assertion.id,
         target_state=target_state,
         expected_revision=expected_revision,
     )
+    from anva.core.services.context_packets import invalidate_context_packets
+
+    invalidate_context_packets(
+        organization_id=actor.organization_id,
+        repository_id=repository_id,
+        reason=ContextPacketInvalidation.Reason.CORRECTION,
+        details={"assertion_id": str(assertion.id), "review_state": target_state},
+    )
+    return reviewed
 
 
 def authorize_sensitive_placeholder(

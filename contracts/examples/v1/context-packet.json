@@ -1,30 +1,64 @@
 {
+  "authorization_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "budget": {
+    "max_bytes": 100000,
+    "max_citations": 100,
+    "max_items": 50,
+    "max_tokens": 8000,
+    "selected_bytes": 256,
+    "selected_citations": 1,
+    "selected_items": 1,
+    "selected_tokens": 12
+  },
   "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "embedding_version": "hash-32-v1",
   "generated_at": "2026-07-28T00:00:00Z",
+  "index_version": "fts-vector-v1",
   "items": [
     {
       "anva_sources": [
         {
+          "access_snapshot_id": "00000000-0000-4000-8000-000000000106",
           "canonical_url": "https://example.test/decisions/checkout",
-          "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "locator": "ADR-42",
           "observed_at": "2026-07-28T00:00:00Z",
-          "revision_id": "00000000-0000-4000-8000-000000000102",
-          "source_id": "00000000-0000-4000-8000-000000000101",
-          "source_type": "DECISION"
+          "source_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "source_location_id": "00000000-0000-4000-8000-000000000104",
+          "source_observation_id": "00000000-0000-4000-8000-000000000105"
         }
       ],
       "freshness": "CURRENT",
       "is_inferred": false,
       "item_id": "00000000-0000-4000-8000-000000000303",
+      "item_key": "assertion:00000000-0000-4000-8000-000000000303",
       "kind": "DECISION",
+      "payload": {
+        "assertion_id": "00000000-0000-4000-8000-000000000303"
+      },
+      "rank_score": 1.0,
+      "selection_reason": "Relevant decision",
       "summary": "Checkout is owned by the payments team."
     }
   ],
   "limitations": [],
   "organization_id": "00000000-0000-4000-8000-000000000001",
   "packet_id": "00000000-0000-4000-8000-000000000301",
+  "phase": "PREFLIGHT",
+  "repository_id": "00000000-0000-4000-8000-000000000304",
+  "request": {
+    "budget": {
+      "max_bytes": 100000,
+      "max_citations": 100,
+      "max_items": 50,
+      "max_tokens": 8000
+    },
+    "phase": "PREFLIGHT",
+    "task": "Prepare checkout for deployment"
+  },
+  "retrieval_algorithm_version": "permission-first-rrf-v1",
+  "retrieval_watermark": 1,
   "revision": 1,
   "schema_version": "1.0",
+  "selection_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "work_item_id": "00000000-0000-4000-8000-000000000302"
 }
