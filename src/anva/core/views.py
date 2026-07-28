@@ -27,6 +27,12 @@ from anva.core.services.authorization import (
 )
 from anva.core.services.bootstrap import bootstrap_local_organization
 from anva.core.services.context import ActorContext
+from anva.core.services.ingestion import (
+    connect_filesystem_source,
+    inspect_source,
+    request_ingestion_sync,
+    source_sync_runs,
+)
 from anva.core.services.retrieval import (
     get_authorized_artifact,
     get_authorized_assertion,
@@ -481,3 +487,91 @@ def revoke_source(request: HttpRequest, source_connection_id: uuid.UUID) -> Json
         expected_revision=_integer(payload, "expected_revision"),
     )
     return JsonResponse({"id": str(source.id), "state": source.state, "revision": source.revision})
+
+
+@api_errors
+@require_http_methods(["POST"])
+def connect_filesystem(request: HttpRequest) -> JsonResponse:
+    actor = _actor(request)
+    payload = _json_body(request)
+    source, created = connect_filesystem_source(
+        actor=actor,
+        repository_id=uuid.UUID(_string(payload, "repository_id")),
+        access_scope_id=uuid.UUID(_string(payload, "access_scope_id")),
+        external_key=_string(payload, "external_key"),
+        display_name=_string(payload, "display_name"),
+        root=_string(payload, "root"),
+    )
+    return JsonResponse(
+        {
+            "id": str(source.id),
+            "state": source.state,
+            "revision": source.revision,
+            "created": created,
+        },
+        status=201 if created else 200,
+    )
+
+
+@api_errors
+@require_http_methods(["GET"])
+def source_detail(request: HttpRequest, source_connection_id: uuid.UUID) -> JsonResponse:
+    return JsonResponse(
+        inspect_source(
+            actor=_actor(request),
+            source_connection_id=source_connection_id,
+        )
+    )
+
+
+def _request_source_sync(
+    request: HttpRequest,
+    source_connection_id: uuid.UUID,
+    *,
+    force_full: bool,
+) -> JsonResponse:
+    actor = _actor(request)
+    payload = _json_body(request)
+    requested_mode = _optional_string(payload, "scan_mode")
+    scan_mode = "FULL" if force_full else requested_mode or "FULL"
+    run, created = request_ingestion_sync(
+        actor=actor,
+        source_connection_id=source_connection_id,
+        scan_mode=scan_mode,
+    )
+    return JsonResponse(
+        {
+            "id": str(run.id),
+            "source_connection_id": str(run.source_connection_id),
+            "access_snapshot_id": str(run.access_snapshot_id),
+            "scan_mode": run.scan_mode,
+            "state": run.state,
+            "created": created,
+        },
+        status=202,
+    )
+
+
+@api_errors
+@require_http_methods(["POST"])
+def sync_source(request: HttpRequest, source_connection_id: uuid.UUID) -> JsonResponse:
+    return _request_source_sync(request, source_connection_id, force_full=False)
+
+
+@api_errors
+@require_http_methods(["POST"])
+def resync_source(request: HttpRequest, source_connection_id: uuid.UUID) -> JsonResponse:
+    return _request_source_sync(request, source_connection_id, force_full=True)
+
+
+@api_errors
+@require_http_methods(["GET"])
+def source_runs(request: HttpRequest, source_connection_id: uuid.UUID) -> JsonResponse:
+    return JsonResponse(
+        {
+            "sync_runs": source_sync_runs(
+                actor=_actor(request),
+                source_connection_id=source_connection_id,
+            )
+        }
+    )

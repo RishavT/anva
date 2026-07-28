@@ -86,6 +86,11 @@ def test_openapi_exposes_versioned_tenancy_and_authorization_boundaries() -> Non
         "/assurance-runs/{resource_id}/transition",
         "/findings/{resource_id}/dismiss",
         "/policies/{resource_id}/override",
+        "/source-connections/filesystem",
+        "/source-connections/{resource_id}",
+        "/source-connections/{resource_id}/sync",
+        "/source-connections/{resource_id}/resync",
+        "/source-connections/{resource_id}/sync-runs",
         "/source-connections/{resource_id}/revoke",
     } <= paths.keys()
     bootstrap = cast(dict[str, object], paths["/bootstrap"])

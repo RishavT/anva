@@ -289,3 +289,50 @@ def fail_job(
             metadata={"error_code": error_code},
         )
         return job
+
+
+def cancel_job(
+    *,
+    actor: ActorContext,
+    job_id: uuid.UUID,
+    worker_id: str,
+    error_code: str,
+    now: datetime | None = None,
+) -> BackgroundJob:
+    """Cancel non-retryable leased work while retaining an observable reason."""
+    cancelled_at = now or timezone.now()
+    with transaction.atomic():
+        job = get_tenant_record_for_update(
+            queryset=BackgroundJob.objects.select_related("organization"),
+            record_id=job_id,
+            organization_id=actor.organization_id,
+        )
+        if job.state == BackgroundJob.State.CANCELLED:
+            return job
+        require_current_lease(job=job, worker_id=worker_id, now=cancelled_at)
+        job.state = BackgroundJob.State.CANCELLED
+        job.lease_owner = None
+        job.lease_expires_at = None
+        job.last_error = error_code
+        job.completed_at = cancelled_at
+        job.save(
+            update_fields=[
+                "state",
+                "lease_owner",
+                "lease_expires_at",
+                "last_error",
+                "completed_at",
+                "updated_at",
+            ]
+        )
+        record_transition(
+            organization=job.organization,
+            actor=actor,
+            target_type="backgroundjob",
+            target_id=job.id,
+            from_state=BackgroundJob.State.RUNNING,
+            to_state=BackgroundJob.State.CANCELLED,
+            revision=job.attempt_count,
+            metadata={"error_code": error_code},
+        )
+        return job

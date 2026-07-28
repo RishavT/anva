@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import Callable
 from io import BytesIO
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
@@ -102,3 +104,75 @@ def test_mcp_readiness_contract(healthy: bool, expected_http: str) -> None:
 def test_mcp_rejects_unknown_routes_and_methods() -> None:
     assert call_mcp("/missing")[0] == "404 Not Found"
     assert call_mcp("/health/live", "POST")[0] == "405 Method Not Allowed"
+
+
+@pytest.mark.contract
+def test_source_lifecycle_http_contracts(client: Client) -> None:
+    source_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    repository_id = uuid.uuid4()
+    scope_id = uuid.uuid4()
+    source = SimpleNamespace(id=source_id, state="ACTIVE", revision=1)
+    run = SimpleNamespace(
+        id=run_id,
+        source_connection_id=source_id,
+        access_snapshot_id=uuid.uuid4(),
+        scan_mode="FULL",
+        state="REQUESTED",
+    )
+    with (
+        patch("anva.core.views._actor", return_value=object()),
+        patch(
+            "anva.core.views.connect_filesystem_source",
+            return_value=(source, True),
+        ) as connect,
+        patch(
+            "anva.core.views.request_ingestion_sync",
+            return_value=(run, True),
+        ) as sync,
+        patch(
+            "anva.core.views.inspect_source",
+            return_value={"id": str(source_id), "state": "ACTIVE"},
+        ),
+        patch(
+            "anva.core.views.source_sync_runs",
+            return_value=[{"id": str(run_id), "state": "REQUESTED"}],
+        ),
+    ):
+        connected = client.post(
+            "/api/v1/source-connections/filesystem",
+            data=json.dumps(
+                {
+                    "repository_id": str(repository_id),
+                    "access_scope_id": str(scope_id),
+                    "external_key": "fixture",
+                    "display_name": "Fixture",
+                    "root": "/fixtures/anva-test",
+                }
+            ),
+            content_type="application/json",
+        )
+        requested = client.post(
+            f"/api/v1/source-connections/{source_id}/sync",
+            data=json.dumps({"scan_mode": "FULL"}),
+            content_type="application/json",
+        )
+        inspected = client.get(f"/api/v1/source-connections/{source_id}")
+        history = client.get(f"/api/v1/source-connections/{source_id}/sync-runs")
+
+    assert connected.status_code == 201
+    assert connected.json()["created"] is True
+    assert requested.status_code == 202
+    assert requested.json()["access_snapshot_id"] == str(run.access_snapshot_id)
+    assert inspected.json() == {"id": str(source_id), "state": "ACTIVE"}
+    assert history.json()["sync_runs"][0]["id"] == str(run_id)
+    assert connect.call_args.kwargs["root"] == "/fixtures/anva-test"
+    assert sync.call_args.kwargs["scan_mode"] == "FULL"
+
+
+@pytest.mark.contract
+def test_source_lifecycle_rejects_unsupported_methods(client: Client) -> None:
+    source_id = uuid.uuid4()
+    assert client.get("/api/v1/source-connections/filesystem").status_code == 405
+    assert client.get(f"/api/v1/source-connections/{source_id}/sync").status_code == 405
+    assert client.get(f"/api/v1/source-connections/{source_id}/resync").status_code == 405

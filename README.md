@@ -6,7 +6,8 @@ This repository currently contains the installable engineering foundation: a Pyt
 Django modular monolith with independent API, worker, MCP, and CLI process boundaries,
 PostgreSQL with pgvector, and S3-compatible object storage. The current backend includes
 tenant identity, repository credentials, access scopes, permission-filtered retrieval, and
-source revocation. It intentionally
+read-only filesystem ingestion with immutable provenance, chunks, and normalized relationship
+edges. It intentionally
 does **not** contain a coding-agent runtime, workflow engine, graph database, or customer-code
 sandbox.
 
@@ -65,13 +66,16 @@ make migrations-check
 make contracts-check
 make unit
 make integration
+make corpus
 make contract
 make smoke
 make coverage
 make check
 ```
 
-`make check` is the same entrypoint used by GitHub Actions. The integration suite uses a
+`make check` is the same entrypoint used by GitHub Actions. The optional `make corpus` target
+requires the sibling `../anva-test` repository and mounts it at `/fixtures/anva-test:ro`; it
+fingerprints representative files before and after a full ingestion. The integration suite uses a
 separate `anva-tests` Compose project with non-persistent `test-postgres` and `test-minio`
 services, never the development containers or data volumes. Remove that project after a
 local test session with `make test-down`.
@@ -107,14 +111,28 @@ make shell
 make down
 ```
 
-The worker is a deliberately empty process shell. MCP exposes health endpoints, while
-the full MCP protocol still returns `501 Not Implemented`; the versioned
+The worker claims PostgreSQL-leased allowlisted jobs and revalidates source/snapshot access before
+and during ingestion. MCP exposes health endpoints, while the full MCP protocol still returns
+`501 Not Implemented`; the versioned
 `/api/v1/mcp/context` permission boundary is available for authorization integration tests.
 
 Bootstrap and repository-token operations are documented in
 [the credential runbook](docs/runbooks/bootstrap-and-repository-tokens.md). A repository token
 is opaque, repository/action scoped, stored only as a keyed digest, and returned in plaintext
 only when issued or rotated.
+
+Filesystem source lifecycle commands use the versioned API. Put the repository token in
+`ANVA_TOKEN` (never a command-line argument), then run commands such as:
+
+```bash
+docker compose --profile tools run --rm \
+  -e ANVA_TOKEN cli anva source inspect <source-connection-uuid>
+docker compose --profile tools run --rm \
+  -e ANVA_TOKEN cli anva source sync <source-connection-uuid>
+```
+
+Connect, resync, revoke, failure recovery, and read-only mount setup are documented in
+[the ingestion runbook](docs/runbooks/source-ingestion.md).
 
 ## Reset
 
@@ -139,6 +157,8 @@ The reset removes the local PostgreSQL database and MinIO objects. It cannot be 
 - MinIO initialization failure: inspect `docker compose logs minio minio-init`; credentials
   must match across the two services.
 - Lock mismatch: run `make lock`, inspect `uv.lock`, and rebuild.
+- Source root rejected: mount it read-only in API and worker, then include its in-container
+  absolute parent in `ANVA_FILESYSTEM_ALLOWED_ROOTS`.
 
 See [the local development runbook](docs/runbooks/local-development.md) for dependency failure
 behavior, [the authorization threat model](docs/security/tenancy-authorization-threat-model.md)
@@ -152,6 +172,7 @@ hardening requirements.
 src/anva/config/       Django settings and API process configuration
 src/anva/contracts/    Canonical versioned JSON/OpenAPI/MCP contract source
 src/anva/core/         Tenant models, state machines, artifacts, jobs, audit, and outbox
+src/anva/ingestion/    Read-only connectors, bounded parsers, and mechanical extractors
 src/anva/foundation/   Service-owned health and deployment invariants
 src/anva/entrypoints/  API-adjacent CLI, worker, and MCP process boundaries
 src/anva/templates/    Server-rendered semantic HTML
