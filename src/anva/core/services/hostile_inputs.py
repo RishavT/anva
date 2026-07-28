@@ -10,7 +10,8 @@ from anva.core.logging import redact_text
 FULL_COMMIT = re.compile(r"^[a-f0-9]{40}$")
 SENSITIVE_KEY = re.compile(
     r"(?i)(?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|"
-    r"client[_-]?secret|password|passwd|private[_-]?key|cookie|session)"
+    r"client[_-]?secret|password|passwd|private[_-]?key|cookie|session|"
+    r"credential|signature|security[_-]?token)"
 )
 
 
@@ -33,6 +34,24 @@ def validate_relative_artifact_path(value: str) -> None:
         raise ValueError("Artifact reference must be a normalized relative POSIX path")
     if str(path) != value:
         raise ValueError("Artifact reference must be normalized")
+
+
+def is_secret_bearing_query_key(value: str) -> bool:
+    """Recognize provider-neutral signed-query credentials case-insensitively."""
+    normalized = re.sub(r"[^a-z0-9]", "", value.casefold())
+    return bool(
+        SENSITIVE_KEY.search(value)
+        or normalized.endswith(("credential", "signature", "securitytoken"))
+        or normalized
+        in {
+            "accesskey",
+            "accesskeyid",
+            "googleaccessid",
+            "keypairid",
+            "sig",
+            "token",
+        }
+    )
 
 
 def reject_secrets(value: object, *, depth: int = 0) -> None:

@@ -35,6 +35,7 @@ from anva.core.services.authorization import (
     Action,
     authorize_action,
     get_tenant_record,
+    get_tenant_record_for_update,
 )
 from anva.core.services.context import ActorContext
 from anva.core.services.events import record_transition
@@ -421,6 +422,11 @@ def approve_work_item_revision(
         "expires_at": expires_at.isoformat() if expires_at else None,
     }
     idempotency_key = content_hash(identity)
+    revision = get_tenant_record_for_update(
+        queryset=WorkItemRevision.objects.select_related("work_item__repository"),
+        record_id=revision.id,
+        organization_id=actor.organization_id,
+    )
     existing = Approval.objects.filter(
         organization_id=actor.organization_id,
         idempotency_key=idempotency_key,
@@ -484,6 +490,11 @@ def revoke_work_item_approval(
     if not reason.strip():
         raise ValueError("Revocation reason is required")
     reject_secrets(reason)
+    approval = get_tenant_record_for_update(
+        queryset=Approval.objects.select_related("work_item_revision__work_item"),
+        record_id=approval.id,
+        organization_id=actor.organization_id,
+    )
     existing = ApprovalRevocation.objects.filter(approval=approval).first()
     if existing is not None:
         return existing, False

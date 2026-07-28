@@ -35,6 +35,7 @@ from anva.core.services.authorization import (
     Action,
     authorize_action,
     get_tenant_record,
+    get_tenant_record_for_update,
 )
 from anva.core.services.context import ActorContext
 from anva.core.services.events import record_transition
@@ -472,17 +473,16 @@ def evaluate_policy(
         work_type = work_revision.work_type
         scope_ids.add(work_revision.work_item.access_scope_id)
 
-    versions = list(
-        PolicyVersion.objects.select_related("policy", "policybinding")
-        .filter(
-            id__in=policy_version_ids,
-            organization_id=actor.organization_id,
+    versions_query = PolicyVersion.objects.select_related("policy", "policybinding").filter(
+        id__in=policy_version_ids,
+        organization_id=actor.organization_id,
+    )
+    if not is_simulation:
+        versions_query = versions_query.filter(
             definition__status=Policy.Status.ACTIVE,
             effective_at__lte=reference_time,
-        )
-        .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=reference_time))
-        .order_by("id")
-    )
+        ).filter(Q(expires_at__isnull=True) | Q(expires_at__gt=reference_time))
+    versions = list(versions_query.order_by("id"))
     if len(versions) != len(set(policy_version_ids)):
         raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
     for version in versions:
@@ -797,6 +797,11 @@ def create_policy_override(
         "expires_at": expires_at.isoformat() if expires_at else None,
     }
     idempotency_key = content_hash(identity)
+    evaluation = get_tenant_record_for_update(
+        queryset=PolicyEvaluation.objects.select_related("repository", "access_scope"),
+        record_id=evaluation.id,
+        organization_id=actor.organization_id,
+    )
     existing = PolicyOverride.objects.filter(
         organization_id=actor.organization_id,
         idempotency_key=idempotency_key,
@@ -867,6 +872,15 @@ def revoke_policy_override(
     if not reason.strip():
         raise ValueError("Revocation reason is required")
     reject_secrets(reason)
+    override = get_tenant_record_for_update(
+        queryset=PolicyOverride.objects.select_related(
+            "repository",
+            "policy_evaluation__access_scope",
+            "policy_version__policy",
+        ),
+        record_id=override.id,
+        organization_id=actor.organization_id,
+    )
     existing = PolicyOverrideRevocation.objects.filter(policy_override=override).first()
     if existing is not None:
         return existing, False

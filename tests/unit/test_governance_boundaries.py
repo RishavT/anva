@@ -49,6 +49,15 @@ def test_secret_canaries_are_rejected_before_persistence() -> None:
         reject_secrets({"command": "curl -H 'Authorization: Bearer secret-value'"})
     with pytest.raises(ValueError, match="secret-bearing field"):
         reject_secrets({"access_token": "plain"})
+    with pytest.raises(ValueError, match="credential material"):
+        reject_secrets(
+            {
+                "source_url": (
+                    "https://storage.example.test/result?"
+                    "X-Amz-Signature=deadbeef&X-Amz-Security-Token=session-value"
+                )
+            }
+        )
 
 
 @pytest.mark.unit
@@ -82,6 +91,13 @@ def test_work_contract_rejects_unknown_required_evidence_types() -> None:
         "file:///etc/passwd",
         "https://user:password@example.test/result",
         "https://example.test/result?access_token=secret",
+        "https://s3.example.test/result?X-Amz-Credential=AKIA/example&X-AmZ-SiGnAtUrE=abc",
+        "https://s3.example.test/result?x-AMZ-security-TOKEN=session-value",
+        "https://storage.googleapis.test/result?X-Goog-Credential=service&X-Goog-Signature=abc",
+        "https://blob.example.test/result?sv=2026-01-01&sp=r&sig=azure-signature",
+        "https://storage.example.test/result?provider-credential=identity",
+        "https://storage.example.test/result?provider-signature=signature",
+        "https://storage.example.test/result?provider-security-token=session",
     ],
 )
 def test_evidence_source_url_rejects_unsafe_or_secret_bearing_urls(value: str) -> None:

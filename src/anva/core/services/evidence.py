@@ -38,7 +38,7 @@ from anva.core.services.authorization import (
 from anva.core.services.context import ActorContext
 from anva.core.services.events import record_transition
 from anva.core.services.hostile_inputs import (
-    SENSITIVE_KEY,
+    is_secret_bearing_query_key,
     reject_secrets,
     validate_full_commit,
     validate_relative_artifact_path,
@@ -97,7 +97,10 @@ def validate_source_url(value: str | None) -> None:
     parsed = urlsplit(value)
     if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
         raise ValueError("source_url must be an HTTPS URL without user information")
-    if any(SENSITIVE_KEY.search(key) for key, _value in parse_qsl(parsed.query)):
+    if any(
+        is_secret_bearing_query_key(key)
+        for key, _value in parse_qsl(parsed.query, keep_blank_values=True)
+    ):
         raise ValueError("source_url contains a secret-bearing query parameter")
 
 
@@ -141,7 +144,10 @@ def _validate_type_specific(
         approval.repository_id != repository_id
         or approval.work_item_revision_id != work_revision.id
         or approval.status != Approval.Status.APPROVED
-        or ApprovalRevocation.objects.filter(approval=approval).exists()
+        or ApprovalRevocation.objects.filter(
+            approval=approval,
+            revoked_at__lte=completed_at,
+        ).exists()
         or approval.decided_at > completed_at
         or (approval.expires_at is not None and approval.expires_at <= completed_at)
         or status != Evidence.Status.PASSED
