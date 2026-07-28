@@ -180,6 +180,7 @@ ASSURANCE_TRANSITIONS: Mapping[str, frozenset[str]] = {
             AssuranceRun.State.STALE,
         }
     ),
+    AssuranceRun.State.COMPLETED: frozenset({AssuranceRun.State.STALE}),
 }
 
 PROPOSAL_TRANSITIONS: Mapping[str, frozenset[str]] = {

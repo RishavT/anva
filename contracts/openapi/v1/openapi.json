@@ -24,6 +24,156 @@
       }
     },
     "schemas": {
+      "assurance-report": {
+        "$id": "https://schemas.anva.dev/v1/assurance-report.schema.json",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "assurance_run_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "finding_fingerprints": {
+            "items": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "maxItems": 500,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "head_commit": {
+            "pattern": "^[a-f0-9]{40}$",
+            "type": "string"
+          },
+          "html": {
+            "maxLength": 300000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "limitations": {
+            "items": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "markdown": {
+            "maxLength": 200000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "pull_request_revision_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "readiness": {
+            "enum": [
+              "BLOCKED",
+              "READY_WITH_WARNINGS",
+              "READY_FOR_HUMAN_REVIEW",
+              "STALE",
+              "FAILED"
+            ],
+            "type": "string"
+          },
+          "reason_codes": {
+            "items": {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "report_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "repository_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "1.0",
+            "type": "string"
+          },
+          "versions": {
+            "additionalProperties": false,
+            "properties": {
+              "context": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "diff": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "evaluator": {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              "evidence": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "policy": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "prompt": {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              "renderer": {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              "requirements": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "diff",
+              "context",
+              "requirements",
+              "policy",
+              "evidence",
+              "evaluator",
+              "prompt",
+              "renderer"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "schema_version",
+          "report_id",
+          "assurance_run_id",
+          "organization_id",
+          "repository_id",
+          "pull_request_revision_id",
+          "head_commit",
+          "readiness",
+          "reason_codes",
+          "finding_fingerprints",
+          "versions",
+          "limitations",
+          "markdown",
+          "html"
+        ],
+        "title": "Anva Manual Diff Assurance Report",
+        "type": "object"
+      },
       "context-packet": {
         "$defs": {
           "context_item": {
@@ -313,37 +463,190 @@
         "type": "object"
       },
       "evaluator-request": {
+        "$defs": {
+          "diff_chunk": {
+            "additionalProperties": false,
+            "properties": {
+              "classification": {
+                "enum": [
+                  "SOURCE",
+                  "TEST",
+                  "DOCUMENTATION",
+                  "MIGRATION",
+                  "SECURITY_SENSITIVE",
+                  "DEPENDENCY",
+                  "CI"
+                ],
+                "type": "string"
+              },
+              "content_hash": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "new_count": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "new_start": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "old_count": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "old_start": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "maxLength": 1000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "position": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "text": {
+                "maxLength": 100000,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "position",
+              "path",
+              "classification",
+              "old_start",
+              "old_count",
+              "new_start",
+              "new_count",
+              "text",
+              "content_hash"
+            ],
+            "type": "object"
+          }
+        },
         "$id": "https://schemas.anva.dev/v1/evaluator-request.schema.json",
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
+          "assurance_run_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "authorized_context": {
+            "items": {
+              "type": "object"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
           "commit_sha": {
             "pattern": "^[a-f0-9]{40}$",
             "type": "string"
           },
-          "context_packet_id": {
-            "format": "uuid",
-            "type": "string"
+          "deterministic_checks": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "blocking": {
+                  "type": "boolean"
+                },
+                "code": {
+                  "maxLength": 100,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "evidence_ids": {
+                  "items": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "status": {
+                  "enum": [
+                    "PASSED",
+                    "FAILED",
+                    "NOT_AVAILABLE"
+                  ],
+                  "type": "string"
+                },
+                "summary": {
+                  "maxLength": 2000,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "status",
+                "blocking",
+                "summary",
+                "evidence_ids"
+              ],
+              "type": "object"
+            },
+            "maxItems": 200,
+            "type": "array"
           },
-          "evidence_manifest_id": {
-            "format": "uuid",
-            "type": "string"
+          "evidence_mappings": {
+            "items": {
+              "type": "object"
+            },
+            "maxItems": 500,
+            "type": "array"
+          },
+          "instructions": {
+            "items": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "type": "array"
+          },
+          "limitations": {
+            "items": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
           },
           "organization_id": {
             "format": "uuid",
             "type": "string"
           },
-          "policy_id": {
+          "policy_controls": {
+            "items": {
+              "type": "object"
+            },
+            "maxItems": 500,
+            "type": "array"
+          },
+          "pull_request_revision_id": {
             "format": "uuid",
             "type": "string"
           },
-          "policy_version": {
-            "minimum": 1,
-            "type": "integer"
+          "repository_id": {
+            "format": "uuid",
+            "type": "string"
           },
           "request_id": {
             "format": "uuid",
             "type": "string"
+          },
+          "requirements": {
+            "items": {
+              "type": "object"
+            },
+            "maxItems": 500,
+            "type": "array"
           },
           "schema_version": {
             "const": "1.0",
@@ -352,12 +655,15 @@
           "untrusted_change": {
             "additionalProperties": false,
             "properties": {
+              "chunks": {
+                "items": {
+                  "$ref": "#/$defs/diff_chunk"
+                },
+                "maxItems": 2000,
+                "type": "array"
+              },
               "description": {
                 "maxLength": 50000,
-                "type": "string"
-              },
-              "diff_reference": {
-                "format": "uri",
                 "type": "string"
               },
               "title": {
@@ -368,7 +674,54 @@
             "required": [
               "title",
               "description",
-              "diff_reference"
+              "chunks"
+            ],
+            "type": "object"
+          },
+          "versions": {
+            "additionalProperties": false,
+            "properties": {
+              "context": {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              "diff_parser": {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              "evaluator": {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              "evidence": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "policy": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "prompt": {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              "requirements": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "diff_parser",
+              "context",
+              "requirements",
+              "policy",
+              "evidence",
+              "evaluator",
+              "prompt"
             ],
             "type": "object"
           }
@@ -377,25 +730,97 @@
           "schema_version",
           "request_id",
           "organization_id",
+          "repository_id",
+          "assurance_run_id",
+          "pull_request_revision_id",
           "commit_sha",
-          "policy_id",
-          "policy_version",
-          "context_packet_id",
-          "evidence_manifest_id",
-          "untrusted_change"
+          "versions",
+          "deterministic_checks",
+          "requirements",
+          "policy_controls",
+          "evidence_mappings",
+          "authorized_context",
+          "untrusted_change",
+          "instructions",
+          "limitations"
         ],
         "title": "Anva Evaluator Request",
         "type": "object"
       },
       "evaluator-result": {
         "$defs": {
-          "finding": {
+          "assurance_citation": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "line": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "path": {
+                    "maxLength": 1000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "side": {
+                    "enum": [
+                      "OLD",
+                      "NEW"
+                    ],
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "DIFF"
+                  }
+                },
+                "required": [
+                  "type",
+                  "path",
+                  "side",
+                  "line"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "context_citation_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "ANVA_SOURCE"
+                  }
+                },
+                "required": [
+                  "type",
+                  "context_citation_id"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "evaluator_finding": {
             "additionalProperties": false,
             "properties": {
-              "anva_sources": {
+              "category": {
+                "enum": [
+                  "CORRECTNESS",
+                  "SECURITY",
+                  "RELIABILITY",
+                  "MAINTAINABILITY",
+                  "REQUIREMENT",
+                  "POLICY",
+                  "EVIDENCE"
+                ],
+                "type": "string"
+              },
+              "citations": {
                 "items": {
-                  "$ref": "#/$defs/source_reference"
+                  "$ref": "#/$defs/assurance_citation"
                 },
+                "maxItems": 20,
                 "minItems": 1,
                 "type": "array"
               },
@@ -403,136 +828,75 @@
                 "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
                 "type": "string"
               },
-              "description": {
-                "maxLength": 10000,
-                "minLength": 1,
+              "confidence": {
+                "enum": [
+                  "HIGH",
+                  "MEDIUM",
+                  "LOW"
+                ],
                 "type": "string"
+              },
+              "criterion_codes": {
+                "items": {
+                  "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "type": "array",
+                "uniqueItems": true
               },
               "evidence_ids": {
                 "items": {
                   "format": "uuid",
                   "type": "string"
                 },
+                "maxItems": 100,
                 "type": "array",
                 "uniqueItems": true
               },
-              "finding_id": {
-                "format": "uuid",
-                "type": "string"
-              },
-              "limitations": {
-                "items": {
-                  "maxLength": 2000,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              "organization_id": {
-                "format": "uuid",
-                "type": "string"
-              },
-              "schema_version": {
-                "const": "1.0",
+              "explanation": {
+                "maxLength": 10000,
+                "minLength": 1,
                 "type": "string"
               },
               "severity": {
                 "enum": [
                   "BLOCKING",
+                  "HIGH",
+                  "MEDIUM",
+                  "LOW",
                   "ADVISORY"
                 ],
+                "type": "string"
+              },
+              "suggested_resolution": {
+                "maxLength": 2000,
+                "minLength": 1,
                 "type": "string"
               },
               "title": {
                 "maxLength": 300,
                 "minLength": 1,
                 "type": "string"
-              }
-            },
-            "required": [
-              "schema_version",
-              "finding_id",
-              "organization_id",
-              "code",
-              "severity",
-              "title",
-              "description",
-              "anva_sources",
-              "evidence_ids",
-              "limitations"
-            ],
-            "title": "Anva Assurance Finding",
-            "type": "object"
-          },
-          "source_reference": {
-            "additionalProperties": false,
-            "properties": {
-              "canonical_url": {
-                "oneOf": [
-                  {
-                    "format": "uri",
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
               },
-              "content_hash": {
-                "oneOf": [
-                  {
-                    "pattern": "^[a-f0-9]{64}$",
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "locator": {
-                "maxLength": 500,
+              "uncertainty": {
+                "maxLength": 2000,
                 "minLength": 1,
                 "type": "string"
-              },
-              "observed_at": {
-                "format": "date-time",
-                "type": "string"
-              },
-              "revision_id": {
-                "oneOf": [
-                  {
-                    "format": "uuid",
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "source_id": {
-                "format": "uuid",
-                "type": "string"
-              },
-              "source_type": {
-                "enum": [
-                  "DOCUMENT",
-                  "CODE",
-                  "POLICY",
-                  "DECISION",
-                  "HUMAN_APPROVAL",
-                  "EVIDENCE"
-                ],
-                "type": "string"
               }
             },
             "required": [
-              "source_id",
-              "source_type",
-              "revision_id",
-              "canonical_url",
-              "content_hash",
-              "observed_at",
-              "locator"
+              "code",
+              "category",
+              "severity",
+              "confidence",
+              "title",
+              "explanation",
+              "citations",
+              "evidence_ids",
+              "criterion_codes",
+              "uncertainty",
+              "suggested_resolution"
             ],
             "type": "object"
           }
@@ -545,13 +909,25 @@
             "pattern": "^[a-f0-9]{40}$",
             "type": "string"
           },
+          "completion": {
+            "enum": [
+              "COMPLETE",
+              "PARTIAL"
+            ],
+            "type": "string"
+          },
           "evaluated_at": {
             "format": "date-time",
             "type": "string"
           },
+          "evaluator_version": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
           "findings": {
             "items": {
-              "$ref": "#/$defs/finding"
+              "$ref": "#/$defs/evaluator_finding"
             },
             "maxItems": 500,
             "type": "array"
@@ -568,12 +944,9 @@
             "format": "uuid",
             "type": "string"
           },
-          "outcome": {
-            "enum": [
-              "READY",
-              "NOT_READY",
-              "UNKNOWN"
-            ],
+          "prompt_version": {
+            "maxLength": 100,
+            "minLength": 1,
             "type": "string"
           },
           "request_id": {
@@ -583,6 +956,24 @@
           "schema_version": {
             "const": "1.0",
             "type": "string"
+          },
+          "usage": {
+            "additionalProperties": false,
+            "properties": {
+              "input_units": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "output_units": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "input_units",
+              "output_units"
+            ],
+            "type": "object"
           }
         },
         "required": [
@@ -590,7 +981,10 @@
           "request_id",
           "organization_id",
           "commit_sha",
-          "outcome",
+          "completion",
+          "evaluator_version",
+          "prompt_version",
+          "usage",
           "findings",
           "limitations",
           "evaluated_at"
@@ -864,6 +1258,58 @@
       },
       "finding": {
         "$defs": {
+          "assurance_citation": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "line": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "path": {
+                    "maxLength": 1000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "side": {
+                    "enum": [
+                      "OLD",
+                      "NEW"
+                    ],
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "DIFF"
+                  }
+                },
+                "required": [
+                  "type",
+                  "path",
+                  "side",
+                  "line"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "context_citation_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "ANVA_SOURCE"
+                  }
+                },
+                "required": [
+                  "type",
+                  "context_citation_id"
+                ],
+                "type": "object"
+              }
+            ]
+          },
           "source_reference": {
             "additionalProperties": false,
             "properties": {
@@ -945,12 +1391,36 @@
             "items": {
               "$ref": "#/$defs/source_reference"
             },
+            "type": "array"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/$defs/assurance_citation"
+            },
+            "maxItems": 20,
             "minItems": 1,
             "type": "array"
           },
           "code": {
             "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
             "type": "string"
+          },
+          "confidence": {
+            "enum": [
+              "PROVEN",
+              "HIGH",
+              "MEDIUM",
+              "LOW"
+            ],
+            "type": "string"
+          },
+          "criterion_codes": {
+            "items": {
+              "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+              "type": "string"
+            },
+            "type": "array",
+            "uniqueItems": true
           },
           "description": {
             "maxLength": 10000,
@@ -967,6 +1437,29 @@
           },
           "finding_id": {
             "format": "uuid",
+            "type": "string"
+          },
+          "fingerprint": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "DETERMINISTIC",
+              "POLICY",
+              "EVIDENCE",
+              "MODEL"
+            ],
+            "type": "string"
+          },
+          "lifecycle_state": {
+            "enum": [
+              "OPEN",
+              "DISMISSED",
+              "RISK_ACCEPTED",
+              "RESOLVED",
+              "OBSOLETE"
+            ],
             "type": "string"
           },
           "limitations": {
@@ -988,12 +1481,25 @@
           "severity": {
             "enum": [
               "BLOCKING",
+              "HIGH",
+              "MEDIUM",
+              "LOW",
               "ADVISORY"
             ],
             "type": "string"
           },
+          "suggested_resolution": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
           "title": {
             "maxLength": 300,
+            "minLength": 1,
+            "type": "string"
+          },
+          "uncertainty": {
+            "maxLength": 2000,
             "minLength": 1,
             "type": "string"
           }
@@ -1002,12 +1508,20 @@
           "schema_version",
           "finding_id",
           "organization_id",
+          "fingerprint",
           "code",
+          "kind",
           "severity",
+          "confidence",
           "title",
           "description",
+          "uncertainty",
+          "suggested_resolution",
+          "lifecycle_state",
+          "citations",
           "anva_sources",
           "evidence_ids",
+          "criterion_codes",
           "limitations"
         ],
         "title": "Anva Assurance Finding",
@@ -1200,6 +1714,156 @@
           "created_at"
         ],
         "title": "Anva Knowledge Proposal",
+        "type": "object"
+      },
+      "manual-diff-artifact": {
+        "$defs": {
+          "diff_chunk": {
+            "additionalProperties": false,
+            "properties": {
+              "classification": {
+                "enum": [
+                  "SOURCE",
+                  "TEST",
+                  "DOCUMENTATION",
+                  "MIGRATION",
+                  "SECURITY_SENSITIVE",
+                  "DEPENDENCY",
+                  "CI"
+                ],
+                "type": "string"
+              },
+              "content_hash": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "new_count": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "new_start": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "old_count": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "old_start": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "maxLength": 1000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "position": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "text": {
+                "maxLength": 100000,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "position",
+              "path",
+              "classification",
+              "old_start",
+              "old_count",
+              "new_start",
+              "new_count",
+              "text",
+              "content_hash"
+            ],
+            "type": "object"
+          }
+        },
+        "$id": "https://schemas.anva.dev/v1/manual-diff-artifact.schema.json",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "base_commit": {
+            "pattern": "^[a-f0-9]{40}$",
+            "type": "string"
+          },
+          "changed_paths": {
+            "items": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 500,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "chunks": {
+            "items": {
+              "$ref": "#/$defs/diff_chunk"
+            },
+            "maxItems": 2000,
+            "minItems": 1,
+            "type": "array"
+          },
+          "diff_hash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "head_commit": {
+            "pattern": "^[a-f0-9]{40}$",
+            "type": "string"
+          },
+          "limitations": {
+            "items": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "parser_version": {
+            "const": "unified-diff-v1"
+          },
+          "pull_request_number": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "repository_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "1.0",
+            "type": "string"
+          },
+          "unified_diff": {
+            "maxLength": 1000000,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "organization_id",
+          "repository_id",
+          "pull_request_number",
+          "base_commit",
+          "head_commit",
+          "parser_version",
+          "unified_diff",
+          "diff_hash",
+          "changed_paths",
+          "chunks",
+          "limitations"
+        ],
+        "title": "Anva Immutable Manual Diff",
         "type": "object"
       },
       "policy": {
@@ -2005,6 +2669,259 @@
         }
       }
     },
+    "/assurance-runs/{resource_id}": {
+      "get": {
+        "operationId": "getAssuranceRun",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/assurance-runs/{resource_id}/findings": {
+      "get": {
+        "operationId": "listAssuranceFindings",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/assurance-runs/{resource_id}/post-merge-proposals": {
+      "post": {
+        "operationId": "proposePostMergeKnowledge",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          },
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "proposals": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "changes": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "is_inferred": {
+                                "type": "boolean"
+                              },
+                              "operation": {
+                                "enum": [
+                                  "ADD",
+                                  "CORRECT",
+                                  "SUPERSEDE"
+                                ],
+                                "type": "string"
+                              },
+                              "predicate": {
+                                "maxLength": 200,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "target_id": {
+                                "oneOf": [
+                                  {
+                                    "format": "uuid",
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "value": {}
+                            },
+                            "required": [
+                              "operation",
+                              "target_id",
+                              "predicate",
+                              "value",
+                              "is_inferred"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 100,
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        "classification": {
+                          "enum": [
+                            "MECHANICAL",
+                            "INTERPRETIVE"
+                          ],
+                          "type": "string"
+                        },
+                        "confidence": {
+                          "enum": [
+                            "HIGH",
+                            "MEDIUM",
+                            "LOW"
+                          ],
+                          "type": "string"
+                        },
+                        "context_citation_ids": {
+                          "items": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "minItems": 1,
+                          "type": "array",
+                          "uniqueItems": true
+                        },
+                        "summary": {
+                          "maxLength": 5000,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "summary",
+                        "changes",
+                        "context_citation_ids",
+                        "classification",
+                        "confidence"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 50,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "proposals"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Tenant-scoped resource created."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/assurance-runs/{resource_id}/report": {
+      "get": {
+        "operationId": "getAssuranceReport",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
     "/assurance-runs/{resource_id}/transition": {
       "post": {
         "operationId": "transitionAssuranceRun",
@@ -2322,6 +3239,76 @@
         }
       }
     },
+    "/evaluator-tasks/{resource_id}/submit": {
+      "post": {
+        "operationId": "submitManualEvaluatorResult",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          },
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "claim_token": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "claimant": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "result": {
+                    "$ref": "#/components/schemas/evaluator-result"
+                  }
+                },
+                "required": [
+                  "claimant",
+                  "claim_token",
+                  "result"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing resource returned for an exact canonical replay."
+          },
+          "201": {
+            "description": "Tenant-scoped resource created."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
     "/evaluator/evaluate": {
       "post": {
         "operationId": "evaluateChange",
@@ -2404,7 +3391,7 @@
     },
     "/findings/{resource_id}/dismiss": {
       "post": {
-        "description": "Authorization boundary; mutation arrives with the finding model.",
+        "description": "Apply an authorized explicit finding lifecycle decision.",
         "operationId": "dismissFinding",
         "parameters": [
           {
@@ -2420,9 +3407,47 @@
             "$ref": "#/components/parameters/CorrelationId"
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expected_revision": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "reason": {
+                    "maxLength": 2000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "repository_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "target_state": {
+                    "enum": [
+                      "DISMISSED",
+                      "RISK_ACCEPTED",
+                      "RESOLVED",
+                      "OPEN"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "repository_id"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
-          "202": {
-            "description": "Authorized request accepted."
+          "200": {
+            "description": "Authorized tenant-scoped response."
           },
           "400": {
             "$ref": "#/components/responses/StructuredError"
@@ -3165,6 +4190,142 @@
         }
       }
     },
+    "/pull-request-revisions/{resource_id}/assurance-runs": {
+      "post": {
+        "operationId": "startManualDiffAssurance",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          },
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "deterministic_checks": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "blocking": {
+                          "type": "boolean"
+                        },
+                        "code": {
+                          "maxLength": 100,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "evidence_ids": {
+                          "items": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "maxItems": 100,
+                          "type": "array",
+                          "uniqueItems": true
+                        },
+                        "status": {
+                          "enum": [
+                            "PASSED",
+                            "FAILED",
+                            "NOT_AVAILABLE"
+                          ],
+                          "type": "string"
+                        },
+                        "summary": {
+                          "maxLength": 2000,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "status",
+                        "blocking",
+                        "summary",
+                        "evidence_ids"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 200,
+                    "type": "array"
+                  },
+                  "evaluator_version": {
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "policy_version_ids": {
+                    "items": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "maxItems": 100,
+                    "minItems": 1,
+                    "type": "array",
+                    "uniqueItems": true
+                  },
+                  "prompt_version": {
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "reference_time": {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  "trigger_key": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "work_item_revision_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "policy_version_ids",
+                  "reference_time",
+                  "deterministic_checks"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing resource returned for an exact canonical replay."
+          },
+          "201": {
+            "description": "Tenant-scoped resource created."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
     "/query": {
       "post": {
         "operationId": "queryAuthorizedKnowledge",
@@ -3173,6 +4334,68 @@
             "$ref": "#/components/parameters/CorrelationId"
           }
         ],
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/repositories/{repository_id}/evaluator-tasks/claim": {
+      "post": {
+        "operationId": "claimManualEvaluatorTask",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          },
+          {
+            "in": "path",
+            "name": "repository_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "claimant": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "lease_seconds": {
+                    "maximum": 3600,
+                    "minimum": 60,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "claimant"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "Authorized tenant-scoped response."
@@ -3223,6 +4446,120 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/evidence-manifest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing resource returned for an exact canonical replay."
+          },
+          "201": {
+            "description": "Tenant-scoped resource created."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/repositories/{repository_id}/pull-requests/{pull_request_number}/manual-diff": {
+      "post": {
+        "operationId": "ingestManualPullRequestDiff",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          },
+          {
+            "in": "path",
+            "name": "repository_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pull_request_number",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "access_scope_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "base_commit": {
+                    "pattern": "^[a-f0-9]{40}$",
+                    "type": "string"
+                  },
+                  "description": {
+                    "maxLength": 50000,
+                    "type": "string"
+                  },
+                  "head_commit": {
+                    "pattern": "^[a-f0-9]{40}$",
+                    "type": "string"
+                  },
+                  "is_draft": {
+                    "type": "boolean"
+                  },
+                  "state": {
+                    "enum": [
+                      "OPEN",
+                      "MERGED",
+                      "CLOSED"
+                    ],
+                    "type": "string"
+                  },
+                  "target_branch": {
+                    "maxLength": 300,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "title": {
+                    "maxLength": 1000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "unified_diff": {
+                    "maxLength": 1000000,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "access_scope_id",
+                  "base_commit",
+                  "head_commit",
+                  "title",
+                  "description",
+                  "target_branch",
+                  "is_draft",
+                  "state",
+                  "unified_diff"
+                ],
+                "type": "object"
               }
             }
           },

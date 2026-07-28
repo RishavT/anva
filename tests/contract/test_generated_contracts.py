@@ -24,7 +24,7 @@ def test_contract_catalog_and_checked_in_generation_are_current() -> None:
     second = rendered_artifacts()
 
     assert first == second
-    assert len(first) == 18
+    assert len(first) == 22
     check_artifacts(first)
 
 
@@ -101,6 +101,14 @@ def test_openapi_exposes_versioned_tenancy_and_authorization_boundaries() -> Non
         "/policies/{resource_id}",
         "/knowledge/assertions/{resource_id}/review",
         "/assurance-runs/{resource_id}/transition",
+        "/repositories/{repository_id}/pull-requests/{pull_request_number}/manual-diff",
+        "/pull-request-revisions/{resource_id}/assurance-runs",
+        "/repositories/{repository_id}/evaluator-tasks/claim",
+        "/evaluator-tasks/{resource_id}/submit",
+        "/assurance-runs/{resource_id}",
+        "/assurance-runs/{resource_id}/findings",
+        "/assurance-runs/{resource_id}/report",
+        "/assurance-runs/{resource_id}/post-merge-proposals",
         "/findings/{resource_id}/dismiss",
         "/policies/{resource_id}/override",
         "/repositories/{repository_id}/pull-requests/{pull_request_number}/evidence",
@@ -124,6 +132,11 @@ def test_openapi_exposes_versioned_tenancy_and_authorization_boundaries() -> Non
         "/policies/simulate",
         "/policies/{resource_id}/override",
         "/policy-overrides/{resource_id}/revoke",
+        "/repositories/{repository_id}/pull-requests/{pull_request_number}/manual-diff",
+        "/pull-request-revisions/{resource_id}/assurance-runs",
+        "/repositories/{repository_id}/evaluator-tasks/claim",
+        "/evaluator-tasks/{resource_id}/submit",
+        "/assurance-runs/{resource_id}/post-merge-proposals",
     ):
         operation = cast(dict[str, object], cast(dict[str, object], paths[path])["post"])
         body = cast(dict[str, object], operation["requestBody"])
@@ -135,6 +148,11 @@ def test_openapi_exposes_versioned_tenancy_and_authorization_boundaries() -> Non
             )["schema"],
         )
         assert schema["additionalProperties"] is False
+
+    evaluator_result = SCHEMAS["evaluator-result"]
+    properties = cast(dict[str, object], evaluator_result["properties"])
+    assert "readiness" not in properties
+    assert "outcome" not in properties
 
     simulation = cast(
         dict[str, object],

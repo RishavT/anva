@@ -161,6 +161,47 @@ urlpatterns = [
         name="api-v1-assurance-transition",
     ),
     path(
+        "api/v1/repositories/<uuid:repository_id>/pull-requests/"
+        "<int:pull_request_number>/manual-diff",
+        core_views.manual_diff_ingestion,
+        name="api-v1-manual-diff-ingest",
+    ),
+    path(
+        "api/v1/pull-request-revisions/<uuid:pull_request_revision_id>/assurance-runs",
+        core_views.assurance_start,
+        name="api-v1-assurance-start",
+    ),
+    path(
+        "api/v1/repositories/<uuid:repository_id>/evaluator-tasks/claim",
+        core_views.evaluator_task_claim,
+        name="api-v1-evaluator-task-claim",
+    ),
+    path(
+        "api/v1/evaluator-tasks/<uuid:task_id>/submit",
+        core_views.evaluator_task_submit,
+        name="api-v1-evaluator-task-submit",
+    ),
+    path(
+        "api/v1/assurance-runs/<uuid:run_id>",
+        core_views.assurance_detail,
+        name="api-v1-assurance-detail",
+    ),
+    path(
+        "api/v1/assurance-runs/<uuid:run_id>/findings",
+        core_views.assurance_findings,
+        name="api-v1-assurance-findings",
+    ),
+    path(
+        "api/v1/assurance-runs/<uuid:run_id>/report",
+        core_views.assurance_report,
+        name="api-v1-assurance-report",
+    ),
+    path(
+        "api/v1/assurance-runs/<uuid:run_id>/post-merge-proposals",
+        core_views.assurance_post_merge_proposals,
+        name="api-v1-assurance-post-merge-proposals",
+    ),
+    path(
         "api/v1/findings/<uuid:finding_id>/dismiss",
         core_views.dismiss_finding,
         name="api-v1-finding-dismiss",

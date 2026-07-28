@@ -1,5 +1,57 @@
 {
   "$defs": {
+    "assurance_citation": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "line": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "path": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "side": {
+              "enum": [
+                "OLD",
+                "NEW"
+              ],
+              "type": "string"
+            },
+            "type": {
+              "const": "DIFF"
+            }
+          },
+          "required": [
+            "type",
+            "path",
+            "side",
+            "line"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "context_citation_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": {
+              "const": "ANVA_SOURCE"
+            }
+          },
+          "required": [
+            "type",
+            "context_citation_id"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "source_reference": {
       "additionalProperties": false,
       "properties": {
@@ -81,12 +133,36 @@
       "items": {
         "$ref": "#/$defs/source_reference"
       },
+      "type": "array"
+    },
+    "citations": {
+      "items": {
+        "$ref": "#/$defs/assurance_citation"
+      },
+      "maxItems": 20,
       "minItems": 1,
       "type": "array"
     },
     "code": {
       "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
       "type": "string"
+    },
+    "confidence": {
+      "enum": [
+        "PROVEN",
+        "HIGH",
+        "MEDIUM",
+        "LOW"
+      ],
+      "type": "string"
+    },
+    "criterion_codes": {
+      "items": {
+        "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+        "type": "string"
+      },
+      "type": "array",
+      "uniqueItems": true
     },
     "description": {
       "maxLength": 10000,
@@ -103,6 +179,29 @@
     },
     "finding_id": {
       "format": "uuid",
+      "type": "string"
+    },
+    "fingerprint": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "DETERMINISTIC",
+        "POLICY",
+        "EVIDENCE",
+        "MODEL"
+      ],
+      "type": "string"
+    },
+    "lifecycle_state": {
+      "enum": [
+        "OPEN",
+        "DISMISSED",
+        "RISK_ACCEPTED",
+        "RESOLVED",
+        "OBSOLETE"
+      ],
       "type": "string"
     },
     "limitations": {
@@ -124,12 +223,25 @@
     "severity": {
       "enum": [
         "BLOCKING",
+        "HIGH",
+        "MEDIUM",
+        "LOW",
         "ADVISORY"
       ],
       "type": "string"
     },
+    "suggested_resolution": {
+      "maxLength": 2000,
+      "minLength": 1,
+      "type": "string"
+    },
     "title": {
       "maxLength": 300,
+      "minLength": 1,
+      "type": "string"
+    },
+    "uncertainty": {
+      "maxLength": 2000,
       "minLength": 1,
       "type": "string"
     }
@@ -138,12 +250,20 @@
     "schema_version",
     "finding_id",
     "organization_id",
+    "fingerprint",
     "code",
+    "kind",
     "severity",
+    "confidence",
     "title",
     "description",
+    "uncertainty",
+    "suggested_resolution",
+    "lifecycle_state",
+    "citations",
     "anva_sources",
     "evidence_ids",
+    "criterion_codes",
     "limitations"
   ],
   "title": "Anva Assurance Finding",

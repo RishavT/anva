@@ -1,0 +1,71 @@
+# Issue #7 self-review: Independent manual-diff assurance
+
+## Scope and acceptance evidence
+
+| Requirement | Implementation | Verification |
+| --- | --- | --- |
+| Exact PR revisions and immutable diffs | Current PR pointer, immutable metadata revisions, content-addressed raw diff, classified immutable chunks | Replay/new-head integration and DB immutability |
+| Safe nonexecuting ingestion | Strict bounded unified parser, path/hunk/binary/secret checks; no fetch/apply/import/subprocess | Hostile parser suite |
+| Debounced/stale assurance history | Canonical all-input hash, duplicate replay, state transitions, new revision staleness, attempt history | Lifecycle integration tests |
+| Deterministic policy/context/evidence | Reuses exact production policy evaluation, ASSURANCE context packet, criterion mappings; stores every hash/version/limitation | Run and evaluator request assertions |
+| Provider-neutral evaluator | `Evaluator` protocol, all v3 fake scenarios, leased claim/submit queue for a fresh context-limited reviewer | Unit/eval and PostgreSQL queue tests |
+| Valid structured findings | Closed schema, confidence/uncertainty, exact diff or authorized-source citations, evidence/criterion allowlists, stable semantic fingerprint and occurrences | Contract, citation, fingerprint tests |
+| Server-only readiness | Fixed precedence; evaluator result has no readiness/outcome; deterministic failure remains blocked | Contract and failure-wins integration test |
+| Concise deterministic reports | Stable Markdown and escaped HTML, top blockers/focus/versions/limitations, no deployment grant | Goldens and injection test |
+| Post-merge proposal safety | Exact completed merged revision and authorized citations required; only `KnowledgeProposal` links created | Safety integration case |
+| API/CLI/docs/generated artifacts | Versioned routes, bounded non-symlink CLI, JSON schemas/examples/OpenAPI/MCP, ADR/runbook/threat model | Contract drift and CLI tests |
+
+## Self-review findings fixed
+
+1. The previous run uniqueness used only repository/PR/head and would suppress same-head
+   re-evaluation after policy/context/evidence/prompt changes. Identity now includes the complete
+   exact canonical input.
+2. The old evaluator result let the model emit `READY|NOT_READY|UNKNOWN`. That field was removed;
+   the server alone computes readiness.
+3. The first queue query locked outer-joined nullable relations, which PostgreSQL rejects. Locking
+   is now restricted to the task row and nullable relations are loaded separately.
+4. Initial staleness considered only a new head. Any new PR metadata revision—including same-head
+   merge state—now stales the prior current result.
+5. Inherent transparency limitations initially forced every otherwise-clean run into warnings.
+   They remain visible in the report, while warnings are reserved for actual nonblocking concerns
+   or incomplete evaluator coverage.
+6. Model prose could carry HTML or deployment-claim language into the report. Rendering now escapes
+   all untrusted fields and removes prohibited deployment claims.
+7. The first evaluator envelope reused the broader diff scope even though it contained a
+   principal-sealed context packet. Evaluator requests, results, and reports now use an actor-only
+   scope derived from every exact input scope; claim, submit, read, and post-merge paths reauthorize
+   that scope and fail after contributing-source revocation.
+8. Citation and readiness validation initially queried every evidence mapping for the same
+   PR/head/work revision. They now reconstruct only the mapping IDs sealed into the evaluator
+   request and verify their payload, bundle hash, commit, PR, work revision, and reference time.
+9. Deterministic-check evidence IDs initially received UUID syntax validation only. Every ID now
+   resolves to retained, exact repository/PR/head/work/reference-time evidence under an authorized
+   scope before the run is created.
+10. A repeated evaluator observation could reopen a human-dismissed or risk-accepted finding.
+    Re-observation now records a new occurrence while preserving human lifecycle decisions; only
+    open findings affect a later readiness calculation.
+11. Diff parsing initially trusted only the `diff --git` path pair. It now also requires matching
+    `---`/`+++` headers and validates the only supported `/dev/null` add/delete forms.
+12. Review also found incomplete standalone criteria, narrow finding fingerprints, and open
+    post-merge change bodies. Criteria are complete, fingerprints include exact semantic citation
+    anchors with collision rejection, and finding/post-merge inputs use closed canonical schemas.
+
+## Limitations
+
+The diff is manually attested rather than fetched and signature-verified. Assurance does not run
+code or independently verify CI artifact bytes; it consumes exact deterministic checks and existing
+evidence metadata. Large/binary/combined/quoted-path diffs fail closed. There is no hosted evaluator
+provider, webhook adapter, GitHub check publisher, reviewer-identity federation, UI, automatic
+knowledge acceptance, retention quota, or proof of runtime/deployment safety in this slice.
+The manual evaluator queue currently requires the claiming principal to be inside the run's sealed
+input envelope; delegated evaluator identities need an explicit future federation design.
+
+## Verification
+
+The isolated Docker/Compose checks passed with 98 focused unit/contract/CLI/HTTP tests, seven
+assurance lifecycle integrations, three legacy authorization/state regressions, Ruff, strict mypy
+across eleven touched source files, deterministic validation of 22 generated contract artifacts,
+and no migration drift. The full repository gate passed 300 tests with one intentionally skipped
+unmounted corpus and 86% combined branch coverage. In production mode, migration `0011` applied;
+API, MCP, worker, PostgreSQL, and object storage became healthy; both readiness endpoints reported
+database and object storage available.

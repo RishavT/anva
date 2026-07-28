@@ -1218,7 +1218,10 @@ class ImmutableArtifact(UUIDModel):
 
     class Kind(models.TextChoices):
         CONTEXT_PACKET = "CONTEXT_PACKET"
+        DIFF_ARTIFACT = "DIFF_ARTIFACT"
         EVIDENCE_MANIFEST = "EVIDENCE_MANIFEST"
+        EVALUATOR_REQUEST = "EVALUATOR_REQUEST"
+        EVALUATOR_RESULT = "EVALUATOR_RESULT"
         ASSURANCE_REPORT = "ASSURANCE_REPORT"
         RENDERED_EXTERNAL_CONTENT = "RENDERED_EXTERNAL_CONTENT"
 
@@ -1542,6 +1545,156 @@ class ContextPacketInvalidation(UUIDModel):
         ]
 
 
+class PullRequest(RevisionedTenantModel):
+    """Current pointer for a repository pull request ingested without code execution."""
+
+    class State(models.TextChoices):
+        OPEN = "OPEN"
+        MERGED = "MERGED"
+        CLOSED = "CLOSED"
+
+    repository = models.ForeignKey("Repository", on_delete=models.PROTECT)
+    number = models.PositiveIntegerField()
+    state = models.CharField(max_length=16, choices=State, default=State.OPEN)
+    current_head_commit = models.CharField(max_length=40)
+    current_revision_number = models.PositiveBigIntegerField(default=1)
+
+    class Meta(RevisionedTenantModel.Meta):
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            *RevisionedTenantModel.Meta.constraints,
+            models.UniqueConstraint(
+                fields=["organization", "repository", "number"],
+                name="core_pull_request_repo_number_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_pull_request_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(current_head_commit__regex=r"^[a-f0-9]{40}$"),
+                name="core_pull_request_head_commit_sha",
+            ),
+            models.CheckConstraint(
+                condition=Q(number__gte=1, current_revision_number__gte=1),
+                name="core_pull_request_numbers_gte_1",
+            ),
+        ]
+
+
+class PullRequestRevision(UUIDModel):
+    """Immutable manual pull-request snapshot and exact diff identity."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    pull_request = models.ForeignKey(PullRequest, on_delete=models.PROTECT)
+    revision = models.PositiveBigIntegerField()
+    base_commit = models.CharField(max_length=40)
+    head_commit = models.CharField(max_length=40)
+    title = models.CharField(max_length=1_000)
+    description = models.TextField(blank=True)
+    target_branch = models.CharField(max_length=300)
+    is_draft = models.BooleanField(default=False)
+    state = models.CharField(max_length=16, choices=PullRequest.State)
+    diff_artifact = models.ForeignKey(ImmutableArtifact, on_delete=models.PROTECT)
+    diff_hash = models.CharField(max_length=64)
+    input_hash = models.CharField(max_length=64)
+    changed_paths = models.JSONField(default=list)
+    classification_summary = models.JSONField(default=dict)
+    limitations = models.JSONField(default=list)
+    ingested_by_type = models.CharField(max_length=20)
+    ingested_by_id = models.CharField(max_length=200)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_pr_revision_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "pull_request", "revision"],
+                name="core_pr_revision_number_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "pull_request", "input_hash"],
+                name="core_pr_revision_input_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(revision__gte=1),
+                name="core_pr_revision_gte_1",
+            ),
+            models.CheckConstraint(
+                condition=Q(base_commit__regex=r"^[a-f0-9]{40}$"),
+                name="core_pr_revision_base_sha",
+            ),
+            models.CheckConstraint(
+                condition=Q(head_commit__regex=r"^[a-f0-9]{40}$"),
+                name="core_pr_revision_head_sha",
+            ),
+            models.CheckConstraint(
+                condition=Q(diff_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_pr_revision_diff_sha",
+            ),
+            models.CheckConstraint(
+                condition=Q(input_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_pr_revision_input_sha",
+            ),
+        ]
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        if not self._state.adding:
+            raise ArtifactImmutableError("Pull request revisions cannot be updated")
+        super().save(*args, **kwargs)
+
+
+class DiffChunk(UUIDModel):
+    """Immutable bounded hunk supplied to an evaluator as untrusted text."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    pull_request_revision = models.ForeignKey(PullRequestRevision, on_delete=models.PROTECT)
+    position = models.PositiveIntegerField()
+    path = models.CharField(max_length=1_000)
+    classification = models.CharField(max_length=40)
+    old_start = models.PositiveIntegerField()
+    old_count = models.PositiveIntegerField()
+    new_start = models.PositiveIntegerField()
+    new_count = models.PositiveIntegerField()
+    text = models.TextField()
+    content_hash = models.CharField(max_length=64)
+    char_count = models.PositiveIntegerField()
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "pull_request_revision", "position"],
+                name="core_diff_chunk_position_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_diff_chunk_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(position__gte=1),
+                name="core_diff_chunk_position_gte_1",
+            ),
+            models.CheckConstraint(
+                condition=Q(content_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_diff_chunk_hash_sha",
+            ),
+        ]
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        digest = hashlib.sha256(self.text.encode()).hexdigest()
+        if not self._state.adding:
+            raise ArtifactImmutableError("Diff chunks cannot be updated")
+        if self.content_hash and self.content_hash != digest:
+            raise ArtifactImmutableError("Diff chunk hash does not match text")
+        if self.char_count != len(self.text):
+            raise ArtifactImmutableError("Diff chunk char_count does not match text")
+        self.content_hash = digest
+        super().save(*args, **kwargs)
+
+
 class AssuranceRun(RevisionedTenantModel):
     """Commit-pinned pull-request assurance state machine."""
 
@@ -1572,7 +1725,66 @@ class AssuranceRun(RevisionedTenantModel):
         on_delete=models.PROTECT,
         null=True,
         blank=True,
+        related_name="legacy_assurance_runs",
     )
+    repository = models.ForeignKey(
+        "Repository",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="assurance_runs",
+    )
+    pull_request_revision = models.ForeignKey(
+        PullRequestRevision,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    work_item_revision = models.ForeignKey(
+        "WorkItemRevision",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    diff_artifact = models.ForeignKey(
+        ImmutableArtifact,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="diff_assurance_runs",
+    )
+    context_packet = models.ForeignKey(
+        ContextPacketRecord,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    policy_evaluation = models.ForeignKey(
+        "PolicyEvaluation",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    trigger_key = models.CharField(max_length=64, blank=True)
+    input_hash = models.CharField(max_length=64, blank=True)
+    requirements_hash = models.CharField(max_length=64, blank=True)
+    policy_bundle_hash = models.CharField(max_length=64, blank=True)
+    evidence_bundle_hash = models.CharField(max_length=64, blank=True)
+    evaluator_version = models.CharField(max_length=100, blank=True)
+    prompt_version = models.CharField(max_length=100, blank=True)
+    limitations = models.JSONField(default=list)
+    readiness = models.CharField(
+        max_length=32,
+        choices=[
+            ("BLOCKED", "BLOCKED"),
+            ("READY_WITH_WARNINGS", "READY_WITH_WARNINGS"),
+            ("READY_FOR_HUMAN_REVIEW", "READY_FOR_HUMAN_REVIEW"),
+            ("STALE", "STALE"),
+            ("FAILED", "FAILED"),
+        ],
+        blank=True,
+    )
+    failure_code = models.CharField(max_length=100, blank=True)
     state = models.CharField(max_length=32, choices=State, default=State.REQUESTED)
     completed_at = models.DateTimeField(null=True, blank=True)
 
@@ -1586,11 +1798,16 @@ class AssuranceRun(RevisionedTenantModel):
         constraints: ClassVar[list[models.BaseConstraint]] = [
             *RevisionedTenantModel.Meta.constraints,
             models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_assurance_run_org_id_unique",
+            ),
+            models.UniqueConstraint(
                 fields=[
                     "organization",
                     "repository_external_id",
                     "pull_request_number",
                     "head_commit",
+                    "input_hash",
                 ],
                 name="core_assurance_one_head_summary",
             ),
@@ -1601,6 +1818,10 @@ class AssuranceRun(RevisionedTenantModel):
             models.CheckConstraint(
                 condition=Q(policy_version__gte=1),
                 name="core_assurance_policy_version_gte_1",
+            ),
+            models.CheckConstraint(
+                condition=Q(input_hash="") | Q(input_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_assurance_input_hash_sha",
             ),
             models.CheckConstraint(
                 condition=(
@@ -1640,6 +1861,358 @@ class AssuranceRun(RevisionedTenantModel):
         ]
 
 
+class AssuranceCheck(UUIDModel):
+    """Immutable deterministic check result for an exact assurance run."""
+
+    class Status(models.TextChoices):
+        PASSED = "PASSED"
+        FAILED = "FAILED"
+        NOT_AVAILABLE = "NOT_AVAILABLE"
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    assurance_run = models.ForeignKey(AssuranceRun, on_delete=models.PROTECT)
+    position = models.PositiveIntegerField()
+    code = models.CharField(max_length=100)
+    status = models.CharField(max_length=20, choices=Status)
+    blocking = models.BooleanField(default=True)
+    summary = models.CharField(max_length=2_000)
+    evidence_ids = models.JSONField(default=list)
+    input_hash = models.CharField(max_length=64)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "assurance_run", "position"],
+                name="core_assurance_check_position_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "assurance_run", "code"],
+                name="core_assurance_check_code_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_assurance_check_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(input_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_assurance_check_input_sha",
+            ),
+        ]
+
+
+class EvaluatorTask(RevisionedTenantModel):
+    """Provider-neutral, claim/submit queue item containing a sealed review request."""
+
+    class State(models.TextChoices):
+        PENDING = "PENDING"
+        CLAIMED = "CLAIMED"
+        SUBMITTED = "SUBMITTED"
+        FAILED = "FAILED"
+        CANCELLED = "CANCELLED"
+
+    assurance_run = models.OneToOneField(AssuranceRun, on_delete=models.PROTECT)
+    repository = models.ForeignKey("Repository", on_delete=models.PROTECT)
+    request_artifact = models.ForeignKey(
+        ImmutableArtifact,
+        on_delete=models.PROTECT,
+        related_name="evaluator_request_tasks",
+    )
+    result_artifact = models.ForeignKey(
+        ImmutableArtifact,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="evaluator_result_tasks",
+    )
+    state = models.CharField(max_length=16, choices=State, default=State.PENDING)
+    claimant = models.CharField(max_length=200, blank=True)
+    claim_token_hash = models.CharField(max_length=64, blank=True)
+    lease_expires_at = models.DateTimeField(null=True, blank=True)
+    attempt_count = models.PositiveIntegerField(default=0)
+    max_attempts = models.PositiveIntegerField(default=3)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    failure_code = models.CharField(max_length=100, blank=True)
+
+    class Meta(RevisionedTenantModel.Meta):
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(
+                fields=["organization", "repository", "state", "created_at"],
+                name="core_evaluator_task_claim_idx",
+            )
+        ]
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            *RevisionedTenantModel.Meta.constraints,
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_evaluator_task_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(attempt_count__lte=F("max_attempts")),
+                name="core_evaluator_attempt_bound",
+            ),
+        ]
+
+
+class EvaluatorAttempt(UUIDModel):
+    """Append-only evaluator claim or submission attempt history."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    evaluator_task = models.ForeignKey(EvaluatorTask, on_delete=models.PROTECT)
+    attempt = models.PositiveIntegerField()
+    claimant = models.CharField(max_length=200)
+    event = models.CharField(max_length=24)
+    request_hash = models.CharField(max_length=64)
+    result_hash = models.CharField(max_length=64, blank=True)
+    usage = models.JSONField(default=dict)
+    safe_error_code = models.CharField(max_length=100, blank=True)
+    occurred_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "evaluator_task", "attempt", "event"],
+                name="core_evaluator_attempt_event_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_evaluator_attempt_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(attempt__gte=1),
+                name="core_evaluator_attempt_gte_1",
+            ),
+            models.CheckConstraint(
+                condition=Q(request_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_evaluator_attempt_request_sha",
+            ),
+        ]
+
+
+class Finding(RevisionedTenantModel):
+    """Stable finding identity with an explicit lifecycle across run occurrences."""
+
+    class Kind(models.TextChoices):
+        DETERMINISTIC = "DETERMINISTIC"
+        POLICY = "POLICY"
+        EVIDENCE = "EVIDENCE"
+        MODEL = "MODEL"
+
+    class Severity(models.TextChoices):
+        BLOCKING = "BLOCKING"
+        HIGH = "HIGH"
+        MEDIUM = "MEDIUM"
+        LOW = "LOW"
+        ADVISORY = "ADVISORY"
+
+    class Confidence(models.TextChoices):
+        PROVEN = "PROVEN"
+        HIGH = "HIGH"
+        MEDIUM = "MEDIUM"
+        LOW = "LOW"
+
+    class State(models.TextChoices):
+        OPEN = "OPEN"
+        DISMISSED = "DISMISSED"
+        RISK_ACCEPTED = "RISK_ACCEPTED"
+        RESOLVED = "RESOLVED"
+        OBSOLETE = "OBSOLETE"
+
+    pull_request = models.ForeignKey(PullRequest, on_delete=models.PROTECT)
+    first_run = models.ForeignKey(
+        AssuranceRun,
+        on_delete=models.PROTECT,
+        related_name="first_findings",
+    )
+    latest_run = models.ForeignKey(
+        AssuranceRun,
+        on_delete=models.PROTECT,
+        related_name="latest_findings",
+    )
+    fingerprint = models.CharField(max_length=64)
+    code = models.CharField(max_length=100)
+    kind = models.CharField(max_length=24, choices=Kind)
+    severity = models.CharField(max_length=16, choices=Severity)
+    confidence = models.CharField(max_length=16, choices=Confidence)
+    title = models.CharField(max_length=300)
+    explanation = models.TextField()
+    path = models.CharField(max_length=1_000, blank=True)
+    line = models.PositiveIntegerField(null=True, blank=True)
+    citations = models.JSONField(default=list)
+    evidence_ids = models.JSONField(default=list)
+    criterion_codes = models.JSONField(default=list)
+    uncertainty = models.CharField(max_length=2_000)
+    suggested_resolution = models.CharField(max_length=2_000)
+    state = models.CharField(max_length=20, choices=State, default=State.OPEN)
+
+    class Meta(RevisionedTenantModel.Meta):
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(
+                fields=["organization", "pull_request", "state", "severity"],
+                name="core_finding_pr_state_idx",
+            )
+        ]
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            *RevisionedTenantModel.Meta.constraints,
+            models.UniqueConstraint(
+                fields=["organization", "pull_request", "fingerprint"],
+                name="core_finding_fingerprint_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_finding_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(fingerprint__regex=r"^[a-f0-9]{64}$"),
+                name="core_finding_fingerprint_sha",
+            ),
+        ]
+
+
+class FindingOccurrence(UUIDModel):
+    """Immutable observation of one stable finding in one exact run."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    finding = models.ForeignKey(Finding, on_delete=models.PROTECT)
+    assurance_run = models.ForeignKey(AssuranceRun, on_delete=models.PROTECT)
+    payload = models.JSONField()
+    payload_hash = models.CharField(max_length=64)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "finding", "assurance_run"],
+                name="core_finding_occurrence_run_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_finding_occurrence_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(payload_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_finding_occurrence_sha",
+            ),
+        ]
+
+
+class FindingDecision(UUIDModel):
+    """Append-only authorized lifecycle decision for a finding."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    finding = models.ForeignKey(Finding, on_delete=models.PROTECT)
+    from_state = models.CharField(max_length=20)
+    to_state = models.CharField(max_length=20)
+    actor_type = models.CharField(max_length=20)
+    actor_id = models.CharField(max_length=200)
+    authority_path = models.CharField(max_length=1_000)
+    reason = models.CharField(max_length=2_000)
+    decided_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_finding_decision_org_id_unique",
+            )
+        ]
+
+
+class ReadinessDecision(UUIDModel):
+    """Immutable precedence result for one exact assurance run."""
+
+    class Status(models.TextChoices):
+        BLOCKED = "BLOCKED"
+        READY_WITH_WARNINGS = "READY_WITH_WARNINGS"
+        READY_FOR_HUMAN_REVIEW = "READY_FOR_HUMAN_REVIEW"
+        STALE = "STALE"
+        FAILED = "FAILED"
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    assurance_run = models.OneToOneField(AssuranceRun, on_delete=models.PROTECT)
+    status = models.CharField(max_length=32, choices=Status)
+    reason_codes = models.JSONField(default=list)
+    input_hash = models.CharField(max_length=64)
+    decided_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_readiness_decision_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(input_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_readiness_input_sha",
+            ),
+            models.CheckConstraint(
+                condition=Q(
+                    status__in=[
+                        "BLOCKED",
+                        "READY_WITH_WARNINGS",
+                        "READY_FOR_HUMAN_REVIEW",
+                        "STALE",
+                        "FAILED",
+                    ]
+                ),
+                name="core_readiness_status_valid",
+            ),
+        ]
+
+
+class AssuranceReport(UUIDModel):
+    """Immutable deterministic Markdown and escaped HTML summary."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    assurance_run = models.OneToOneField(AssuranceRun, on_delete=models.PROTECT)
+    artifact = models.OneToOneField(ImmutableArtifact, on_delete=models.PROTECT)
+    markdown = models.TextField()
+    html = models.TextField()
+    content_hash = models.CharField(max_length=64)
+    renderer_version = models.CharField(max_length=100)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_assurance_report_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(content_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_assurance_report_sha",
+            ),
+        ]
+
+
+class AssuranceKnowledgeProposal(UUIDModel):
+    """Post-merge proposal link; never an automatic knowledge mutation."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    assurance_run = models.ForeignKey(AssuranceRun, on_delete=models.PROTECT)
+    knowledge_proposal = models.OneToOneField("KnowledgeProposal", on_delete=models.PROTECT)
+    classification = models.CharField(max_length=20)
+    confidence = models.CharField(max_length=16)
+    input_hash = models.CharField(max_length=64)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "assurance_run", "input_hash"],
+                name="core_assurance_proposal_input_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_assurance_proposal_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(input_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_assurance_proposal_sha",
+            ),
+        ]
+
+
 class KnowledgeProposal(RevisionedTenantModel):
     """A proposed knowledge mutation requiring validation and review."""
 
@@ -1661,6 +2234,10 @@ class KnowledgeProposal(RevisionedTenantModel):
     class Meta(RevisionedTenantModel.Meta):
         constraints: ClassVar[list[models.BaseConstraint]] = [
             *RevisionedTenantModel.Meta.constraints,
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_knowledge_proposal_org_id_unique",
+            ),
             models.CheckConstraint(
                 condition=~Q(anva_sources=[]),
                 name="core_proposal_sources_not_empty",

@@ -1,0 +1,150 @@
+{
+  "$defs": {
+    "diff_chunk": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "enum": [
+            "SOURCE",
+            "TEST",
+            "DOCUMENTATION",
+            "MIGRATION",
+            "SECURITY_SENSITIVE",
+            "DEPENDENCY",
+            "CI"
+          ],
+          "type": "string"
+        },
+        "content_hash": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "new_count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "new_start": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "old_count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "old_start": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "position": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "text": {
+          "maxLength": 100000,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "position",
+        "path",
+        "classification",
+        "old_start",
+        "old_count",
+        "new_start",
+        "new_count",
+        "text",
+        "content_hash"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://schemas.anva.dev/v1/manual-diff-artifact.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "base_commit": {
+      "pattern": "^[a-f0-9]{40}$",
+      "type": "string"
+    },
+    "changed_paths": {
+      "items": {
+        "maxLength": 1000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 500,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "chunks": {
+      "items": {
+        "$ref": "#/$defs/diff_chunk"
+      },
+      "maxItems": 2000,
+      "minItems": 1,
+      "type": "array"
+    },
+    "diff_hash": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "head_commit": {
+      "pattern": "^[a-f0-9]{40}$",
+      "type": "string"
+    },
+    "limitations": {
+      "items": {
+        "maxLength": 2000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "organization_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "parser_version": {
+      "const": "unified-diff-v1"
+    },
+    "pull_request_number": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "repository_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "type": "string"
+    },
+    "unified_diff": {
+      "maxLength": 1000000,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "organization_id",
+    "repository_id",
+    "pull_request_number",
+    "base_commit",
+    "head_commit",
+    "parser_version",
+    "unified_diff",
+    "diff_hash",
+    "changed_paths",
+    "chunks",
+    "limitations"
+  ],
+  "title": "Anva Immutable Manual Diff",
+  "type": "object"
+}
