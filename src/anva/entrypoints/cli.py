@@ -38,6 +38,37 @@ def build_parser() -> argparse.ArgumentParser:
     revoke = source_commands.add_parser("revoke")
     revoke.add_argument("source_connection_id", type=uuid.UUID)
     revoke.add_argument("--expected-revision", required=True, type=int)
+    search = subparsers.add_parser("search", help="Run permission-safe hybrid search")
+    search.add_argument(
+        "--api-url",
+        default=os.getenv("ANVA_API_URL", "http://localhost:8000/api/v1"),
+    )
+    search.add_argument("--repository-id", required=True, type=uuid.UUID)
+    search.add_argument("--query", required=True)
+    search.add_argument(
+        "--phase",
+        choices=("PREPARE", "BUILD", "PREFLIGHT", "ASSURANCE"),
+    )
+    search.add_argument("--limit", type=int, default=20)
+    context = subparsers.add_parser("context", help="Build an immutable context packet")
+    context.add_argument(
+        "--api-url",
+        default=os.getenv("ANVA_API_URL", "http://localhost:8000/api/v1"),
+    )
+    context.add_argument("--repository-id", required=True, type=uuid.UUID)
+    context.add_argument("--task", required=True)
+    context.add_argument(
+        "--phase",
+        required=True,
+        choices=("PREPARE", "BUILD", "PREFLIGHT", "ASSURANCE"),
+    )
+    packet = subparsers.add_parser("packet", help="Retrieve an exact context packet")
+    packet.add_argument(
+        "--api-url",
+        default=os.getenv("ANVA_API_URL", "http://localhost:8000/api/v1"),
+    )
+    packet.add_argument("--repository-id", required=True, type=uuid.UUID)
+    packet.add_argument("packet_id", type=uuid.UUID)
     return parser
 
 
@@ -95,6 +126,58 @@ def _source_request(arguments: argparse.Namespace) -> int:
     return 0
 
 
+def _retrieval_request(arguments: argparse.Namespace) -> int:
+    token = os.getenv("ANVA_TOKEN", "")
+    if not token:
+        print(json.dumps({"code": "missing_token", "message": "ANVA_TOKEN is required"}))
+        return 2
+    method = "POST"
+    if arguments.command == "search":
+        path = "/search"
+        payload: dict[str, object] = {
+            "repository_id": str(arguments.repository_id),
+            "query": arguments.query,
+            "limit": arguments.limit,
+        }
+        if arguments.phase:
+            payload["phase"] = arguments.phase
+    elif arguments.command == "context":
+        path = "/context-packets"
+        payload = {
+            "repository_id": str(arguments.repository_id),
+            "task": arguments.task,
+            "phase": arguments.phase,
+        }
+    elif arguments.command == "packet":
+        method = "GET"
+        path = f"/context-packets/{arguments.packet_id}?repository_id={arguments.repository_id}"
+        payload = {}
+    else:
+        raise ValueError("Unknown retrieval command")
+    request = Request(  # noqa: S310 - operator-selected Anva API endpoint
+        f"{str(arguments.api_url).rstrip('/')}{path}",
+        data=None if method == "GET" else json.dumps(payload).encode(),
+        method=method,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "X-Correlation-ID": str(uuid.uuid4()),
+        },
+    )
+    try:
+        with urlopen(request, timeout=30) as response:  # noqa: S310
+            result = json.loads(response.read())
+    except HTTPError as error:
+        result = json.loads(error.read() or b"{}")
+        print(json.dumps(result, sort_keys=True))
+        return 1
+    except (URLError, TimeoutError):
+        print(json.dumps({"code": "api_unavailable", "message": "Anva API is unavailable"}))
+        return 1
+    print(json.dumps(result, sort_keys=True))
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Execute one CLI command and return a process exit code."""
     arguments = build_parser().parse_args(argv)
@@ -103,6 +186,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if arguments.command == "source":
         return _source_request(arguments)
+    if arguments.command in {"search", "context", "packet"}:
+        return _retrieval_request(arguments)
 
     configure_django()
     from anva.foundation.services import readiness_status

@@ -27,6 +27,12 @@ from anva.core.services.authorization import (
 )
 from anva.core.services.bootstrap import bootstrap_local_organization
 from anva.core.services.context import ActorContext
+from anva.core.services.context_packets import (
+    PacketBudget,
+    build_context_packet,
+    get_context_packet,
+)
+from anva.core.services.graph import traverse_graph
 from anva.core.services.ingestion import (
     connect_filesystem_source,
     inspect_source,
@@ -36,9 +42,9 @@ from anva.core.services.ingestion import (
 from anva.core.services.retrieval import (
     get_authorized_artifact,
     get_authorized_assertion,
-    search_assertions,
 )
 from anva.core.services.scopes import revoke_source_connection
+from anva.core.services.search import search_chunks
 from anva.core.services.secured_operations import (
     authorize_sensitive_placeholder,
     execute_assurance_transition,
@@ -131,6 +137,17 @@ def _optional_string(payload: dict[str, object], name: str) -> str | None:
         return None
     if not isinstance(value, str) or not value:
         raise ValueError(f"{name} must be a non-empty string")
+    return value
+
+
+def _optional_integer(
+    payload: dict[str, object],
+    name: str,
+    default: int,
+) -> int:
+    value = payload.get(name, default)
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError(f"{name} must be an integer")
     return value
 
 
@@ -320,22 +337,196 @@ def search(request: HttpRequest) -> JsonResponse:
     actor = _actor(request)
     payload = _json_body(request)
     repository_id = uuid.UUID(_string(payload, "repository_id"))
-    records = search_assertions(
+    response = search_chunks(
         actor=actor,
         repository_id=repository_id,
         query=_string(payload, "query"),
+        phase=_optional_string(payload, "phase"),
+        limit=_optional_integer(payload, "limit", 20),
     )
     return JsonResponse(
         {
-            "results": [
+            "results": [result.as_dict() for result in response.results],
+        }
+    )
+
+
+@api_errors
+@require_http_methods(["POST"])
+def context_packets(request: HttpRequest) -> JsonResponse:
+    actor = _actor(request)
+    payload = _json_body(request)
+    budget_payload = payload.get("budget", {})
+    if not isinstance(budget_payload, dict):
+        raise ValueError("budget must be an object")
+    budget = PacketBudget(
+        max_items=_optional_integer(budget_payload, "max_items", 50),
+        max_tokens=_optional_integer(budget_payload, "max_tokens", 8_000),
+        max_bytes=_optional_integer(budget_payload, "max_bytes", 100_000),
+        max_citations=_optional_integer(budget_payload, "max_citations", 100),
+    )
+    packet, created = build_context_packet(
+        actor=actor,
+        repository_id=uuid.UUID(_string(payload, "repository_id")),
+        task=_string(payload, "task"),
+        phase=_string(payload, "phase"),
+        budget=budget,
+    )
+    return JsonResponse(
+        {
+            "packet_id": str(packet.id),
+            "artifact_id": str(packet.artifact_id),
+            "content_hash": packet.artifact.content_hash,
+            "created": created,
+            "packet": packet.artifact.payload,
+        },
+        status=201 if created else 200,
+    )
+
+
+@api_errors
+@require_http_methods(["GET"])
+def context_packet_detail(
+    request: HttpRequest,
+    packet_id: uuid.UUID,
+) -> JsonResponse:
+    actor = _actor(request)
+    repository_id = uuid.UUID(request.GET.get("repository_id", ""))
+    return JsonResponse(
+        {
+            "packet": get_context_packet(
+                actor=actor,
+                repository_id=repository_id,
+                packet_id=packet_id,
+            )
+        }
+    )
+
+
+@api_errors
+@require_http_methods(["POST"])
+def query(request: HttpRequest) -> JsonResponse:
+    actor = _actor(request)
+    payload = _json_body(request)
+    repository_id = uuid.UUID(_string(payload, "repository_id"))
+    response = search_chunks(
+        actor=actor,
+        repository_id=repository_id,
+        query=_string(payload, "query"),
+        phase=_optional_string(payload, "phase"),
+        limit=_optional_integer(payload, "limit", 20),
+    )
+    result: dict[str, object] = {
+        "results": [search_result.as_dict() for search_result in response.results],
+    }
+    start_entity = _optional_string(payload, "start_entity_id")
+    if start_entity is not None:
+        result["graph"] = traverse_graph(
+            actor=actor,
+            repository_id=repository_id,
+            start_entity_id=uuid.UUID(start_entity),
+            depth=_optional_integer(payload, "depth", 2),
+            degree=_optional_integer(payload, "degree", 100),
+            edge_limit=_optional_integer(payload, "edge_limit", 500),
+        ).as_dict()
+    return JsonResponse(result)
+
+
+def _entity_graph(
+    request: HttpRequest,
+    entity_id: uuid.UUID,
+    *,
+    depth: int,
+) -> dict[str, object]:
+    actor = _actor(request)
+    repository_id = uuid.UUID(request.GET.get("repository_id", ""))
+    return traverse_graph(
+        actor=actor,
+        repository_id=repository_id,
+        start_entity_id=entity_id,
+        depth=depth,
+    ).as_dict()
+
+
+@api_errors
+@require_http_methods(["GET"])
+def entity_relationships(request: HttpRequest, entity_id: uuid.UUID) -> JsonResponse:
+    return JsonResponse(_entity_graph(request, entity_id, depth=1))
+
+
+@api_errors
+@require_http_methods(["GET"])
+def entity_history(request: HttpRequest, entity_id: uuid.UUID) -> JsonResponse:
+    graph = _entity_graph(request, entity_id, depth=4)
+    edges = cast(list[dict[str, object]], graph["edges"])
+    return JsonResponse(
+        {
+            "entity_id": str(entity_id),
+            "history": sorted(
+                edges,
+                key=lambda edge: (
+                    str(edge["observed_at"]),
+                    str(edge["relationship_id"]),
+                ),
+            ),
+            "truncated": graph["truncated"],
+        }
+    )
+
+
+@api_errors
+@require_http_methods(["GET"])
+def entity_sources(request: HttpRequest, entity_id: uuid.UUID) -> JsonResponse:
+    graph = _entity_graph(request, entity_id, depth=4)
+    edges = cast(list[dict[str, object]], graph["edges"])
+    sources = {
+        (
+            str(edge["source_location_id"]),
+            str(edge["source_observation_id"]),
+            str(edge["access_snapshot_id"]),
+        )
+        for edge in edges
+    }
+    return JsonResponse(
+        {
+            "entity_id": str(entity_id),
+            "sources": [
                 {
-                    "id": str(record.id),
-                    "subject_key": record.subject_key,
-                    "predicate": record.predicate,
-                    "value": record.value,
+                    "source_location_id": source[0],
+                    "source_observation_id": source[1],
+                    "access_snapshot_id": source[2],
                 }
-                for record in records
-            ]
+                for source in sorted(sources)
+            ],
+        }
+    )
+
+
+@api_errors
+@require_http_methods(["GET"])
+def assertion_explanation(
+    request: HttpRequest,
+    assertion_id: uuid.UUID,
+) -> JsonResponse:
+    actor = _actor(request)
+    repository_id = uuid.UUID(request.GET.get("repository_id", ""))
+    assertion = get_authorized_assertion(
+        actor=actor,
+        repository_id=repository_id,
+        assertion_id=assertion_id,
+        action=Action.KNOWLEDGE_VIEW,
+    )
+    return JsonResponse(
+        {
+            "assertion_id": str(assertion.id),
+            "summary": (
+                f"{assertion.subject_key} {assertion.predicate} "
+                f"{json.dumps(assertion.value, sort_keys=True)}"
+            ),
+            "freshness": assertion.staleness_state,
+            "is_inferred": assertion.is_inferred,
+            "selection_reason": "Direct governed assertion lookup",
+            "anva_sources": assertion.provenance,
         }
     )
 
@@ -376,14 +567,18 @@ def mcp_context(request: HttpRequest) -> JsonResponse:
     actor = _actor(request)
     payload = _json_body(request)
     repository_id = uuid.UUID(_string(payload, "repository_id"))
-    assertion_id = uuid.UUID(_string(payload, "assertion_id"))
-    record = get_authorized_assertion(
+    authorize_action(
         actor=actor,
         repository_id=repository_id,
-        assertion_id=assertion_id,
         action=Action.MCP_CONTEXT,
     )
-    return _assertion_response(record)
+    return JsonResponse(
+        {
+            "code": "mcp_not_implemented",
+            "message": "MCP transport is reserved for issue #9",
+        },
+        status=501,
+    )
 
 
 @api_errors

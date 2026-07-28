@@ -31,7 +31,7 @@
             "properties": {
               "anva_sources": {
                 "items": {
-                  "$ref": "#/$defs/source_reference"
+                  "$ref": "#/$defs/retrieval_citation"
                 },
                 "minItems": 1,
                 "type": "array"
@@ -51,15 +51,33 @@
                 "format": "uuid",
                 "type": "string"
               },
+              "item_key": {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
               "kind": {
                 "enum": [
-                  "REQUIREMENT",
-                  "DECISION",
                   "POLICY",
-                  "ENTITY",
-                  "RISK",
-                  "ASSUMPTION"
+                  "RELATIONSHIP",
+                  "ASSERTION",
+                  "SOURCE_EXCERPT",
+                  "DECISION",
+                  "INCIDENT",
+                  "CONFLICT"
                 ],
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              },
+              "rank_score": {
+                "minimum": 0,
+                "type": "number"
+              },
+              "selection_reason": {
+                "maxLength": 500,
+                "minLength": 1,
                 "type": "string"
               },
               "summary": {
@@ -71,40 +89,30 @@
             "required": [
               "item_id",
               "kind",
+              "item_key",
               "summary",
               "is_inferred",
               "freshness",
+              "selection_reason",
+              "rank_score",
+              "payload",
               "anva_sources"
             ],
             "type": "object"
           },
-          "source_reference": {
+          "retrieval_citation": {
             "additionalProperties": false,
             "properties": {
-              "canonical_url": {
-                "oneOf": [
-                  {
-                    "format": "uri",
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+              "access_snapshot_id": {
+                "format": "uuid",
+                "type": "string"
               },
-              "content_hash": {
-                "oneOf": [
-                  {
-                    "pattern": "^[a-f0-9]{64}$",
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+              "canonical_url": {
+                "format": "uri",
+                "type": "string"
               },
               "locator": {
-                "maxLength": 500,
+                "maxLength": 1000,
                 "minLength": 1,
                 "type": "string"
               },
@@ -112,41 +120,27 @@
                 "format": "date-time",
                 "type": "string"
               },
-              "revision_id": {
-                "oneOf": [
-                  {
-                    "format": "uuid",
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+              "source_content_hash": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
               },
-              "source_id": {
+              "source_location_id": {
                 "format": "uuid",
                 "type": "string"
               },
-              "source_type": {
-                "enum": [
-                  "DOCUMENT",
-                  "CODE",
-                  "POLICY",
-                  "DECISION",
-                  "HUMAN_APPROVAL",
-                  "EVIDENCE"
-                ],
+              "source_observation_id": {
+                "format": "uuid",
                 "type": "string"
               }
             },
             "required": [
-              "source_id",
-              "source_type",
-              "revision_id",
+              "source_location_id",
+              "source_observation_id",
+              "access_snapshot_id",
               "canonical_url",
-              "content_hash",
-              "observed_at",
-              "locator"
+              "locator",
+              "source_content_hash",
+              "observed_at"
             ],
             "type": "object"
           }
@@ -155,12 +149,72 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
+          "authorization_hash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "budget": {
+            "additionalProperties": false,
+            "properties": {
+              "max_bytes": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "max_citations": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "max_items": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "max_tokens": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "selected_bytes": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "selected_citations": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "selected_items": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "selected_tokens": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "max_items",
+              "max_tokens",
+              "max_bytes",
+              "max_citations",
+              "selected_items",
+              "selected_tokens",
+              "selected_bytes",
+              "selected_citations"
+            ],
+            "type": "object"
+          },
           "content_hash": {
             "pattern": "^[a-f0-9]{64}$",
             "type": "string"
           },
+          "embedding_version": {
+            "minLength": 1,
+            "type": "string"
+          },
           "generated_at": {
             "format": "date-time",
+            "type": "string"
+          },
+          "index_version": {
+            "minLength": 1,
             "type": "string"
           },
           "items": {
@@ -186,12 +240,40 @@
             "format": "uuid",
             "type": "string"
           },
+          "phase": {
+            "enum": [
+              "PREPARE",
+              "BUILD",
+              "PREFLIGHT",
+              "ASSURANCE"
+            ],
+            "type": "string"
+          },
+          "repository_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "request": {
+            "type": "object"
+          },
+          "retrieval_algorithm_version": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "retrieval_watermark": {
+            "minimum": 1,
+            "type": "integer"
+          },
           "revision": {
             "minimum": 1,
             "type": "integer"
           },
           "schema_version": {
             "const": "1.0",
+            "type": "string"
+          },
+          "selection_hash": {
+            "pattern": "^[a-f0-9]{64}$",
             "type": "string"
           },
           "work_item_id": {
@@ -210,10 +292,20 @@
           "schema_version",
           "packet_id",
           "organization_id",
+          "repository_id",
           "work_item_id",
           "revision",
           "generated_at",
           "content_hash",
+          "phase",
+          "request",
+          "authorization_hash",
+          "selection_hash",
+          "retrieval_watermark",
+          "retrieval_algorithm_version",
+          "index_version",
+          "embedding_version",
+          "budget",
           "items",
           "limitations"
         ],
@@ -1137,6 +1229,42 @@
         }
       }
     },
+    "/assertions/{resource_id}/explanation": {
+      "get": {
+        "operationId": "getAssertionExplanation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
     "/assurance-runs/{resource_id}/transition": {
       "post": {
         "operationId": "transitionAssuranceRun",
@@ -1279,6 +1407,187 @@
               }
             },
             "description": "Supported external contract versions."
+          }
+        }
+      }
+    },
+    "/context-packets": {
+      "post": {
+        "operationId": "buildContextPacket",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Tenant-scoped resource created."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/context-packets/{resource_id}": {
+      "get": {
+        "operationId": "getContextPacket",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/entities/{resource_id}/history": {
+      "get": {
+        "operationId": "getEntityHistory",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/entities/{resource_id}/relationships": {
+      "get": {
+        "operationId": "getEntityRelationships",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/entities/{resource_id}/sources": {
+      "get": {
+        "operationId": "getEntitySources",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
           }
         }
       }
@@ -1459,6 +1768,7 @@
     },
     "/mcp/context": {
       "post": {
+        "description": "Reserved for issue #9; returns 501 after authorization.",
         "operationId": "getMcpContext",
         "parameters": [
           {
@@ -1466,9 +1776,6 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Authorized tenant-scoped response."
-          },
           "400": {
             "$ref": "#/components/responses/StructuredError"
           },
@@ -1480,6 +1787,9 @@
           },
           "409": {
             "$ref": "#/components/responses/StructuredError"
+          },
+          "501": {
+            "description": "MCP transport is not implemented."
           }
         }
       }
@@ -1699,6 +2009,33 @@
         "responses": {
           "202": {
             "description": "Authorized request accepted."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/query": {
+      "post": {
+        "operationId": "queryAuthorizedKnowledge",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
           },
           "400": {
             "$ref": "#/components/responses/StructuredError"
