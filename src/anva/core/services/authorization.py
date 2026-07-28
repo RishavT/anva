@@ -47,6 +47,13 @@ class Action(StrEnum):
     ASSURANCE_EXECUTE = "assurance.execute"
     FINDING_DISMISS = "finding.dismiss"
     POLICY_OVERRIDE = "policy.override"
+    WORK_VIEW = "work.view"
+    WORK_MANAGE = "work.manage"
+    WORK_APPROVE = "work.approve"
+    POLICY_VIEW = "policy.view"
+    POLICY_MANAGE = "policy.manage"
+    EVIDENCE_VIEW = "evidence.view"
+    EVIDENCE_SUBMIT = "evidence.submit"
     SEARCH = "search.query"
     CANVAS_VIEW = "canvas.view"
     MCP_CONTEXT = "mcp.context"
@@ -65,6 +72,9 @@ VIEW_ACTIONS = frozenset(
         Action.CANVAS_VIEW,
         Action.MCP_CONTEXT,
         Action.ARTIFACT_VIEW,
+        Action.WORK_VIEW,
+        Action.POLICY_VIEW,
+        Action.EVIDENCE_VIEW,
     }
 )
 ROLE_ACTIONS: dict[str, frozenset[Action]] = {
@@ -75,6 +85,8 @@ ROLE_ACTIONS: dict[str, frozenset[Action]] = {
             Action.KNOWLEDGE_REVIEW,
             Action.ARTIFACT_CREATE,
             Action.SCOPE_MANAGE,
+            Action.WORK_MANAGE,
+            Action.POLICY_MANAGE,
         }
     ),
     Role.Code.TECHNICAL_OWNER: VIEW_ACTIONS
@@ -84,14 +96,31 @@ ROLE_ACTIONS: dict[str, frozenset[Action]] = {
             Action.SOURCE_SYNC,
             Action.ASSURANCE_EXECUTE,
             Action.ARTIFACT_CREATE,
+            Action.WORK_MANAGE,
+            Action.POLICY_MANAGE,
+            Action.EVIDENCE_SUBMIT,
         }
     ),
-    Role.Code.PRODUCT_OWNER: VIEW_ACTIONS | frozenset({Action.KNOWLEDGE_REVIEW}),
+    Role.Code.PRODUCT_OWNER: VIEW_ACTIONS
+    | frozenset({Action.KNOWLEDGE_REVIEW, Action.WORK_MANAGE, Action.WORK_APPROVE}),
     Role.Code.DEVELOPER: VIEW_ACTIONS
-    | frozenset({Action.ASSURANCE_EXECUTE, Action.ARTIFACT_CREATE}),
-    Role.Code.REVIEWER: VIEW_ACTIONS | frozenset({Action.KNOWLEDGE_REVIEW}),
+    | frozenset(
+        {
+            Action.ASSURANCE_EXECUTE,
+            Action.ARTIFACT_CREATE,
+            Action.EVIDENCE_SUBMIT,
+        }
+    ),
+    Role.Code.REVIEWER: VIEW_ACTIONS | frozenset({Action.KNOWLEDGE_REVIEW, Action.WORK_APPROVE}),
     Role.Code.SECURITY_REVIEWER: VIEW_ACTIONS
-    | frozenset({Action.FINDING_DISMISS, Action.POLICY_OVERRIDE}),
+    | frozenset(
+        {
+            Action.FINDING_DISMISS,
+            Action.POLICY_OVERRIDE,
+            Action.WORK_APPROVE,
+            Action.EVIDENCE_SUBMIT,
+        }
+    ),
     Role.Code.VIEWER: VIEW_ACTIONS,
 }
 

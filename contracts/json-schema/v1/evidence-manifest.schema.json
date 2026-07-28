@@ -3,16 +3,45 @@
     "evidence_entry": {
       "additionalProperties": false,
       "properties": {
-        "artifact_uri": {
-          "format": "uri",
+        "approval_id": {
+          "oneOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "artifact_reference": {
+          "maxLength": 2000,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*\\x00).*$",
+          "type": "string"
+        },
+        "command": {
+          "maxLength": 2000,
+          "type": "string"
+        },
+        "completed_at": {
+          "format": "date-time",
           "type": "string"
         },
         "content_hash": {
           "pattern": "^[a-f0-9]{64}$",
           "type": "string"
         },
-        "created_at": {
-          "format": "date-time",
+        "criterion_codes": {
+          "items": {
+            "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+            "type": "string"
+          },
+          "maxItems": 500,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "environment": {
+          "maxLength": 200,
           "type": "string"
         },
         "evidence_id": {
@@ -21,20 +50,94 @@
         },
         "kind": {
           "enum": [
-            "TEST",
-            "LINT",
-            "TYPECHECK",
-            "BUILD",
-            "MIGRATION",
-            "BROWSER",
-            "MANUAL"
+            "CHECK_STATUS",
+            "TEST_RESULT",
+            "BUILD_RESULT",
+            "TYPECHECK_RESULT",
+            "LINT_RESULT",
+            "SCREENSHOT",
+            "VIDEO",
+            "CONSOLE_LOG",
+            "NETWORK_TRACE",
+            "API_ASSERTION",
+            "STATIC_ANALYSIS",
+            "SECURITY_SCAN",
+            "DEPENDENCY_SCAN",
+            "MIGRATION_RESULT",
+            "PERFORMANCE_RESULT",
+            "ACCESSIBILITY_RESULT",
+            "MANUAL_APPROVAL",
+            "SOURCE_REFERENCE",
+            "DIFF_REFERENCE"
           ],
+          "type": "string"
+        },
+        "limitations": {
+          "items": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 100,
+          "type": "array"
+        },
+        "name": {
+          "maxLength": 300,
+          "minLength": 1,
           "type": "string"
         },
         "producer": {
           "maxLength": 200,
           "minLength": 1,
           "type": "string"
+        },
+        "producer_version": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "retention_class": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "retention_expires_at": {
+          "oneOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scenario": {
+          "maxLength": 500,
+          "type": "string"
+        },
+        "source_url": {
+          "oneOf": [
+            {
+              "format": "uri",
+              "maxLength": 2000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "started_at": {
+          "oneOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "status": {
           "enum": [
@@ -48,11 +151,23 @@
       "required": [
         "evidence_id",
         "kind",
+        "name",
         "status",
-        "artifact_uri",
+        "command",
+        "artifact_reference",
+        "source_url",
         "content_hash",
-        "created_at",
-        "producer"
+        "started_at",
+        "completed_at",
+        "producer",
+        "producer_version",
+        "approval_id",
+        "retention_class",
+        "retention_expires_at",
+        "limitations",
+        "criterion_codes",
+        "environment",
+        "scenario"
       ],
       "type": "object"
     }
@@ -61,8 +176,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "access_scope_id": {
+      "format": "uuid",
+      "type": "string"
+    },
     "commit_sha": {
-      "pattern": "^[a-f0-9]{7,64}$",
+      "pattern": "^[a-f0-9]{40}$",
       "type": "string"
     },
     "created_at": {
@@ -73,7 +192,7 @@
       "items": {
         "$ref": "#/$defs/evidence_entry"
       },
-      "maxItems": 2000,
+      "maxItems": 500,
       "type": "array"
     },
     "manifest_id": {
@@ -84,17 +203,60 @@
       "format": "uuid",
       "type": "string"
     },
+    "producer": {
+      "maxLength": 200,
+      "minLength": 1,
+      "type": "string"
+    },
+    "producer_mode": {
+      "enum": [
+        "MANUAL",
+        "CI"
+      ],
+      "type": "string"
+    },
+    "producer_version": {
+      "maxLength": 100,
+      "minLength": 1,
+      "type": "string"
+    },
+    "pull_request_number": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "repository_id": {
+      "format": "uuid",
+      "type": "string"
+    },
     "schema_version": {
       "const": "1.0",
       "type": "string"
+    },
+    "work_item_revision_id": {
+      "oneOf": [
+        {
+          "format": "uuid",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [
     "schema_version",
     "manifest_id",
     "organization_id",
+    "repository_id",
+    "access_scope_id",
+    "pull_request_number",
+    "work_item_revision_id",
     "commit_sha",
     "created_at",
+    "producer",
+    "producer_version",
+    "producer_mode",
     "entries"
   ],
   "title": "Anva Evidence Manifest",

@@ -2204,3 +2204,823 @@ class RepositoryAccessToken(UUIDModel):
                 name="core_repository_token_hash_unique",
             ),
         ]
+
+
+class WorkItem(RevisionedTenantModel):
+    """Current pointer for versioned, repository-scoped delivery intent."""
+
+    class WorkType(models.TextChoices):
+        FEATURE = "FEATURE"
+        BUG = "BUG"
+        SECURITY = "SECURITY"
+        MIGRATION = "MIGRATION"
+        OPERATIONS = "OPERATIONS"
+        OTHER = "OTHER"
+
+    class Status(models.TextChoices):
+        DRAFT = "DRAFT"
+        READY = "READY"
+        APPROVED = "APPROVED"
+        CLOSED = "CLOSED"
+
+    repository = models.ForeignKey(Repository, on_delete=models.PROTECT)
+    access_scope = models.ForeignKey(AccessScope, on_delete=models.PROTECT)
+    external_key = models.CharField(max_length=300, null=True, blank=True)
+    title = models.CharField(max_length=500)
+    work_type = models.CharField(max_length=24, choices=WorkType)
+    status = models.CharField(max_length=24, choices=Status, default=Status.DRAFT)
+    current_content_hash = models.CharField(max_length=64)
+
+    class Meta(RevisionedTenantModel.Meta):
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            *RevisionedTenantModel.Meta.constraints,
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_work_item_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "repository", "external_key"],
+                condition=Q(external_key__isnull=False),
+                name="core_work_item_external_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(current_content_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_work_item_hash_sha256",
+            ),
+        ]
+
+
+class WorkItemRevision(UUIDModel):
+    """Immutable normalized snapshot of one complete work-item version."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    work_item = models.ForeignKey(WorkItem, on_delete=models.PROTECT)
+    revision = models.PositiveBigIntegerField()
+    title = models.CharField(max_length=500)
+    work_type = models.CharField(max_length=24, choices=WorkItem.WorkType)
+    status = models.CharField(max_length=24, choices=WorkItem.Status)
+    summary = models.TextField(blank=True)
+    origin = models.CharField(max_length=100)
+    source_references = models.JSONField(default=list)
+    normalized_payload = models.JSONField()
+    content_hash = models.CharField(max_length=64)
+    created_by_type = models.CharField(max_length=20)
+    created_by_id = models.CharField(max_length=200)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_work_revision_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "work_item", "revision"],
+                name="core_work_revision_number_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "work_item", "content_hash"],
+                name="core_work_revision_hash_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(revision__gte=1),
+                name="core_work_revision_gte_1",
+            ),
+            models.CheckConstraint(
+                condition=Q(content_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_work_revision_hash_sha256",
+            ),
+        ]
+
+
+class Requirement(UUIDModel):
+    """Immutable confirmed requirement in one exact work-item revision."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    work_item_revision = models.ForeignKey(WorkItemRevision, on_delete=models.PROTECT)
+    position = models.PositiveIntegerField()
+    code = models.CharField(max_length=64)
+    normalized_text = models.TextField()
+    origin = models.CharField(max_length=100)
+    owner = models.CharField(max_length=300, blank=True)
+    status = models.CharField(max_length=24)
+    source_references = models.JSONField(default=list)
+    related_entity_ids = models.JSONField(default=list)
+    requires_approval = models.BooleanField(default=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_requirement_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "work_item_revision", "code"],
+                name="core_requirement_revision_code_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "work_item_revision", "position"],
+                name="core_requirement_revision_position_unique",
+            ),
+        ]
+
+
+class NonRequirement(UUIDModel):
+    """Immutable explicit exclusion from one work-item revision."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    work_item_revision = models.ForeignKey(WorkItemRevision, on_delete=models.PROTECT)
+    position = models.PositiveIntegerField()
+    code = models.CharField(max_length=64)
+    normalized_text = models.TextField()
+    rationale = models.TextField(blank=True)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_non_requirement_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "work_item_revision", "code"],
+                name="core_non_requirement_code_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "work_item_revision", "position"],
+                name="core_non_requirement_position_unique",
+            ),
+        ]
+
+
+class Assumption(UUIDModel):
+    """Immutable explicitly labeled assumption in one work-item revision."""
+
+    class Status(models.TextChoices):
+        OPEN = "OPEN"
+        VALIDATED = "VALIDATED"
+        INVALIDATED = "INVALIDATED"
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    work_item_revision = models.ForeignKey(WorkItemRevision, on_delete=models.PROTECT)
+    position = models.PositiveIntegerField()
+    code = models.CharField(max_length=64)
+    normalized_text = models.TextField()
+    status = models.CharField(max_length=16, choices=Status, default=Status.OPEN)
+    validation_reference = models.CharField(max_length=1_000, blank=True)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_assumption_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "work_item_revision", "code"],
+                name="core_assumption_revision_code_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "work_item_revision", "position"],
+                name="core_assumption_revision_position_unique",
+            ),
+        ]
+
+
+class AcceptanceCriterion(UUIDModel):
+    """Immutable, version-bound outcome that must map to evidence or a gap."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    work_item_revision = models.ForeignKey(WorkItemRevision, on_delete=models.PROTECT)
+    position = models.PositiveIntegerField()
+    requirement = models.ForeignKey(
+        Requirement,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    code = models.CharField(max_length=64)
+    normalized_text = models.TextField()
+    required_evidence_types = models.JSONField(default=list)
+    manual_approval_allowed = models.BooleanField(default=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_criterion_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "work_item_revision", "code"],
+                name="core_criterion_revision_code_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "work_item_revision", "position"],
+                name="core_criterion_revision_position_unique",
+            ),
+        ]
+
+
+class Decision(UUIDModel):
+    """Immutable plan or product decision attached to one intent revision."""
+
+    class Status(models.TextChoices):
+        PROPOSED = "PROPOSED"
+        ACCEPTED = "ACCEPTED"
+        REJECTED = "REJECTED"
+        SUPERSEDED = "SUPERSEDED"
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    work_item_revision = models.ForeignKey(WorkItemRevision, on_delete=models.PROTECT)
+    position = models.PositiveIntegerField()
+    code = models.CharField(max_length=64)
+    title = models.CharField(max_length=500)
+    outcome = models.TextField()
+    rationale = models.TextField(blank=True)
+    status = models.CharField(max_length=16, choices=Status)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_decision_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "work_item_revision", "code"],
+                name="core_decision_revision_code_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "work_item_revision", "position"],
+                name="core_decision_revision_position_unique",
+            ),
+        ]
+
+
+class Approval(UUIDModel):
+    """Append-only authority decision over exact versioned intent."""
+
+    class Status(models.TextChoices):
+        APPROVED = "APPROVED"
+        REJECTED = "REJECTED"
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    work_item_revision = models.ForeignKey(WorkItemRevision, on_delete=models.PROTECT)
+    repository = models.ForeignKey(Repository, on_delete=models.PROTECT)
+    target_kind = models.CharField(max_length=40)
+    target_key = models.CharField(max_length=200)
+    status = models.CharField(max_length=16, choices=Status)
+    actor_type = models.CharField(max_length=20)
+    actor_id = models.CharField(max_length=200)
+    authority_action = models.CharField(max_length=100)
+    reason = models.CharField(max_length=2_000)
+    idempotency_key = models.CharField(max_length=64)
+    decided_at = models.DateTimeField(default=timezone.now, editable=False)
+    expires_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_approval_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "idempotency_key"],
+                name="core_approval_idempotency_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(idempotency_key__regex=r"^[a-f0-9]{64}$"),
+                name="core_approval_key_sha256",
+            ),
+        ]
+
+
+class ApprovalRevocation(UUIDModel):
+    """Append-only withdrawal of one exact approval."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    approval = models.OneToOneField(Approval, on_delete=models.PROTECT)
+    actor_type = models.CharField(max_length=20)
+    actor_id = models.CharField(max_length=200)
+    authority_path = models.CharField(max_length=1_000)
+    reason = models.CharField(max_length=2_000)
+    revoked_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_approval_revocation_org_id_unique",
+            )
+        ]
+
+
+class WorkSummary(UUIDModel):
+    """Immutable structured summary that is context, never deterministic evidence."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    work_item_revision = models.ForeignKey(WorkItemRevision, on_delete=models.PROTECT)
+    summary_type = models.CharField(max_length=40)
+    structured_data = models.JSONField()
+    content_hash = models.CharField(max_length=64)
+    producer = models.CharField(max_length=200)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_work_summary_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "work_item_revision", "content_hash"],
+                name="core_work_summary_hash_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(content_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_work_summary_hash_sha256",
+            ),
+        ]
+
+
+class Policy(RevisionedTenantModel):
+    """Current pointer for one governed, versioned deterministic policy."""
+
+    class Status(models.TextChoices):
+        DRAFT = "DRAFT"
+        ACTIVE = "ACTIVE"
+        DISABLED = "DISABLED"
+
+    access_scope = models.ForeignKey(AccessScope, on_delete=models.PROTECT)
+    name = models.CharField(max_length=300)
+    owner = models.CharField(max_length=300)
+    status = models.CharField(max_length=16, choices=Status)
+    current_content_hash = models.CharField(max_length=64)
+
+    class Meta(RevisionedTenantModel.Meta):
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            *RevisionedTenantModel.Meta.constraints,
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_policy_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(current_content_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_policy_hash_sha256",
+            ),
+        ]
+
+
+class PolicyVersion(UUIDModel):
+    """Immutable validated policy definition used by every evaluation."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    policy = models.ForeignKey(Policy, on_delete=models.PROTECT)
+    version = models.PositiveBigIntegerField()
+    schema_version = models.CharField(max_length=20)
+    definition = models.JSONField()
+    content_hash = models.CharField(max_length=64)
+    effective_at = models.DateTimeField()
+    expires_at = models.DateTimeField(null=True, blank=True)
+    created_by_type = models.CharField(max_length=20)
+    created_by_id = models.CharField(max_length=200)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_policy_version_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "policy", "version"],
+                name="core_policy_version_number_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "policy", "content_hash"],
+                name="core_policy_version_hash_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(version__gte=1),
+                name="core_policy_version_gte_1",
+            ),
+            models.CheckConstraint(
+                condition=Q(content_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_policy_version_hash_sha256",
+            ),
+        ]
+
+
+class PolicyBinding(UUIDModel):
+    """Immutable matcher dimensions for one exact policy version."""
+
+    class ScopeLevel(models.TextChoices):
+        ORGANIZATION = "ORGANIZATION"
+        PRODUCT = "PRODUCT"
+        SYSTEM = "SYSTEM"
+        REPOSITORY = "REPOSITORY"
+        PATH = "PATH"
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    policy_version = models.OneToOneField(PolicyVersion, on_delete=models.PROTECT)
+    scope_level = models.CharField(max_length=20, choices=ScopeLevel)
+    mandatory = models.BooleanField(default=False)
+    repository_ids = models.JSONField(default=list)
+    entity_ids = models.JSONField(default=list)
+    entity_types = models.JSONField(default=list)
+    path_patterns = models.JSONField(default=list)
+    work_item_types = models.JSONField(default=list)
+    target_branches = models.JSONField(default=list)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_policy_binding_org_id_unique",
+            )
+        ]
+
+
+class PolicyRequirement(UUIDModel):
+    """Immutable normalized requirement emitted by one policy version."""
+
+    class Enforcement(models.TextChoices):
+        BLOCKING = "BLOCKING"
+        ADVISORY = "ADVISORY"
+
+    class CheckType(models.TextChoices):
+        DETERMINISTIC = "DETERMINISTIC"
+        EVIDENCE = "EVIDENCE"
+        MODEL_REVIEW = "MODEL_REVIEW"
+        MANUAL_APPROVAL = "MANUAL_APPROVAL"
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    policy_version = models.ForeignKey(PolicyVersion, on_delete=models.PROTECT)
+    code = models.CharField(max_length=64)
+    description = models.TextField()
+    enforcement = models.CharField(max_length=16, choices=Enforcement)
+    check_type = models.CharField(max_length=24, choices=CheckType)
+    required_evidence = models.JSONField(default=list)
+    required_reviewers = models.JSONField(default=list)
+    required_approval = models.BooleanField(default=False)
+    report_sections = models.JSONField(default=list)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_policy_requirement_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "policy_version", "code"],
+                name="core_policy_requirement_code_unique",
+            ),
+        ]
+
+
+class PolicyEvaluation(UUIDModel):
+    """Content-addressed immutable result for exact versioned policy inputs."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    repository = models.ForeignKey(Repository, on_delete=models.PROTECT)
+    access_scope = models.ForeignKey(AccessScope, on_delete=models.PROTECT)
+    work_item_revision = models.ForeignKey(
+        WorkItemRevision,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    pull_request_number = models.PositiveIntegerField()
+    commit_sha = models.CharField(max_length=40)
+    reference_time = models.DateTimeField()
+    is_simulation = models.BooleanField(default=False)
+    input_payload = models.JSONField()
+    input_hash = models.CharField(max_length=64)
+    output_payload = models.JSONField()
+    output_hash = models.CharField(max_length=64)
+    evaluated_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_policy_evaluation_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "input_hash"],
+                name="core_policy_evaluation_input_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(commit_sha__regex=r"^[a-f0-9]{40}$"),
+                name="core_policy_evaluation_commit_sha",
+            ),
+            models.CheckConstraint(
+                condition=Q(input_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_policy_evaluation_input_sha",
+            ),
+            models.CheckConstraint(
+                condition=Q(output_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_policy_evaluation_output_sha",
+            ),
+        ]
+
+
+class PolicyOverride(UUIDModel):
+    """Append-only authority-checked exception for an exact evaluation input."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    policy_evaluation = models.ForeignKey(PolicyEvaluation, on_delete=models.PROTECT)
+    policy_version = models.ForeignKey(PolicyVersion, on_delete=models.PROTECT)
+    repository = models.ForeignKey(Repository, on_delete=models.PROTECT)
+    pull_request_number = models.PositiveIntegerField()
+    requirement_code = models.CharField(max_length=64)
+    commit_sha = models.CharField(max_length=40)
+    actor_type = models.CharField(max_length=20)
+    actor_id = models.CharField(max_length=200)
+    authority_path = models.CharField(max_length=1_000)
+    reason = models.CharField(max_length=2_000)
+    idempotency_key = models.CharField(max_length=64)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_policy_override_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "idempotency_key"],
+                name="core_policy_override_key_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(commit_sha__regex=r"^[a-f0-9]{40}$"),
+                name="core_policy_override_commit_sha",
+            ),
+            models.CheckConstraint(
+                condition=Q(idempotency_key__regex=r"^[a-f0-9]{64}$"),
+                name="core_policy_override_key_sha",
+            ),
+        ]
+
+
+class PolicyOverrideRevocation(UUIDModel):
+    """Append-only withdrawal of one exact policy override."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    policy_override = models.OneToOneField(PolicyOverride, on_delete=models.PROTECT)
+    actor_type = models.CharField(max_length=20)
+    actor_id = models.CharField(max_length=200)
+    authority_path = models.CharField(max_length=1_000)
+    reason = models.CharField(max_length=2_000)
+    revoked_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_policy_override_revoke_org_id_unique",
+            )
+        ]
+
+
+class EvidenceManifest(UUIDModel):
+    """Immutable schema-validated submission envelope; payloads are never executed."""
+
+    class ProducerMode(models.TextChoices):
+        MANUAL = "MANUAL"
+        CI = "CI"
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    repository = models.ForeignKey(Repository, on_delete=models.PROTECT)
+    access_scope = models.ForeignKey(AccessScope, on_delete=models.PROTECT)
+    artifact = models.OneToOneField(ImmutableArtifact, on_delete=models.PROTECT)
+    work_item_revision = models.ForeignKey(
+        WorkItemRevision,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    pull_request_number = models.PositiveIntegerField()
+    commit_sha = models.CharField(max_length=40)
+    schema_version = models.CharField(max_length=20)
+    producer = models.CharField(max_length=200)
+    producer_version = models.CharField(max_length=100)
+    producer_mode = models.CharField(max_length=16, choices=ProducerMode)
+    payload_hash = models.CharField(max_length=64)
+    payload_size = models.PositiveIntegerField()
+    received_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_evidence_manifest_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "repository", "payload_hash"],
+                name="core_evidence_manifest_hash_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(commit_sha__regex=r"^[a-f0-9]{40}$"),
+                name="core_evidence_manifest_commit_sha",
+            ),
+            models.CheckConstraint(
+                condition=Q(payload_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_evidence_manifest_payload_sha",
+            ),
+        ]
+
+
+class Evidence(UUIDModel):
+    """Immutable commit-bound deterministic status or approved manual evidence."""
+
+    class Kind(models.TextChoices):
+        CHECK_STATUS = "CHECK_STATUS"
+        TEST_RESULT = "TEST_RESULT"
+        BUILD_RESULT = "BUILD_RESULT"
+        TYPECHECK_RESULT = "TYPECHECK_RESULT"
+        LINT_RESULT = "LINT_RESULT"
+        SCREENSHOT = "SCREENSHOT"
+        VIDEO = "VIDEO"
+        CONSOLE_LOG = "CONSOLE_LOG"
+        NETWORK_TRACE = "NETWORK_TRACE"
+        API_ASSERTION = "API_ASSERTION"
+        STATIC_ANALYSIS = "STATIC_ANALYSIS"
+        SECURITY_SCAN = "SECURITY_SCAN"
+        DEPENDENCY_SCAN = "DEPENDENCY_SCAN"
+        MIGRATION_RESULT = "MIGRATION_RESULT"
+        PERFORMANCE_RESULT = "PERFORMANCE_RESULT"
+        ACCESSIBILITY_RESULT = "ACCESSIBILITY_RESULT"
+        MANUAL_APPROVAL = "MANUAL_APPROVAL"
+        SOURCE_REFERENCE = "SOURCE_REFERENCE"
+        DIFF_REFERENCE = "DIFF_REFERENCE"
+
+    class Status(models.TextChoices):
+        PASSED = "PASSED"
+        FAILED = "FAILED"
+        UNKNOWN = "UNKNOWN"
+
+    class RetentionState(models.TextChoices):
+        ACTIVE = "ACTIVE"
+        EXPIRED = "EXPIRED"
+        DELETED = "DELETED"
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    manifest = models.ForeignKey(EvidenceManifest, on_delete=models.PROTECT)
+    approval = models.ForeignKey(Approval, on_delete=models.PROTECT, null=True, blank=True)
+    commit_sha = models.CharField(max_length=40)
+    kind = models.CharField(max_length=32, choices=Kind)
+    name = models.CharField(max_length=300)
+    producer = models.CharField(max_length=200)
+    producer_version = models.CharField(max_length=100)
+    command = models.CharField(max_length=2_000, blank=True)
+    status = models.CharField(max_length=16, choices=Status)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField()
+    artifact_reference = models.CharField(max_length=2_000, blank=True)
+    source_url = models.URLField(max_length=2_000, blank=True)
+    content_hash = models.CharField(max_length=64)
+    limitations = models.JSONField(default=list)
+    criterion_codes = models.JSONField(default=list)
+    retention_class = models.CharField(max_length=100)
+    retention_expires_at = models.DateTimeField(null=True, blank=True)
+    environment = models.CharField(max_length=200, blank=True)
+    scenario = models.CharField(max_length=500, blank=True)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_evidence_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "manifest", "content_hash", "kind", "name"],
+                name="core_evidence_manifest_identity_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(commit_sha__regex=r"^[a-f0-9]{40}$"),
+                name="core_evidence_commit_sha",
+            ),
+            models.CheckConstraint(
+                condition=Q(content_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_evidence_hash_sha256",
+            ),
+            models.CheckConstraint(
+                condition=Q(started_at__isnull=True) | Q(completed_at__gte=F("started_at")),
+                name="core_evidence_time_coherent",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(kind="MANUAL_APPROVAL", approval__isnull=False)
+                    | (~Q(kind="MANUAL_APPROVAL") & Q(approval__isnull=True))
+                ),
+                name="core_evidence_manual_approval_coherent",
+            ),
+        ]
+
+
+class CriterionEvidence(UUIDModel):
+    """Immutable deterministic mapping or explicit gap for one criterion version."""
+
+    class Classification(models.TextChoices):
+        DIRECT = "DIRECT"
+        INDIRECT = "INDIRECT"
+        GAP = "GAP"
+
+    class Assessment(models.TextChoices):
+        SATISFIED = "SATISFIED"
+        GAP = "GAP"
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    access_scope = models.ForeignKey(AccessScope, on_delete=models.PROTECT)
+    criterion = models.ForeignKey(AcceptanceCriterion, on_delete=models.PROTECT)
+    evidence = models.ForeignKey(Evidence, on_delete=models.PROTECT, null=True, blank=True)
+    target_commit = models.CharField(max_length=40)
+    pull_request_number = models.PositiveIntegerField()
+    reference_time = models.DateTimeField()
+    required_evidence_type = models.CharField(max_length=32)
+    engine_version = models.CharField(max_length=64)
+    input_hash = models.CharField(max_length=64)
+    classification = models.CharField(max_length=16, choices=Classification)
+    assessment = models.CharField(max_length=16, choices=Assessment)
+    verifier_type = models.CharField(max_length=20)
+    verifier_id = models.CharField(max_length=200)
+    limitations = models.JSONField(default=list)
+    confidence = models.FloatField()
+    gap_code = models.CharField(max_length=64, blank=True)
+    gap_description = models.CharField(max_length=2_000, blank=True)
+    mapping_key = models.CharField(max_length=64)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_criterion_evidence_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "mapping_key"],
+                name="core_criterion_evidence_key_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(target_commit__regex=r"^[a-f0-9]{40}$"),
+                name="core_criterion_evidence_commit_sha",
+            ),
+            models.CheckConstraint(
+                condition=Q(mapping_key__regex=r"^[a-f0-9]{64}$"),
+                name="core_criterion_evidence_key_sha",
+            ),
+            models.CheckConstraint(
+                condition=Q(input_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_criterion_evidence_input_sha",
+            ),
+            models.CheckConstraint(
+                condition=Q(pull_request_number__gte=1),
+                name="core_criterion_evidence_pr_gte_1",
+            ),
+            models.CheckConstraint(
+                condition=~Q(engine_version="") & ~Q(required_evidence_type=""),
+                name="core_criterion_evidence_versions_present",
+            ),
+            models.CheckConstraint(
+                condition=Q(confidence__gte=0.0, confidence__lte=1.0),
+                name="core_criterion_evidence_confidence",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        assessment="SATISFIED",
+                        evidence__isnull=False,
+                        gap_code="",
+                        gap_description="",
+                    )
+                    | (
+                        Q(
+                            assessment="GAP",
+                            evidence__isnull=True,
+                        )
+                        & ~Q(gap_code="")
+                        & ~Q(gap_description="")
+                    )
+                ),
+                name="core_criterion_evidence_coherent",
+            ),
+        ]
+
+
+class EvidenceRetentionEvent(UUIDModel):
+    """Append-only availability history without mutating immutable evidence."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    evidence = models.ForeignKey(Evidence, on_delete=models.PROTECT)
+    state = models.CharField(max_length=16, choices=Evidence.RetentionState)
+    reason = models.CharField(max_length=1_000)
+    actor_type = models.CharField(max_length=20)
+    actor_id = models.CharField(max_length=200)
+    occurred_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_evidence_retention_org_id_unique",
+            )
+        ]

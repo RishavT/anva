@@ -86,6 +86,71 @@ urlpatterns = [
         name="api-v1-artifact",
     ),
     path(
+        "api/v1/work-items",
+        core_views.work_items_import,
+        name="api-v1-work-items-create",
+    ),
+    path(
+        "api/v1/work-items/import",
+        core_views.work_items_import,
+        name="api-v1-work-items-import",
+    ),
+    path(
+        "api/v1/work-items/<uuid:work_item_id>",
+        core_views.work_item_detail,
+        name="api-v1-work-item",
+    ),
+    path(
+        "api/v1/work-item-revisions/<uuid:work_item_revision_id>/approvals",
+        core_views.work_revision_approval,
+        name="api-v1-work-revision-approval",
+    ),
+    path(
+        "api/v1/work-approvals/<uuid:approval_id>/revoke",
+        core_views.work_approval_revocation,
+        name="api-v1-work-approval-revoke",
+    ),
+    path(
+        "api/v1/work-item-revisions/<uuid:work_item_revision_id>/evidence-map",
+        core_views.criterion_evidence_mapping,
+        name="api-v1-work-revision-evidence-map",
+    ),
+    path(
+        "api/v1/policies",
+        core_views.policies_import,
+        name="api-v1-policies-create",
+    ),
+    path(
+        "api/v1/policies/import",
+        core_views.policies_import,
+        name="api-v1-policies-import",
+    ),
+    path(
+        "api/v1/policies/simulate",
+        core_views.policy_simulation,
+        name="api-v1-policies-simulate",
+    ),
+    path(
+        "api/v1/policies/<uuid:policy_id>",
+        core_views.policy_detail,
+        name="api-v1-policy",
+    ),
+    path(
+        "api/v1/repositories/<uuid:repository_id>/pull-requests/<int:pull_request_number>/evidence",
+        core_views.evidence_submission,
+        name="api-v1-evidence-submit",
+    ),
+    path(
+        "api/v1/evidence-manifests/<uuid:manifest_id>",
+        core_views.evidence_manifest_detail,
+        name="api-v1-evidence-manifest",
+    ),
+    path(
+        "api/v1/policy-overrides/<uuid:policy_override_id>/revoke",
+        core_views.policy_override_revocation,
+        name="api-v1-policy-override-revoke",
+    ),
+    path(
         "api/v1/knowledge/assertions/<uuid:assertion_id>/review",
         core_views.review_knowledge,
         name="api-v1-knowledge-review",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -89,3 +90,67 @@ def test_source_sync_cli_calls_versioned_api_without_printing_token(
     assert request.full_url == (f"https://anva.example/api/v1/source-connections/{source_id}/sync")
     assert request.method == "POST"
     assert "CANARY-CLI-TOKEN" not in output
+
+
+@pytest.mark.unit
+def test_evidence_cli_submits_bounded_manifest_without_printing_token(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repository_id = uuid.uuid4()
+    manifest = tmp_path / "evidence.json"
+    manifest.write_text(json.dumps({"repository_id": str(repository_id)}))
+    monkeypatch.setenv("ANVA_TOKEN", "CANARY-EVIDENCE-TOKEN")
+    with patch("anva.entrypoints.cli.urlopen") as open_url:
+        open_url.return_value.__enter__.return_value.read.return_value = json.dumps(
+            {"manifest_id": str(uuid.uuid4()), "created": True}
+        ).encode()
+        result = main(
+            [
+                "evidence",
+                "--api-url",
+                "https://anva.example/api/v1",
+                "submit",
+                "--repository-id",
+                str(repository_id),
+                "--pull-request-number",
+                "42",
+                "--manifest",
+                str(manifest),
+            ]
+        )
+
+    assert result == 0
+    output = capsys.readouterr().out
+    request = open_url.call_args.args[0]
+    assert request.full_url.endswith(f"/repositories/{repository_id}/pull-requests/42/evidence")
+    assert "CANARY-EVIDENCE-TOKEN" not in output
+
+
+@pytest.mark.unit
+def test_governance_cli_rejects_symlink_input(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repository_id = uuid.uuid4()
+    target = tmp_path / "policy.json"
+    target.write_text("{}")
+    link = tmp_path / "linked-policy.json"
+    link.symlink_to(target)
+    monkeypatch.setenv("ANVA_TOKEN", "CANARY-TOKEN")
+
+    result = main(
+        [
+            "policy",
+            "import",
+            "--repository-id",
+            str(repository_id),
+            "--file",
+            str(link),
+        ]
+    )
+
+    assert result == 2
+    assert json.loads(capsys.readouterr().out)["code"] == "invalid_input"

@@ -1,5 +1,108 @@
 {
   "$defs": {
+    "policy_binding": {
+      "additionalProperties": false,
+      "properties": {
+        "entity_ids": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "maxItems": 500,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "entity_types": {
+          "items": {
+            "enum": [
+              "TEAM",
+              "REPOSITORY",
+              "SERVICE",
+              "COMPONENT",
+              "API",
+              "DATA_ASSET",
+              "DECISION",
+              "POLICY",
+              "REQUIREMENT",
+              "UNKNOWN"
+            ],
+            "type": "string"
+          },
+          "maxItems": 100,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "mandatory": {
+          "type": "boolean"
+        },
+        "path_patterns": {
+          "items": {
+            "maxLength": 500,
+            "minLength": 1,
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*\\x00).*$",
+            "type": "string"
+          },
+          "maxItems": 500,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "repository_ids": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "maxItems": 500,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "scope_level": {
+          "enum": [
+            "ORGANIZATION",
+            "PRODUCT",
+            "SYSTEM",
+            "REPOSITORY",
+            "PATH"
+          ],
+          "type": "string"
+        },
+        "target_branches": {
+          "items": {
+            "maxLength": 300,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 100,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "work_item_types": {
+          "items": {
+            "enum": [
+              "FEATURE",
+              "BUG",
+              "SECURITY",
+              "MIGRATION",
+              "OPERATIONS",
+              "OTHER"
+            ],
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "scope_level",
+        "mandatory",
+        "repository_ids",
+        "entity_ids",
+        "entity_types",
+        "path_patterns",
+        "work_item_types",
+        "target_branches"
+      ],
+      "type": "object"
+    },
     "policy_requirement": {
       "additionalProperties": false,
       "properties": {
@@ -28,17 +131,50 @@
           ],
           "type": "string"
         },
+        "report_sections": {
+          "items": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "required_approval": {
+          "type": "boolean"
+        },
         "required_evidence": {
           "items": {
             "enum": [
-              "TEST",
-              "LINT",
-              "TYPECHECK",
-              "BUILD",
-              "MIGRATION",
-              "BROWSER",
-              "MANUAL"
+              "CHECK_STATUS",
+              "TEST_RESULT",
+              "BUILD_RESULT",
+              "TYPECHECK_RESULT",
+              "LINT_RESULT",
+              "SCREENSHOT",
+              "VIDEO",
+              "CONSOLE_LOG",
+              "NETWORK_TRACE",
+              "API_ASSERTION",
+              "STATIC_ANALYSIS",
+              "SECURITY_SCAN",
+              "DEPENDENCY_SCAN",
+              "MIGRATION_RESULT",
+              "PERFORMANCE_RESULT",
+              "ACCESSIBILITY_RESULT",
+              "MANUAL_APPROVAL",
+              "SOURCE_REFERENCE",
+              "DIFF_REFERENCE"
             ],
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "required_reviewers": {
+          "items": {
+            "maxLength": 100,
+            "minLength": 1,
             "type": "string"
           },
           "type": "array",
@@ -55,7 +191,10 @@
         "description",
         "enforcement",
         "check_type",
-        "required_evidence"
+        "required_evidence",
+        "required_reviewers",
+        "required_approval",
+        "report_sections"
       ],
       "type": "object"
     }
@@ -64,9 +203,27 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "access_scope_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "binding": {
+      "$ref": "#/$defs/policy_binding"
+    },
     "effective_at": {
       "format": "date-time",
       "type": "string"
+    },
+    "expires_at": {
+      "oneOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "name": {
       "maxLength": 300,
@@ -75,6 +232,11 @@
     },
     "organization_id": {
       "format": "uuid",
+      "type": "string"
+    },
+    "owner": {
+      "maxLength": 300,
+      "minLength": 1,
       "type": "string"
     },
     "policy_id": {
@@ -93,6 +255,14 @@
       "const": "1.0",
       "type": "string"
     },
+    "status": {
+      "enum": [
+        "DRAFT",
+        "ACTIVE",
+        "DISABLED"
+      ],
+      "type": "string"
+    },
     "version": {
       "minimum": 1,
       "type": "integer"
@@ -102,9 +272,14 @@
     "schema_version",
     "policy_id",
     "organization_id",
+    "access_scope_id",
     "version",
     "name",
+    "owner",
+    "status",
     "effective_at",
+    "expires_at",
+    "binding",
     "requirements"
   ],
   "title": "Anva Assurance Policy",

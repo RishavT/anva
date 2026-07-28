@@ -7,6 +7,7 @@ import json
 import os
 import uuid
 from collections.abc import Sequence
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -69,6 +70,38 @@ def build_parser() -> argparse.ArgumentParser:
     )
     packet.add_argument("--repository-id", required=True, type=uuid.UUID)
     packet.add_argument("packet_id", type=uuid.UUID)
+    work = subparsers.add_parser("work", help="Create or import versioned work intent")
+    work.add_argument(
+        "--api-url",
+        default=os.getenv("ANVA_API_URL", "http://localhost:8000/api/v1"),
+    )
+    work_commands = work.add_subparsers(dest="work_command", required=True)
+    for command in ("create", "import"):
+        work_action = work_commands.add_parser(command)
+        work_action.add_argument("--repository-id", required=True, type=uuid.UUID)
+        work_action.add_argument("--file", required=True, type=Path)
+    policy = subparsers.add_parser("policy", help="Import or simulate deterministic policy")
+    policy.add_argument(
+        "--api-url",
+        default=os.getenv("ANVA_API_URL", "http://localhost:8000/api/v1"),
+    )
+    policy_commands = policy.add_subparsers(dest="policy_command", required=True)
+    policy_import = policy_commands.add_parser("import")
+    policy_import.add_argument("--repository-id", required=True, type=uuid.UUID)
+    policy_import.add_argument("--file", required=True, type=Path)
+    policy_simulate = policy_commands.add_parser("simulate")
+    policy_simulate.add_argument("--repository-id", required=True, type=uuid.UUID)
+    policy_simulate.add_argument("--inputs", required=True, type=Path)
+    evidence = subparsers.add_parser("evidence", help="Submit a nonexecuting evidence manifest")
+    evidence.add_argument(
+        "--api-url",
+        default=os.getenv("ANVA_API_URL", "http://localhost:8000/api/v1"),
+    )
+    evidence_commands = evidence.add_subparsers(dest="evidence_command", required=True)
+    evidence_submit = evidence_commands.add_parser("submit")
+    evidence_submit.add_argument("--repository-id", required=True, type=uuid.UUID)
+    evidence_submit.add_argument("--pull-request-number", required=True, type=int)
+    evidence_submit.add_argument("--manifest", required=True, type=Path)
     return parser
 
 
@@ -178,6 +211,71 @@ def _retrieval_request(arguments: argparse.Namespace) -> int:
     return 0
 
 
+def _bounded_json_file(path: Path) -> dict[str, object]:
+    """Read only a small regular non-symlink JSON file supplied by the operator."""
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("Input must be a regular non-symlink file")
+    raw = path.read_bytes()
+    if len(raw) > 64 * 1024:
+        raise ValueError("Input file exceeds the 64 KiB limit")
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise ValueError("Input JSON must be an object")
+    return payload
+
+
+def _governance_request(arguments: argparse.Namespace) -> int:
+    token = os.getenv("ANVA_TOKEN", "")
+    if not token:
+        print(json.dumps({"code": "missing_token", "message": "ANVA_TOKEN is required"}))
+        return 2
+    repository_id = str(arguments.repository_id)
+    if arguments.command == "work":
+        payload = _bounded_json_file(arguments.file)
+        path = "/work-items" if arguments.work_command == "create" else "/work-items/import"
+    elif arguments.command == "policy":
+        payload = _bounded_json_file(
+            arguments.file if arguments.policy_command == "import" else arguments.inputs
+        )
+        if arguments.policy_command == "import":
+            path = "/policies/import"
+        else:
+            path = "/policies/simulate"
+            payload["repository_id"] = repository_id
+    elif arguments.command == "evidence":
+        payload = _bounded_json_file(arguments.manifest)
+        path = (
+            f"/repositories/{repository_id}/pull-requests/{arguments.pull_request_number}/evidence"
+        )
+    else:
+        raise ValueError("Unknown governance command")
+    payload_repository = payload.get("repository_id")
+    if payload_repository is not None and payload_repository != repository_id:
+        raise ValueError("Input repository_id does not match --repository-id")
+    request = Request(  # noqa: S310 - operator-selected Anva API endpoint
+        f"{str(arguments.api_url).rstrip('/')}{path}",
+        data=json.dumps(payload).encode(),
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "X-Correlation-ID": str(uuid.uuid4()),
+        },
+    )
+    try:
+        with urlopen(request, timeout=30) as response:  # noqa: S310
+            result = json.loads(response.read())
+    except HTTPError as error:
+        result = json.loads(error.read() or b"{}")
+        print(json.dumps(result, sort_keys=True))
+        return 1
+    except (URLError, TimeoutError):
+        print(json.dumps({"code": "api_unavailable", "message": "Anva API is unavailable"}))
+        return 1
+    print(json.dumps(result, sort_keys=True))
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Execute one CLI command and return a process exit code."""
     arguments = build_parser().parse_args(argv)
@@ -188,6 +286,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _source_request(arguments)
     if arguments.command in {"search", "context", "packet"}:
         return _retrieval_request(arguments)
+    if arguments.command in {"work", "policy", "evidence"}:
+        try:
+            return _governance_request(arguments)
+        except (json.JSONDecodeError, OSError, ValueError):
+            print(json.dumps({"code": "invalid_input", "message": "Input file is invalid"}))
+            return 2
 
     configure_django()
     from anva.foundation.services import readiness_status

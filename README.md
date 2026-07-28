@@ -7,7 +7,9 @@ Django modular monolith with independent API, worker, MCP, and CLI process bound
 PostgreSQL with pgvector, and S3-compatible object storage. The current backend includes
 tenant identity, repository credentials, access scopes, permission-first hybrid retrieval,
 bounded graph traversal, immutable context packets, and read-only filesystem ingestion with
-immutable provenance, chunks, and normalized relationship edges. It intentionally
+immutable provenance, chunks, and normalized relationship edges. It also provides versioned work
+intent, deterministic additive policy calculation, authority-pinned overrides, and immutable
+commit-bound evidence manifests with criterion evidence/gaps. It intentionally
 does **not** contain a coding-agent runtime, workflow engine, graph database, or customer-code
 sandbox.
 
@@ -132,6 +134,10 @@ docker compose --profile tools run --rm \
 
 Connect, resync, revoke, failure recovery, and read-only mount setup are documented in
 [the ingestion runbook](docs/runbooks/source-ingestion.md).
+
+Versioned work import, policy simulation, evidence submission, deterministic replay, and current
+limitations are documented in
+[the intent/policy/evidence runbook](docs/runbooks/intent-policy-evidence.md).
 
 Permission-safe search, graph, context packet, CLI, evaluation, cache, and limitation details
 are documented in

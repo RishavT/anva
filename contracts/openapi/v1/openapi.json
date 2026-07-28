@@ -318,7 +318,7 @@
         "additionalProperties": false,
         "properties": {
           "commit_sha": {
-            "pattern": "^[a-f0-9]{7,64}$",
+            "pattern": "^[a-f0-9]{40}$",
             "type": "string"
           },
           "context_packet_id": {
@@ -542,7 +542,7 @@
         "additionalProperties": false,
         "properties": {
           "commit_sha": {
-            "pattern": "^[a-f0-9]{7,64}$",
+            "pattern": "^[a-f0-9]{40}$",
             "type": "string"
           },
           "evaluated_at": {
@@ -603,16 +603,45 @@
           "evidence_entry": {
             "additionalProperties": false,
             "properties": {
-              "artifact_uri": {
-                "format": "uri",
+              "approval_id": {
+                "oneOf": [
+                  {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "artifact_reference": {
+                "maxLength": 2000,
+                "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*\\x00).*$",
+                "type": "string"
+              },
+              "command": {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              "completed_at": {
+                "format": "date-time",
                 "type": "string"
               },
               "content_hash": {
                 "pattern": "^[a-f0-9]{64}$",
                 "type": "string"
               },
-              "created_at": {
-                "format": "date-time",
+              "criterion_codes": {
+                "items": {
+                  "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+                  "type": "string"
+                },
+                "maxItems": 500,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "environment": {
+                "maxLength": 200,
                 "type": "string"
               },
               "evidence_id": {
@@ -621,20 +650,94 @@
               },
               "kind": {
                 "enum": [
-                  "TEST",
-                  "LINT",
-                  "TYPECHECK",
-                  "BUILD",
-                  "MIGRATION",
-                  "BROWSER",
-                  "MANUAL"
+                  "CHECK_STATUS",
+                  "TEST_RESULT",
+                  "BUILD_RESULT",
+                  "TYPECHECK_RESULT",
+                  "LINT_RESULT",
+                  "SCREENSHOT",
+                  "VIDEO",
+                  "CONSOLE_LOG",
+                  "NETWORK_TRACE",
+                  "API_ASSERTION",
+                  "STATIC_ANALYSIS",
+                  "SECURITY_SCAN",
+                  "DEPENDENCY_SCAN",
+                  "MIGRATION_RESULT",
+                  "PERFORMANCE_RESULT",
+                  "ACCESSIBILITY_RESULT",
+                  "MANUAL_APPROVAL",
+                  "SOURCE_REFERENCE",
+                  "DIFF_REFERENCE"
                 ],
+                "type": "string"
+              },
+              "limitations": {
+                "items": {
+                  "maxLength": 2000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "name": {
+                "maxLength": 300,
+                "minLength": 1,
                 "type": "string"
               },
               "producer": {
                 "maxLength": 200,
                 "minLength": 1,
                 "type": "string"
+              },
+              "producer_version": {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retention_class": {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retention_expires_at": {
+                "oneOf": [
+                  {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "scenario": {
+                "maxLength": 500,
+                "type": "string"
+              },
+              "source_url": {
+                "oneOf": [
+                  {
+                    "format": "uri",
+                    "maxLength": 2000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "started_at": {
+                "oneOf": [
+                  {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "status": {
                 "enum": [
@@ -648,11 +751,23 @@
             "required": [
               "evidence_id",
               "kind",
+              "name",
               "status",
-              "artifact_uri",
+              "command",
+              "artifact_reference",
+              "source_url",
               "content_hash",
-              "created_at",
-              "producer"
+              "started_at",
+              "completed_at",
+              "producer",
+              "producer_version",
+              "approval_id",
+              "retention_class",
+              "retention_expires_at",
+              "limitations",
+              "criterion_codes",
+              "environment",
+              "scenario"
             ],
             "type": "object"
           }
@@ -661,8 +776,12 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
+          "access_scope_id": {
+            "format": "uuid",
+            "type": "string"
+          },
           "commit_sha": {
-            "pattern": "^[a-f0-9]{7,64}$",
+            "pattern": "^[a-f0-9]{40}$",
             "type": "string"
           },
           "created_at": {
@@ -673,7 +792,7 @@
             "items": {
               "$ref": "#/$defs/evidence_entry"
             },
-            "maxItems": 2000,
+            "maxItems": 500,
             "type": "array"
           },
           "manifest_id": {
@@ -684,17 +803,60 @@
             "format": "uuid",
             "type": "string"
           },
+          "producer": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "producer_mode": {
+            "enum": [
+              "MANUAL",
+              "CI"
+            ],
+            "type": "string"
+          },
+          "producer_version": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "pull_request_number": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "repository_id": {
+            "format": "uuid",
+            "type": "string"
+          },
           "schema_version": {
             "const": "1.0",
             "type": "string"
+          },
+          "work_item_revision_id": {
+            "oneOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
           "schema_version",
           "manifest_id",
           "organization_id",
+          "repository_id",
+          "access_scope_id",
+          "pull_request_number",
+          "work_item_revision_id",
           "commit_sha",
           "created_at",
+          "producer",
+          "producer_version",
+          "producer_mode",
           "entries"
         ],
         "title": "Anva Evidence Manifest",
@@ -1042,6 +1204,109 @@
       },
       "policy": {
         "$defs": {
+          "policy_binding": {
+            "additionalProperties": false,
+            "properties": {
+              "entity_ids": {
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "maxItems": 500,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "entity_types": {
+                "items": {
+                  "enum": [
+                    "TEAM",
+                    "REPOSITORY",
+                    "SERVICE",
+                    "COMPONENT",
+                    "API",
+                    "DATA_ASSET",
+                    "DECISION",
+                    "POLICY",
+                    "REQUIREMENT",
+                    "UNKNOWN"
+                  ],
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "mandatory": {
+                "type": "boolean"
+              },
+              "path_patterns": {
+                "items": {
+                  "maxLength": 500,
+                  "minLength": 1,
+                  "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*\\x00).*$",
+                  "type": "string"
+                },
+                "maxItems": 500,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "repository_ids": {
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "maxItems": 500,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "scope_level": {
+                "enum": [
+                  "ORGANIZATION",
+                  "PRODUCT",
+                  "SYSTEM",
+                  "REPOSITORY",
+                  "PATH"
+                ],
+                "type": "string"
+              },
+              "target_branches": {
+                "items": {
+                  "maxLength": 300,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "work_item_types": {
+                "items": {
+                  "enum": [
+                    "FEATURE",
+                    "BUG",
+                    "SECURITY",
+                    "MIGRATION",
+                    "OPERATIONS",
+                    "OTHER"
+                  ],
+                  "type": "string"
+                },
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "scope_level",
+              "mandatory",
+              "repository_ids",
+              "entity_ids",
+              "entity_types",
+              "path_patterns",
+              "work_item_types",
+              "target_branches"
+            ],
+            "type": "object"
+          },
           "policy_requirement": {
             "additionalProperties": false,
             "properties": {
@@ -1070,17 +1335,50 @@
                 ],
                 "type": "string"
               },
+              "report_sections": {
+                "items": {
+                  "maxLength": 100,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              "required_approval": {
+                "type": "boolean"
+              },
               "required_evidence": {
                 "items": {
                   "enum": [
-                    "TEST",
-                    "LINT",
-                    "TYPECHECK",
-                    "BUILD",
-                    "MIGRATION",
-                    "BROWSER",
-                    "MANUAL"
+                    "CHECK_STATUS",
+                    "TEST_RESULT",
+                    "BUILD_RESULT",
+                    "TYPECHECK_RESULT",
+                    "LINT_RESULT",
+                    "SCREENSHOT",
+                    "VIDEO",
+                    "CONSOLE_LOG",
+                    "NETWORK_TRACE",
+                    "API_ASSERTION",
+                    "STATIC_ANALYSIS",
+                    "SECURITY_SCAN",
+                    "DEPENDENCY_SCAN",
+                    "MIGRATION_RESULT",
+                    "PERFORMANCE_RESULT",
+                    "ACCESSIBILITY_RESULT",
+                    "MANUAL_APPROVAL",
+                    "SOURCE_REFERENCE",
+                    "DIFF_REFERENCE"
                   ],
+                  "type": "string"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              "required_reviewers": {
+                "items": {
+                  "maxLength": 100,
+                  "minLength": 1,
                   "type": "string"
                 },
                 "type": "array",
@@ -1097,7 +1395,10 @@
               "description",
               "enforcement",
               "check_type",
-              "required_evidence"
+              "required_evidence",
+              "required_reviewers",
+              "required_approval",
+              "report_sections"
             ],
             "type": "object"
           }
@@ -1106,9 +1407,27 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
+          "access_scope_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "binding": {
+            "$ref": "#/$defs/policy_binding"
+          },
           "effective_at": {
             "format": "date-time",
             "type": "string"
+          },
+          "expires_at": {
+            "oneOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "name": {
             "maxLength": 300,
@@ -1117,6 +1436,11 @@
           },
           "organization_id": {
             "format": "uuid",
+            "type": "string"
+          },
+          "owner": {
+            "maxLength": 300,
+            "minLength": 1,
             "type": "string"
           },
           "policy_id": {
@@ -1135,6 +1459,14 @@
             "const": "1.0",
             "type": "string"
           },
+          "status": {
+            "enum": [
+              "DRAFT",
+              "ACTIVE",
+              "DISABLED"
+            ],
+            "type": "string"
+          },
           "version": {
             "minimum": 1,
             "type": "integer"
@@ -1144,9 +1476,14 @@
           "schema_version",
           "policy_id",
           "organization_id",
+          "access_scope_id",
           "version",
           "name",
+          "owner",
+          "status",
           "effective_at",
+          "expires_at",
+          "binding",
           "requirements"
         ],
         "title": "Anva Assurance Policy",
@@ -1175,6 +1512,409 @@
           "message",
           "correlation_id"
         ],
+        "type": "object"
+      },
+      "work-item-import": {
+        "$defs": {
+          "acceptance_criterion": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+                "type": "string"
+              },
+              "manual_approval_allowed": {
+                "type": "boolean"
+              },
+              "normalized_text": {
+                "maxLength": 10000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "required_evidence_types": {
+                "items": {
+                  "enum": [
+                    "CHECK_STATUS",
+                    "TEST_RESULT",
+                    "BUILD_RESULT",
+                    "TYPECHECK_RESULT",
+                    "LINT_RESULT",
+                    "SCREENSHOT",
+                    "VIDEO",
+                    "CONSOLE_LOG",
+                    "NETWORK_TRACE",
+                    "API_ASSERTION",
+                    "STATIC_ANALYSIS",
+                    "SECURITY_SCAN",
+                    "DEPENDENCY_SCAN",
+                    "MIGRATION_RESULT",
+                    "PERFORMANCE_RESULT",
+                    "ACCESSIBILITY_RESULT",
+                    "MANUAL_APPROVAL",
+                    "SOURCE_REFERENCE",
+                    "DIFF_REFERENCE"
+                  ],
+                  "type": "string"
+                },
+                "maxItems": 20,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "requirement_code": {
+                "oneOf": [
+                  {
+                    "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "code",
+              "requirement_code",
+              "normalized_text",
+              "required_evidence_types",
+              "manual_approval_allowed"
+            ],
+            "type": "object"
+          },
+          "assumption": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+                "type": "string"
+              },
+              "normalized_text": {
+                "maxLength": 10000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "OPEN",
+                  "VALIDATED",
+                  "INVALIDATED"
+                ],
+                "type": "string"
+              },
+              "validation_reference": {
+                "maxLength": 1000,
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "normalized_text",
+              "status",
+              "validation_reference"
+            ],
+            "type": "object"
+          },
+          "decision": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+                "type": "string"
+              },
+              "outcome": {
+                "maxLength": 10000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "rationale": {
+                "maxLength": 10000,
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "PROPOSED",
+                  "ACCEPTED",
+                  "REJECTED",
+                  "SUPERSEDED"
+                ],
+                "type": "string"
+              },
+              "title": {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "title",
+              "outcome",
+              "rationale",
+              "status"
+            ],
+            "type": "object"
+          },
+          "non_requirement": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+                "type": "string"
+              },
+              "normalized_text": {
+                "maxLength": 10000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "rationale": {
+                "maxLength": 10000,
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "normalized_text",
+              "rationale"
+            ],
+            "type": "object"
+          },
+          "requirement": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+                "type": "string"
+              },
+              "normalized_text": {
+                "maxLength": 10000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "origin": {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              "owner": {
+                "maxLength": 300,
+                "type": "string"
+              },
+              "related_entity_ids": {
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "maxItems": 500,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "requires_approval": {
+                "type": "boolean"
+              },
+              "source_references": {
+                "items": {
+                  "maxLength": 1000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "status": {
+                "maxLength": 24,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "normalized_text",
+              "origin",
+              "owner",
+              "status",
+              "source_references",
+              "related_entity_ids",
+              "requires_approval"
+            ],
+            "type": "object"
+          },
+          "work_summary": {
+            "additionalProperties": false,
+            "properties": {
+              "producer": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "structured_data": {
+                "type": "object"
+              },
+              "summary_type": {
+                "maxLength": 40,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "summary_type",
+              "structured_data",
+              "producer"
+            ],
+            "type": "object"
+          }
+        },
+        "$id": "https://schemas.anva.dev/v1/work-item-import.schema.json",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "acceptance_criteria": {
+            "items": {
+              "$ref": "#/$defs/acceptance_criterion"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "type": "array"
+          },
+          "access_scope_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "assumptions": {
+            "items": {
+              "$ref": "#/$defs/assumption"
+            },
+            "maxItems": 500,
+            "type": "array"
+          },
+          "decisions": {
+            "items": {
+              "$ref": "#/$defs/decision"
+            },
+            "maxItems": 500,
+            "type": "array"
+          },
+          "external_key": {
+            "oneOf": [
+              {
+                "maxLength": 300,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "non_requirements": {
+            "items": {
+              "$ref": "#/$defs/non_requirement"
+            },
+            "maxItems": 500,
+            "type": "array"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "origin": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "repository_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "requirements": {
+            "items": {
+              "$ref": "#/$defs/requirement"
+            },
+            "maxItems": 500,
+            "type": "array"
+          },
+          "revision": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": "1.0",
+            "type": "string"
+          },
+          "source_references": {
+            "items": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 500,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "status": {
+            "enum": [
+              "DRAFT",
+              "READY",
+              "APPROVED",
+              "CLOSED"
+            ],
+            "type": "string"
+          },
+          "summaries": {
+            "items": {
+              "$ref": "#/$defs/work_summary"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "summary": {
+            "maxLength": 20000,
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 500,
+            "minLength": 1,
+            "type": "string"
+          },
+          "work_item_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "work_type": {
+            "enum": [
+              "FEATURE",
+              "BUG",
+              "SECURITY",
+              "MIGRATION",
+              "OPERATIONS",
+              "OTHER"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "work_item_id",
+          "organization_id",
+          "repository_id",
+          "access_scope_id",
+          "revision",
+          "external_key",
+          "title",
+          "work_type",
+          "status",
+          "summary",
+          "origin",
+          "source_references",
+          "requirements",
+          "non_requirements",
+          "assumptions",
+          "acceptance_criteria",
+          "decisions",
+          "summaries"
+        ],
+        "title": "Anva Versioned Work Item Import",
         "type": "object"
       }
     },
@@ -1416,16 +2156,6 @@
         "operationId": "buildContextPacket",
         "parameters": [
           {
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/CorrelationId"
           }
         ],
@@ -1597,16 +2327,6 @@
         "operationId": "evaluateChange",
         "parameters": [
           {
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/CorrelationId"
           }
         ],
@@ -1630,6 +2350,42 @@
               }
             },
             "description": "Stored evaluator result."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/evidence-manifests/{resource_id}": {
+      "get": {
+        "operationId": "getEvidenceManifest",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
           },
           "400": {
             "$ref": "#/components/responses/StructuredError"
@@ -1687,16 +2443,6 @@
       "post": {
         "operationId": "submitKnowledgeProposal",
         "parameters": [
-          {
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "minLength": 1,
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/CorrelationId"
           }
@@ -1988,10 +2734,228 @@
         }
       }
     },
-    "/policies/{resource_id}/override": {
+    "/policies": {
       "post": {
-        "description": "Authorization boundary; mutation arrives with policy persistence.",
-        "operationId": "overridePolicy",
+        "operationId": "createPolicy",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/policy"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing resource returned for an exact canonical replay."
+          },
+          "201": {
+            "description": "Tenant-scoped resource created."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/policies/import": {
+      "post": {
+        "operationId": "importPolicyVersion",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/policy"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing resource returned for an exact canonical replay."
+          },
+          "201": {
+            "description": "Tenant-scoped resource created."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/policies/simulate": {
+      "post": {
+        "operationId": "simulatePolicy",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "affected_entities": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": [
+                            "TEAM",
+                            "REPOSITORY",
+                            "SERVICE",
+                            "COMPONENT",
+                            "API",
+                            "DATA_ASSET",
+                            "DECISION",
+                            "POLICY",
+                            "REQUIREMENT",
+                            "UNKNOWN"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "type"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 1000,
+                    "type": "array",
+                    "uniqueItems": true
+                  },
+                  "affected_paths": {
+                    "items": {
+                      "maxLength": 500,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 1000,
+                    "type": "array",
+                    "uniqueItems": true
+                  },
+                  "commit_sha": {
+                    "pattern": "^[a-f0-9]{40}$",
+                    "type": "string"
+                  },
+                  "policy_version_ids": {
+                    "items": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "maxItems": 100,
+                    "minItems": 1,
+                    "type": "array",
+                    "uniqueItems": true
+                  },
+                  "pull_request_number": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "reference_time": {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  "repository_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "target_branch": {
+                    "maxLength": 300,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "work_item_revision_id": {
+                    "oneOf": [
+                      {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "repository_id",
+                  "pull_request_number",
+                  "commit_sha",
+                  "policy_version_ids",
+                  "reference_time",
+                  "affected_paths",
+                  "affected_entities",
+                  "target_branch"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing resource returned for an exact canonical replay."
+          },
+          "201": {
+            "description": "Tenant-scoped resource created."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/policies/{resource_id}": {
+      "get": {
+        "operationId": "getPolicy",
         "parameters": [
           {
             "in": "path",
@@ -2003,12 +2967,188 @@
             }
           },
           {
+            "in": "query",
+            "name": "repository_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
             "$ref": "#/components/parameters/CorrelationId"
           }
         ],
         "responses": {
-          "202": {
-            "description": "Authorized request accepted."
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/policies/{resource_id}/override": {
+      "post": {
+        "description": "Create an authority-checked exception pinned to an exact policy version, repository, pull request, and commit.",
+        "operationId": "overridePolicy",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          },
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "commit_sha": {
+                    "pattern": "^[a-f0-9]{40}$",
+                    "type": "string"
+                  },
+                  "expires_at": {
+                    "oneOf": [
+                      {
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "policy_evaluation_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "policy_version_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "pull_request_number": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "reason": {
+                    "maxLength": 2000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "repository_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "requirement_code": {
+                    "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "repository_id",
+                  "policy_evaluation_id",
+                  "policy_version_id",
+                  "requirement_code",
+                  "pull_request_number",
+                  "commit_sha",
+                  "reason"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing resource returned for an exact canonical replay."
+          },
+          "201": {
+            "description": "Tenant-scoped resource created."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/policy-overrides/{resource_id}/revoke": {
+      "post": {
+        "operationId": "revokePolicyOverride",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          },
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "maxLength": 2000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "repository_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "repository_id",
+                  "reason"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing resource returned for an exact canonical replay."
+          },
+          "201": {
+            "description": "Tenant-scoped resource created."
           },
           "400": {
             "$ref": "#/components/responses/StructuredError"
@@ -2036,6 +3176,64 @@
         "responses": {
           "200": {
             "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/repositories/{repository_id}/pull-requests/{pull_request_number}/evidence": {
+      "post": {
+        "operationId": "submitEvidenceManifest",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          },
+          {
+            "in": "path",
+            "name": "repository_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pull_request_number",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/evidence-manifest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing resource returned for an exact canonical replay."
+          },
+          "201": {
+            "description": "Tenant-scoped resource created."
           },
           "400": {
             "$ref": "#/components/responses/StructuredError"
@@ -2122,16 +3320,6 @@
         "operationId": "connectFilesystemSource",
         "parameters": [
           {
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          {
             "$ref": "#/components/parameters/CorrelationId"
           }
         ],
@@ -2194,16 +3382,6 @@
       "post": {
         "operationId": "resyncSourceConnection",
         "parameters": [
-          {
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "minLength": 1,
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/CorrelationId"
           },
@@ -2276,16 +3454,6 @@
       "post": {
         "operationId": "syncSourceConnection",
         "parameters": [
-          {
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": true,
-            "schema": {
-              "maxLength": 200,
-              "minLength": 1,
-              "type": "string"
-            }
-          },
           {
             "$ref": "#/components/parameters/CorrelationId"
           },
@@ -2411,6 +3579,361 @@
         "responses": {
           "201": {
             "description": "Tenant-scoped resource created."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/work-approvals/{resource_id}/revoke": {
+      "post": {
+        "operationId": "revokeWorkApproval",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          },
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "maxLength": 2000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "repository_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "repository_id",
+                  "reason"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing resource returned for an exact canonical replay."
+          },
+          "201": {
+            "description": "Tenant-scoped resource created."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/work-item-revisions/{resource_id}/approvals": {
+      "post": {
+        "operationId": "approveWorkItemRevision",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          },
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expires_at": {
+                    "oneOf": [
+                      {
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "reason": {
+                    "maxLength": 2000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "repository_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "APPROVED",
+                      "REJECTED"
+                    ],
+                    "type": "string"
+                  },
+                  "target_key": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "target_kind": {
+                    "enum": [
+                      "WORK_ITEM_REVISION",
+                      "REQUIREMENT",
+                      "ACCEPTANCE_CRITERION",
+                      "DECISION"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "repository_id",
+                  "status",
+                  "target_kind",
+                  "target_key",
+                  "reason"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing resource returned for an exact canonical replay."
+          },
+          "201": {
+            "description": "Tenant-scoped resource created."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/work-item-revisions/{resource_id}/evidence-map": {
+      "post": {
+        "operationId": "mapCriterionEvidence",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          },
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "commit_sha": {
+                    "pattern": "^[a-f0-9]{40}$",
+                    "type": "string"
+                  },
+                  "pull_request_number": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "reference_time": {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  "repository_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "repository_id",
+                  "pull_request_number",
+                  "commit_sha",
+                  "reference_time"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing resource returned for an exact canonical replay."
+          },
+          "201": {
+            "description": "Tenant-scoped resource created."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/work-items": {
+      "post": {
+        "operationId": "createWorkItem",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/work-item-import"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing resource returned for an exact canonical replay."
+          },
+          "201": {
+            "description": "Tenant-scoped resource created."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/work-items/import": {
+      "post": {
+        "operationId": "importWorkItemRevision",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/work-item-import"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing resource returned for an exact canonical replay."
+          },
+          "201": {
+            "description": "Tenant-scoped resource created."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/work-items/{resource_id}": {
+      "get": {
+        "operationId": "getWorkItem",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
           },
           "400": {
             "$ref": "#/components/responses/StructuredError"

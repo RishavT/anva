@@ -1,0 +1,75 @@
+{
+  "acceptance_criteria": [
+    {
+      "code": "TESTS_PASS",
+      "manual_approval_allowed": false,
+      "normalized_text": "Tests pass for the exact commit.",
+      "required_evidence_types": [
+        "TEST_RESULT"
+      ],
+      "requirement_code": "REQ_VERSION_INTENT"
+    }
+  ],
+  "access_scope_id": "00000000-0000-4000-8000-000000000504",
+  "assumptions": [
+    {
+      "code": "ASM_CI_TRUST",
+      "normalized_text": "CI producer identity is configured.",
+      "status": "OPEN",
+      "validation_reference": ""
+    }
+  ],
+  "decisions": [
+    {
+      "code": "DEC_MANIFEST_ONLY",
+      "outcome": "Never fetch or execute artifacts during ingestion.",
+      "rationale": "Treat all manifest fields as hostile input.",
+      "status": "ACCEPTED",
+      "title": "Manifest-only ingestion"
+    }
+  ],
+  "external_key": "ANVA-6",
+  "non_requirements": [
+    {
+      "code": "NONREQ_RUN_ARTIFACTS",
+      "normalized_text": "Do not execute submitted artifacts.",
+      "rationale": "Evidence ingestion is declarative."
+    }
+  ],
+  "organization_id": "00000000-0000-4000-8000-000000000001",
+  "origin": "github-issue",
+  "repository_id": "00000000-0000-4000-8000-000000000304",
+  "requirements": [
+    {
+      "code": "REQ_VERSION_INTENT",
+      "normalized_text": "Version normalized intent.",
+      "origin": "issue",
+      "owner": "platform",
+      "related_entity_ids": [],
+      "requires_approval": false,
+      "source_references": [
+        "https://example.test/issues/6"
+      ],
+      "status": "CONFIRMED"
+    }
+  ],
+  "revision": 1,
+  "schema_version": "1.0",
+  "source_references": [
+    "https://example.test/issues/6"
+  ],
+  "status": "READY",
+  "summaries": [
+    {
+      "producer": "anva-cli",
+      "structured_data": {
+        "text": "Context only; never evidence."
+      },
+      "summary_type": "PLAN"
+    }
+  ],
+  "summary": "Version intent and map evidence.",
+  "title": "Deterministic intent and evidence",
+  "work_item_id": "00000000-0000-4000-8000-000000000701",
+  "work_type": "FEATURE"
+}

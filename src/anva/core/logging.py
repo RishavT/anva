@@ -24,6 +24,20 @@ SECRET_PATTERNS = (
     re.compile(r"(?i)\bhttps?://[^/\s:@]+:[^@\s/]+@"),
     re.compile(
         r"""(?ix)
+        (?:[?&]|&amp;)
+        (?:
+            [a-z0-9_.~-]*(?:credential|signature|security[-_]?token)
+            |googleaccessid
+            |access[-_]?key(?:[-_]?id)?
+            |key[-_]?pair[-_]?id
+            |sig
+            |token
+        )
+        \s*=\s*[^&#\s"']+
+        """
+    ),
+    re.compile(
+        r"""(?ix)
         ["']?
         (?:authorization|x-anva-bootstrap-secret|api[_-]?key|access[_-]?token|
            refresh[_-]?token|client[_-]?secret|password|passwd|pwd|

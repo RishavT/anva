@@ -24,12 +24,6 @@ def canonical_json(value: object) -> bytes:
 def openapi_document() -> dict[str, object]:
     """Generate the initial HTTP contract from the canonical schemas."""
     mutation_parameters: list[dict[str, object]] = [
-        {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": True,
-            "schema": {"type": "string", "minLength": 1, "maxLength": 200},
-        },
         {"$ref": "#/components/parameters/CorrelationId"},
     ]
     structured_errors: dict[str, object] = {
@@ -50,6 +44,11 @@ def openapi_document() -> dict[str, object]:
         "201": {"description": "Tenant-scoped resource created."},
         **structured_errors,
     }
+    created_or_replayed_responses: dict[str, object] = {
+        "200": {"description": "Existing resource returned for an exact canonical replay."},
+        "201": {"description": "Tenant-scoped resource created."},
+        **structured_errors,
+    }
     organization_parameter = {
         "name": "organization_id",
         "in": "path",
@@ -67,6 +66,169 @@ def openapi_document() -> dict[str, object]:
         "in": "path",
         "required": True,
         "schema": {"type": "string", "format": "uuid"},
+    }
+    repository_query_parameter = {
+        "name": "repository_id",
+        "in": "query",
+        "required": True,
+        "schema": {"type": "string", "format": "uuid"},
+    }
+    work_approval_request = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "repository_id": {"type": "string", "format": "uuid"},
+            "status": {"type": "string", "enum": ["APPROVED", "REJECTED"]},
+            "target_kind": {
+                "type": "string",
+                "enum": [
+                    "WORK_ITEM_REVISION",
+                    "REQUIREMENT",
+                    "ACCEPTANCE_CRITERION",
+                    "DECISION",
+                ],
+            },
+            "target_key": {"type": "string", "minLength": 1, "maxLength": 200},
+            "reason": {"type": "string", "minLength": 1, "maxLength": 2_000},
+            "expires_at": {
+                "oneOf": [
+                    {"type": "string", "format": "date-time"},
+                    {"type": "null"},
+                ]
+            },
+        },
+        "required": [
+            "repository_id",
+            "status",
+            "target_kind",
+            "target_key",
+            "reason",
+        ],
+    }
+    revocation_request = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "repository_id": {"type": "string", "format": "uuid"},
+            "reason": {"type": "string", "minLength": 1, "maxLength": 2_000},
+        },
+        "required": ["repository_id", "reason"],
+    }
+    evidence_mapping_request = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "repository_id": {"type": "string", "format": "uuid"},
+            "pull_request_number": {"type": "integer", "minimum": 1},
+            "commit_sha": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+            "reference_time": {"type": "string", "format": "date-time"},
+        },
+        "required": [
+            "repository_id",
+            "pull_request_number",
+            "commit_sha",
+            "reference_time",
+        ],
+    }
+    affected_entity = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "id": {"type": "string", "format": "uuid"},
+            "type": {
+                "type": "string",
+                "enum": [
+                    "TEAM",
+                    "REPOSITORY",
+                    "SERVICE",
+                    "COMPONENT",
+                    "API",
+                    "DATA_ASSET",
+                    "DECISION",
+                    "POLICY",
+                    "REQUIREMENT",
+                    "UNKNOWN",
+                ],
+            },
+        },
+        "required": ["id", "type"],
+    }
+    policy_simulation_request = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "repository_id": {"type": "string", "format": "uuid"},
+            "pull_request_number": {"type": "integer", "minimum": 1},
+            "commit_sha": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+            "policy_version_ids": {
+                "type": "array",
+                "items": {"type": "string", "format": "uuid"},
+                "minItems": 1,
+                "maxItems": 100,
+                "uniqueItems": True,
+            },
+            "reference_time": {"type": "string", "format": "date-time"},
+            "affected_paths": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1, "maxLength": 500},
+                "maxItems": 1_000,
+                "uniqueItems": True,
+            },
+            "affected_entities": {
+                "type": "array",
+                "items": affected_entity,
+                "maxItems": 1_000,
+                "uniqueItems": True,
+            },
+            "target_branch": {"type": "string", "minLength": 1, "maxLength": 300},
+            "work_item_revision_id": {
+                "oneOf": [
+                    {"type": "string", "format": "uuid"},
+                    {"type": "null"},
+                ]
+            },
+        },
+        "required": [
+            "repository_id",
+            "pull_request_number",
+            "commit_sha",
+            "policy_version_ids",
+            "reference_time",
+            "affected_paths",
+            "affected_entities",
+            "target_branch",
+        ],
+    }
+    policy_override_request = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "repository_id": {"type": "string", "format": "uuid"},
+            "policy_evaluation_id": {"type": "string", "format": "uuid"},
+            "policy_version_id": {"type": "string", "format": "uuid"},
+            "requirement_code": {
+                "type": "string",
+                "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+            },
+            "pull_request_number": {"type": "integer", "minimum": 1},
+            "commit_sha": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+            "reason": {"type": "string", "minLength": 1, "maxLength": 2_000},
+            "expires_at": {
+                "oneOf": [
+                    {"type": "string", "format": "date-time"},
+                    {"type": "null"},
+                ]
+            },
+        },
+        "required": [
+            "repository_id",
+            "policy_evaluation_id",
+            "policy_version_id",
+            "requirement_code",
+            "pull_request_number",
+            "commit_sha",
+            "reason",
+        ],
     }
     evaluator_responses: dict[str, object] = {
         "200": {
@@ -156,6 +318,172 @@ def openapi_document() -> dict[str, object]:
                         },
                     },
                     "responses": proposal_responses,
+                }
+            },
+            "/work-items": {
+                "post": {
+                    "operationId": "createWorkItem",
+                    "parameters": mutation_parameters,
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/work-item-import"}
+                            }
+                        },
+                    },
+                    "responses": created_or_replayed_responses,
+                }
+            },
+            "/work-items/import": {
+                "post": {
+                    "operationId": "importWorkItemRevision",
+                    "parameters": mutation_parameters,
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/work-item-import"}
+                            }
+                        },
+                    },
+                    "responses": created_or_replayed_responses,
+                }
+            },
+            "/work-items/{resource_id}": {
+                "get": {
+                    "operationId": "getWorkItem",
+                    "parameters": [
+                        resource_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": authorized_responses,
+                }
+            },
+            "/work-item-revisions/{resource_id}/approvals": {
+                "post": {
+                    "operationId": "approveWorkItemRevision",
+                    "parameters": [*mutation_parameters, resource_parameter],
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": work_approval_request}},
+                    },
+                    "responses": created_or_replayed_responses,
+                }
+            },
+            "/work-approvals/{resource_id}/revoke": {
+                "post": {
+                    "operationId": "revokeWorkApproval",
+                    "parameters": [*mutation_parameters, resource_parameter],
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": revocation_request}},
+                    },
+                    "responses": created_or_replayed_responses,
+                }
+            },
+            "/work-item-revisions/{resource_id}/evidence-map": {
+                "post": {
+                    "operationId": "mapCriterionEvidence",
+                    "parameters": [*mutation_parameters, resource_parameter],
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": evidence_mapping_request}},
+                    },
+                    "responses": created_or_replayed_responses,
+                }
+            },
+            "/policies": {
+                "post": {
+                    "operationId": "createPolicy",
+                    "parameters": mutation_parameters,
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {"schema": {"$ref": "#/components/schemas/policy"}}
+                        },
+                    },
+                    "responses": created_or_replayed_responses,
+                }
+            },
+            "/policies/import": {
+                "post": {
+                    "operationId": "importPolicyVersion",
+                    "parameters": mutation_parameters,
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {"schema": {"$ref": "#/components/schemas/policy"}}
+                        },
+                    },
+                    "responses": created_or_replayed_responses,
+                }
+            },
+            "/policies/simulate": {
+                "post": {
+                    "operationId": "simulatePolicy",
+                    "parameters": mutation_parameters,
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": policy_simulation_request}},
+                    },
+                    "responses": created_or_replayed_responses,
+                }
+            },
+            "/policies/{resource_id}": {
+                "get": {
+                    "operationId": "getPolicy",
+                    "parameters": [
+                        resource_parameter,
+                        repository_query_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": authorized_responses,
+                }
+            },
+            "/repositories/{repository_id}/pull-requests/{pull_request_number}/evidence": {
+                "post": {
+                    "operationId": "submitEvidenceManifest",
+                    "parameters": [
+                        *mutation_parameters,
+                        repository_parameter,
+                        {
+                            "name": "pull_request_number",
+                            "in": "path",
+                            "required": True,
+                            "schema": {"type": "integer", "minimum": 1},
+                        },
+                    ],
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/evidence-manifest"}
+                            }
+                        },
+                    },
+                    "responses": created_or_replayed_responses,
+                }
+            },
+            "/evidence-manifests/{resource_id}": {
+                "get": {
+                    "operationId": "getEvidenceManifest",
+                    "parameters": [
+                        resource_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": authorized_responses,
+                }
+            },
+            "/policy-overrides/{resource_id}/revoke": {
+                "post": {
+                    "operationId": "revokePolicyOverride",
+                    "parameters": [*mutation_parameters, resource_parameter],
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": revocation_request}},
+                    },
+                    "responses": created_or_replayed_responses,
                 }
             },
             "/bootstrap": {
@@ -390,13 +718,15 @@ def openapi_document() -> dict[str, object]:
                 "post": {
                     "operationId": "overridePolicy",
                     "description": (
-                        "Authorization boundary; mutation arrives with policy persistence."
+                        "Create an authority-checked exception pinned to an exact "
+                        "policy version, repository, pull request, and commit."
                     ),
-                    "parameters": [
-                        resource_parameter,
-                        {"$ref": "#/components/parameters/CorrelationId"},
-                    ],
-                    "responses": accepted_responses,
+                    "parameters": [*mutation_parameters, resource_parameter],
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": policy_override_request}},
+                    },
+                    "responses": created_or_replayed_responses,
                 }
             },
             "/source-connections/{resource_id}/revoke": {

@@ -24,6 +24,10 @@ from anva.core.logging import SecretRedactionFilter, StructuredJsonFormatter, re
         "access_token: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456",
         "cookie=session_id=highly-sensitive-cookie",
         "private_key=-----BEGIN PRIVATE KEY-----",
+        "GET https://s3.example.test/result?X-Amz-Signature=aws-signed-value",
+        "GET https://s3.example.test/result?x-AMZ-security-TOKEN=session-value",
+        "GET https://storage.googleapis.test/result?X-Goog-Credential=gcp-identity",
+        "GET https://blob.example.test/result?sv=2026-01-01&sig=azure-signed-value",
     ],
 )
 def test_secret_redaction_covers_headers_tokens_and_configured_secrets(message: str) -> None:
@@ -36,6 +40,9 @@ def test_secret_redaction_covers_headers_tokens_and_configured_secrets(message: 
     assert "correct-horse" not in redacted
     assert "ghp_" not in redacted
     assert "highly-sensitive-cookie" not in redacted
+    assert "signed-value" not in redacted
+    assert "session-value" not in redacted
+    assert "gcp-identity" not in redacted
 
 
 @pytest.mark.unit
@@ -57,6 +64,15 @@ def test_filter_redacts_before_structured_json_formatting() -> None:
     assert payload["logger"] == "anva.security"
     assert payload["message"] == "request [REDACTED]"
     assert "raw-secret" not in rendered
+
+
+@pytest.mark.unit
+def test_credential_id_in_authorization_path_is_not_secret_material() -> None:
+    authorization_path = (
+        "credential:00000000-0000-4000-8000-000000000001"
+        ">role:ORG_ADMIN>repository:00000000-0000-4000-8000-000000000002"
+    )
+    assert redact_text(authorization_path) == authorization_path
 
 
 @pytest.mark.unit
