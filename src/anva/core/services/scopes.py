@@ -18,6 +18,7 @@ from anva.core.models import (
     AccessScopeSource,
     AccessSnapshot,
     BackgroundJob,
+    ContextPacketInvalidation,
     Organization,
     SourceChunkVisibility,
     SourceConnection,
@@ -436,4 +437,13 @@ def revoke_source_connection(
             revision=source.revision,
             metadata={"invalidated_scope_count": len(affected_ids)},
         )
+        if source.repository_id is not None:
+            from anva.core.services.context_packets import invalidate_context_packets
+
+            invalidate_context_packets(
+                organization_id=source.organization_id,
+                repository_id=source.repository_id,
+                reason=ContextPacketInvalidation.Reason.REVOCATION,
+                details={"source_connection_id": str(source.id)},
+            )
         return source

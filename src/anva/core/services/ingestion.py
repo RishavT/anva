@@ -24,6 +24,7 @@ from anva.core.models import (
     AssertionProvenance,
     AssertionValidityInterval,
     BackgroundJob,
+    ContextPacketInvalidation,
     EntityAlias,
     EntityResolution,
     IngestionFailure,
@@ -60,6 +61,7 @@ from anva.core.services.context import ActorContext
 from anva.core.services.events import record_transition
 from anva.core.services.jobs import enqueue_job, require_current_lease
 from anva.core.services.scopes import create_access_snapshot
+from anva.core.services.search_index import index_source_chunk
 from anva.ingestion.errors import IngestionError
 from anva.ingestion.extractors import MechanicalExtractor
 from anva.ingestion.filesystem import FilesystemConnector
@@ -812,6 +814,7 @@ def _persist_chunks(
                 "char_count": len(text),
             },
         )
+        index_source_chunk(chunk)
         SourceChunkVisibility.objects.get_or_create(
             organization=organization,
             source_chunk=chunk,
@@ -1373,6 +1376,15 @@ def _execute_ingestion_job(
             started_at=started,
             duration_ms=max(0, int((time.monotonic() - started_monotonic) * 1_000)),
         )
+        if run.source_connection.repository_id is not None:
+            from anva.core.services.context_packets import invalidate_context_packets
+
+            invalidate_context_packets(
+                organization_id=run.organization_id,
+                repository_id=run.source_connection.repository_id,
+                reason=ContextPacketInvalidation.Reason.INGESTION,
+                details={"sync_run_id": str(run.id)},
+            )
     return run
 
 
