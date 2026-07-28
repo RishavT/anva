@@ -12,9 +12,9 @@ from django.utils import timezone
 from anva.core.exceptions import (
     IdempotencyConflictError,
     LeaseConflictError,
-    TenantBoundaryError,
 )
 from anva.core.models import BackgroundJob, Organization
+from anva.core.services.authorization import get_tenant_record_for_update
 from anva.core.services.context import ActorContext
 from anva.core.services.events import record_transition
 
@@ -203,11 +203,11 @@ def complete_job(
     """Complete a leased job exactly once."""
     completed_at = now or timezone.now()
     with transaction.atomic():
-        job = (
-            BackgroundJob.objects.select_for_update().select_related("organization").get(id=job_id)
+        job = get_tenant_record_for_update(
+            queryset=BackgroundJob.objects.select_related("organization"),
+            record_id=job_id,
+            organization_id=actor.organization_id,
         )
-        if job.organization_id != actor.organization_id:
-            raise TenantBoundaryError("Job belongs to another organization")
         if job.state == BackgroundJob.State.SUCCEEDED:
             return job
         require_current_lease(job=job, worker_id=worker_id, now=completed_at)
@@ -250,11 +250,11 @@ def fail_job(
         raise ValueError("retry_delay_seconds cannot be negative")
     failed_at = now or timezone.now()
     with transaction.atomic():
-        job = (
-            BackgroundJob.objects.select_for_update().select_related("organization").get(id=job_id)
+        job = get_tenant_record_for_update(
+            queryset=BackgroundJob.objects.select_related("organization"),
+            record_id=job_id,
+            organization_id=actor.organization_id,
         )
-        if job.organization_id != actor.organization_id:
-            raise TenantBoundaryError("Job belongs to another organization")
         require_current_lease(job=job, worker_id=worker_id, now=failed_at)
         next_state = (
             BackgroundJob.State.FAILED

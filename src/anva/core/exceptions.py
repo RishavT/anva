@@ -15,6 +15,12 @@ class TenantBoundaryError(DomainOperationError):
     code = "tenant_boundary_violation"
 
 
+class ResourceNotFoundError(DomainOperationError):
+    """A governed record is absent or outside the actor's tenant boundary."""
+
+    code = "resource_not_found"
+
+
 class InvalidStateTransitionError(DomainOperationError):
     """A requested state edge is not part of the authoritative graph."""
 

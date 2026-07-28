@@ -22,6 +22,7 @@ from anva.core.models import (
     SyncRun,
 )
 from anva.core.services.artifacts import require_artifact_organization
+from anva.core.services.authorization import get_tenant_record_for_update
 from anva.core.services.context import ActorContext
 from anva.core.services.events import record_transition
 
@@ -256,7 +257,11 @@ def transition_sync_run(
 ) -> SyncRun:
     """Transition one sync run and retain terminal history."""
     with transaction.atomic():
-        run = SyncRun.objects.select_for_update().select_related("organization").get(id=run_id)
+        run = get_tenant_record_for_update(
+            queryset=SyncRun.objects.select_related("organization"),
+            record_id=run_id,
+            organization_id=actor.organization_id,
+        )
         if run.state == target_state:
             return run
         terminal = target_state in {
@@ -291,10 +296,10 @@ def transition_assertion_review(
 ) -> KnowledgeAssertion:
     """Review an assertion using optimistic concurrency."""
     with transaction.atomic():
-        assertion = (
-            KnowledgeAssertion.objects.select_for_update()
-            .select_related("organization")
-            .get(id=assertion_id)
+        assertion = get_tenant_record_for_update(
+            queryset=KnowledgeAssertion.objects.select_related("organization"),
+            record_id=assertion_id,
+            organization_id=actor.organization_id,
         )
         return cast(
             KnowledgeAssertion,
@@ -321,9 +326,11 @@ def transition_assurance_run(
 ) -> AssuranceRun:
     """Transition assurance without allowing commit or tenant drift."""
     with transaction.atomic():
-        run = AssuranceRun.objects.select_for_update().select_related("organization").get(id=run_id)
-        if run.organization_id != actor.organization_id:
-            raise TenantBoundaryError("Assurance run belongs to another organization")
+        run = get_tenant_record_for_update(
+            queryset=AssuranceRun.objects.select_related("organization"),
+            record_id=run_id,
+            organization_id=actor.organization_id,
+        )
         if run.state == target_state:
             return run
         if evaluated_commit is not None:
@@ -377,10 +384,10 @@ def transition_knowledge_proposal(
 ) -> KnowledgeProposal:
     """Transition a proposal without directly changing approved knowledge."""
     with transaction.atomic():
-        proposal = (
-            KnowledgeProposal.objects.select_for_update()
-            .select_related("organization")
-            .get(id=proposal_id)
+        proposal = get_tenant_record_for_update(
+            queryset=KnowledgeProposal.objects.select_related("organization"),
+            record_id=proposal_id,
+            organization_id=actor.organization_id,
         )
         if proposal.state == target_state:
             return proposal

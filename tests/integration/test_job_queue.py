@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 
@@ -10,8 +11,13 @@ import pytest
 from django.db import close_old_connections, connection
 from django.utils import timezone
 
-from anva.core.exceptions import IdempotencyConflictError, LeaseConflictError
+from anva.core.exceptions import (
+    IdempotencyConflictError,
+    LeaseConflictError,
+    ResourceNotFoundError,
+)
 from anva.core.models import AuditEvent, BackgroundJob, Organization, OutboxEvent
+from anva.core.services.authorization import NOT_FOUND_MESSAGE
 from anva.core.services.context import ActorContext
 from anva.core.services.jobs import (
     claim_next_job,
@@ -157,6 +163,70 @@ def test_completion_requires_current_lease_and_is_idempotent() -> None:
     assert completed.state == BackgroundJob.State.SUCCEEDED
     assert repeated.id == completed.id
     assert AuditEvent.objects.filter(target_id=job.id).count() == 3
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_job_terminal_noop_and_failure_hide_foreign_or_missing_ids() -> None:
+    owner = Organization.objects.create(slug="job-owner", name="Job Owner")
+    caller = Organization.objects.create(slug="job-caller", name="Job Caller")
+    now = timezone.now()
+    foreign_terminal = BackgroundJob.objects.create(
+        organization=owner,
+        kind="source.sync",
+        payload={},
+        state=BackgroundJob.State.SUCCEEDED,
+        idempotency_key="foreign-terminal",
+        completed_at=now,
+    )
+    foreign_running = BackgroundJob.objects.create(
+        organization=owner,
+        kind="source.sync",
+        payload={},
+        state=BackgroundJob.State.RUNNING,
+        idempotency_key="foreign-running",
+        attempt_count=1,
+        lease_owner="worker",
+        lease_expires_at=now + timedelta(minutes=1),
+    )
+    actor = actor_for(caller)
+    missing_id = uuid.uuid4()
+
+    operations: list[Callable[[], BackgroundJob]] = [
+        lambda: complete_job(
+            actor=actor,
+            job_id=foreign_terminal.id,
+            worker_id="worker",
+            now=now,
+        ),
+        lambda: complete_job(
+            actor=actor,
+            job_id=missing_id,
+            worker_id="worker",
+            now=now,
+        ),
+        lambda: fail_job(
+            actor=actor,
+            job_id=foreign_running.id,
+            worker_id="worker",
+            error_code="FAILED",
+            now=now,
+        ),
+        lambda: fail_job(
+            actor=actor,
+            job_id=missing_id,
+            worker_id="worker",
+            error_code="FAILED",
+            now=now,
+        ),
+    ]
+    errors: list[tuple[str, str]] = []
+    for operation in operations:
+        with pytest.raises(ResourceNotFoundError) as captured:
+            operation()
+        errors.append((captured.value.code, str(captured.value)))
+
+    assert set(errors) == {("resource_not_found", NOT_FOUND_MESSAGE)}
 
 
 @pytest.mark.integration

@@ -12,6 +12,7 @@ from anva.contracts.catalog import EXAMPLES
 from anva.core.exceptions import (
     InvalidStateTransitionError,
     OptimisticConcurrencyError,
+    ResourceNotFoundError,
     TenantBoundaryError,
 )
 from anva.core.models import (
@@ -25,7 +26,8 @@ from anva.core.models import (
     SourceConnection,
     SyncRun,
 )
-from anva.core.services.artifacts import create_artifact
+from anva.core.services.artifacts import create_artifact, require_artifact_organization
+from anva.core.services.authorization import NOT_FOUND_MESSAGE
 from anva.core.services.context import ActorContext
 from anva.core.services.creation import (
     create_assertion,
@@ -131,6 +133,28 @@ def test_content_addressed_artifacts_are_idempotent_and_database_immutable() -> 
             schema_version="2.0",
             payload=EXAMPLES["context-packet"],
         )
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_artifact_lookup_hides_foreign_or_missing_ids() -> None:
+    owner = Organization.objects.create(slug="artifact-owner", name="Artifact Owner")
+    caller = Organization.objects.create(slug="artifact-caller", name="Artifact Caller")
+    foreign = ImmutableArtifact.objects.create(
+        organization=owner,
+        kind=ImmutableArtifact.Kind.CONTEXT_PACKET,
+        schema_name="context-packet",
+        schema_version="1.0",
+        payload=EXAMPLES["context-packet"],
+    )
+
+    errors: list[tuple[str, str]] = []
+    for artifact_id in (foreign.id, uuid.uuid4()):
+        with pytest.raises(ResourceNotFoundError) as captured:
+            require_artifact_organization(artifact_id, caller.id)
+        errors.append((captured.value.code, str(captured.value)))
+
+    assert set(errors) == {("resource_not_found", NOT_FOUND_MESSAGE)}
 
 
 @pytest.mark.integration

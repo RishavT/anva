@@ -9,6 +9,7 @@ from django.db import transaction
 from anva.contracts.validation import validate_payload
 from anva.core.exceptions import TenantBoundaryError
 from anva.core.models import ImmutableArtifact, Organization, content_hash
+from anva.core.services.authorization import get_tenant_record
 from anva.core.services.context import ActorContext
 from anva.core.services.events import record_transition
 
@@ -71,8 +72,9 @@ def require_artifact_organization(
     artifact_id: uuid.UUID,
     organization_id: uuid.UUID,
 ) -> ImmutableArtifact:
-    """Load an artifact and enforce tenant ownership inside the operation."""
-    artifact = ImmutableArtifact.objects.get(id=artifact_id)
-    if artifact.organization_id != organization_id:
-        raise TenantBoundaryError("Artifact belongs to another organization")
-    return artifact
+    """Load a tenant artifact without distinguishing foreign from absent IDs."""
+    return get_tenant_record(
+        queryset=ImmutableArtifact.objects.all(),
+        record_id=artifact_id,
+        organization_id=organization_id,
+    )

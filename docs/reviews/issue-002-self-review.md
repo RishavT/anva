@@ -79,13 +79,29 @@ decisions. No credentials enter job or contract examples.
 ## Verification evidence
 
 - `make check`: pass.
-- Format check: 48 files already formatted.
+- Format check: 50 files already formatted.
 - Ruff: pass.
-- Strict mypy: 44 source files, no issues.
+- Strict mypy: 46 source files, no issues.
 - Migration drift: `No changes detected`.
 - Generated contracts: 16 artifacts verified.
-- Pytest: 66 passed in 2.15 seconds.
-- Coverage: 90%, above the required 85% gate.
+- Pytest: 72 passed in 2.86 seconds.
+- Coverage: 92%, above the required 85% gate.
+
+## Pull-request review follow-up
+
+1. The first implementation loaded transition targets by UUID and delegated tenant checking to
+   `apply_transition`. Sync and proposal wrappers had same-state returns before that delegation,
+   allowing a foreign actor to receive another tenant's row on an idempotent request. All
+   caller-supplied governed IDs now use one tenant-scoped lookup before no-op, terminal,
+   transition-graph, revision, lease, or artifact validation.
+2. Foreign and nonexistent IDs now share the stable `resource_not_found` code and constant message,
+   preventing state, revision, terminal status, or existence from being inferred through exception
+   differences. The same lookup is used by sync, assertion, assurance, proposal, job completion and
+   failure, and assurance artifact attachment.
+3. A PostgreSQL matrix now covers foreign initial-state no-ops, terminal-state no-ops, invalid or
+   backward edges, stale revisions, valid edges, missing UUIDs, and authorized successful edges for
+   every state machine. Job terminal no-op/failure and artifact helper paths have equivalent
+   foreign-versus-missing tests.
 
 ## Known limitations
 
