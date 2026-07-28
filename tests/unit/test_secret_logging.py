@@ -67,6 +67,15 @@ def test_filter_redacts_before_structured_json_formatting() -> None:
 
 
 @pytest.mark.unit
+def test_credential_id_in_authorization_path_is_not_secret_material() -> None:
+    authorization_path = (
+        "credential:00000000-0000-4000-8000-000000000001"
+        ">role:ORG_ADMIN>repository:00000000-0000-4000-8000-000000000002"
+    )
+    assert redact_text(authorization_path) == authorization_path
+
+
+@pytest.mark.unit
 def test_exception_message_and_nested_mapping_are_redacted_before_formatting() -> None:
     try:
         raise ValueError("api_key=sk_live_EXCEPTION012345")

@@ -41,8 +41,7 @@ SECRET_PATTERNS = (
         ["']?
         (?:authorization|x-anva-bootstrap-secret|api[_-]?key|access[_-]?token|
            refresh[_-]?token|client[_-]?secret|password|passwd|pwd|
-           private[_-]?key|set[_-]?cookie|cookie|session[_-]?(?:id|token)?|
-           [a-z0-9_.~-]*(?:credential|signature|security[-_]?token))
+           private[_-]?key|set[_-]?cookie|cookie|session[_-]?(?:id|token)?)
         ["']?\s*[:=]\s*["']?[^\s,;}\]]+
         """
     ),
