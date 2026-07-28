@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from copy import deepcopy
 from datetime import UTC, datetime
+from html.parser import HTMLParser
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -16,6 +17,9 @@ from anva.contracts import ContractValidationError, validate_payload
 from anva.contracts.catalog import EXAMPLES
 from anva.core.models import AssuranceCheck, AssuranceRun, CriterionEvidence, Finding
 from anva.core.services.assurance import (
+    REPORT_DETAIL_LIMITATION_PREFIX,
+    REPORT_HTML_MAX_CHARS,
+    REPORT_MARKDOWN_MAX_CHARS,
     _finding_fingerprint,
     _fingerprinted_payloads,
     _mapping_payload,
@@ -772,7 +776,7 @@ def test_report_markdown_and_html_match_deterministic_goldens() -> None:
             citations=[],
         ),
     )
-    markdown, rendered_html = _render_report(
+    markdown, rendered_html, report_limitations = _render_report(
         run=run,
         status="READY_WITH_WARNINGS",
         reasons=["MODEL_CONCERNS"],
@@ -783,6 +787,7 @@ def test_report_markdown_and_html_match_deterministic_goldens() -> None:
 
     assert markdown == (root / "assurance-report-golden.md").read_text()
     assert rendered_html == (root / "assurance-report-golden.html").read_text()
+    assert report_limitations == ["No code was executed."]
 
 
 @pytest.mark.unit
@@ -835,7 +840,7 @@ def test_report_renders_blockers_and_empty_sections_without_html_injection() -> 
         ),
     )
 
-    markdown, rendered_html = _render_report(
+    markdown, rendered_html, report_limitations = _render_report(
         run=run,
         status="BLOCKED",
         reasons=[],
@@ -859,6 +864,7 @@ def test_report_renders_blockers_and_empty_sections_without_html_injection() -> 
     assert "No evaluator concerns recorded." not in markdown
     assert "No evaluator concerns recorded." not in rendered_html
     assert "blocking findings above are the immediate review focus" in rendered_html
+    assert report_limitations == []
 
 
 @pytest.mark.unit
@@ -895,7 +901,7 @@ def test_report_renders_every_key_review_area() -> None:
         for index in range(11)
     )
 
-    markdown, rendered_html = _render_report(
+    markdown, rendered_html, report_limitations = _render_report(
         run=run,
         status="READY_WITH_WARNINGS",
         reasons=["MODEL_CONCERNS"],
@@ -905,3 +911,81 @@ def test_report_renders_every_key_review_area() -> None:
 
     assert markdown.count("Review area") == 11
     assert rendered_html.count("Review area") == 11
+    assert report_limitations == []
+
+
+@pytest.mark.unit
+def test_report_bounds_maximum_findings_and_escaping_deterministically() -> None:
+    run = cast(
+        AssuranceRun,
+        SimpleNamespace(
+            pull_request_number=11,
+            head_commit="e" * 40,
+            diff_artifact=None,
+            context_artifact=None,
+            requirements_hash="a" * 64,
+            policy_bundle_hash="b" * 64,
+            evidence_bundle_hash="c" * 64,
+            evaluator_version="manual",
+            prompt_version="prompt_v1",
+        ),
+    )
+    findings = tuple(
+        cast(
+            Finding,
+            SimpleNamespace(
+                id=uuid.UUID(int=index + 1),
+                severity=Finding.Severity.BLOCKING,
+                state=Finding.State.OPEN,
+                title="<&" * 150,
+                path="src/" + ("<&" * 498),
+                line=index + 1,
+                fingerprint=f"{index:064x}",
+                explanation="<&" * 5_000,
+                uncertainty="<&" * 1_000,
+                suggested_resolution="<&" * 1_000,
+                citations=[],
+            ),
+        )
+        for index in range(500)
+    )
+    limitations = [f"{index:03d} " + ("<&" * 998) for index in range(100)]
+
+    markdown, rendered_html, report_limitations = _render_report(
+        run=run,
+        status="BLOCKED",
+        reasons=["SUPPORTED_MODEL_BLOCKER"],
+        findings=findings,
+        limitations=limitations,
+    )
+    replay_markdown, replay_html, replay_limitations = _render_report(
+        run=run,
+        status="BLOCKED",
+        reasons=["SUPPORTED_MODEL_BLOCKER"],
+        findings=tuple(reversed(findings)),
+        limitations=list(reversed(limitations)),
+    )
+
+    assert len(markdown) <= REPORT_MARKDOWN_MAX_CHARS
+    assert len(rendered_html) <= REPORT_HTML_MAX_CHARS
+    assert markdown == replay_markdown
+    assert rendered_html == replay_html
+    assert report_limitations == replay_limitations
+    assert any(
+        limitation.startswith(REPORT_DETAIL_LIMITATION_PREFIX) for limitation in report_limitations
+    )
+    assert all(
+        finding.fingerprint in markdown and finding.fingerprint in rendered_html
+        for finding in findings
+    )
+    assert all(
+        str(finding.id) in markdown and str(finding.id) in rendered_html for finding in findings
+    )
+    assert "detail entries=500" not in markdown
+    assert "detail entries omitted=" in markdown
+    assert "detail entries omitted=" in rendered_html
+    assert markdown.encode("utf-8").decode("utf-8") == markdown
+    assert rendered_html.encode("utf-8").decode("utf-8") == rendered_html
+    parser = HTMLParser()
+    parser.feed(rendered_html)
+    parser.close()

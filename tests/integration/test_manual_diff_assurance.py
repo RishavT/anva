@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
@@ -10,6 +11,7 @@ import pytest
 from django.db import DatabaseError, transaction
 from django.utils import timezone
 
+from anva.contracts import validate_payload
 from anva.contracts.catalog import EXAMPLES
 from anva.core.exceptions import ResourceNotFoundError
 from anva.core.models import (
@@ -741,3 +743,129 @@ def test_inflight_run_ignores_later_evidence_mapping_for_same_head() -> None:
     )
 
     assert "EVIDENCE_GAP_TESTS_PASS" not in completed.readiness.reason_codes
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_maximum_evaluator_shape_completes_with_bounded_replayable_report() -> None:
+    organization, repository, scope, actor = _tenant()
+    policy_version_id = _policy(organization, repository, scope, actor)
+    ingested = _ingest(
+        actor=actor,
+        repository=repository,
+        scope=scope,
+        number=43,
+        head="8" * 40,
+    )
+    evaluator = FakeEvaluator(FakeScenario.SUCCESS_WITH_BLOCKING)
+    start_assurance(
+        actor=actor,
+        pull_request_revision_id=ingested.revision.id,
+        policy_version_ids=[policy_version_id],
+        reference_time=REFERENCE_TIME,
+        deterministic_checks=[
+            {
+                "code": "TESTS_PASS",
+                "status": "PASSED",
+                "blocking": True,
+                "summary": "Exact-head deterministic tests passed.",
+                "evidence_ids": [],
+            }
+        ],
+        evaluator_version=evaluator.version,
+        prompt_version="assurance-prompt-v1",
+        trigger_key="8" * 64,
+    )
+    claim = claim_evaluator_task(
+        actor=actor,
+        repository_id=repository.id,
+        claimant="maximum-shape-review-agent",
+    )
+    assert claim is not None
+    result = evaluator.evaluate(claim.request)
+    base_finding = deepcopy(result["findings"][0])  # type: ignore[index]
+    result["findings"] = [
+        {
+            **deepcopy(base_finding),
+            "code": f"MAX_SHAPE_{index:03d}",
+            "severity": "BLOCKING",
+            "title": f"{index:03d}" + ("T" * 297),
+            "explanation": f"{index:03d}" + ("E" * 9_997),
+            "citations": [
+                {
+                    "type": "DIFF",
+                    "path": "src/auth/service.py",
+                    "side": "NEW",
+                    "line": 1,
+                }
+            ],
+            "evidence_ids": [],
+            "criterion_codes": [],
+            "uncertainty": f"{index:03d}" + ("U" * 1_997),
+            "suggested_resolution": f"{index:03d}" + ("S" * 1_997),
+        }
+        for index in range(500)
+    ]
+    result["limitations"] = [f"{index:03d} " + ("L" * 1_996) for index in range(MAX_LIMITATIONS)]
+    validate_payload("evaluator-result", result)
+
+    completed = submit_evaluator_result(
+        actor=actor,
+        task_id=claim.task.id,
+        claimant="maximum-shape-review-agent",
+        claim_token=claim.claim_token,
+        result=result,
+    )
+    replayed = submit_evaluator_result(
+        actor=actor,
+        task_id=claim.task.id,
+        claimant="maximum-shape-review-agent",
+        claim_token=claim.claim_token,
+        result=result,
+    )
+
+    assert completed.run.state == AssuranceRun.State.COMPLETED
+    assert completed.readiness.status == "BLOCKED"
+    assert len(completed.findings) == 500
+    assert FindingOccurrence.objects.filter(assurance_run=completed.run).count() == 500
+    assert {len(finding.title) for finding in completed.findings} == {300}
+    assert {len(finding.explanation) for finding in completed.findings} == {10_000}
+    assert {len(finding.uncertainty) for finding in completed.findings} == {2_000}
+    assert {len(finding.suggested_resolution) for finding in completed.findings} == {2_000}
+    assert len(completed.run.limitations) == MAX_LIMITATIONS
+    assert any(len(limitation) == 2_000 for limitation in completed.run.limitations)
+
+    fingerprints = {finding.fingerprint for finding in completed.findings}
+    assert len(fingerprints) == 500
+    report_payload = completed.report.artifact.payload
+    assert report_payload["finding_fingerprints"] == sorted(fingerprints)
+    assert report_payload["markdown"] == completed.report.markdown
+    assert report_payload["html"] == completed.report.html
+    validate_payload("assurance-report", report_payload)
+    assert len(completed.report.markdown) <= 200_000
+    assert len(completed.report.html) <= 300_000
+    assert all(
+        fingerprint in completed.report.markdown and fingerprint in completed.report.html
+        for fingerprint in fingerprints
+    )
+
+    truncation_limitations = [
+        limitation
+        for limitation in report_payload["limitations"]
+        if "detail" in limitation.casefold() and "truncat" in limitation.casefold()
+    ]
+    assert len(truncation_limitations) == 1
+    truncation_counts = {int(value) for value in re.findall(r"\d+", truncation_limitations[0])}
+    assert 500 in truncation_counts
+    assert any(0 < count < 500 for count in truncation_counts)
+    assert all(
+        str(count) in completed.report.markdown and str(count) in completed.report.html
+        for count in truncation_counts
+    )
+
+    assert replayed.created is False
+    assert completed.report.markdown == replayed.report.markdown
+    assert completed.report.html == replayed.report.html
+    assert completed.report.content_hash == replayed.report.content_hash
+    assert completed.report.artifact.content_hash == replayed.report.artifact.content_hash
+    assert {finding.fingerprint for finding in replayed.findings} == fingerprints

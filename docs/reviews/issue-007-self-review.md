@@ -11,7 +11,7 @@
 | Provider-neutral evaluator | `Evaluator` protocol, all v3 fake scenarios, leased claim/submit queue for a fresh context-limited reviewer | Unit/eval and PostgreSQL queue tests |
 | Valid structured findings | Closed schema, confidence/uncertainty, exact diff or authorized-source citations, evidence/criterion allowlists, stable semantic fingerprint and occurrences | Contract, citation, fingerprint tests |
 | Server-only readiness | Fixed precedence; evaluator result has no readiness/outcome; deterministic failure remains blocked | Contract and failure-wins integration test |
-| Concise deterministic reports | Stable Markdown and escaped HTML, every blocker and review area, exact versions/limitations, no deployment grant | Goldens and injection test |
+| Concise deterministic reports | Contract-bounded Markdown and escaped HTML, compact index of every finding, budgeted optional detail, exact versions/limitations, no deployment grant | Goldens, injection, maximum-shape unit and PostgreSQL tests |
 | Post-merge proposal safety | Exact completed merged revision and authorized citations required; only `KnowledgeProposal` links created | Safety integration case |
 | API/CLI/docs/generated artifacts | Versioned routes, bounded non-symlink CLI, JSON schemas/examples/OpenAPI/MCP, ADR/runbook/threat model | Contract drift and CLI tests |
 
@@ -63,6 +63,12 @@
     `REQUIREMENT_TRACEABILITY_NOT_ESTABLISHED`, and are at least `READY_WITH_WARNINGS` unless a
     stronger blocker applies. The mandatory limitation survives bounded evaluator output, and exact
     replay preserves report bytes and hashes.
+16. Rendering every finding with all optional prose could exceed the assurance-report contract and
+    roll back an otherwise-valid submission. Reports now index every finding with stable identity,
+    severity, lifecycle, bounded title/location, and full fingerprint. Blockers receive first access
+    to explicit per-field and aggregate optional-detail budgets; deterministic markers, counts, and
+    a persisted limitation describe compaction. Limitation and reason display are separately
+    bounded, while their stored exact values remain subject to the existing payload cap.
 
 ## Limitations
 
@@ -90,3 +96,12 @@ PostgreSQL exact-replay/report lifecycle, Ruff, canonical formatting, and strict
 changed services. The remediation adds no contract or migration surface. Per review coordination,
 the exact-head hosted full CI is the final broad gate; the local full and production suites were not
 redundantly rerun.
+
+The report-boundary remediation reproduced a 50-finding contract rejection at reviewed head
+`9d6452a`: Markdown was 374,397 characters and HTML was 379,572 characters, and PostgreSQL proved
+the failed completion rolled back every new artifact, finding, occurrence, readiness decision,
+report, and submitted attempt. The final 500-finding maximum-field rendering is 101,389 Markdown
+characters and 126,302 HTML characters. Its focused Docker gate passed 94 unit regressions and one
+PostgreSQL maximum-shape completion/replay lifecycle, plus Ruff, canonical formatting, and strict
+mypy for the changed service. The local full and production suites remain intentionally delegated
+to exact-head hosted CI.

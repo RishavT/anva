@@ -16,6 +16,7 @@ from anva.contracts.generate import openapi_document
 from anva.core.models import AssuranceRun, Finding, WorkItemRevision
 from anva.core.services.assurance import (
     MAX_LIMITATIONS,
+    REPORT_DETAIL_LIMITATION_PREFIX,
     REQUIREMENT_TRACEABILITY_LIMITATION,
     _bounded_limitations,
     _finding_fingerprint,
@@ -226,7 +227,7 @@ def test_report_uses_neutral_reason_label_and_escapes_untrusted_finding_text() -
         ),
     )
 
-    markdown, rendered_html = _render_report(
+    markdown, rendered_html, report_limitations = _render_report(
         run=run,
         status="READY_WITH_WARNINGS",
         reasons=["MODEL_CONCERNS", "deployment-authorized"],
@@ -240,7 +241,7 @@ def test_report_uses_neutral_reason_label_and_escapes_untrusted_finding_text() -
     assert "safe-to-deploy" not in markdown.casefold()
     assert "deployment-authorized" not in markdown.casefold()
     assert "<script>" not in rendered_html
-    assert "&lt;script&gt;" in rendered_html
+    assert "script" not in rendered_html.casefold()
     assert "Deployment is safe" not in markdown
     assert "merge can proceed" not in rendered_html
     assert "risk-free" not in markdown.casefold()
@@ -250,6 +251,9 @@ def test_report_uses_neutral_reason_label_and_escapes_untrusted_finding_text() -
     assert "src/\\<unsafe\\>.py:9" in markdown
     assert "src/&lt;unsafe&gt;.py:9" in rendered_html
     assert "Readiness reasons" in rendered_html
+    assert any(
+        limitation.startswith(REPORT_DETAIL_LIMITATION_PREFIX) for limitation in report_limitations
+    )
 
 
 @pytest.mark.unit

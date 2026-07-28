@@ -116,6 +116,18 @@ REPORT_SAFETY_ASSERTION = re.compile(
         |no[\s_-]+(?:known[\s_-]+)?blockers?
     )\b"""
 )
+REPORT_MARKDOWN_MAX_CHARS = 200_000
+REPORT_HTML_MAX_CHARS = 300_000
+REPORT_INDEX_TEXT_CHARS = 24
+REPORT_DETAIL_EXPLANATION_CHARS = 320
+REPORT_DETAIL_OTHER_CHARS = 160
+REPORT_DETAIL_SOURCE_BUDGET = 4_000
+REPORT_REASON_ITEM_CHARS = 100
+REPORT_REASON_SOURCE_BUDGET = 2_000
+REPORT_LIMITATION_ITEM_CHARS = 320
+REPORT_LIMITATION_SOURCE_BUDGET = 4_000
+REPORT_TRUNCATION_MARKER = "... [truncated]"
+REPORT_DETAIL_LIMITATION_PREFIX = "Report detail truncation applied:"
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +149,19 @@ class EvaluatorClaim:
     task: EvaluatorTask
     claim_token: str
     request: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class _ReportFinding:
+    finding: Finding
+    identity: str
+    title: str
+    location: str
+    explanation: str
+    uncertainty: str
+    suggested_resolution: str
+    index_truncated_fields: int
+    detail_truncated_fields: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -1530,6 +1555,45 @@ def _markdown_escape(value: object) -> str:
     return re.sub(r"([\\`*_[\]<>#])", r"\\\1", _safe_report_text(value))
 
 
+def _bounded_report_text(value: object, *, maximum: int) -> tuple[str, bool]:
+    safe = _safe_report_text(value)
+    if len(safe) <= maximum:
+        return safe, False
+    if maximum <= len(REPORT_TRUNCATION_MARKER):
+        raise ValueError("Report text budget cannot contain its truncation marker")
+    prefix_length = maximum - len(REPORT_TRUNCATION_MARKER)
+    return f"{safe[:prefix_length]}{REPORT_TRUNCATION_MARKER}", True
+
+
+def _bounded_report_items(
+    values: list[str],
+    *,
+    maximum: int,
+    source_budget: int,
+    priority: tuple[str, ...] = (),
+) -> tuple[list[str], int, int]:
+    remaining = set(values)
+    ordered: list[str] = []
+    for item in priority:
+        if item in remaining:
+            ordered.append(item)
+            remaining.remove(item)
+    ordered.extend(sorted(remaining))
+    rendered: list[str] = []
+    truncated = 0
+    omitted = 0
+    used = 0
+    for value in ordered:
+        bounded, was_truncated = _bounded_report_text(value, maximum=maximum)
+        if used + len(bounded) > source_budget:
+            omitted += 1
+            continue
+        rendered.append(bounded)
+        used += len(bounded)
+        truncated += int(was_truncated)
+    return rendered, truncated, omitted
+
+
 def _finding_report_location(finding: Finding) -> str:
     if finding.path:
         return f"{finding.path}:{finding.line}" if finding.line is not None else finding.path
@@ -1539,33 +1603,110 @@ def _finding_report_location(finding: Finding) -> str:
     return "No localized location supplied"
 
 
-def _markdown_finding(finding: Finding) -> list[str]:
-    return [
-        (
-            f"- **{_markdown_escape(finding.severity)}:** "
-            f"{_markdown_escape(finding.title)} "
-            f"(`{_markdown_escape(_finding_report_location(finding))}`)"
-        ),
-        f"  - Detail: {_markdown_escape(finding.explanation)}",
-        f"  - Uncertainty: {_markdown_escape(finding.uncertainty)}",
-        f"  - Suggested resolution: {_markdown_escape(finding.suggested_resolution)}",
-        f"  - Fingerprint: `{_markdown_escape(finding.fingerprint)}`",
-    ]
-
-
-def _html_finding(finding: Finding) -> str:
-    return (
-        f"<li><strong>{html.escape(_safe_report_text(finding.severity))}: "
-        f"{html.escape(_safe_report_text(finding.title))}</strong>"
-        f"<br><span>Location: <code>"
-        f"{html.escape(_safe_report_text(_finding_report_location(finding)))}</code></span>"
-        f"<br><span>Detail: {html.escape(_safe_report_text(finding.explanation))}</span>"
-        f"<br><span>Uncertainty: {html.escape(_safe_report_text(finding.uncertainty))}</span>"
-        f"<br><span>Suggested resolution: "
-        f"{html.escape(_safe_report_text(finding.suggested_resolution))}</span>"
-        f"<br><span>Fingerprint: <code>"
-        f"{html.escape(_safe_report_text(finding.fingerprint))}</code></span></li>"
+def _report_finding(finding: Finding) -> _ReportFinding:
+    title, title_truncated = _bounded_report_text(
+        finding.title,
+        maximum=REPORT_INDEX_TEXT_CHARS,
     )
+    location, location_truncated = _bounded_report_text(
+        _finding_report_location(finding),
+        maximum=REPORT_INDEX_TEXT_CHARS,
+    )
+    explanation, explanation_truncated = _bounded_report_text(
+        finding.explanation,
+        maximum=REPORT_DETAIL_EXPLANATION_CHARS,
+    )
+    uncertainty, uncertainty_truncated = _bounded_report_text(
+        finding.uncertainty,
+        maximum=REPORT_DETAIL_OTHER_CHARS,
+    )
+    suggested_resolution, resolution_truncated = _bounded_report_text(
+        finding.suggested_resolution,
+        maximum=REPORT_DETAIL_OTHER_CHARS,
+    )
+    identity = str(getattr(finding, "id", finding.fingerprint))
+    return _ReportFinding(
+        finding=finding,
+        identity=identity,
+        title=title,
+        location=location,
+        explanation=explanation,
+        uncertainty=uncertainty,
+        suggested_resolution=suggested_resolution,
+        index_truncated_fields=int(title_truncated) + int(location_truncated),
+        detail_truncated_fields=(
+            int(explanation_truncated) + int(uncertainty_truncated) + int(resolution_truncated)
+        ),
+    )
+
+
+def _detail_fingerprints(entries: list[_ReportFinding]) -> set[str]:
+    selected: set[str] = set()
+    used = 0
+    for entry in sorted(
+        entries,
+        key=lambda item: (
+            item.finding.severity != Finding.Severity.BLOCKING,
+            item.finding.fingerprint,
+        ),
+    ):
+        cost = len(entry.explanation) + len(entry.uncertainty) + len(entry.suggested_resolution)
+        if used + cost > REPORT_DETAIL_SOURCE_BUDGET:
+            continue
+        selected.add(entry.finding.fingerprint)
+        used += cost
+    return selected
+
+
+def _markdown_finding(entry: _ReportFinding, *, include_details: bool) -> list[str]:
+    finding = entry.finding
+    state = getattr(finding, "state", Finding.State.OPEN)
+    lines = [
+        (
+            f"- `{_markdown_escape(entry.identity)}` | "
+            f"**{_markdown_escape(finding.severity)}/{_markdown_escape(state)}** | "
+            f"{_markdown_escape(entry.title)} | `{_markdown_escape(entry.location)}` | "
+            f"`{_markdown_escape(finding.fingerprint)}`"
+        )
+    ]
+    if include_details:
+        lines.extend(
+            [
+                f"  - Detail: {_markdown_escape(entry.explanation)}",
+                f"  - Uncertainty: {_markdown_escape(entry.uncertainty)}",
+                (f"  - Suggested resolution: {_markdown_escape(entry.suggested_resolution)}"),
+            ]
+        )
+    return lines
+
+
+def _html_finding(entry: _ReportFinding, *, include_details: bool) -> str:
+    finding = entry.finding
+    state = getattr(finding, "state", Finding.State.OPEN)
+    parts = [
+        "<li>",
+        f"<code>{html.escape(entry.identity, quote=False)}</code> | ",
+        (
+            f"<strong>{html.escape(_safe_report_text(finding.severity), quote=False)}/"
+            f"{html.escape(_safe_report_text(state), quote=False)}</strong> | "
+        ),
+        f"{html.escape(entry.title, quote=False)} | ",
+        f"<code>{html.escape(entry.location, quote=False)}</code> | ",
+        f"<code>{html.escape(finding.fingerprint, quote=False)}</code>",
+    ]
+    if include_details:
+        parts.extend(
+            [
+                f"<br><span>Detail: {html.escape(entry.explanation, quote=False)}</span>",
+                (f"<br><span>Uncertainty: {html.escape(entry.uncertainty, quote=False)}</span>"),
+                (
+                    "<br><span>Suggested resolution: "
+                    f"{html.escape(entry.suggested_resolution, quote=False)}</span>"
+                ),
+            ]
+        )
+    parts.append("</li>")
+    return "".join(parts)
 
 
 def _render_report(
@@ -1575,21 +1716,90 @@ def _render_report(
     reasons: list[str],
     findings: tuple[Finding, ...],
     limitations: list[str],
-) -> tuple[str, str]:
-    ordered_findings = sorted(
-        findings,
+) -> tuple[str, str, list[str]]:
+    ordered_entries = sorted(
+        (_report_finding(finding) for finding in findings),
         key=lambda finding: (
-            finding.fingerprint,
-            finding.path,
-            finding.line if finding.line is not None else -1,
+            finding.finding.fingerprint,
+            finding.finding.path,
+            finding.finding.line if finding.finding.line is not None else -1,
         ),
     )
     blockers = [
-        finding for finding in ordered_findings if finding.severity == Finding.Severity.BLOCKING
+        entry for entry in ordered_entries if entry.finding.severity == Finding.Severity.BLOCKING
     ]
     warnings = [
-        finding for finding in ordered_findings if finding.severity != Finding.Severity.BLOCKING
+        entry for entry in ordered_entries if entry.finding.severity != Finding.Severity.BLOCKING
     ]
+    detail_fingerprints = _detail_fingerprints(ordered_entries)
+    details_rendered = len(detail_fingerprints)
+    details_omitted = len(ordered_entries) - details_rendered
+    index_fields_truncated = sum(entry.index_truncated_fields for entry in ordered_entries)
+    detail_fields_truncated = sum(
+        entry.detail_truncated_fields
+        for entry in ordered_entries
+        if entry.finding.fingerprint in detail_fingerprints
+    )
+    rendered_reasons, reasons_truncated, reasons_omitted = _bounded_report_items(
+        reasons,
+        maximum=REPORT_REASON_ITEM_CHARS,
+        source_budget=REPORT_REASON_SOURCE_BUDGET,
+    )
+    _preview_limitations, limitations_truncated, limitations_omitted = _bounded_report_items(
+        sorted(set(limitations)),
+        maximum=REPORT_LIMITATION_ITEM_CHARS,
+        source_budget=REPORT_LIMITATION_SOURCE_BUDGET,
+        priority=(REQUIREMENT_TRACEABILITY_LIMITATION,),
+    )
+    report_was_bounded = any(
+        (
+            details_omitted,
+            index_fields_truncated,
+            detail_fields_truncated,
+            reasons_truncated,
+            reasons_omitted,
+            limitations_truncated,
+            limitations_omitted,
+        )
+    )
+    budget_limitation = ""
+    effective_limitations = sorted(set(limitations))
+    if report_was_bounded:
+        budget_limitation = (
+            f"{REPORT_DETAIL_LIMITATION_PREFIX} findings={len(ordered_entries)}; "
+            f"detail entries={details_rendered}; detail entries omitted={details_omitted}; "
+            f"index fields truncated={index_fields_truncated}; "
+            f"detail fields truncated={detail_fields_truncated}; "
+            f"reason entries compacted={reasons_truncated + reasons_omitted}; "
+            f"limitation entries compacted={limitations_truncated + limitations_omitted}."
+        )
+        required_limitations = tuple(
+            item
+            for item in (
+                REQUIREMENT_TRACEABILITY_LIMITATION,
+                budget_limitation,
+            )
+            if item == budget_limitation or item in effective_limitations
+        )
+        effective_limitations = _bounded_limitations(
+            effective_limitations,
+            [budget_limitation],
+            required=required_limitations,
+        )
+    limitation_priority = tuple(
+        item
+        for item in (
+            budget_limitation,
+            REQUIREMENT_TRACEABILITY_LIMITATION,
+        )
+        if item
+    )
+    rendered_limitations, _truncated, _omitted = _bounded_report_items(
+        effective_limitations,
+        maximum=REPORT_LIMITATION_ITEM_CHARS,
+        source_budget=REPORT_LIMITATION_SOURCE_BUDGET,
+        priority=limitation_priority,
+    )
     markdown_lines = [
         "# Anva independent assurance",
         "",
@@ -1603,18 +1813,28 @@ def _render_report(
         "",
     ]
     markdown_lines.extend(
-        [f"- `{_markdown_escape(reason)}`" for reason in reasons] or ["- None recorded."]
+        [f"- `{_markdown_escape(reason)}`" for reason in rendered_reasons] or ["- None recorded."]
     )
     markdown_lines.extend(["", "## Blocking findings", ""])
     if blockers:
-        for finding in blockers:
-            markdown_lines.extend(_markdown_finding(finding))
+        for entry in blockers:
+            markdown_lines.extend(
+                _markdown_finding(
+                    entry,
+                    include_details=entry.finding.fingerprint in detail_fingerprints,
+                )
+            )
     else:
         markdown_lines.append("- None recorded.")
     markdown_lines.extend(["", "## Review focus", ""])
     if warnings:
-        for finding in warnings:
-            markdown_lines.extend(_markdown_finding(finding))
+        for entry in warnings:
+            markdown_lines.extend(
+                _markdown_finding(
+                    entry,
+                    include_details=entry.finding.fingerprint in detail_fingerprints,
+                )
+            )
     elif blockers:
         markdown_lines.append("- The blocking findings above are the immediate review focus.")
     else:
@@ -1638,7 +1858,7 @@ def _render_report(
         ]
     )
     markdown_lines.extend(
-        [f"- {_markdown_escape(item)}" for item in sorted(set(limitations))] or ["- None recorded."]
+        [f"- {_markdown_escape(item)}" for item in rendered_limitations] or ["- None recorded."]
     )
     markdown = "\n".join(markdown_lines).rstrip() + "\n"
 
@@ -1652,29 +1872,43 @@ def _render_report(
         "<h2>Readiness reasons</h2><ul>",
     ]
     html_parts.extend(
-        f"<li><code>{html.escape(_safe_report_text(reason))}</code></li>" for reason in reasons
+        f"<li><code>{html.escape(reason, quote=False)}</code></li>" for reason in rendered_reasons
     )
-    if not reasons:
+    if not rendered_reasons:
         html_parts.append("<li>None recorded.</li>")
     html_parts.append("</ul><h2>Blocking findings</h2><ul>")
-    html_parts.extend(_html_finding(finding) for finding in blockers)
+    html_parts.extend(
+        _html_finding(
+            entry,
+            include_details=entry.finding.fingerprint in detail_fingerprints,
+        )
+        for entry in blockers
+    )
     if not blockers:
         html_parts.append("<li>None recorded.</li>")
     html_parts.append("</ul><h2>Review focus</h2><ul>")
-    html_parts.extend(_html_finding(finding) for finding in warnings)
+    html_parts.extend(
+        _html_finding(
+            entry,
+            include_details=entry.finding.fingerprint in detail_fingerprints,
+        )
+        for entry in warnings
+    )
     if blockers and not warnings:
         html_parts.append("<li>The blocking findings above are the immediate review focus.</li>")
     elif not warnings:
         html_parts.append("<li>No evaluator concerns recorded.</li>")
     html_parts.append("</ul><h2>Limitations</h2><ul>")
-    html_parts.extend(
-        f"<li>{html.escape(_safe_report_text(item))}</li>" for item in sorted(set(limitations))
-    )
-    if not limitations:
+    html_parts.extend(f"<li>{html.escape(item, quote=False)}</li>" for item in rendered_limitations)
+    if not rendered_limitations:
         html_parts.append("<li>None recorded.</li>")
     html_parts.append("</ul></article>")
     rendered_html = "".join(html_parts) + "\n"
-    return markdown, rendered_html
+    if len(markdown) > REPORT_MARKDOWN_MAX_CHARS:
+        raise ValueError("Internal Markdown report budget was exceeded")
+    if len(rendered_html) > REPORT_HTML_MAX_CHARS:
+        raise ValueError("Internal HTML report budget was exceeded")
+    return markdown, rendered_html, effective_limitations
 
 
 def _finalize_evaluator_failure(
@@ -1713,7 +1947,7 @@ def _finalize_evaluator_failure(
             (REQUIREMENT_TRACEABILITY_LIMITATION,) if run.work_item_revision_id is None else ()
         ),
     )
-    markdown, rendered_html = _render_report(
+    markdown, rendered_html, limitations = _render_report(
         run=run,
         status=ReadinessDecision.Status.FAILED,
         reasons=[failure_code],
@@ -1936,7 +2170,7 @@ def submit_evaluator_result(
             (REQUIREMENT_TRACEABILITY_LIMITATION,) if run.work_item_revision_id is None else ()
         ),
     )
-    markdown, rendered_html = _render_report(
+    markdown, rendered_html, all_limitations = _render_report(
         run=run,
         status=status,
         reasons=reason_codes,
