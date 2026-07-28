@@ -49,6 +49,7 @@ def test_worker_marks_readiness_and_cleans_up(tmp_path: Path) -> None:
     with (
         patch("anva.foundation.services.readiness_status", return_value=status),
         patch("anva.entrypoints.worker.READY_FILE", ready_file),
+        patch("anva.entrypoints.worker.process_one_job", return_value=False),
         patch("anva.entrypoints.worker.time.sleep", side_effect=stop_after_poll),
     ):
         assert worker.run() == 0

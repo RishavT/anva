@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import uuid
 
-from django.db.models import Q, QuerySet
+from django.db.models import F, Q, QuerySet
 
 from anva.core.exceptions import ResourceNotFoundError
 from anva.core.models import (
     AccessScope,
     ImmutableArtifact,
     KnowledgeAssertion,
+    KnowledgeRelationship,
+    SourceChunk,
+    SourceChunkVisibility,
     SourceConnection,
+    SourceDocument,
 )
 from anva.core.services.authorization import (
     NOT_FOUND_MESSAGE,
@@ -67,9 +71,66 @@ def authorized_assertions(
         repository_id=repository_id,
     )
     scopes = visible_scope_ids(actor=actor, repository_id=repository_id)
-    return KnowledgeAssertion.objects.filter(
+    return (
+        KnowledgeAssertion.objects.filter(
+            organization_id=actor.organization_id,
+            access_scope__in=scopes,
+        )
+        .filter(
+            Q(assertionprovenance__isnull=True)
+            | Q(assertionprovenance__access_snapshot__revoked_at__isnull=True)
+        )
+        .distinct()
+    )
+
+
+def authorized_source_chunks(
+    *,
+    actor: ActorContext,
+    repository_id: uuid.UUID,
+) -> QuerySet[SourceChunk]:
+    """Apply tenant and snapshot visibility before any chunk ranking."""
+    authorize_action(
+        actor=actor,
+        action=Action.SEARCH,
+        repository_id=repository_id,
+    )
+    scopes = visible_scope_ids(actor=actor, repository_id=repository_id)
+    return SourceChunk.objects.filter(
+        organization_id=actor.organization_id,
+        sourcechunkvisibility__access_scope__in=scopes,
+        sourcechunkvisibility__state=SourceChunkVisibility.State.AVAILABLE,
+        sourcechunkvisibility__access_snapshot__revoked_at__isnull=True,
+        sourcechunkvisibility__source_observation__source_document__state=(
+            SourceDocument.State.PRESENT
+        ),
+        sourcechunkvisibility__source_observation__source_revision_id=F(
+            "sourcechunkvisibility__source_observation__source_document__current_revision_id"
+        ),
+    ).distinct()
+
+
+def authorized_relationships(
+    *,
+    actor: ActorContext,
+    repository_id: uuid.UUID,
+) -> QuerySet[KnowledgeRelationship]:
+    """Return committed edges only after scope and snapshot filtering."""
+    authorize_action(
+        actor=actor,
+        action=Action.KNOWLEDGE_VIEW,
+        repository_id=repository_id,
+    )
+    scopes = visible_scope_ids(actor=actor, repository_id=repository_id)
+    return KnowledgeRelationship.objects.filter(
         organization_id=actor.organization_id,
         access_scope__in=scopes,
+        access_snapshot__revoked_at__isnull=True,
+        assertion__valid_until__isnull=True,
+        source_observation__source_document__state=SourceDocument.State.PRESENT,
+        source_observation__source_revision_id=F(
+            "source_observation__source_document__current_revision_id"
+        ),
     )
 
 

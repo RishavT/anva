@@ -17,8 +17,11 @@ from anva.core.models import (
     AccessScopeServiceIdentity,
     AccessScopeSource,
     AccessSnapshot,
+    BackgroundJob,
     Organization,
+    SourceChunkVisibility,
     SourceConnection,
+    SyncRun,
     content_hash,
 )
 from anva.core.services.authorization import (
@@ -205,9 +208,16 @@ def create_access_snapshot(
     actor: ActorContext,
     source_connection_id: uuid.UUID,
     access_scope_id: uuid.UUID,
+    action: Action = Action.SCOPE_MANAGE,
 ) -> AccessSnapshot:
     """Capture the exact effective source boundary without secret material."""
     with transaction.atomic():
+        decision = authorize_action(
+            actor=actor,
+            action=action,
+            repository_id=actor.repository_id,
+            source_connection_id=source_connection_id,
+        )
         source = get_tenant_record_for_update(
             queryset=SourceConnection.objects.select_related("organization"),
             record_id=source_connection_id,
@@ -217,12 +227,6 @@ def create_access_snapshot(
             queryset=AccessScope.objects.all(),
             record_id=access_scope_id,
             organization_id=actor.organization_id,
-        )
-        decision = authorize_action(
-            actor=actor,
-            action=Action.SCOPE_MANAGE,
-            repository_id=actor.repository_id,
-            source_connection_id=source.id,
         )
         payload: dict[str, object] = {
             "source_connection_id": str(source.id),
@@ -291,17 +295,17 @@ def revoke_source_connection(
 ) -> SourceConnection:
     """Revoke a source and every current/derived visibility scope that depends on it."""
     with transaction.atomic():
-        source = get_tenant_record_for_update(
-            queryset=SourceConnection.objects.select_related("organization"),
-            record_id=source_connection_id,
-            organization_id=actor.organization_id,
-        )
         decision = authorize_action(
             actor=actor,
             action=Action.SOURCE_REVOKE,
             repository_id=actor.repository_id,
-            source_connection_id=source.id,
+            source_connection_id=source_connection_id,
             allow_revoked_source=True,
+        )
+        source = get_tenant_record_for_update(
+            queryset=SourceConnection.objects.select_related("organization"),
+            record_id=source_connection_id,
+            organization_id=actor.organization_id,
         )
         if source.state == SourceConnection.State.REVOKED:
             return source
@@ -344,11 +348,84 @@ def revoke_source_connection(
             source_connection=source,
             revoked_at__isnull=True,
         ).update(revoked_at=revoked_at)
+        for visibility in SourceChunkVisibility.objects.filter(
+            organization=source.organization,
+            access_snapshot__source_connection=source,
+            state=SourceChunkVisibility.State.AVAILABLE,
+        ):
+            visibility.state = SourceChunkVisibility.State.REVOKED
+            visibility.revoked_at = revoked_at
+            visibility.save(update_fields=["state", "revoked_at"])
+        audit_actor = replace(actor, authorization_path=decision.authorization_path)
+        for job in BackgroundJob.objects.filter(
+            organization=source.organization,
+            kind="ingestion.sync",
+            payload__source_connection_id=str(source.id),
+            state=BackgroundJob.State.PENDING,
+        ):
+            job.state = BackgroundJob.State.CANCELLED
+            job.completed_at = revoked_at
+            job.last_error = "source_revoked"
+            job.save(
+                update_fields=[
+                    "state",
+                    "completed_at",
+                    "last_error",
+                    "updated_at",
+                ]
+            )
+            record_transition(
+                organization=source.organization,
+                actor=audit_actor,
+                target_type="backgroundjob",
+                target_id=job.id,
+                from_state=BackgroundJob.State.PENDING,
+                to_state=BackgroundJob.State.CANCELLED,
+                revision=job.attempt_count,
+                metadata={"error_code": "source_revoked"},
+            )
+        for run in SyncRun.objects.filter(
+            organization=source.organization,
+            source_connection=source,
+            state__in=[
+                SyncRun.State.REQUESTED,
+                SyncRun.State.DISCOVERING,
+                SyncRun.State.FETCHING,
+                SyncRun.State.PARSING,
+                SyncRun.State.INDEXING,
+                SyncRun.State.EXTRACTING,
+                SyncRun.State.RESOLVING,
+                SyncRun.State.PUBLISHING,
+            ],
+        ):
+            previous_run_state = str(run.state)
+            run.state = SyncRun.State.CANCELLED
+            run.failure_code = "source_revoked"
+            run.completed_at = revoked_at
+            run.revision += 1
+            run.save(
+                update_fields=[
+                    "state",
+                    "failure_code",
+                    "completed_at",
+                    "revision",
+                    "updated_at",
+                ]
+            )
+            record_transition(
+                organization=source.organization,
+                actor=audit_actor,
+                target_type="syncrun",
+                target_id=run.id,
+                from_state=previous_run_state,
+                to_state=SyncRun.State.CANCELLED,
+                revision=run.revision,
+                metadata={"failure_code": "source_revoked"},
+            )
         previous_state = str(source.state)
         source.state = SourceConnection.State.REVOKED
         source.revision += 1
         source.save(update_fields=["state", "revision", "updated_at"])
-        audit_actor = replace(actor, authorization_path=decision.authorization_path)
         record_transition(
             organization=source.organization,
             actor=audit_actor,

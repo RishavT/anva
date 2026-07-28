@@ -105,8 +105,32 @@ class SourceConnection(RevisionedTenantModel):
         DISABLED = "DISABLED"
         FAILED = "FAILED"
 
+    class ConnectorKind(models.TextChoices):
+        FILESYSTEM = "FILESYSTEM"
+
     external_key = models.CharField(max_length=300)
+    display_name = models.CharField(max_length=300, blank=True)
+    connector_kind = models.CharField(
+        max_length=32,
+        choices=ConnectorKind,
+        default=ConnectorKind.FILESYSTEM,
+    )
+    configuration = models.JSONField(default=dict)
+    repository = models.ForeignKey(
+        "Repository",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    access_scope = models.ForeignKey(
+        "AccessScope",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
     state = models.CharField(max_length=20, choices=State, default=State.DRAFT)
+    last_successful_sync_at = models.DateTimeField(null=True, blank=True)
+    last_error_code = models.CharField(max_length=100, blank=True)
 
     class Meta(RevisionedTenantModel.Meta):
         constraints: ClassVar[list[models.BaseConstraint]] = [
@@ -139,10 +163,26 @@ class SyncRun(RevisionedTenantModel):
         FAILED = "FAILED"
         CANCELLED = "CANCELLED"
 
+    class ScanMode(models.TextChoices):
+        FULL = "FULL"
+        INCREMENTAL = "INCREMENTAL"
+
     source_connection = models.ForeignKey(SourceConnection, on_delete=models.PROTECT)
+    access_snapshot = models.ForeignKey(
+        "AccessSnapshot",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    scan_mode = models.CharField(max_length=16, choices=ScanMode, default=ScanMode.FULL)
     state = models.CharField(max_length=24, choices=State, default=State.REQUESTED)
     failure_code = models.CharField(max_length=100, blank=True)
+    started_at = models.DateTimeField(default=timezone.now)
     completed_at = models.DateTimeField(null=True, blank=True)
+    discovered_count = models.PositiveIntegerField(default=0)
+    processed_count = models.PositiveIntegerField(default=0)
+    failed_count = models.PositiveIntegerField(default=0)
+    tombstoned_count = models.PositiveIntegerField(default=0)
 
     class Meta(RevisionedTenantModel.Meta):
         indexes: ClassVar[list[models.Index]] = [
@@ -153,6 +193,10 @@ class SyncRun(RevisionedTenantModel):
         ]
         constraints: ClassVar[list[models.BaseConstraint]] = [
             *RevisionedTenantModel.Meta.constraints,
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_sync_run_org_id_unique",
+            ),
             models.UniqueConstraint(
                 fields=["organization", "source_connection"],
                 condition=Q(
@@ -199,6 +243,518 @@ class SyncRun(RevisionedTenantModel):
         ]
 
 
+class SourceContainer(TenantOwnedModel):
+    """Stable connector-neutral container discovered beneath one connection."""
+
+    source_connection = models.ForeignKey(SourceConnection, on_delete=models.PROTECT)
+    external_id = models.CharField(max_length=500)
+    name = models.CharField(max_length=300)
+    canonical_url = models.CharField(max_length=1_000)
+    is_active = models.BooleanField(default=True)
+    first_observed_at = models.DateTimeField(default=timezone.now)
+    last_observed_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "source_connection", "external_id"],
+                name="core_source_container_external_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_source_container_org_id_unique",
+            ),
+        ]
+
+
+class SourceDocument(TenantOwnedModel):
+    """Stable logical document whose immutable content revisions retain history."""
+
+    class Kind(models.TextChoices):
+        MARKDOWN = "MARKDOWN"
+        YAML = "YAML"
+        JSON = "JSON"
+        TEXT = "TEXT"
+        CODEOWNERS = "CODEOWNERS"
+        MANIFEST = "MANIFEST"
+        MIGRATION = "MIGRATION"
+        WORKFLOW = "WORKFLOW"
+        OPENAPI = "OPENAPI"
+
+    class State(models.TextChoices):
+        PRESENT = "PRESENT"
+        TOMBSTONED = "TOMBSTONED"
+
+    source_container = models.ForeignKey(SourceContainer, on_delete=models.PROTECT)
+    external_id = models.CharField(max_length=1_000)
+    relative_path = models.CharField(max_length=1_000)
+    canonical_url = models.CharField(max_length=1_500)
+    document_kind = models.CharField(max_length=32, choices=Kind)
+    media_type = models.CharField(max_length=200)
+    state = models.CharField(max_length=16, choices=State, default=State.PRESENT)
+    current_revision = models.ForeignKey(
+        "SourceRevision",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    last_seen_run = models.ForeignKey(
+        SyncRun,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="seen_documents",
+    )
+    first_observed_at = models.DateTimeField(default=timezone.now)
+    last_observed_at = models.DateTimeField(default=timezone.now)
+    tombstoned_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(
+                fields=["organization", "source_container", "state"],
+                name="core_src_doc_cont_state_idx",
+            )
+        ]
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "source_container", "external_id"],
+                name="core_source_document_external_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_source_document_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(state="PRESENT", tombstoned_at__isnull=True)
+                    | Q(state="TOMBSTONED", tombstoned_at__isnull=False)
+                ),
+                name="core_source_document_tombstone_coherent",
+            ),
+        ]
+
+
+class SourceContentArtifact(UUIDModel):
+    """Tenant-isolated immutable bytes, deliberately separated from visibility."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    content_hash = models.CharField(max_length=64, editable=False)
+    byte_size = models.PositiveIntegerField()
+    media_type = models.CharField(max_length=200)
+    content = models.BinaryField()
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "content_hash"],
+                name="core_source_content_org_hash_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_source_content_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(content_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_source_content_hash_sha256",
+            ),
+        ]
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Compute byte identity at creation and reject ORM updates."""
+        digest = hashlib.sha256(bytes(self.content)).hexdigest()
+        if not self._state.adding:
+            raise ArtifactImmutableError("Source content artifacts cannot be updated")
+        if self.content_hash and self.content_hash != digest:
+            raise ArtifactImmutableError("Source content hash does not match bytes")
+        if self.byte_size != len(self.content):
+            raise ArtifactImmutableError("Source content byte_size does not match bytes")
+        self.content_hash = digest
+        super().save(*args, **kwargs)
+
+
+class SourceRevision(UUIDModel):
+    """Immutable content identity for a logical document."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    source_document = models.ForeignKey(SourceDocument, on_delete=models.PROTECT)
+    content_artifact = models.ForeignKey(SourceContentArtifact, on_delete=models.PROTECT)
+    content_hash = models.CharField(max_length=64)
+    canonical_url = models.CharField(max_length=1_500)
+    source_modified_at = models.DateTimeField(null=True, blank=True)
+    observed_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "source_document", "content_hash"],
+                name="core_source_revision_document_hash_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_source_revision_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(content_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_source_revision_hash_sha256",
+            ),
+        ]
+
+
+class SourceObservation(UUIDModel):
+    """One scan-time observation, preserving A→B→A without duplicating revisions."""
+
+    class Status(models.TextChoices):
+        PRESENT = "PRESENT"
+        TOMBSTONED = "TOMBSTONED"
+        FAILED = "FAILED"
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    sync_run = models.ForeignKey(SyncRun, on_delete=models.PROTECT)
+    source_document = models.ForeignKey(SourceDocument, on_delete=models.PROTECT)
+    source_revision = models.ForeignKey(
+        SourceRevision,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    access_snapshot = models.ForeignKey("AccessSnapshot", on_delete=models.PROTECT)
+    status = models.CharField(max_length=16, choices=Status)
+    observed_at = models.DateTimeField(default=timezone.now)
+    error_code = models.CharField(max_length=100, blank=True)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "sync_run", "source_document"],
+                name="core_source_observation_run_document_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_source_observation_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(status="PRESENT", source_revision__isnull=False, error_code="")
+                    | Q(status="TOMBSTONED", source_revision__isnull=True, error_code="")
+                    | Q(status="FAILED", source_revision__isnull=True)
+                ),
+                name="core_source_observation_status_coherent",
+            ),
+        ]
+
+
+class ParsedSource(UUIDModel):
+    """Immutable parser-version-specific normalized output."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    source_revision = models.ForeignKey(SourceRevision, on_delete=models.PROTECT)
+    parser_name = models.CharField(max_length=100)
+    parser_version = models.CharField(max_length=50)
+    document_kind = models.CharField(max_length=32, choices=SourceDocument.Kind)
+    normalized = models.JSONField()
+    output_hash = models.CharField(max_length=64)
+    duration_ms = models.PositiveIntegerField()
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=[
+                    "organization",
+                    "source_revision",
+                    "parser_name",
+                    "parser_version",
+                ],
+                name="core_parsed_source_version_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_parsed_source_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(output_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_parsed_source_hash_sha256",
+            ),
+        ]
+
+
+class SourceLocation(UUIDModel):
+    """Normalized address inside one observed parser derivation."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    parsed_source = models.ForeignKey(ParsedSource, on_delete=models.PROTECT)
+    source_observation = models.ForeignKey(SourceObservation, on_delete=models.PROTECT)
+    pointer = models.CharField(max_length=1_000)
+    start_line = models.PositiveIntegerField(null=True, blank=True)
+    end_line = models.PositiveIntegerField(null=True, blank=True)
+    excerpt_hash = models.CharField(max_length=64)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=[
+                    "organization",
+                    "parsed_source",
+                    "source_observation",
+                    "pointer",
+                ],
+                name="core_source_location_pointer_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_source_location_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(excerpt_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_source_location_hash_sha256",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(start_line__isnull=True, end_line__isnull=True)
+                    | Q(
+                        start_line__isnull=False,
+                        end_line__isnull=False,
+                        end_line__gte=F("start_line"),
+                    )
+                ),
+                name="core_source_location_lines_coherent",
+            ),
+        ]
+
+
+class ExtractionResult(UUIDModel):
+    """Immutable extractor-version-specific claims over one parser output."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    parsed_source = models.ForeignKey(ParsedSource, on_delete=models.PROTECT)
+    extractor_name = models.CharField(max_length=100)
+    extractor_version = models.CharField(max_length=50)
+    claims = models.JSONField()
+    output_hash = models.CharField(max_length=64)
+    duration_ms = models.PositiveIntegerField()
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=[
+                    "organization",
+                    "parsed_source",
+                    "extractor_name",
+                    "extractor_version",
+                ],
+                name="core_extraction_result_version_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_extraction_result_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(output_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_extraction_result_hash_sha256",
+            ),
+        ]
+
+
+class SourceChunk(UUIDModel):
+    """Immutable parser-derived retrieval unit, separate from visibility state."""
+
+    objects: ClassVar[models.Manager[SourceChunk]] = models.Manager()
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    parsed_source = models.ForeignKey(ParsedSource, on_delete=models.PROTECT)
+    chunk_index = models.PositiveIntegerField()
+    pointer = models.CharField(max_length=1_000)
+    text = models.TextField()
+    content_hash = models.CharField(max_length=64, editable=False)
+    char_count = models.PositiveIntegerField()
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "parsed_source", "chunk_index"],
+                name="core_source_chunk_index_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_source_chunk_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(content_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_source_chunk_hash_sha256",
+            ),
+        ]
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Compute identity at creation and reject ORM updates."""
+        digest = hashlib.sha256(self.text.encode()).hexdigest()
+        if not self._state.adding:
+            raise ArtifactImmutableError("Source chunks cannot be updated")
+        if self.content_hash and self.content_hash != digest:
+            raise ArtifactImmutableError("Source chunk hash does not match text")
+        if self.char_count != len(self.text):
+            raise ArtifactImmutableError("Source chunk char_count does not match text")
+        self.content_hash = digest
+        super().save(*args, **kwargs)
+
+
+class SourceChunkVisibility(UUIDModel):
+    """Observation-specific index visibility for an immutable source chunk."""
+
+    class State(models.TextChoices):
+        AVAILABLE = "AVAILABLE"
+        SOURCE_UNAVAILABLE = "SOURCE_UNAVAILABLE"
+        REVOKED = "REVOKED"
+        EXCLUDED = "EXCLUDED"
+
+    objects: ClassVar[models.Manager[SourceChunkVisibility]] = models.Manager()
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    source_chunk = models.ForeignKey(SourceChunk, on_delete=models.PROTECT)
+    source_location = models.ForeignKey(SourceLocation, on_delete=models.PROTECT)
+    source_observation = models.ForeignKey(SourceObservation, on_delete=models.PROTECT)
+    access_snapshot = models.ForeignKey("AccessSnapshot", on_delete=models.PROTECT)
+    access_scope = models.ForeignKey("AccessScope", on_delete=models.PROTECT)
+    state = models.CharField(max_length=24, choices=State, default=State.AVAILABLE)
+    observed_at = models.DateTimeField()
+    revoked_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(
+                fields=["organization", "access_scope", "state"],
+                name="core_chunk_vis_scope_idx",
+            )
+        ]
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "source_chunk", "source_observation"],
+                name="core_chunk_visibility_observation_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_chunk_visibility_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(state="AVAILABLE", revoked_at__isnull=True)
+                    | Q(
+                        state__in=["SOURCE_UNAVAILABLE", "REVOKED", "EXCLUDED"],
+                        revoked_at__isnull=False,
+                    )
+                ),
+                name="core_chunk_visibility_state_coherent",
+            ),
+        ]
+
+
+class SyncCursor(RevisionedTenantModel):
+    """Versioned opaque incremental cursor owned by one connection."""
+
+    source_connection = models.ForeignKey(SourceConnection, on_delete=models.PROTECT)
+    cursor_key = models.CharField(max_length=100)
+    cursor_value = models.JSONField()
+
+    class Meta(RevisionedTenantModel.Meta):
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            *RevisionedTenantModel.Meta.constraints,
+            models.UniqueConstraint(
+                fields=["organization", "source_connection", "cursor_key"],
+                name="core_sync_cursor_connection_key_unique",
+            ),
+        ]
+
+
+class IngestionFailure(TenantOwnedModel):
+    """Secret-safe per-item failure that does not poison the containing sync."""
+
+    sync_run = models.ForeignKey(SyncRun, on_delete=models.PROTECT)
+    source_document = models.ForeignKey(
+        SourceDocument,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    stage = models.CharField(max_length=50)
+    item_key = models.CharField(max_length=1_000)
+    error_code = models.CharField(max_length=100)
+    safe_message = models.CharField(max_length=500)
+    is_transient = models.BooleanField(default=False)
+    occurred_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(
+                fields=["organization", "sync_run", "stage"],
+                name="core_ing_fail_run_stage_idx",
+            )
+        ]
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=[
+                    "organization",
+                    "sync_run",
+                    "stage",
+                    "item_key",
+                    "error_code",
+                ],
+                name="core_ingestion_failure_item_unique",
+            )
+        ]
+
+
+class IngestionStageResult(TenantOwnedModel):
+    """Observable idempotent stage result with explicit implementation versions."""
+
+    class Status(models.TextChoices):
+        RUNNING = "RUNNING"
+        SUCCEEDED = "SUCCEEDED"
+        PARTIAL = "PARTIAL"
+        FAILED = "FAILED"
+
+    sync_run = models.ForeignKey(SyncRun, on_delete=models.PROTECT)
+    background_job = models.ForeignKey(
+        "BackgroundJob",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    stage = models.CharField(max_length=50)
+    input_version = models.CharField(max_length=100)
+    implementation_version = models.CharField(max_length=100)
+    output_version = models.CharField(max_length=100, blank=True)
+    status = models.CharField(max_length=16, choices=Status)
+    duration_ms = models.PositiveIntegerField(default=0)
+    error_code = models.CharField(max_length=100, blank=True)
+    started_at = models.DateTimeField(default=timezone.now)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=[
+                    "organization",
+                    "sync_run",
+                    "stage",
+                    "implementation_version",
+                ],
+                name="core_ingestion_stage_run_version_unique",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(status="RUNNING", completed_at__isnull=True)
+                    | Q(
+                        status__in=["SUCCEEDED", "PARTIAL", "FAILED"],
+                        completed_at__isnull=False,
+                    )
+                ),
+                name="core_ingestion_stage_completion_coherent",
+            ),
+        ]
+
+
 class KnowledgeAssertion(RevisionedTenantModel):
     """Current governed assertion state with provenance-preserving content."""
 
@@ -211,10 +767,37 @@ class KnowledgeAssertion(RevisionedTenantModel):
         SUPERSEDED = "SUPERSEDED"
         STALE = "STALE"
 
+    class ExtractionClass(models.TextChoices):
+        MECHANICAL = "MECHANICAL"
+        INTERPRETIVE = "INTERPRETIVE"
+        HUMAN = "HUMAN"
+
+    class StalenessState(models.TextChoices):
+        FRESH = "FRESH"
+        AGING = "AGING"
+        STALE = "STALE"
+        CONTRADICTED = "CONTRADICTED"
+        SOURCE_UNAVAILABLE = "SOURCE_UNAVAILABLE"
+
     subject_key = models.CharField(max_length=500)
     predicate = models.CharField(max_length=200)
     value = models.JSONField()
     is_inferred = models.BooleanField(default=False)
+    extraction_class = models.CharField(
+        max_length=20,
+        choices=ExtractionClass,
+        default=ExtractionClass.HUMAN,
+    )
+    extraction_method = models.CharField(max_length=200, default="human")
+    confidence = models.FloatField(default=1.0)
+    valid_from = models.DateTimeField(default=timezone.now)
+    valid_until = models.DateTimeField(null=True, blank=True)
+    observed_at = models.DateTimeField(default=timezone.now)
+    staleness_state = models.CharField(
+        max_length=24,
+        choices=StalenessState,
+        default=StalenessState.FRESH,
+    )
     provenance = models.JSONField(default=list)
     review_state = models.CharField(
         max_length=24,
@@ -237,9 +820,343 @@ class KnowledgeAssertion(RevisionedTenantModel):
         ]
         constraints: ClassVar[list[models.BaseConstraint]] = [
             *RevisionedTenantModel.Meta.constraints,
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_assertion_org_id_unique",
+            ),
             models.CheckConstraint(
                 condition=~Q(provenance=[]),
                 name="core_assertion_provenance_not_empty",
+            ),
+            models.CheckConstraint(
+                condition=Q(confidence__gte=0.0, confidence__lte=1.0),
+                name="core_assertion_confidence_range",
+            ),
+            models.CheckConstraint(
+                condition=Q(valid_until__isnull=True) | Q(valid_until__gt=F("valid_from")),
+                name="core_assertion_validity_coherent",
+            ),
+        ]
+
+
+class AssertionProvenance(TenantOwnedModel):
+    """Normalized source lineage for one assertion."""
+
+    assertion = models.ForeignKey(KnowledgeAssertion, on_delete=models.PROTECT)
+    source_location = models.ForeignKey(SourceLocation, on_delete=models.PROTECT)
+    source_observation = models.ForeignKey(SourceObservation, on_delete=models.PROTECT)
+    access_snapshot = models.ForeignKey("AccessSnapshot", on_delete=models.PROTECT)
+    extraction_class = models.CharField(
+        max_length=20,
+        choices=KnowledgeAssertion.ExtractionClass,
+    )
+    extraction_method = models.CharField(max_length=200)
+    confidence = models.FloatField()
+    is_inferred = models.BooleanField(default=False)
+    observed_at = models.DateTimeField()
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "assertion", "source_location"],
+                name="core_assertion_provenance_location_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(confidence__gte=0.0, confidence__lte=1.0),
+                name="core_assertion_provenance_confidence_range",
+            ),
+        ]
+
+
+class AssertionValidityInterval(UUIDModel):
+    """Immutable-open, one-way-close temporal occurrence of a claim in a document."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    assertion = models.ForeignKey(KnowledgeAssertion, on_delete=models.PROTECT)
+    source_document = models.ForeignKey(SourceDocument, on_delete=models.PROTECT)
+    source_observation = models.ForeignKey(SourceObservation, on_delete=models.PROTECT)
+    valid_from = models.DateTimeField()
+    valid_until = models.DateTimeField(null=True, blank=True)
+    observed_from = models.DateTimeField()
+    observed_until = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "assertion", "source_document"],
+                condition=Q(valid_until__isnull=True),
+                name="core_assertion_one_active_document_interval",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(valid_until__isnull=True, observed_until__isnull=True)
+                    | Q(
+                        valid_until__isnull=False,
+                        observed_until__isnull=False,
+                        valid_until__gt=F("valid_from"),
+                        observed_until__gte=F("observed_from"),
+                    )
+                ),
+                name="core_assertion_interval_coherent",
+            ),
+        ]
+
+
+class AssertionRevision(UUIDModel):
+    """Immutable reconstruction record for a governed assertion revision."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    assertion = models.ForeignKey(KnowledgeAssertion, on_delete=models.PROTECT)
+    revision = models.PositiveBigIntegerField()
+    snapshot = models.JSONField()
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "assertion", "revision"],
+                name="core_assertion_revision_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(revision__gte=1),
+                name="core_assertion_revision_gte_1",
+            ),
+        ]
+
+
+class AssertionReview(UUIDModel):
+    """Explicit human/service review decision history."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    assertion = models.ForeignKey(KnowledgeAssertion, on_delete=models.PROTECT)
+    actor_type = models.CharField(max_length=50)
+    actor_id = models.CharField(max_length=200)
+    from_state = models.CharField(max_length=24)
+    to_state = models.CharField(max_length=24)
+    assertion_revision = models.PositiveBigIntegerField()
+    reason = models.CharField(max_length=500, blank=True)
+    reviewed_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "assertion", "assertion_revision"],
+                name="core_assertion_review_revision_unique",
+            )
+        ]
+
+
+class AssertionConflict(TenantOwnedModel):
+    """Both sides of a contradictory active claim, retained for review."""
+
+    class Status(models.TextChoices):
+        OPEN = "OPEN"
+        RESOLVED = "RESOLVED"
+
+    left_assertion = models.ForeignKey(
+        KnowledgeAssertion,
+        on_delete=models.PROTECT,
+        related_name="left_conflicts",
+    )
+    right_assertion = models.ForeignKey(
+        KnowledgeAssertion,
+        on_delete=models.PROTECT,
+        related_name="right_conflicts",
+    )
+    predicate = models.CharField(max_length=200)
+    status = models.CharField(max_length=16, choices=Status, default=Status.OPEN)
+    detected_at = models.DateTimeField(default=timezone.now)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "left_assertion", "right_assertion"],
+                name="core_assertion_conflict_pair_unique",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(status="OPEN", resolved_at__isnull=True)
+                    | Q(status="RESOLVED", resolved_at__isnull=False)
+                ),
+                name="core_assertion_conflict_resolution_coherent",
+            ),
+            models.CheckConstraint(
+                condition=~Q(left_assertion=F("right_assertion")),
+                name="core_assertion_conflict_distinct",
+            ),
+        ]
+
+
+class KnowledgeEntity(RevisionedTenantModel):
+    """Common explicit entity identity without a table per future noun."""
+
+    class EntityType(models.TextChoices):
+        TEAM = "TEAM"
+        REPOSITORY = "REPOSITORY"
+        SERVICE = "SERVICE"
+        COMPONENT = "COMPONENT"
+        API = "API"
+        DATA_ASSET = "DATA_ASSET"
+        DECISION = "DECISION"
+        POLICY = "POLICY"
+        REQUIREMENT = "REQUIREMENT"
+        UNKNOWN = "UNKNOWN"
+
+    entity_type = models.CharField(max_length=32, choices=EntityType)
+    canonical_key = models.CharField(max_length=500)
+    display_name = models.CharField(max_length=500)
+    attributes = models.JSONField(default=dict)
+    access_scope = models.ForeignKey("AccessScope", on_delete=models.PROTECT)
+    is_active = models.BooleanField(default=True)
+
+    class Meta(RevisionedTenantModel.Meta):
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            *RevisionedTenantModel.Meta.constraints,
+            models.UniqueConstraint(
+                fields=["organization", "entity_type", "canonical_key"],
+                name="core_knowledge_entity_canonical_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_knowledge_entity_org_id_unique",
+            ),
+        ]
+
+
+class EntityAlias(TenantOwnedModel):
+    """Normalized alias used without silently merging ambiguous entities."""
+
+    entity = models.ForeignKey(KnowledgeEntity, on_delete=models.PROTECT)
+    normalized_alias = models.CharField(max_length=500)
+    source_location = models.ForeignKey(SourceLocation, on_delete=models.PROTECT)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "entity", "normalized_alias"],
+                name="core_entity_alias_unique",
+            )
+        ]
+
+
+class EntityResolution(UUIDModel):
+    """Immutable outcome of alias-aware entity matching."""
+
+    class Outcome(models.TextChoices):
+        MATCHED = "MATCHED"
+        CREATED = "CREATED"
+        AMBIGUOUS = "AMBIGUOUS"
+        CONFLICT = "CONFLICT"
+        IGNORED = "IGNORED"
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    source_location = models.ForeignKey(SourceLocation, on_delete=models.PROTECT)
+    candidate_key = models.CharField(max_length=500)
+    outcome = models.CharField(max_length=16, choices=Outcome)
+    entity = models.ForeignKey(
+        KnowledgeEntity,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    candidate_ids = models.JSONField(default=list)
+    resolver_version = models.CharField(max_length=50)
+    resolved_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=[
+                    "organization",
+                    "source_location",
+                    "candidate_key",
+                    "resolver_version",
+                ],
+                name="core_entity_resolution_input_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_entity_resolution_org_id_unique",
+            ),
+        ]
+
+
+class KnowledgeRelationship(UUIDModel):
+    """Normalized, provenance-bearing edge committed for graph consumers."""
+
+    class RelationshipType(models.TextChoices):
+        OWNED_BY = "OWNED_BY"
+        MAINTAINED_BY = "MAINTAINED_BY"
+        DEPENDS_ON = "DEPENDS_ON"
+
+    class ReviewState(models.TextChoices):
+        UNREVIEWED = "UNREVIEWED"
+        AMBIGUOUS = "AMBIGUOUS"
+        CONFIRMED = "CONFIRMED"
+        REJECTED = "REJECTED"
+
+    objects: ClassVar[models.Manager[KnowledgeRelationship]] = models.Manager()
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    relationship_type = models.CharField(max_length=32, choices=RelationshipType)
+    source_entity = models.ForeignKey(
+        KnowledgeEntity,
+        on_delete=models.PROTECT,
+        related_name="outgoing_relationships",
+    )
+    target_entity = models.ForeignKey(
+        KnowledgeEntity,
+        on_delete=models.PROTECT,
+        related_name="incoming_relationships",
+    )
+    source_entity_type = models.CharField(max_length=32, choices=KnowledgeEntity.EntityType)
+    target_entity_type = models.CharField(max_length=32, choices=KnowledgeEntity.EntityType)
+    assertion = models.ForeignKey(KnowledgeAssertion, on_delete=models.PROTECT)
+    source_location = models.ForeignKey(SourceLocation, on_delete=models.PROTECT)
+    source_observation = models.ForeignKey(SourceObservation, on_delete=models.PROTECT)
+    access_snapshot = models.ForeignKey("AccessSnapshot", on_delete=models.PROTECT)
+    access_scope = models.ForeignKey("AccessScope", on_delete=models.PROTECT)
+    extraction_class = models.CharField(
+        max_length=20,
+        choices=KnowledgeAssertion.ExtractionClass,
+    )
+    confidence = models.FloatField()
+    observed_at = models.DateTimeField()
+    review_state = models.CharField(
+        max_length=24,
+        choices=ReviewState,
+        default=ReviewState.UNREVIEWED,
+    )
+
+    class Meta:
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(
+                fields=["organization", "access_scope", "relationship_type"],
+                name="core_rel_scope_type_idx",
+            )
+        ]
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=[
+                    "organization",
+                    "assertion",
+                    "source_entity",
+                    "target_entity",
+                    "relationship_type",
+                ],
+                name="core_relationship_assertion_edge_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_relationship_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=~Q(source_entity=F("target_entity")),
+                name="core_relationship_distinct_endpoints",
+            ),
+            models.CheckConstraint(
+                condition=Q(confidence__gte=0.0, confidence__lte=1.0),
+                name="core_relationship_confidence_range",
             ),
         ]
 
@@ -473,6 +1390,10 @@ class BackgroundJob(TenantOwnedModel):
             )
         ]
         constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_background_job_org_id_unique",
+            ),
             models.UniqueConstraint(
                 fields=["organization", "idempotency_key"],
                 name="core_job_org_idempotency_unique",
@@ -832,6 +1753,10 @@ class AccessSnapshot(UUIDModel):
             models.UniqueConstraint(
                 fields=["organization", "source_connection", "content_hash"],
                 name="core_access_snapshot_identity_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_access_snapshot_org_id_unique",
             ),
         ]
 

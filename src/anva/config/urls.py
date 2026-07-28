@@ -79,4 +79,29 @@ urlpatterns = [
         core_views.revoke_source,
         name="api-v1-source-revoke",
     ),
+    path(
+        "api/v1/source-connections/filesystem",
+        core_views.connect_filesystem,
+        name="api-v1-source-connect-filesystem",
+    ),
+    path(
+        "api/v1/source-connections/<uuid:source_connection_id>",
+        core_views.source_detail,
+        name="api-v1-source-detail",
+    ),
+    path(
+        "api/v1/source-connections/<uuid:source_connection_id>/sync",
+        core_views.sync_source,
+        name="api-v1-source-sync",
+    ),
+    path(
+        "api/v1/source-connections/<uuid:source_connection_id>/resync",
+        core_views.resync_source,
+        name="api-v1-source-resync",
+    ),
+    path(
+        "api/v1/source-connections/<uuid:source_connection_id>/sync-runs",
+        core_views.source_runs,
+        name="api-v1-source-runs",
+    ),
 ]

@@ -340,6 +340,48 @@ def openapi_document() -> dict[str, object]:
                     "responses": authorized_responses,
                 }
             },
+            "/source-connections/filesystem": {
+                "post": {
+                    "operationId": "connectFilesystemSource",
+                    "description": "Connect a configured read-only mounted filesystem root.",
+                    "parameters": mutation_parameters,
+                    "responses": created_responses,
+                }
+            },
+            "/source-connections/{resource_id}": {
+                "get": {
+                    "operationId": "inspectSourceConnection",
+                    "parameters": [
+                        resource_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": authorized_responses,
+                }
+            },
+            "/source-connections/{resource_id}/sync": {
+                "post": {
+                    "operationId": "syncSourceConnection",
+                    "parameters": [*mutation_parameters, resource_parameter],
+                    "responses": accepted_responses,
+                }
+            },
+            "/source-connections/{resource_id}/resync": {
+                "post": {
+                    "operationId": "resyncSourceConnection",
+                    "parameters": [*mutation_parameters, resource_parameter],
+                    "responses": accepted_responses,
+                }
+            },
+            "/source-connections/{resource_id}/sync-runs": {
+                "get": {
+                    "operationId": "listSourceSyncRuns",
+                    "parameters": [
+                        resource_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": authorized_responses,
+                }
+            },
         },
         "components": {
             "schemas": {
