@@ -8,16 +8,20 @@ not implement MCP transport, hosted embeddings, the management UI, or a new agen
 
 ## Security and tenant isolation
 
-- Authorization is evaluated before candidate ranking or recursive traversal.
+- Authorization is evaluated before candidate ranking or recursive traversal, and the emitted
+  SQL independently binds the current principal, credential, action, and source lineage.
 - PostgreSQL queries rank only `authorized_chunks AS MATERIALIZED` and traverse only
   `authorized_edges AS MATERIALIZED`.
 - Candidate relations filter tenant, repository, visible scope, source/document state,
   current revision, latest observation, and unrevoked snapshots.
 - Same-tenant composite foreign keys protect every new cross-row retrieval relationship.
-- Packet scopes are sealed to exactly the requesting principal and repository and derive from
-  selected source scopes.
+- Every packet item has a sealed requesting-principal/repository scope derived from all content
+  and citation scopes; the packet scope derives from the item intersections.
 - Foreign and same-tenant hidden canary content is tested for search, score/order influence,
-  and graph path influence.
+  graph endpoint/path influence, provenance serialization, and cross-repository lineage.
+- Packet reads and cache reuse reauthorize current item parents and citation lineage, so ACL,
+  source-scope, snapshot, revision, and invalidation changes fail with the common not-found
+  contract while immutable history remains stored.
 
 ## Reproducibility and integrity
 
@@ -45,6 +49,7 @@ Targeted Compose tests cover:
 - hidden candidate search/ranking and graph non-interference;
 - graph types and hard caps;
 - policy priority, budget failure, packet cache reuse, exact reconstruction, and invalidation;
+- asymmetric conflict scopes and current parent/citation reauthorization after ACL removal;
 - offline recall, precision, prohibited leakage, staleness, and citation metrics;
 - generated JSON Schema/OpenAPI artifacts and deliberate MCP `501`.
 
@@ -56,4 +61,3 @@ The deterministic embedding is intentionally modest, graph traversal is directed
 generation is synchronous, assertion classification relies on governed predicate/subject
 conventions, and retrieval evaluation fixtures remain organization-owned data. These are
 documented in the retrieval runbook and do not weaken the permission boundary.
-

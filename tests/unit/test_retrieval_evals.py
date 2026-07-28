@@ -25,6 +25,7 @@ def _result(content_hash: str) -> SearchResult:
         content_hash=content_hash,
         pointer="/policy",
         canonical_url="https://example.test/policy",
+        access_scope_id=uuid.uuid4(),
         source_location_id=uuid.uuid4(),
         source_observation_id=uuid.uuid4(),
         access_snapshot_id=uuid.uuid4(),

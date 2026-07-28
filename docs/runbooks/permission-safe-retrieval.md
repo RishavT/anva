@@ -39,12 +39,12 @@ future adapter.
 
 ## Authorization and ranking
 
-Search resolves an authorized, stable scope snapshot before executing ranking SQL. The SQL
-forms `authorized_chunks AS MATERIALIZED`; lexical and semantic candidates can only read that
-relation. Graph traversal applies the same pattern to `authorized_edges` before its recursive
-CTE. Tenant, repository, source state, current document revision, latest observation,
-visibility state, access snapshot revocation, and scope are all enforced in the materialized
-boundary.
+Search and graph resolve the action before executing their bounded SQL, then independently bind
+the current database principal, role or grant, repository credential, repository, source,
+snapshot, parser lineage, and scope memberships inside the authoritative materialized relation.
+Lexical and semantic candidates can read only `authorized_chunks AS MATERIALIZED`; recursive
+traversal can read only `authorized_edges AS MATERIALIZED`. Endpoint scopes are authorized
+before entity names enter the graph walk, so hidden intermediate nodes cannot influence paths.
 
 Search is bounded to 100 results. Graph traversal has hard ceilings of depth 4, degree 100,
 and 500 returned edges. Ties use stable UUID ordering. The current embedding version is
@@ -63,15 +63,20 @@ Selection order is deterministic:
 6. authorized conflicts.
 
 Every selected item contains provenance, freshness, inference status, selection reason,
-ranking information, and at least one normalized citation. A required current policy that
-cannot fit causes `required_policy_budget_exceeded`; it is never silently dropped.
+ranking information, and at least one normalized citation. Provenance is filtered through the
+current repository/source/snapshot/parser lineage before candidate formation. Each item receives
+its own sealed scope derived from every contributing content and citation scope; the packet scope
+is then derived from those item intersections. A required current policy that cannot fit causes
+`required_policy_budget_exceeded`; it is never silently dropped.
 
 Packet records, items, citations, search indexes, and invalidations are immutable in
 PostgreSQL. An artifact stores the exact original response. The cache key includes normalized
 request, actor, repository, authorized scope revisions, access-snapshot hashes, retrieval
 watermark, and algorithm/index/embedding versions. Ingestion, assertion review corrections,
-and source revocation advance the watermark and append invalidations; old packets remain
-available to their authorized actor.
+source revocation, and permission-schema changes advance the watermark and append invalidations.
+Packet reads and cache reuse reauthorize every current item parent and citation lineage. An
+invalidated, hidden, revoked, stale-lineage, or missing packet returns the same not-found
+contract; immutable historical rows remain stored for audit but are not returned.
 
 ## Evaluation
 
@@ -106,9 +111,9 @@ comparison; never rewrite an existing index row or packet.
 - The local hash embedding is a reproducible baseline. Operators should not infer general
   language understanding from semantic matches.
 - Graph traversal is directed and follows outgoing relationships.
-- Context generation is synchronous and creates a sealed actor-specific scope per new packet.
+- Context generation is synchronous and creates sealed actor-specific per-item intersections
+  plus a packet scope derived from those item scopes.
 - Corrections are represented by governed assertion review transitions; richer proposal-based
   correction workflows remain later work.
 - MCP transport, hosted embedding providers, rerankers, UI visualization, and distributed
   cache coordination are outside issue #5.
-

@@ -1392,6 +1392,7 @@ class ContextPacketItem(UUIDModel):
 
     organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
     context_packet = models.ForeignKey(ContextPacketRecord, on_delete=models.PROTECT)
+    access_scope = models.ForeignKey("AccessScope", on_delete=models.PROTECT)
     position = models.PositiveIntegerField()
     kind = models.CharField(max_length=24, choices=Kind)
     item_key = models.CharField(max_length=500)

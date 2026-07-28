@@ -8,9 +8,8 @@ from datetime import datetime
 
 from django.db import connection
 
-from anva.core.services.authorization import Action
+from anva.core.services.authorization import Action, authorize_action
 from anva.core.services.context import ActorContext
-from anva.core.services.retrieval import authorized_scope_ids
 
 MAX_GRAPH_DEPTH = 4
 MAX_GRAPH_DEGREE = 100
@@ -44,11 +43,35 @@ authorized_edges AS MATERIALIZED (
       ON target_entity.id = relationship.target_entity_id
      AND target_entity.organization_id = relationship.organization_id
     JOIN core_knowledgeassertion assertion
-      ON assertion.id = relationship.assertion_id
+     ON assertion.id = relationship.assertion_id
      AND assertion.organization_id = relationship.organization_id
+    JOIN core_accessscope edge_scope
+      ON edge_scope.id = relationship.access_scope_id
+     AND edge_scope.organization_id = relationship.organization_id
+     AND edge_scope.is_active
+    JOIN core_accessscope source_scope
+      ON source_scope.id = source_entity.access_scope_id
+     AND source_scope.organization_id = relationship.organization_id
+     AND source_scope.is_active
+    JOIN core_accessscope target_scope
+      ON target_scope.id = target_entity.access_scope_id
+     AND target_scope.organization_id = relationship.organization_id
+     AND target_scope.is_active
+    JOIN core_accessscope assertion_scope
+      ON assertion_scope.id = assertion.access_scope_id
+     AND assertion_scope.organization_id = relationship.organization_id
+     AND assertion_scope.is_active
+    JOIN core_sourcelocation location
+      ON location.id = relationship.source_location_id
+     AND location.organization_id = relationship.organization_id
+     AND location.source_observation_id = relationship.source_observation_id
     JOIN core_sourceobservation observation
-      ON observation.id = relationship.source_observation_id
+     ON observation.id = relationship.source_observation_id
      AND observation.organization_id = relationship.organization_id
+    JOIN core_parsedsource parsed_source
+      ON parsed_source.id = location.parsed_source_id
+     AND parsed_source.organization_id = relationship.organization_id
+     AND parsed_source.source_revision_id = observation.source_revision_id
     JOIN core_sourcedocument document
       ON document.id = observation.source_document_id
      AND document.organization_id = observation.organization_id
@@ -56,20 +79,246 @@ authorized_edges AS MATERIALIZED (
       ON container.id = document.source_container_id
      AND container.organization_id = document.organization_id
     JOIN core_sourceconnection source_connection
-      ON source_connection.id = container.source_connection_id
+     ON source_connection.id = container.source_connection_id
      AND source_connection.organization_id = container.organization_id
+    JOIN core_repository repository
+      ON repository.id = source_connection.repository_id
+     AND repository.organization_id = source_connection.organization_id
+     AND repository.is_active
     JOIN core_accesssnapshot snapshot
-      ON snapshot.id = relationship.access_snapshot_id
+     ON snapshot.id = relationship.access_snapshot_id
      AND snapshot.organization_id = relationship.organization_id
+     AND snapshot.source_connection_id = source_connection.id
+     AND snapshot.access_scope_id = relationship.access_scope_id
+    LEFT JOIN core_membership membership
+      ON %(actor_type)s = 'USER'
+     AND membership.organization_id = relationship.organization_id
+     AND membership.user_id = %(actor_id)s
+     AND membership.is_active
+    LEFT JOIN core_user principal_user
+      ON principal_user.id = membership.user_id
+     AND principal_user.is_active
+    LEFT JOIN core_role role
+      ON role.id = membership.role_id
+     AND role.organization_id = membership.organization_id
+    LEFT JOIN core_serviceidentity service_identity
+      ON %(actor_type)s = 'SERVICE'
+     AND service_identity.id = %(actor_id)s
+     AND service_identity.organization_id = relationship.organization_id
+     AND service_identity.is_active
     WHERE relationship.organization_id = %(organization_id)s
-      AND source_connection.repository_id = %(repository_id)s
-      AND relationship.access_scope_id = ANY(%(scope_ids)s::uuid[])
+      AND repository.id = %(repository_id)s
+      AND source_connection.state IN ('ACTIVE', 'DEGRADED')
       AND snapshot.revoked_at IS NULL
       AND assertion.valid_until IS NULL
       AND relationship.review_state <> 'REJECTED'
+      AND source_entity.is_active
+      AND target_entity.is_active
       AND document.state = 'PRESENT'
       AND observation.status = 'PRESENT'
       AND observation.source_revision_id = document.current_revision_id
+      AND observation.sync_run_id = document.last_seen_run_id
+      AND EXISTS (
+          SELECT 1
+          FROM core_accessscopesource edge_scope_source
+          WHERE edge_scope_source.organization_id = relationship.organization_id
+            AND edge_scope_source.access_scope_id = edge_scope.id
+            AND edge_scope_source.source_connection_id = source_connection.id
+      )
+      AND (
+          (
+              %(actor_type)s = 'USER'
+              AND membership.id IS NOT NULL
+              AND principal_user.id IS NOT NULL
+          )
+          OR (
+              %(actor_type)s = 'SERVICE'
+              AND service_identity.id IS NOT NULL
+          )
+      )
+      AND (
+          (
+              %(actor_type)s = 'USER'
+              AND role.code IN (
+                  'ORG_ADMIN', 'KNOWLEDGE_ADMIN', 'TECHNICAL_OWNER',
+                  'PRODUCT_OWNER', 'DEVELOPER', 'REVIEWER',
+                  'SECURITY_REVIEWER', 'VIEWER'
+              )
+          )
+          OR EXISTS (
+              SELECT 1
+              FROM core_accessgrant action_grant
+              WHERE action_grant.organization_id = relationship.organization_id
+                AND action_grant.action = %(action)s
+                AND action_grant.revoked_at IS NULL
+                AND (
+                    action_grant.expires_at IS NULL
+                    OR action_grant.expires_at > CURRENT_TIMESTAMP
+                )
+                AND (
+                    action_grant.repository_id IS NULL
+                    OR action_grant.repository_id = repository.id
+                )
+                AND action_grant.source_connection_id IS NULL
+                AND (
+                    (
+                        %(actor_type)s = 'USER'
+                        AND action_grant.membership_id = membership.id
+                    )
+                    OR (
+                        %(actor_type)s = 'SERVICE'
+                        AND action_grant.service_identity_id = service_identity.id
+                    )
+                )
+          )
+      )
+      AND (
+          %(credential_id)s::uuid IS NULL
+          OR EXISTS (
+              SELECT 1
+              FROM core_repositoryaccesstoken credential
+              WHERE credential.id = %(credential_id)s::uuid
+                AND credential.organization_id = relationship.organization_id
+                AND credential.repository_id = repository.id
+                AND credential.service_identity_id = service_identity.id
+                AND credential.revoked_at IS NULL
+                AND credential.expires_at > CURRENT_TIMESTAMP
+                AND credential.allowed_actions ? %(action)s
+          )
+      )
+      AND (
+          (
+              %(actor_type)s = 'USER'
+              AND (
+                  edge_scope.all_memberships
+                  OR EXISTS (
+                      SELECT 1 FROM core_accessscopemembership edge_member
+                      WHERE edge_member.organization_id = relationship.organization_id
+                        AND edge_member.access_scope_id = edge_scope.id
+                        AND edge_member.membership_id = membership.id
+                  )
+              )
+              AND (
+                  source_scope.all_memberships
+                  OR EXISTS (
+                      SELECT 1 FROM core_accessscopemembership source_member
+                      WHERE source_member.organization_id = relationship.organization_id
+                        AND source_member.access_scope_id = source_scope.id
+                        AND source_member.membership_id = membership.id
+                  )
+              )
+              AND (
+                  target_scope.all_memberships
+                  OR EXISTS (
+                      SELECT 1 FROM core_accessscopemembership target_member
+                      WHERE target_member.organization_id = relationship.organization_id
+                        AND target_member.access_scope_id = target_scope.id
+                        AND target_member.membership_id = membership.id
+                  )
+              )
+              AND (
+                  assertion_scope.all_memberships
+                  OR EXISTS (
+                      SELECT 1 FROM core_accessscopemembership assertion_member
+                      WHERE assertion_member.organization_id = relationship.organization_id
+                        AND assertion_member.access_scope_id = assertion_scope.id
+                        AND assertion_member.membership_id = membership.id
+                  )
+              )
+          )
+          OR (
+              %(actor_type)s = 'SERVICE'
+              AND (
+                  edge_scope.all_service_identities
+                  OR EXISTS (
+                      SELECT 1 FROM core_accessscopeserviceidentity edge_service
+                      WHERE edge_service.organization_id = relationship.organization_id
+                        AND edge_service.access_scope_id = edge_scope.id
+                        AND edge_service.service_identity_id = service_identity.id
+                  )
+              )
+              AND (
+                  source_scope.all_service_identities
+                  OR EXISTS (
+                      SELECT 1 FROM core_accessscopeserviceidentity source_service
+                      WHERE source_service.organization_id = relationship.organization_id
+                        AND source_service.access_scope_id = source_scope.id
+                        AND source_service.service_identity_id = service_identity.id
+                  )
+              )
+              AND (
+                  target_scope.all_service_identities
+                  OR EXISTS (
+                      SELECT 1 FROM core_accessscopeserviceidentity target_service
+                      WHERE target_service.organization_id = relationship.organization_id
+                        AND target_service.access_scope_id = target_scope.id
+                        AND target_service.service_identity_id = service_identity.id
+                  )
+              )
+              AND (
+                  assertion_scope.all_service_identities
+                  OR EXISTS (
+                      SELECT 1 FROM core_accessscopeserviceidentity assertion_service
+                      WHERE assertion_service.organization_id = relationship.organization_id
+                        AND assertion_service.access_scope_id = assertion_scope.id
+                        AND assertion_service.service_identity_id = service_identity.id
+                  )
+              )
+          )
+      )
+      AND (
+          (
+              edge_scope.all_repositories
+              OR EXISTS (
+                  SELECT 1 FROM core_accessscoperepository edge_repository
+                  WHERE edge_repository.organization_id = relationship.organization_id
+                    AND edge_repository.access_scope_id = edge_scope.id
+                    AND edge_repository.repository_id = repository.id
+              )
+          )
+          AND (
+              source_scope.all_repositories
+              OR EXISTS (
+                  SELECT 1 FROM core_accessscoperepository source_repository
+                  WHERE source_repository.organization_id = relationship.organization_id
+                    AND source_repository.access_scope_id = source_scope.id
+                    AND source_repository.repository_id = repository.id
+              )
+          )
+          AND (
+              target_scope.all_repositories
+              OR EXISTS (
+                  SELECT 1 FROM core_accessscoperepository target_repository
+                  WHERE target_repository.organization_id = relationship.organization_id
+                    AND target_repository.access_scope_id = target_scope.id
+                    AND target_repository.repository_id = repository.id
+              )
+          )
+          AND (
+              assertion_scope.all_repositories
+              OR EXISTS (
+                  SELECT 1 FROM core_accessscoperepository assertion_repository
+                  WHERE assertion_repository.organization_id = relationship.organization_id
+                    AND assertion_repository.access_scope_id = assertion_scope.id
+                    AND assertion_repository.repository_id = repository.id
+              )
+          )
+      )
+      AND NOT EXISTS (
+          SELECT 1
+          FROM core_accessscopesource governed_scope_source
+          JOIN core_sourceconnection governed_source
+            ON governed_source.id = governed_scope_source.source_connection_id
+           AND governed_source.organization_id = governed_scope_source.organization_id
+          WHERE governed_scope_source.organization_id = relationship.organization_id
+            AND governed_scope_source.access_scope_id IN (
+                edge_scope.id,
+                source_scope.id,
+                target_scope.id,
+                assertion_scope.id
+            )
+            AND governed_source.state IN ('REVOKED', 'DISABLED')
+      )
 ),
 walk AS (
     SELECT
@@ -207,22 +456,21 @@ def traverse_graph(
         raise ValueError("degree must be between 1 and 100")
     if edge_limit < 1 or edge_limit > MAX_GRAPH_EDGES:
         raise ValueError("edge_limit must be between 1 and 500")
-    scope_ids = list(
-        authorized_scope_ids(
-            actor=actor,
-            repository_id=repository_id,
-            action=Action.KNOWLEDGE_VIEW,
-        )
+    authorize_action(
+        actor=actor,
+        repository_id=repository_id,
+        action=Action.KNOWLEDGE_VIEW,
     )
-    if not scope_ids:
-        return GraphResult(start_entity_id, depth, degree, edge_limit, False, ())
     with connection.cursor() as cursor:
         cursor.execute(
             _GRAPH_SQL,
             {
                 "organization_id": actor.organization_id,
                 "repository_id": repository_id,
-                "scope_ids": scope_ids,
+                "actor_type": actor.actor_type,
+                "actor_id": uuid.UUID(actor.actor_id),
+                "credential_id": actor.credential_id,
+                "action": Action.KNOWLEDGE_VIEW.value,
                 "start_entity_id": start_entity_id,
                 "depth_limit": depth,
                 "degree_limit": degree,

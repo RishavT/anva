@@ -8,9 +8,10 @@ import math
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 
 from django.db import transaction
+from django.db.models import F, QuerySet
 from django.utils import timezone
 
 from anva.core.exceptions import RequiredPolicyBudgetError, ResourceNotFoundError
@@ -29,17 +30,24 @@ from anva.core.models import (
     ContextPacketRecord,
     ImmutableArtifact,
     KnowledgeAssertion,
+    KnowledgeRelationship,
     Organization,
     Repository,
     RetrievalWatermark,
 )
-from anva.core.services.authorization import Action, authorize_action, resolve_principal
+from anva.core.services.authorization import (
+    NOT_FOUND_MESSAGE,
+    Action,
+    authorize_action,
+    resolve_principal,
+)
 from anva.core.services.context import ActorContext
 from anva.core.services.ranking import RETRIEVAL_ALGORITHM_VERSION
 from anva.core.services.retrieval import (
     authorized_assertions,
     authorized_relationships,
     authorized_scope_ids,
+    authorized_source_chunks,
     get_authorized_artifact,
 )
 from anva.core.services.search import SearchResult, search_chunks
@@ -83,6 +91,7 @@ class PacketBudget:
 
 @dataclass(frozen=True, slots=True)
 class CitationCandidate:
+    access_scope_id: uuid.UUID
     source_location_id: uuid.UUID
     source_observation_id: uuid.UUID
     access_snapshot_id: uuid.UUID
@@ -116,7 +125,7 @@ class PacketCandidate:
     tier: int
     required_policy: bool
     payload: dict[str, object]
-    access_scope_id: uuid.UUID
+    contributing_scope_ids: tuple[uuid.UUID, ...]
     citations: tuple[CitationCandidate, ...]
     source_assertion_id: uuid.UUID | None = None
     source_relationship_id: uuid.UUID | None = None
@@ -215,6 +224,63 @@ def _assertion_summary(assertion: KnowledgeAssertion) -> str:
     return f"{assertion.subject_key} {assertion.predicate} {rendered}"
 
 
+def _authorized_provenance(
+    *,
+    actor: ActorContext,
+    repository_id: uuid.UUID,
+    assertion_ids: list[uuid.UUID] | set[uuid.UUID],
+) -> QuerySet[AssertionProvenance]:
+    """Filter every provenance row through its current source authorization lineage."""
+    visible_scope_ids = authorized_scope_ids(
+        actor=actor,
+        repository_id=repository_id,
+        action=Action.SEARCH,
+    )
+    return (
+        AssertionProvenance.objects.filter(
+            organization_id=actor.organization_id,
+            assertion_id__in=assertion_ids,
+            access_snapshot__access_scope_id__in=visible_scope_ids,
+            access_snapshot__revoked_at__isnull=True,
+            access_snapshot__source_connection_id=F(
+                "source_observation__source_document__source_container__source_connection_id"
+            ),
+            access_snapshot__access_scope__accessscopesource__source_connection_id=F(
+                "source_observation__source_document__source_container__source_connection_id"
+            ),
+            source_observation__status="PRESENT",
+            source_observation__source_document__state="PRESENT",
+            source_observation__source_document__source_container__source_connection__repository_id=(
+                repository_id
+            ),
+            source_observation__source_document__source_container__source_connection__state__in=(
+                "ACTIVE",
+                "DEGRADED",
+            ),
+            source_observation__source_revision_id=F(
+                "source_observation__source_document__current_revision_id"
+            ),
+            source_observation__sync_run_id=F(
+                "source_observation__source_document__last_seen_run_id"
+            ),
+            source_location__source_observation_id=F("source_observation_id"),
+            source_location__parsed_source__source_revision_id=F(
+                "source_observation__source_revision_id"
+            ),
+            assertion__assertionvalidityinterval__valid_until__isnull=True,
+            assertion__assertionvalidityinterval__source_observation_id=F("source_observation_id"),
+        )
+        .select_related(
+            "source_location",
+            "source_observation__source_document",
+            "source_observation__source_revision",
+            "access_snapshot",
+        )
+        .order_by("assertion_id", "observed_at", "id")
+        .distinct()
+    )
+
+
 def _citation_from_provenance(
     provenance: AssertionProvenance,
 ) -> CitationCandidate:
@@ -227,6 +293,7 @@ def _citation_from_provenance(
     if location.start_line is not None:
         locator = f"{locator}#L{location.start_line}-L{location.end_line}"
     return CitationCandidate(
+        access_scope_id=provenance.access_snapshot.access_scope_id,
         source_location_id=location.id,
         source_observation_id=observation.id,
         access_snapshot_id=provenance.access_snapshot_id,
@@ -254,18 +321,10 @@ def _assertion_candidates(
         .order_by("id")[:MAX_ASSERTION_CANDIDATES]
     )
     provenance_by_assertion: dict[uuid.UUID, tuple[CitationCandidate, ...]] = {}
-    provenance_rows = (
-        AssertionProvenance.objects.filter(
-            organization_id=actor.organization_id,
-            assertion_id__in=[assertion.id for assertion in assertions],
-            access_snapshot__revoked_at__isnull=True,
-        )
-        .select_related(
-            "source_location",
-            "source_observation__source_document",
-            "source_observation__source_revision",
-        )
-        .order_by("assertion_id", "observed_at", "id")
+    provenance_rows = _authorized_provenance(
+        actor=actor,
+        repository_id=repository_id,
+        assertion_ids=[assertion.id for assertion in assertions],
     )
     for provenance in provenance_rows:
         existing = provenance_by_assertion.get(provenance.assertion_id, ())
@@ -326,12 +385,68 @@ def _assertion_candidates(
                 tier=tier,
                 required_policy=required,
                 payload=payload,
-                access_scope_id=assertion.access_scope_id,
+                contributing_scope_ids=tuple(
+                    sorted(
+                        {
+                            assertion.access_scope_id,
+                            *(citation.access_scope_id for citation in citations),
+                        }
+                    )
+                ),
                 citations=citations,
                 source_assertion_id=assertion.id,
             )
         )
     return candidates
+
+
+def _authorized_packet_relationships(
+    *,
+    actor: ActorContext,
+    repository_id: uuid.UUID,
+) -> QuerySet[KnowledgeRelationship]:
+    """Apply current endpoint, provenance, repository, and source lineage to packet edges."""
+    visible_scope_ids = authorized_scope_ids(
+        actor=actor,
+        repository_id=repository_id,
+        action=Action.KNOWLEDGE_VIEW,
+    )
+    return (
+        authorized_relationships(actor=actor, repository_id=repository_id)
+        .filter(
+            access_scope_id__in=visible_scope_ids,
+            assertion__access_scope_id__in=visible_scope_ids,
+            source_entity__access_scope_id__in=visible_scope_ids,
+            target_entity__access_scope_id__in=visible_scope_ids,
+            access_snapshot__access_scope_id__in=visible_scope_ids,
+            access_snapshot__source_connection_id=F(
+                "source_observation__source_document__source_container__source_connection_id"
+            ),
+            access_snapshot__access_scope__accessscopesource__source_connection_id=F(
+                "source_observation__source_document__source_container__source_connection_id"
+            ),
+            source_observation__status="PRESENT",
+            source_observation__source_document__state="PRESENT",
+            source_observation__source_document__source_container__source_connection__repository_id=(
+                repository_id
+            ),
+            source_observation__source_document__source_container__source_connection__state__in=(
+                "ACTIVE",
+                "DEGRADED",
+            ),
+            source_observation__sync_run_id=F(
+                "source_observation__source_document__last_seen_run_id"
+            ),
+            source_location__source_observation_id=F("source_observation_id"),
+            source_location__parsed_source__source_revision_id=F(
+                "source_observation__source_revision_id"
+            ),
+            source_entity__is_active=True,
+            target_entity__is_active=True,
+        )
+        .exclude(review_state=KnowledgeRelationship.ReviewState.REJECTED)
+        .distinct()
+    )
 
 
 def _relationship_candidates(
@@ -342,10 +457,14 @@ def _relationship_candidates(
 ) -> list[PacketCandidate]:
     query_terms = tuple(term.casefold() for term in query.split() if len(term) > 1)
     relationships = (
-        authorized_relationships(actor=actor, repository_id=repository_id)
+        _authorized_packet_relationships(
+            actor=actor,
+            repository_id=repository_id,
+        )
         .select_related(
             "source_entity",
             "target_entity",
+            "assertion",
             "source_location",
             "source_observation__source_document",
             "source_observation__source_revision",
@@ -355,7 +474,7 @@ def _relationship_candidates(
     candidates: list[PacketCandidate] = []
     for relationship in relationships:
         revision = relationship.source_observation.source_revision
-        if revision is None:
+        if revision is None or relationship.assertion.access_scope_id is None:
             continue
         summary = (
             f"{relationship.source_entity.display_name} "
@@ -364,6 +483,7 @@ def _relationship_candidates(
         if query_terms and not any(term in summary.casefold() for term in query_terms):
             continue
         citation = CitationCandidate(
+            access_scope_id=relationship.access_snapshot.access_scope_id,
             source_location_id=relationship.source_location_id,
             source_observation_id=relationship.source_observation_id,
             access_snapshot_id=relationship.access_snapshot_id,
@@ -394,7 +514,17 @@ def _relationship_candidates(
                     "review_state": relationship.review_state,
                     "confidence": relationship.confidence,
                 },
-                access_scope_id=relationship.access_scope_id,
+                contributing_scope_ids=tuple(
+                    sorted(
+                        {
+                            relationship.access_scope_id,
+                            relationship.assertion.access_scope_id,
+                            relationship.source_entity.access_scope_id,
+                            relationship.target_entity.access_scope_id,
+                            citation.access_scope_id,
+                        }
+                    )
+                ),
                 citations=(citation,),
                 source_relationship_id=relationship.id,
             )
@@ -403,10 +533,8 @@ def _relationship_candidates(
 
 
 def _chunk_candidate(result: SearchResult, position: int) -> PacketCandidate:
-    snapshot = AccessSnapshot.objects.select_related("access_scope").get(
-        id=result.access_snapshot_id
-    )
     citation = CitationCandidate(
+        access_scope_id=result.access_scope_id,
         source_location_id=result.source_location_id,
         source_observation_id=result.source_observation_id,
         access_snapshot_id=result.access_snapshot_id,
@@ -433,7 +561,7 @@ def _chunk_candidate(result: SearchResult, position: int) -> PacketCandidate:
             "ranking": result.explanation.as_dict(),
             "search_position": position,
         },
-        access_scope_id=snapshot.access_scope_id,
+        contributing_scope_ids=(result.access_scope_id,),
         citations=(citation,),
         source_chunk_id=result.chunk_id,
     )
@@ -442,6 +570,7 @@ def _chunk_candidate(result: SearchResult, position: int) -> PacketCandidate:
 def _conflict_candidates(
     *,
     actor: ActorContext,
+    repository_id: uuid.UUID,
     selected_assertion_ids: set[uuid.UUID],
 ) -> list[PacketCandidate]:
     if not selected_assertion_ids:
@@ -457,23 +586,27 @@ def _conflict_candidates(
         .order_by("id")
     )
     candidates: list[PacketCandidate] = []
+    provenance_by_assertion: dict[uuid.UUID, AssertionProvenance] = {}
+    for provenance in _authorized_provenance(
+        actor=actor,
+        repository_id=repository_id,
+        assertion_ids=selected_assertion_ids,
+    ):
+        provenance_by_assertion.setdefault(provenance.assertion_id, provenance)
     for conflict in conflicts:
-        left_provenance = (
-            AssertionProvenance.objects.filter(
-                organization_id=actor.organization_id,
-                assertion=conflict.left_assertion,
-                access_snapshot__revoked_at__isnull=True,
-            )
-            .select_related(
-                "source_location",
-                "source_observation__source_document",
-                "source_observation__source_revision",
-            )
-            .order_by("id")
-            .first()
-        )
-        if left_provenance is None or conflict.left_assertion.access_scope_id is None:
+        left_provenance = provenance_by_assertion.get(conflict.left_assertion_id)
+        right_provenance = provenance_by_assertion.get(conflict.right_assertion_id)
+        if (
+            left_provenance is None
+            or right_provenance is None
+            or conflict.left_assertion.access_scope_id is None
+            or conflict.right_assertion.access_scope_id is None
+        ):
             continue
+        citations = (
+            _citation_from_provenance(left_provenance),
+            _citation_from_provenance(right_provenance),
+        )
         candidates.append(
             PacketCandidate(
                 item_id=uuid.uuid4(),
@@ -496,8 +629,16 @@ def _conflict_candidates(
                     "right_assertion_id": str(conflict.right_assertion_id),
                     "predicate": conflict.predicate,
                 },
-                access_scope_id=conflict.left_assertion.access_scope_id,
-                citations=(_citation_from_provenance(left_provenance),),
+                contributing_scope_ids=tuple(
+                    sorted(
+                        {
+                            conflict.left_assertion.access_scope_id,
+                            conflict.right_assertion.access_scope_id,
+                            *(citation.access_scope_id for citation in citations),
+                        }
+                    )
+                ),
+                citations=citations,
                 source_conflict_id=conflict.id,
             )
         )
@@ -558,7 +699,7 @@ def _seal_actor_scope(
     actor: ActorContext,
     repository_id: uuid.UUID,
     source_scope_ids: set[uuid.UUID],
-    packet_id: uuid.UUID,
+    scope_key: uuid.UUID,
 ) -> AccessScope:
     """Create an actor-and-repository-only scope narrower than every input scope."""
     principal = resolve_principal(actor)
@@ -572,11 +713,11 @@ def _seal_actor_scope(
         .order_by("id")
     )
     if len(scopes) != len(source_scope_ids):
-        raise ResourceNotFoundError("Resource not found")
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
     organization = Organization.objects.get(id=actor.organization_id)
     derived = AccessScope.objects.create(
         organization=organization,
-        name=f"context-packet:{packet_id}",
+        name=f"context-packet:{scope_key}",
     )
     derived.derived_from.set(scopes)
     if principal.membership is not None:
@@ -587,7 +728,7 @@ def _seal_actor_scope(
         )
     else:
         if principal.service_identity is None:
-            raise ResourceNotFoundError("Resource not found")
+            raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
         AccessScopeServiceIdentity.objects.create(
             organization=organization,
             access_scope=derived,
@@ -641,7 +782,7 @@ def _authorization_snapshot(
         .values_list("id", flat=True)
     )
     if not scope_ids:
-        raise ResourceNotFoundError("Resource not found")
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
     scopes = list(
         AccessScope.objects.filter(id__in=scope_ids).order_by("id").values("id", "revision")
     )
@@ -681,6 +822,169 @@ def _watermark(
         repository=repository,
     )
     return watermark
+
+
+def _deny_packet() -> NoReturn:
+    raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+
+
+def _reauthorize_packet_current(
+    *,
+    actor: ActorContext,
+    repository_id: uuid.UUID,
+    packet: ContextPacketRecord,
+) -> ImmutableArtifact:
+    """Recheck every parent scope and citation against current source lineage."""
+    if ContextPacketInvalidation.objects.filter(context_packet=packet).exists():
+        _deny_packet()
+    artifact = get_authorized_artifact(
+        actor=actor,
+        repository_id=repository_id,
+        artifact_id=packet.artifact_id,
+    )
+    visible_scope_ids = set(
+        authorized_scope_ids(
+            actor=actor,
+            repository_id=repository_id,
+            action=Action.ARTIFACT_VIEW,
+        )
+    )
+    if packet.access_scope_id not in visible_scope_ids:
+        _deny_packet()
+    items = list(
+        ContextPacketItem.objects.filter(
+            organization_id=actor.organization_id,
+            context_packet=packet,
+        )
+        .select_related("access_scope")
+        .prefetch_related("access_scope__derived_from")
+        .order_by("position")
+    )
+    packet_parent_ids = set(packet.access_scope.derived_from.values_list("id", flat=True))
+    expected_packet_parents = {item.access_scope_id for item in items}
+    if items:
+        if packet_parent_ids != expected_packet_parents:
+            _deny_packet()
+    elif not packet_parent_ids or not packet_parent_ids <= visible_scope_ids:
+        _deny_packet()
+
+    visible_assertion_ids = set(
+        authorized_assertions(
+            actor=actor,
+            repository_id=repository_id,
+            action=Action.ARTIFACT_VIEW,
+        ).values_list("id", flat=True)
+    )
+    visible_relationship_ids = set(
+        _authorized_packet_relationships(
+            actor=actor,
+            repository_id=repository_id,
+        ).values_list("id", flat=True)
+    )
+    visible_chunk_ids = set(
+        authorized_source_chunks(
+            actor=actor,
+            repository_id=repository_id,
+        ).values_list("id", flat=True)
+    )
+    visible_conflict_ids = set(
+        AssertionConflict.objects.filter(
+            organization_id=actor.organization_id,
+            status=AssertionConflict.Status.OPEN,
+            left_assertion_id__in=visible_assertion_ids,
+            right_assertion_id__in=visible_assertion_ids,
+        ).values_list("id", flat=True)
+    )
+    citations_by_item: dict[uuid.UUID, list[ContextPacketCitation]] = {}
+    citations = (
+        ContextPacketCitation.objects.filter(
+            organization_id=actor.organization_id,
+            context_packet=packet,
+        )
+        .select_related(
+            "access_snapshot__access_scope",
+            "access_snapshot__source_connection",
+            "source_location__parsed_source",
+            "source_observation__source_revision",
+            "source_observation__source_document__source_container__source_connection",
+        )
+        .order_by("context_item_id", "position")
+    )
+    for citation in citations:
+        citations_by_item.setdefault(citation.context_item_id, []).append(citation)
+
+    for item in items:
+        if item.access_scope_id not in visible_scope_ids:
+            _deny_packet()
+        item_parent_ids = set(item.access_scope.derived_from.values_list("id", flat=True))
+        if not item_parent_ids or not item_parent_ids <= visible_scope_ids:
+            _deny_packet()
+        item_citations = citations_by_item.get(item.id, [])
+        if not item_citations:
+            _deny_packet()
+        citation_scope_ids: set[uuid.UUID] = set()
+        for citation in item_citations:
+            if citation.access_snapshot is None:
+                _deny_packet()
+            citation_scope_ids.add(citation.access_snapshot.access_scope_id)
+        if not citation_scope_ids <= item_parent_ids:
+            _deny_packet()
+        if (
+            item.source_assertion_id is not None
+            and item.source_assertion_id not in visible_assertion_ids
+        ):
+            _deny_packet()
+        if (
+            item.source_relationship_id is not None
+            and item.source_relationship_id not in visible_relationship_ids
+        ):
+            _deny_packet()
+        if item.source_chunk_id is not None and item.source_chunk_id not in visible_chunk_ids:
+            _deny_packet()
+        if (
+            item.source_conflict_id is not None
+            and item.source_conflict_id not in visible_conflict_ids
+        ):
+            _deny_packet()
+
+        for citation in item_citations:
+            snapshot = citation.access_snapshot
+            location = citation.source_location
+            observation = citation.source_observation
+            if location is None or observation is None or snapshot is None:
+                _deny_packet()
+            document = observation.source_document
+            source_connection = document.source_container.source_connection
+            revision = observation.source_revision
+            if (
+                snapshot.revoked_at is not None
+                or snapshot.access_scope_id not in item_parent_ids
+                or snapshot.source_connection_id != source_connection.id
+                or not AccessScopeSource.objects.filter(
+                    organization_id=actor.organization_id,
+                    access_scope_id=snapshot.access_scope_id,
+                    source_connection_id=source_connection.id,
+                ).exists()
+                or source_connection.repository_id != repository_id
+                or source_connection.state not in {"ACTIVE", "DEGRADED"}
+                or document.state != "PRESENT"
+                or observation.status != "PRESENT"
+                or revision is None
+                or observation.source_revision_id != document.current_revision_id
+                or observation.sync_run_id != document.last_seen_run_id
+                or location.source_observation_id != observation.id
+                or location.parsed_source.source_revision_id != revision.id
+                or citation.canonical_url != document.canonical_url
+            ):
+                _deny_packet()
+            expected_hash = revision.content_hash
+            if item.source_chunk_id is not None:
+                if item.source_chunk is None:
+                    _deny_packet()
+                expected_hash = item.source_chunk.content_hash
+            if citation.source_content_hash != expected_hash:
+                _deny_packet()
+    return artifact
 
 
 @transaction.atomic
@@ -740,10 +1044,10 @@ def build_context_packet(
         .first()
     )
     if cached is not None:
-        get_authorized_artifact(
+        _reauthorize_packet_current(
             actor=actor,
             repository_id=repository_id,
-            artifact_id=cached.artifact_id,
+            packet=cached,
         )
         return cached, False
 
@@ -775,6 +1079,7 @@ def build_context_packet(
     }
     conflicts = _conflict_candidates(
         actor=actor,
+        repository_id=repository_id,
         selected_assertion_ids=selected_assertions,
     )
     selection = _select(
@@ -811,14 +1116,21 @@ def build_context_packet(
         "items": [candidate.as_dict() for candidate in selection.candidates],
         "limitations": list(selection.limitations),
     }
-    selected_scope_ids = {candidate.access_scope_id for candidate in selection.candidates} or {
-        visible_scopes[0]
+    item_scopes = {
+        candidate.item_id: _seal_actor_scope(
+            actor=actor,
+            repository_id=repository_id,
+            source_scope_ids=set(candidate.contributing_scope_ids),
+            scope_key=candidate.item_id,
+        )
+        for candidate in selection.candidates
     }
+    selected_scope_ids = {scope.id for scope in item_scopes.values()} or {visible_scopes[0]}
     sealed_scope = _seal_actor_scope(
         actor=actor,
         repository_id=repository_id,
         source_scope_ids=selected_scope_ids,
-        packet_id=packet_id,
+        scope_key=packet_id,
     )
     organization = Organization.objects.get(id=actor.organization_id)
     artifact = ImmutableArtifact.objects.create(
@@ -863,6 +1175,7 @@ def build_context_packet(
             id=candidate.item_id,
             organization=organization,
             context_packet=packet,
+            access_scope=item_scopes[candidate.item_id],
             position=position,
             kind=candidate.kind,
             item_key=candidate.item_key,
@@ -916,11 +1229,11 @@ def get_context_packet(
         repository_id=repository_id,
     ).first()
     if packet is None:
-        raise ResourceNotFoundError("Resource not found")
-    artifact = get_authorized_artifact(
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    artifact = _reauthorize_packet_current(
         actor=actor,
         repository_id=repository_id,
-        artifact_id=packet.artifact_id,
+        packet=packet,
     )
     return cast(dict[str, object], artifact.payload)
 
