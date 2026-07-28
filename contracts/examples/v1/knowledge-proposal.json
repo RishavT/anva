@@ -1,0 +1,32 @@
+{
+  "anva_sources": [
+    {
+      "canonical_url": "https://example.test/decisions/checkout",
+      "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "locator": "ADR-42",
+      "observed_at": "2026-07-28T00:00:00Z",
+      "revision_id": "00000000-0000-4000-8000-000000000102",
+      "source_id": "00000000-0000-4000-8000-000000000101",
+      "source_type": "DECISION"
+    }
+  ],
+  "changes": [
+    {
+      "is_inferred": false,
+      "operation": "CORRECT",
+      "predicate": "owned_by",
+      "target_id": "00000000-0000-4000-8000-000000000602",
+      "value": {
+        "team": "payments-platform"
+      }
+    }
+  ],
+  "created_at": "2026-07-28T00:03:00Z",
+  "organization_id": "00000000-0000-4000-8000-000000000001",
+  "proposal_id": "00000000-0000-4000-8000-000000000601",
+  "proposal_version": 1,
+  "schema_version": "1.0",
+  "state": "PROPOSED",
+  "submitted_by": "00000000-0000-4000-8000-000000000603",
+  "summary": "Record the checkout ownership correction."
+}

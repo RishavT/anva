@@ -1,0 +1,196 @@
+{
+  "$defs": {
+    "context_item": {
+      "additionalProperties": false,
+      "properties": {
+        "anva_sources": {
+          "items": {
+            "$ref": "#/$defs/source_reference"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "freshness": {
+          "enum": [
+            "CURRENT",
+            "STALE",
+            "UNKNOWN"
+          ],
+          "type": "string"
+        },
+        "is_inferred": {
+          "type": "boolean"
+        },
+        "item_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "REQUIREMENT",
+            "DECISION",
+            "POLICY",
+            "ENTITY",
+            "RISK",
+            "ASSUMPTION"
+          ],
+          "type": "string"
+        },
+        "summary": {
+          "maxLength": 10000,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "item_id",
+        "kind",
+        "summary",
+        "is_inferred",
+        "freshness",
+        "anva_sources"
+      ],
+      "type": "object"
+    },
+    "source_reference": {
+      "additionalProperties": false,
+      "properties": {
+        "canonical_url": {
+          "oneOf": [
+            {
+              "format": "uri",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "content_hash": {
+          "oneOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "locator": {
+          "maxLength": 500,
+          "minLength": 1,
+          "type": "string"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "revision_id": {
+          "oneOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "source_type": {
+          "enum": [
+            "DOCUMENT",
+            "CODE",
+            "POLICY",
+            "DECISION",
+            "HUMAN_APPROVAL",
+            "EVIDENCE"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_type",
+        "revision_id",
+        "canonical_url",
+        "content_hash",
+        "observed_at",
+        "locator"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://schemas.anva.dev/v1/context-packet.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "content_hash": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "generated_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "items": {
+      "items": {
+        "$ref": "#/$defs/context_item"
+      },
+      "maxItems": 500,
+      "type": "array"
+    },
+    "limitations": {
+      "items": {
+        "maxLength": 2000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "organization_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "packet_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "revision": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "type": "string"
+    },
+    "work_item_id": {
+      "oneOf": [
+        {
+          "format": "uuid",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "packet_id",
+    "organization_id",
+    "work_item_id",
+    "revision",
+    "generated_at",
+    "content_hash",
+    "items",
+    "limitations"
+  ],
+  "title": "Anva Context Packet",
+  "type": "object"
+}

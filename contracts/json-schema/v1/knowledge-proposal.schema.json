@@ -1,0 +1,189 @@
+{
+  "$defs": {
+    "source_reference": {
+      "additionalProperties": false,
+      "properties": {
+        "canonical_url": {
+          "oneOf": [
+            {
+              "format": "uri",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "content_hash": {
+          "oneOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "locator": {
+          "maxLength": 500,
+          "minLength": 1,
+          "type": "string"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "revision_id": {
+          "oneOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "source_type": {
+          "enum": [
+            "DOCUMENT",
+            "CODE",
+            "POLICY",
+            "DECISION",
+            "HUMAN_APPROVAL",
+            "EVIDENCE"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_type",
+        "revision_id",
+        "canonical_url",
+        "content_hash",
+        "observed_at",
+        "locator"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://schemas.anva.dev/v1/knowledge-proposal.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "anva_sources": {
+      "items": {
+        "$ref": "#/$defs/source_reference"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "changes": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "is_inferred": {
+            "type": "boolean"
+          },
+          "operation": {
+            "enum": [
+              "ADD",
+              "CORRECT",
+              "SUPERSEDE"
+            ],
+            "type": "string"
+          },
+          "predicate": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "target_id": {
+            "oneOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "value": {}
+        },
+        "required": [
+          "operation",
+          "target_id",
+          "predicate",
+          "value",
+          "is_inferred"
+        ],
+        "type": "object"
+      },
+      "maxItems": 100,
+      "minItems": 1,
+      "type": "array"
+    },
+    "created_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "organization_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "proposal_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "proposal_version": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "type": "string"
+    },
+    "state": {
+      "enum": [
+        "PROPOSED",
+        "VALIDATING",
+        "AWAITING_REVIEW",
+        "ACCEPTED",
+        "REJECTED",
+        "SUPERSEDED",
+        "FAILED"
+      ],
+      "type": "string"
+    },
+    "submitted_by": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "summary": {
+      "maxLength": 5000,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "proposal_id",
+    "organization_id",
+    "proposal_version",
+    "state",
+    "summary",
+    "changes",
+    "anva_sources",
+    "submitted_by",
+    "created_at"
+  ],
+  "title": "Anva Knowledge Proposal",
+  "type": "object"
+}

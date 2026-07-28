@@ -3,13 +3,14 @@ EXPOSED_COMPOSE := $(COMPOSE) -f compose.yaml -f compose.expose.yaml
 TEST_COMPOSE := $(COMPOSE) -p anva-tests
 TEST_RUN := $(TEST_COMPOSE) --profile test run --rm --build test
 
-.PHONY: help up up-exposed down reset logs migrate shell cli lock format format-check lint type unit integration contract smoke coverage test test-down check ci
+.PHONY: help up up-exposed down reset logs migrate migrations-check shell cli lock contracts contracts-check format format-check lint type unit integration contract smoke coverage test test-down check ci
 
 help:
 	@echo "Anva development commands (all application tooling runs in Compose)"
 	@echo "  make up            Build and start the internal-only stack"
 	@echo "  make up-exposed    Build and start with documented host ports"
 	@echo "  make check         Run formatting, lint, typing, and every test suite"
+	@echo "  make contracts     Regenerate versioned OpenAPI, MCP, schemas, and examples"
 	@echo "  make test-down     Remove the isolated test project"
 	@echo "  make reset         Remove local containers and named data volumes"
 	@echo "  make logs          Follow service logs"
@@ -32,6 +33,9 @@ logs:
 migrate:
 	$(COMPOSE) run --rm migrate
 
+migrations-check:
+	$(TEST_RUN) python -m anva.manage makemigrations --check --dry-run
+
 shell:
 	$(COMPOSE) run --rm api python -m anva.manage shell
 
@@ -40,6 +44,12 @@ cli:
 
 lock:
 	$(COMPOSE) --profile tools run --rm lock
+
+contracts:
+	$(TEST_RUN) python -m anva.contracts.generate --write --validate-examples
+
+contracts-check:
+	$(TEST_RUN) python -m anva.contracts.generate --check --validate-examples
 
 format:
 	$(TEST_RUN) ruff format .
@@ -73,6 +83,6 @@ test: unit integration contract smoke
 test-down:
 	$(TEST_COMPOSE) --profile test down --volumes --remove-orphans
 
-check: format-check lint type coverage
+check: format-check lint type migrations-check contracts-check coverage
 
 ci: check

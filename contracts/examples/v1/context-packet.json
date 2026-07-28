@@ -1,0 +1,30 @@
+{
+  "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "generated_at": "2026-07-28T00:00:00Z",
+  "items": [
+    {
+      "anva_sources": [
+        {
+          "canonical_url": "https://example.test/decisions/checkout",
+          "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "locator": "ADR-42",
+          "observed_at": "2026-07-28T00:00:00Z",
+          "revision_id": "00000000-0000-4000-8000-000000000102",
+          "source_id": "00000000-0000-4000-8000-000000000101",
+          "source_type": "DECISION"
+        }
+      ],
+      "freshness": "CURRENT",
+      "is_inferred": false,
+      "item_id": "00000000-0000-4000-8000-000000000303",
+      "kind": "DECISION",
+      "summary": "Checkout is owned by the payments team."
+    }
+  ],
+  "limitations": [],
+  "organization_id": "00000000-0000-4000-8000-000000000001",
+  "packet_id": "00000000-0000-4000-8000-000000000301",
+  "revision": 1,
+  "schema_version": "1.0",
+  "work_item_id": "00000000-0000-4000-8000-000000000302"
+}

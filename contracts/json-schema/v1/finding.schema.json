@@ -1,0 +1,151 @@
+{
+  "$defs": {
+    "source_reference": {
+      "additionalProperties": false,
+      "properties": {
+        "canonical_url": {
+          "oneOf": [
+            {
+              "format": "uri",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "content_hash": {
+          "oneOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "locator": {
+          "maxLength": 500,
+          "minLength": 1,
+          "type": "string"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "revision_id": {
+          "oneOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "source_type": {
+          "enum": [
+            "DOCUMENT",
+            "CODE",
+            "POLICY",
+            "DECISION",
+            "HUMAN_APPROVAL",
+            "EVIDENCE"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_type",
+        "revision_id",
+        "canonical_url",
+        "content_hash",
+        "observed_at",
+        "locator"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://schemas.anva.dev/v1/finding.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "anva_sources": {
+      "items": {
+        "$ref": "#/$defs/source_reference"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "code": {
+      "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+      "type": "string"
+    },
+    "description": {
+      "maxLength": 10000,
+      "minLength": 1,
+      "type": "string"
+    },
+    "evidence_ids": {
+      "items": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "finding_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "limitations": {
+      "items": {
+        "maxLength": 2000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "organization_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "type": "string"
+    },
+    "severity": {
+      "enum": [
+        "BLOCKING",
+        "ADVISORY"
+      ],
+      "type": "string"
+    },
+    "title": {
+      "maxLength": 300,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "finding_id",
+    "organization_id",
+    "code",
+    "severity",
+    "title",
+    "description",
+    "anva_sources",
+    "evidence_ids",
+    "limitations"
+  ],
+  "title": "Anva Assurance Finding",
+  "type": "object"
+}

@@ -1,0 +1,75 @@
+{
+  "$id": "https://schemas.anva.dev/v1/evaluator-request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "commit_sha": {
+      "pattern": "^[a-f0-9]{7,64}$",
+      "type": "string"
+    },
+    "context_packet_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "evidence_manifest_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "organization_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "policy_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "policy_version": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "request_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "type": "string"
+    },
+    "untrusted_change": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "maxLength": 50000,
+          "type": "string"
+        },
+        "diff_reference": {
+          "format": "uri",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 1000,
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "description",
+        "diff_reference"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema_version",
+    "request_id",
+    "organization_id",
+    "commit_sha",
+    "policy_id",
+    "policy_version",
+    "context_packet_id",
+    "evidence_manifest_id",
+    "untrusted_change"
+  ],
+  "title": "Anva Evaluator Request",
+  "type": "object"
+}

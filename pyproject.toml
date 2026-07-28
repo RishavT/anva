@@ -13,6 +13,7 @@ authors = [{ name = "Anva" }]
 dependencies = [
   "Django==5.2.5",
   "gunicorn==23.0.0",
+  "jsonschema[format]==4.25.1",
   "psycopg[binary]==3.2.9",
   "whitenoise==6.9.0",
 ]
@@ -60,10 +61,14 @@ python_version = "3.12"
 strict = true
 plugins = ["mypy_django_plugin.main"]
 mypy_path = "src"
-exclude = ["src/anva/foundation/migrations/"]
+exclude = ["src/anva/core/migrations/", "src/anva/foundation/migrations/"]
 
 [tool.django-stubs]
 django_settings_module = "anva.config.settings"
+
+[[tool.mypy.overrides]]
+module = ["jsonschema", "jsonschema.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "anva.config.settings"

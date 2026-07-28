@@ -1,0 +1,112 @@
+{
+  "$defs": {
+    "policy_requirement": {
+      "additionalProperties": false,
+      "properties": {
+        "check_type": {
+          "enum": [
+            "DETERMINISTIC",
+            "EVIDENCE",
+            "MODEL_REVIEW",
+            "MANUAL_APPROVAL"
+          ],
+          "type": "string"
+        },
+        "code": {
+          "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+          "type": "string"
+        },
+        "description": {
+          "maxLength": 5000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "enforcement": {
+          "enum": [
+            "BLOCKING",
+            "ADVISORY"
+          ],
+          "type": "string"
+        },
+        "required_evidence": {
+          "items": {
+            "enum": [
+              "TEST",
+              "LINT",
+              "TYPECHECK",
+              "BUILD",
+              "MIGRATION",
+              "BROWSER",
+              "MANUAL"
+            ],
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "requirement_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requirement_id",
+        "code",
+        "description",
+        "enforcement",
+        "check_type",
+        "required_evidence"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://schemas.anva.dev/v1/policy.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "effective_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "name": {
+      "maxLength": 300,
+      "minLength": 1,
+      "type": "string"
+    },
+    "organization_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "policy_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "requirements": {
+      "items": {
+        "$ref": "#/$defs/policy_requirement"
+      },
+      "maxItems": 500,
+      "minItems": 1,
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "type": "string"
+    },
+    "version": {
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schema_version",
+    "policy_id",
+    "organization_id",
+    "version",
+    "name",
+    "effective_at",
+    "requirements"
+  ],
+  "title": "Anva Assurance Policy",
+  "type": "object"
+}

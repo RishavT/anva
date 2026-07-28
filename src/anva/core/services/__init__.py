@@ -1,0 +1,1 @@
+"""Authoritative core domain operations."""
