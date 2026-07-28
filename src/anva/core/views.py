@@ -6,12 +6,13 @@ import json
 import uuid
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 from functools import wraps
 from typing import Any, cast
 
 from django.http import HttpRequest, JsonResponse
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from django.views.decorators.http import require_http_methods
 
 from anva.core.exceptions import (
@@ -19,11 +20,18 @@ from anva.core.exceptions import (
     DomainOperationError,
     ResourceNotFoundError,
 )
-from anva.core.models import Organization
+from anva.core.models import (
+    EvidenceManifest,
+    Organization,
+    Policy,
+    WorkItem,
+    WorkItemRevision,
+)
 from anva.core.services.authorization import (
     NOT_FOUND_MESSAGE,
     Action,
     authorize_action,
+    get_tenant_record,
 )
 from anva.core.services.bootstrap import bootstrap_local_organization
 from anva.core.services.context import ActorContext
@@ -32,12 +40,27 @@ from anva.core.services.context_packets import (
     build_context_packet,
     get_context_packet,
 )
+from anva.core.services.evidence import (
+    map_criterion_evidence,
+    submit_evidence_manifest,
+)
 from anva.core.services.graph import traverse_graph
 from anva.core.services.ingestion import (
     connect_filesystem_source,
     inspect_source,
     request_ingestion_sync,
     source_sync_runs,
+)
+from anva.core.services.intent import (
+    approve_work_item_revision,
+    import_work_item,
+    revoke_work_item_approval,
+)
+from anva.core.services.policies import (
+    create_policy_override,
+    evaluate_policy,
+    import_policy,
+    revoke_policy_override,
 )
 from anva.core.services.retrieval import (
     get_authorized_artifact,
@@ -117,6 +140,17 @@ def _json_body(request: HttpRequest) -> dict[str, object]:
     return payload
 
 
+def _closed_payload(
+    payload: dict[str, object],
+    *,
+    allowed: frozenset[str],
+    required: frozenset[str],
+) -> dict[str, object]:
+    if set(payload) - allowed or required - set(payload):
+        raise ValueError("Request body fields are invalid")
+    return payload
+
+
 def _string(payload: dict[str, object], name: str) -> str:
     value = payload.get(name)
     if not isinstance(value, str) or not value.strip():
@@ -149,6 +183,39 @@ def _optional_integer(
     if not isinstance(value, int) or isinstance(value, bool):
         raise ValueError(f"{name} must be an integer")
     return value
+
+
+def _date_time(payload: dict[str, object], name: str) -> datetime:
+    value = _string(payload, name)
+    parsed = parse_datetime(value)
+    if parsed is None or parsed.tzinfo is None:
+        raise ValueError(f"{name} must be a timezone-aware ISO 8601 timestamp")
+    return parsed
+
+
+def _string_list(payload: dict[str, object], name: str) -> list[str]:
+    value = payload.get(name)
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f"{name} must be a list of strings")
+    return value
+
+
+def _uuid_list(payload: dict[str, object], name: str) -> list[uuid.UUID]:
+    return [uuid.UUID(value) for value in _string_list(payload, name)]
+
+
+def _object_list(payload: dict[str, object], name: str) -> list[dict[str, str]]:
+    value = payload.get(name)
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        raise ValueError(f"{name} must be a list of objects")
+    if not all(
+        set(item) == {"id", "type"}
+        and isinstance(item["id"], str)
+        and isinstance(item["type"], str)
+        for item in value
+    ):
+        raise ValueError(f"{name} entries require string id and type")
+    return cast(list[dict[str, str]], value)
 
 
 def _actor(request: HttpRequest) -> ActorContext:
@@ -605,6 +672,226 @@ def artifact_detail(request: HttpRequest, artifact_id: uuid.UUID) -> JsonRespons
 
 @api_errors
 @require_http_methods(["POST"])
+def work_items_import(request: HttpRequest) -> JsonResponse:
+    payload = _json_body(request)
+    result = import_work_item(actor=_actor(request), payload=payload)
+    return JsonResponse(
+        {
+            "work_item_id": str(result.work_item.id),
+            "work_item_revision_id": str(result.work_item_revision.id),
+            "revision": result.work_item_revision.revision,
+            "content_hash": result.work_item_revision.content_hash,
+            "created": result.created,
+        },
+        status=201 if result.created else 200,
+    )
+
+
+@api_errors
+@require_http_methods(["GET"])
+def work_item_detail(request: HttpRequest, work_item_id: uuid.UUID) -> JsonResponse:
+    actor = _actor(request)
+    work_item = get_tenant_record(
+        queryset=WorkItem.objects.all(),
+        record_id=work_item_id,
+        organization_id=actor.organization_id,
+    )
+    authorize_action(
+        actor=actor,
+        action=Action.WORK_VIEW,
+        repository_id=work_item.repository_id,
+        access_scope_id=work_item.access_scope_id,
+    )
+    revision = WorkItemRevision.objects.get(
+        organization_id=actor.organization_id,
+        work_item=work_item,
+        revision=work_item.revision,
+    )
+    return JsonResponse(
+        {
+            "id": str(work_item.id),
+            "repository_id": str(work_item.repository_id),
+            "revision": work_item.revision,
+            "status": work_item.status,
+            "content_hash": revision.content_hash,
+            "intent": revision.normalized_payload,
+        }
+    )
+
+
+@api_errors
+@require_http_methods(["POST"])
+def work_revision_approval(
+    request: HttpRequest,
+    work_item_revision_id: uuid.UUID,
+) -> JsonResponse:
+    payload = _closed_payload(
+        _json_body(request),
+        allowed=frozenset(
+            {
+                "repository_id",
+                "status",
+                "target_kind",
+                "target_key",
+                "reason",
+                "expires_at",
+            }
+        ),
+        required=frozenset({"repository_id", "status", "target_kind", "target_key", "reason"}),
+    )
+    expires = _optional_string(payload, "expires_at")
+    approval, created = approve_work_item_revision(
+        actor=_actor(request),
+        repository_id=uuid.UUID(_string(payload, "repository_id")),
+        work_item_revision_id=work_item_revision_id,
+        status=_string(payload, "status"),
+        target_kind=_string(payload, "target_kind"),
+        target_key=_string(payload, "target_key"),
+        reason=_string(payload, "reason"),
+        expires_at=_date_time(payload, "expires_at") if expires else None,
+    )
+    return JsonResponse(
+        {
+            "approval_id": str(approval.id),
+            "work_item_revision_id": str(approval.work_item_revision_id),
+            "status": approval.status,
+            "created": created,
+        },
+        status=201 if created else 200,
+    )
+
+
+@api_errors
+@require_http_methods(["POST"])
+def work_approval_revocation(
+    request: HttpRequest,
+    approval_id: uuid.UUID,
+) -> JsonResponse:
+    payload = _closed_payload(
+        _json_body(request),
+        allowed=frozenset({"repository_id", "reason"}),
+        required=frozenset({"repository_id", "reason"}),
+    )
+    revocation, created = revoke_work_item_approval(
+        actor=_actor(request),
+        repository_id=uuid.UUID(_string(payload, "repository_id")),
+        approval_id=approval_id,
+        reason=_string(payload, "reason"),
+    )
+    return JsonResponse(
+        {
+            "approval_revocation_id": str(revocation.id),
+            "approval_id": str(revocation.approval_id),
+            "created": created,
+        },
+        status=201 if created else 200,
+    )
+
+
+@api_errors
+@require_http_methods(["POST"])
+def policies_import(request: HttpRequest) -> JsonResponse:
+    result = import_policy(actor=_actor(request), payload=_json_body(request))
+    return JsonResponse(
+        {
+            "policy_id": str(result.policy.id),
+            "policy_version_id": str(result.policy_version.id),
+            "version": result.policy_version.version,
+            "content_hash": result.policy_version.content_hash,
+            "created": result.created,
+        },
+        status=201 if result.created else 200,
+    )
+
+
+@api_errors
+@require_http_methods(["GET"])
+def policy_detail(request: HttpRequest, policy_id: uuid.UUID) -> JsonResponse:
+    actor = _actor(request)
+    repository_id = uuid.UUID(request.GET.get("repository_id", ""))
+    policy = get_tenant_record(
+        queryset=Policy.objects.all(),
+        record_id=policy_id,
+        organization_id=actor.organization_id,
+    )
+    authorize_action(
+        actor=actor,
+        action=Action.POLICY_VIEW,
+        repository_id=repository_id,
+        access_scope_id=policy.access_scope_id,
+    )
+    version = policy.policyversion_set.get(version=policy.revision)
+    return JsonResponse(
+        {
+            "id": str(policy.id),
+            "version_id": str(version.id),
+            "version": version.version,
+            "status": policy.status,
+            "content_hash": version.content_hash,
+            "definition": version.definition,
+        }
+    )
+
+
+@api_errors
+@require_http_methods(["POST"])
+def policy_simulation(request: HttpRequest) -> JsonResponse:
+    payload = _closed_payload(
+        _json_body(request),
+        allowed=frozenset(
+            {
+                "repository_id",
+                "pull_request_number",
+                "commit_sha",
+                "policy_version_ids",
+                "reference_time",
+                "affected_paths",
+                "affected_entities",
+                "target_branch",
+                "work_item_revision_id",
+            }
+        ),
+        required=frozenset(
+            {
+                "repository_id",
+                "pull_request_number",
+                "commit_sha",
+                "policy_version_ids",
+                "reference_time",
+                "affected_paths",
+                "affected_entities",
+                "target_branch",
+            }
+        ),
+    )
+    raw_work_revision_id = _optional_string(payload, "work_item_revision_id")
+    evaluation, created = evaluate_policy(
+        actor=_actor(request),
+        repository_id=uuid.UUID(_string(payload, "repository_id")),
+        pull_request_number=_integer(payload, "pull_request_number"),
+        commit_sha=_string(payload, "commit_sha"),
+        policy_version_ids=_uuid_list(payload, "policy_version_ids"),
+        reference_time=_date_time(payload, "reference_time"),
+        affected_paths=_string_list(payload, "affected_paths"),
+        affected_entities=_object_list(payload, "affected_entities"),
+        target_branch=_string(payload, "target_branch"),
+        work_item_revision_id=(uuid.UUID(raw_work_revision_id) if raw_work_revision_id else None),
+        is_simulation=True,
+    )
+    return JsonResponse(
+        {
+            "policy_evaluation_id": str(evaluation.id),
+            "input_hash": evaluation.input_hash,
+            "output_hash": evaluation.output_hash,
+            "output": evaluation.output_payload,
+            "created": created,
+        },
+        status=201 if created else 200,
+    )
+
+
+@api_errors
+@require_http_methods(["POST"])
 def review_knowledge(request: HttpRequest, assertion_id: uuid.UUID) -> JsonResponse:
     actor = _actor(request)
     payload = _json_body(request)
@@ -660,15 +947,200 @@ def dismiss_finding(request: HttpRequest, finding_id: uuid.UUID) -> JsonResponse
 @api_errors
 @require_http_methods(["POST"])
 def override_policy(request: HttpRequest, policy_id: uuid.UUID) -> JsonResponse:
-    del policy_id
     actor = _actor(request)
-    payload = _json_body(request)
-    authorize_sensitive_placeholder(
+    raw_payload = _json_body(request)
+    repository_id = uuid.UUID(_string(raw_payload, "repository_id"))
+    authorize_action(
         actor=actor,
-        repository_id=uuid.UUID(_string(payload, "repository_id")),
         action=Action.POLICY_OVERRIDE,
+        repository_id=repository_id,
     )
-    return JsonResponse({"status": "AUTHORIZED_NOT_IMPLEMENTED"}, status=202)
+    payload = _closed_payload(
+        raw_payload,
+        allowed=frozenset(
+            {
+                "repository_id",
+                "policy_evaluation_id",
+                "policy_version_id",
+                "requirement_code",
+                "pull_request_number",
+                "commit_sha",
+                "reason",
+                "expires_at",
+            }
+        ),
+        required=frozenset(
+            {
+                "repository_id",
+                "policy_evaluation_id",
+                "policy_version_id",
+                "requirement_code",
+                "pull_request_number",
+                "commit_sha",
+                "reason",
+            }
+        ),
+    )
+    expires = _optional_string(payload, "expires_at")
+    override, created = create_policy_override(
+        actor=actor,
+        repository_id=repository_id,
+        policy_id=policy_id,
+        policy_evaluation_id=uuid.UUID(_string(payload, "policy_evaluation_id")),
+        policy_version_id=uuid.UUID(_string(payload, "policy_version_id")),
+        requirement_code=_string(payload, "requirement_code"),
+        pull_request_number=_integer(payload, "pull_request_number"),
+        commit_sha=_string(payload, "commit_sha"),
+        reason=_string(payload, "reason"),
+        expires_at=_date_time(payload, "expires_at") if expires else None,
+    )
+    return JsonResponse(
+        {
+            "policy_override_id": str(override.id),
+            "policy_version_id": str(override.policy_version_id),
+            "commit_sha": override.commit_sha,
+            "created": created,
+        },
+        status=201 if created else 200,
+    )
+
+
+@api_errors
+@require_http_methods(["POST"])
+def policy_override_revocation(
+    request: HttpRequest,
+    policy_override_id: uuid.UUID,
+) -> JsonResponse:
+    payload = _closed_payload(
+        _json_body(request),
+        allowed=frozenset({"repository_id", "reason"}),
+        required=frozenset({"repository_id", "reason"}),
+    )
+    revocation, created = revoke_policy_override(
+        actor=_actor(request),
+        repository_id=uuid.UUID(_string(payload, "repository_id")),
+        policy_override_id=policy_override_id,
+        reason=_string(payload, "reason"),
+    )
+    return JsonResponse(
+        {
+            "policy_override_revocation_id": str(revocation.id),
+            "policy_override_id": str(revocation.policy_override_id),
+            "created": created,
+        },
+        status=201 if created else 200,
+    )
+
+
+@api_errors
+@require_http_methods(["POST"])
+def evidence_submission(
+    request: HttpRequest,
+    repository_id: uuid.UUID,
+    pull_request_number: int,
+) -> JsonResponse:
+    result = submit_evidence_manifest(
+        actor=_actor(request),
+        repository_id=repository_id,
+        pull_request_number=pull_request_number,
+        payload=_json_body(request),
+    )
+    return JsonResponse(
+        {
+            "manifest_id": str(result.manifest.id),
+            "payload_hash": result.manifest.payload_hash,
+            "evidence_ids": [str(record.id) for record in result.evidence],
+            "created": result.created,
+        },
+        status=201 if result.created else 200,
+    )
+
+
+@api_errors
+@require_http_methods(["GET"])
+def evidence_manifest_detail(
+    request: HttpRequest,
+    manifest_id: uuid.UUID,
+) -> JsonResponse:
+    actor = _actor(request)
+    manifest = get_tenant_record(
+        queryset=EvidenceManifest.objects.all(),
+        record_id=manifest_id,
+        organization_id=actor.organization_id,
+    )
+    authorize_action(
+        actor=actor,
+        action=Action.EVIDENCE_VIEW,
+        repository_id=manifest.repository_id,
+        access_scope_id=manifest.access_scope_id,
+    )
+    return JsonResponse(
+        {
+            "id": str(manifest.id),
+            "repository_id": str(manifest.repository_id),
+            "pull_request_number": manifest.pull_request_number,
+            "commit_sha": manifest.commit_sha,
+            "payload_hash": manifest.payload_hash,
+            "manifest": manifest.artifact.payload,
+        }
+    )
+
+
+@api_errors
+@require_http_methods(["POST"])
+def criterion_evidence_mapping(
+    request: HttpRequest,
+    work_item_revision_id: uuid.UUID,
+) -> JsonResponse:
+    payload = _closed_payload(
+        _json_body(request),
+        allowed=frozenset(
+            {
+                "repository_id",
+                "pull_request_number",
+                "commit_sha",
+                "reference_time",
+            }
+        ),
+        required=frozenset(
+            {
+                "repository_id",
+                "pull_request_number",
+                "commit_sha",
+                "reference_time",
+            }
+        ),
+    )
+    result = map_criterion_evidence(
+        actor=_actor(request),
+        repository_id=uuid.UUID(_string(payload, "repository_id")),
+        pull_request_number=_integer(payload, "pull_request_number"),
+        work_item_revision_id=work_item_revision_id,
+        commit_sha=_string(payload, "commit_sha"),
+        reference_time=_date_time(payload, "reference_time"),
+    )
+    return JsonResponse(
+        {
+            "mappings": [
+                {
+                    "id": str(mapping.id),
+                    "criterion_id": str(mapping.criterion_id),
+                    "evidence_id": (str(mapping.evidence_id) if mapping.evidence_id else None),
+                    "required_evidence_type": mapping.required_evidence_type,
+                    "pull_request_number": mapping.pull_request_number,
+                    "reference_time": mapping.reference_time.isoformat(),
+                    "engine_version": mapping.engine_version,
+                    "input_hash": mapping.input_hash,
+                    "assessment": mapping.assessment,
+                    "classification": mapping.classification,
+                    "gap_code": mapping.gap_code,
+                    "gap_description": mapping.gap_description,
+                }
+                for mapping in result.mappings
+            ]
+        },
+        status=201 if result.created else 200,
+    )
 
 
 @api_errors

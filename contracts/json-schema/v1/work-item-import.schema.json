@@ -1,0 +1,403 @@
+{
+  "$defs": {
+    "acceptance_criterion": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+          "type": "string"
+        },
+        "manual_approval_allowed": {
+          "type": "boolean"
+        },
+        "normalized_text": {
+          "maxLength": 10000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "required_evidence_types": {
+          "items": {
+            "enum": [
+              "CHECK_STATUS",
+              "TEST_RESULT",
+              "BUILD_RESULT",
+              "TYPECHECK_RESULT",
+              "LINT_RESULT",
+              "SCREENSHOT",
+              "VIDEO",
+              "CONSOLE_LOG",
+              "NETWORK_TRACE",
+              "API_ASSERTION",
+              "STATIC_ANALYSIS",
+              "SECURITY_SCAN",
+              "DEPENDENCY_SCAN",
+              "MIGRATION_RESULT",
+              "PERFORMANCE_RESULT",
+              "ACCESSIBILITY_RESULT",
+              "MANUAL_APPROVAL",
+              "SOURCE_REFERENCE",
+              "DIFF_REFERENCE"
+            ],
+            "type": "string"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "requirement_code": {
+          "oneOf": [
+            {
+              "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "requirement_code",
+        "normalized_text",
+        "required_evidence_types",
+        "manual_approval_allowed"
+      ],
+      "type": "object"
+    },
+    "assumption": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+          "type": "string"
+        },
+        "normalized_text": {
+          "maxLength": 10000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "OPEN",
+            "VALIDATED",
+            "INVALIDATED"
+          ],
+          "type": "string"
+        },
+        "validation_reference": {
+          "maxLength": 1000,
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "normalized_text",
+        "status",
+        "validation_reference"
+      ],
+      "type": "object"
+    },
+    "decision": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+          "type": "string"
+        },
+        "outcome": {
+          "maxLength": 10000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "rationale": {
+          "maxLength": 10000,
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "PROPOSED",
+            "ACCEPTED",
+            "REJECTED",
+            "SUPERSEDED"
+          ],
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 500,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "title",
+        "outcome",
+        "rationale",
+        "status"
+      ],
+      "type": "object"
+    },
+    "non_requirement": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+          "type": "string"
+        },
+        "normalized_text": {
+          "maxLength": 10000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "rationale": {
+          "maxLength": 10000,
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "normalized_text",
+        "rationale"
+      ],
+      "type": "object"
+    },
+    "requirement": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+          "type": "string"
+        },
+        "normalized_text": {
+          "maxLength": 10000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "origin": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "owner": {
+          "maxLength": 300,
+          "type": "string"
+        },
+        "related_entity_ids": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "maxItems": 500,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "requires_approval": {
+          "type": "boolean"
+        },
+        "source_references": {
+          "items": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 100,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "status": {
+          "maxLength": 24,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "normalized_text",
+        "origin",
+        "owner",
+        "status",
+        "source_references",
+        "related_entity_ids",
+        "requires_approval"
+      ],
+      "type": "object"
+    },
+    "work_summary": {
+      "additionalProperties": false,
+      "properties": {
+        "producer": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "structured_data": {
+          "type": "object"
+        },
+        "summary_type": {
+          "maxLength": 40,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary_type",
+        "structured_data",
+        "producer"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://schemas.anva.dev/v1/work-item-import.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "acceptance_criteria": {
+      "items": {
+        "$ref": "#/$defs/acceptance_criterion"
+      },
+      "maxItems": 500,
+      "minItems": 1,
+      "type": "array"
+    },
+    "access_scope_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "assumptions": {
+      "items": {
+        "$ref": "#/$defs/assumption"
+      },
+      "maxItems": 500,
+      "type": "array"
+    },
+    "decisions": {
+      "items": {
+        "$ref": "#/$defs/decision"
+      },
+      "maxItems": 500,
+      "type": "array"
+    },
+    "external_key": {
+      "oneOf": [
+        {
+          "maxLength": 300,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "non_requirements": {
+      "items": {
+        "$ref": "#/$defs/non_requirement"
+      },
+      "maxItems": 500,
+      "type": "array"
+    },
+    "organization_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "origin": {
+      "maxLength": 100,
+      "minLength": 1,
+      "type": "string"
+    },
+    "repository_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "requirements": {
+      "items": {
+        "$ref": "#/$defs/requirement"
+      },
+      "maxItems": 500,
+      "type": "array"
+    },
+    "revision": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "type": "string"
+    },
+    "source_references": {
+      "items": {
+        "maxLength": 1000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 500,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "status": {
+      "enum": [
+        "DRAFT",
+        "READY",
+        "APPROVED",
+        "CLOSED"
+      ],
+      "type": "string"
+    },
+    "summaries": {
+      "items": {
+        "$ref": "#/$defs/work_summary"
+      },
+      "maxItems": 100,
+      "type": "array"
+    },
+    "summary": {
+      "maxLength": 20000,
+      "type": "string"
+    },
+    "title": {
+      "maxLength": 500,
+      "minLength": 1,
+      "type": "string"
+    },
+    "work_item_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "work_type": {
+      "enum": [
+        "FEATURE",
+        "BUG",
+        "SECURITY",
+        "MIGRATION",
+        "OPERATIONS",
+        "OTHER"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "work_item_id",
+    "organization_id",
+    "repository_id",
+    "access_scope_id",
+    "revision",
+    "external_key",
+    "title",
+    "work_type",
+    "status",
+    "summary",
+    "origin",
+    "source_references",
+    "requirements",
+    "non_requirements",
+    "assumptions",
+    "acceptance_criteria",
+    "decisions",
+    "summaries"
+  ],
+  "title": "Anva Versioned Work Item Import",
+  "type": "object"
+}

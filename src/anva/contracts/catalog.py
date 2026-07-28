@@ -8,7 +8,28 @@ from typing import Final
 SCHEMA_VERSION: Final = "1.0"
 SCHEMA_BASE_URI: Final = "https://schemas.anva.dev/v1"
 SHA256_PATTERN: Final = "^[a-f0-9]{64}$"
-COMMIT_PATTERN: Final = "^[a-f0-9]{7,64}$"
+COMMIT_PATTERN: Final = "^[a-f0-9]{40}$"
+EVIDENCE_KINDS: Final[list[str]] = [
+    "CHECK_STATUS",
+    "TEST_RESULT",
+    "BUILD_RESULT",
+    "TYPECHECK_RESULT",
+    "LINT_RESULT",
+    "SCREENSHOT",
+    "VIDEO",
+    "CONSOLE_LOG",
+    "NETWORK_TRACE",
+    "API_ASSERTION",
+    "STATIC_ANALYSIS",
+    "SECURITY_SCAN",
+    "DEPENDENCY_SCAN",
+    "MIGRATION_RESULT",
+    "PERFORMANCE_RESULT",
+    "ACCESSIBILITY_RESULT",
+    "MANUAL_APPROVAL",
+    "SOURCE_REFERENCE",
+    "DIFF_REFERENCE",
+]
 
 
 def versioned_schema(
@@ -217,6 +238,200 @@ CONTEXT_PACKET_SCHEMA = versioned_schema(
     },
 )
 
+WORK_ITEM_IMPORT_SCHEMA = versioned_schema(
+    "work-item-import",
+    "Anva Versioned Work Item Import",
+    {
+        "work_item_id": UUID_FIELD,
+        "organization_id": UUID_FIELD,
+        "repository_id": UUID_FIELD,
+        "access_scope_id": UUID_FIELD,
+        "revision": {"type": "integer", "minimum": 1},
+        "external_key": {
+            "oneOf": [
+                {"type": "string", "minLength": 1, "maxLength": 300},
+                {"type": "null"},
+            ]
+        },
+        "title": {"type": "string", "minLength": 1, "maxLength": 500},
+        "work_type": {
+            "type": "string",
+            "enum": ["FEATURE", "BUG", "SECURITY", "MIGRATION", "OPERATIONS", "OTHER"],
+        },
+        "status": {"type": "string", "enum": ["DRAFT", "READY", "APPROVED", "CLOSED"]},
+        "summary": {"type": "string", "maxLength": 20_000},
+        "origin": {"type": "string", "minLength": 1, "maxLength": 100},
+        "source_references": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "maxLength": 1_000},
+            "uniqueItems": True,
+            "maxItems": 500,
+        },
+        "requirements": {
+            "type": "array",
+            "items": {"$ref": "#/$defs/requirement"},
+            "maxItems": 500,
+        },
+        "non_requirements": {
+            "type": "array",
+            "items": {"$ref": "#/$defs/non_requirement"},
+            "maxItems": 500,
+        },
+        "assumptions": {
+            "type": "array",
+            "items": {"$ref": "#/$defs/assumption"},
+            "maxItems": 500,
+        },
+        "acceptance_criteria": {
+            "type": "array",
+            "items": {"$ref": "#/$defs/acceptance_criterion"},
+            "minItems": 1,
+            "maxItems": 500,
+        },
+        "decisions": {
+            "type": "array",
+            "items": {"$ref": "#/$defs/decision"},
+            "maxItems": 500,
+        },
+        "summaries": {
+            "type": "array",
+            "items": {"$ref": "#/$defs/work_summary"},
+            "maxItems": 100,
+        },
+    },
+    [
+        "work_item_id",
+        "organization_id",
+        "repository_id",
+        "access_scope_id",
+        "revision",
+        "external_key",
+        "title",
+        "work_type",
+        "status",
+        "summary",
+        "origin",
+        "source_references",
+        "requirements",
+        "non_requirements",
+        "assumptions",
+        "acceptance_criteria",
+        "decisions",
+        "summaries",
+    ],
+    definitions={
+        "requirement": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,63}$"},
+                "normalized_text": {"type": "string", "minLength": 1, "maxLength": 10_000},
+                "origin": {"type": "string", "minLength": 1, "maxLength": 100},
+                "owner": {"type": "string", "maxLength": 300},
+                "status": {"type": "string", "minLength": 1, "maxLength": 24},
+                "source_references": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1, "maxLength": 1_000},
+                    "uniqueItems": True,
+                    "maxItems": 100,
+                },
+                "related_entity_ids": {
+                    "type": "array",
+                    "items": UUID_FIELD,
+                    "uniqueItems": True,
+                    "maxItems": 500,
+                },
+                "requires_approval": {"type": "boolean"},
+            },
+            "required": [
+                "code",
+                "normalized_text",
+                "origin",
+                "owner",
+                "status",
+                "source_references",
+                "related_entity_ids",
+                "requires_approval",
+            ],
+        },
+        "non_requirement": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,63}$"},
+                "normalized_text": {"type": "string", "minLength": 1, "maxLength": 10_000},
+                "rationale": {"type": "string", "maxLength": 10_000},
+            },
+            "required": ["code", "normalized_text", "rationale"],
+        },
+        "assumption": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,63}$"},
+                "normalized_text": {"type": "string", "minLength": 1, "maxLength": 10_000},
+                "status": {"type": "string", "enum": ["OPEN", "VALIDATED", "INVALIDATED"]},
+                "validation_reference": {"type": "string", "maxLength": 1_000},
+            },
+            "required": ["code", "normalized_text", "status", "validation_reference"],
+        },
+        "acceptance_criterion": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,63}$"},
+                "requirement_code": {
+                    "oneOf": [
+                        {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,63}$"},
+                        {"type": "null"},
+                    ]
+                },
+                "normalized_text": {"type": "string", "minLength": 1, "maxLength": 10_000},
+                "required_evidence_types": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": EVIDENCE_KINDS},
+                    "uniqueItems": True,
+                    "minItems": 1,
+                    "maxItems": 20,
+                },
+                "manual_approval_allowed": {"type": "boolean"},
+            },
+            "required": [
+                "code",
+                "requirement_code",
+                "normalized_text",
+                "required_evidence_types",
+                "manual_approval_allowed",
+            ],
+        },
+        "decision": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,63}$"},
+                "title": {"type": "string", "minLength": 1, "maxLength": 500},
+                "outcome": {"type": "string", "minLength": 1, "maxLength": 10_000},
+                "rationale": {"type": "string", "maxLength": 10_000},
+                "status": {
+                    "type": "string",
+                    "enum": ["PROPOSED", "ACCEPTED", "REJECTED", "SUPERSEDED"],
+                },
+            },
+            "required": ["code", "title", "outcome", "rationale", "status"],
+        },
+        "work_summary": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "summary_type": {"type": "string", "minLength": 1, "maxLength": 40},
+                "structured_data": {"type": "object"},
+                "producer": {"type": "string", "minLength": 1, "maxLength": 200},
+            },
+            "required": ["summary_type", "structured_data", "producer"],
+        },
+    },
+)
+
 EVIDENCE_ENTRY: Final[dict[str, object]] = {
     "type": "object",
     "additionalProperties": False,
@@ -224,22 +439,64 @@ EVIDENCE_ENTRY: Final[dict[str, object]] = {
         "evidence_id": UUID_FIELD,
         "kind": {
             "type": "string",
-            "enum": ["TEST", "LINT", "TYPECHECK", "BUILD", "MIGRATION", "BROWSER", "MANUAL"],
+            "enum": EVIDENCE_KINDS,
         },
+        "name": {"type": "string", "minLength": 1, "maxLength": 300},
         "status": {"type": "string", "enum": ["PASSED", "FAILED", "UNKNOWN"]},
-        "artifact_uri": {"type": "string", "format": "uri"},
+        "command": {"type": "string", "maxLength": 2_000},
+        "artifact_reference": {
+            "type": "string",
+            "maxLength": 2_000,
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*\\x00).*$",
+        },
+        "source_url": {
+            "oneOf": [
+                {"type": "string", "format": "uri", "maxLength": 2_000},
+                {"type": "null"},
+            ]
+        },
         "content_hash": SHA256_FIELD,
-        "created_at": DATE_TIME_FIELD,
+        "started_at": {"oneOf": [DATE_TIME_FIELD, {"type": "null"}]},
+        "completed_at": DATE_TIME_FIELD,
         "producer": {"type": "string", "minLength": 1, "maxLength": 200},
+        "producer_version": {"type": "string", "minLength": 1, "maxLength": 100},
+        "approval_id": {"oneOf": [UUID_FIELD, {"type": "null"}]},
+        "retention_class": {"type": "string", "minLength": 1, "maxLength": 100},
+        "retention_expires_at": {"oneOf": [DATE_TIME_FIELD, {"type": "null"}]},
+        "limitations": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {"type": "string", "minLength": 1, "maxLength": 2_000},
+        },
+        "criterion_codes": {
+            "type": "array",
+            "maxItems": 500,
+            "uniqueItems": True,
+            "items": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,63}$"},
+        },
+        "environment": {"type": "string", "maxLength": 200},
+        "scenario": {"type": "string", "maxLength": 500},
     },
     "required": [
         "evidence_id",
         "kind",
+        "name",
         "status",
-        "artifact_uri",
+        "command",
+        "artifact_reference",
+        "source_url",
         "content_hash",
-        "created_at",
+        "started_at",
+        "completed_at",
         "producer",
+        "producer_version",
+        "approval_id",
+        "retention_class",
+        "retention_expires_at",
+        "limitations",
+        "criterion_codes",
+        "environment",
+        "scenario",
     ],
 }
 
@@ -249,15 +506,35 @@ EVIDENCE_MANIFEST_SCHEMA = versioned_schema(
     {
         "manifest_id": UUID_FIELD,
         "organization_id": UUID_FIELD,
+        "repository_id": UUID_FIELD,
+        "access_scope_id": UUID_FIELD,
+        "pull_request_number": {"type": "integer", "minimum": 1},
+        "work_item_revision_id": {"oneOf": [UUID_FIELD, {"type": "null"}]},
         "commit_sha": COMMIT_FIELD,
         "created_at": DATE_TIME_FIELD,
+        "producer": {"type": "string", "minLength": 1, "maxLength": 200},
+        "producer_version": {"type": "string", "minLength": 1, "maxLength": 100},
+        "producer_mode": {"type": "string", "enum": ["MANUAL", "CI"]},
         "entries": {
             "type": "array",
             "items": {"$ref": "#/$defs/evidence_entry"},
-            "maxItems": 2_000,
+            "maxItems": 500,
         },
     },
-    ["manifest_id", "organization_id", "commit_sha", "created_at", "entries"],
+    [
+        "manifest_id",
+        "organization_id",
+        "repository_id",
+        "access_scope_id",
+        "pull_request_number",
+        "work_item_revision_id",
+        "commit_sha",
+        "created_at",
+        "producer",
+        "producer_version",
+        "producer_mode",
+        "entries",
+    ],
     definitions={"evidence_entry": EVIDENCE_ENTRY},
 )
 
@@ -388,10 +665,18 @@ POLICY_REQUIREMENT: Final[dict[str, object]] = {
         },
         "required_evidence": {
             "type": "array",
-            "items": {
-                "type": "string",
-                "enum": ["TEST", "LINT", "TYPECHECK", "BUILD", "MIGRATION", "BROWSER", "MANUAL"],
-            },
+            "items": {"type": "string", "enum": EVIDENCE_KINDS},
+            "uniqueItems": True,
+        },
+        "required_reviewers": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "maxLength": 100},
+            "uniqueItems": True,
+        },
+        "required_approval": {"type": "boolean"},
+        "report_sections": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "maxLength": 100},
             "uniqueItems": True,
         },
     },
@@ -402,6 +687,88 @@ POLICY_REQUIREMENT: Final[dict[str, object]] = {
         "enforcement",
         "check_type",
         "required_evidence",
+        "required_reviewers",
+        "required_approval",
+        "report_sections",
+    ],
+}
+
+POLICY_BINDING: Final[dict[str, object]] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "scope_level": {
+            "type": "string",
+            "enum": ["ORGANIZATION", "PRODUCT", "SYSTEM", "REPOSITORY", "PATH"],
+        },
+        "mandatory": {"type": "boolean"},
+        "repository_ids": {
+            "type": "array",
+            "items": UUID_FIELD,
+            "uniqueItems": True,
+            "maxItems": 500,
+        },
+        "entity_ids": {
+            "type": "array",
+            "items": UUID_FIELD,
+            "uniqueItems": True,
+            "maxItems": 500,
+        },
+        "entity_types": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "enum": [
+                    "TEAM",
+                    "REPOSITORY",
+                    "SERVICE",
+                    "COMPONENT",
+                    "API",
+                    "DATA_ASSET",
+                    "DECISION",
+                    "POLICY",
+                    "REQUIREMENT",
+                    "UNKNOWN",
+                ],
+            },
+            "uniqueItems": True,
+            "maxItems": 100,
+        },
+        "path_patterns": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500,
+                "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*\\x00).*$",
+            },
+            "uniqueItems": True,
+            "maxItems": 500,
+        },
+        "work_item_types": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "enum": ["FEATURE", "BUG", "SECURITY", "MIGRATION", "OPERATIONS", "OTHER"],
+            },
+            "uniqueItems": True,
+        },
+        "target_branches": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "maxLength": 300},
+            "uniqueItems": True,
+            "maxItems": 100,
+        },
+    },
+    "required": [
+        "scope_level",
+        "mandatory",
+        "repository_ids",
+        "entity_ids",
+        "entity_types",
+        "path_patterns",
+        "work_item_types",
+        "target_branches",
     ],
 }
 
@@ -411,9 +778,14 @@ POLICY_SCHEMA = versioned_schema(
     {
         "policy_id": UUID_FIELD,
         "organization_id": UUID_FIELD,
+        "access_scope_id": UUID_FIELD,
         "version": {"type": "integer", "minimum": 1},
         "name": {"type": "string", "minLength": 1, "maxLength": 300},
+        "owner": {"type": "string", "minLength": 1, "maxLength": 300},
+        "status": {"type": "string", "enum": ["DRAFT", "ACTIVE", "DISABLED"]},
         "effective_at": DATE_TIME_FIELD,
+        "expires_at": {"oneOf": [DATE_TIME_FIELD, {"type": "null"}]},
+        "binding": {"$ref": "#/$defs/policy_binding"},
         "requirements": {
             "type": "array",
             "items": {"$ref": "#/$defs/policy_requirement"},
@@ -421,8 +793,23 @@ POLICY_SCHEMA = versioned_schema(
             "maxItems": 500,
         },
     },
-    ["policy_id", "organization_id", "version", "name", "effective_at", "requirements"],
-    definitions={"policy_requirement": POLICY_REQUIREMENT},
+    [
+        "policy_id",
+        "organization_id",
+        "access_scope_id",
+        "version",
+        "name",
+        "owner",
+        "status",
+        "effective_at",
+        "expires_at",
+        "binding",
+        "requirements",
+    ],
+    definitions={
+        "policy_binding": POLICY_BINDING,
+        "policy_requirement": POLICY_REQUIREMENT,
+    },
 )
 
 KNOWLEDGE_PROPOSAL_SCHEMA = versioned_schema(
@@ -492,6 +879,7 @@ SCHEMAS: Final[dict[str, dict[str, object]]] = {
     "finding": FINDING_SCHEMA,
     "knowledge-proposal": KNOWLEDGE_PROPOSAL_SCHEMA,
     "policy": POLICY_SCHEMA,
+    "work-item-import": WORK_ITEM_IMPORT_SCHEMA,
 }
 
 SOURCE_EXAMPLE: Final[dict[str, object]] = {
@@ -584,17 +972,36 @@ EXAMPLES: Final[dict[str, dict[str, object]]] = {
         "schema_version": SCHEMA_VERSION,
         "manifest_id": "00000000-0000-4000-8000-000000000401",
         "organization_id": "00000000-0000-4000-8000-000000000001",
+        "repository_id": "00000000-0000-4000-8000-000000000304",
+        "access_scope_id": "00000000-0000-4000-8000-000000000504",
+        "pull_request_number": 17,
+        "work_item_revision_id": None,
         "commit_sha": "a" * 40,
         "created_at": "2026-07-28T00:01:00Z",
+        "producer": "github-actions",
+        "producer_version": "1",
+        "producer_mode": "CI",
         "entries": [
             {
                 "evidence_id": "00000000-0000-4000-8000-000000000402",
-                "kind": "TEST",
+                "kind": "TEST_RESULT",
+                "name": "unit tests",
                 "status": "PASSED",
-                "artifact_uri": "s3://anva/evidence/tests.json",
+                "command": "pytest -m unit",
+                "artifact_reference": "artifacts/tests.json",
+                "source_url": "https://example.test/runs/17",
                 "content_hash": "c" * 64,
-                "created_at": "2026-07-28T00:01:00Z",
+                "started_at": "2026-07-28T00:00:00Z",
+                "completed_at": "2026-07-28T00:01:00Z",
                 "producer": "github-actions",
+                "producer_version": "1",
+                "approval_id": None,
+                "retention_class": "ASSURANCE_1Y",
+                "retention_expires_at": "2027-07-28T00:01:00Z",
+                "limitations": [],
+                "criterion_codes": ["TESTS_PASS"],
+                "environment": "ci",
+                "scenario": "unit",
             }
         ],
     },
@@ -628,9 +1035,23 @@ EXAMPLES: Final[dict[str, dict[str, object]]] = {
         "schema_version": SCHEMA_VERSION,
         "policy_id": "00000000-0000-4000-8000-000000000502",
         "organization_id": "00000000-0000-4000-8000-000000000001",
+        "access_scope_id": "00000000-0000-4000-8000-000000000504",
         "version": 3,
         "name": "Default repository assurance",
+        "owner": "platform",
+        "status": "ACTIVE",
         "effective_at": "2026-07-01T00:00:00Z",
+        "expires_at": None,
+        "binding": {
+            "scope_level": "REPOSITORY",
+            "mandatory": True,
+            "repository_ids": ["00000000-0000-4000-8000-000000000304"],
+            "entity_ids": [],
+            "entity_types": [],
+            "path_patterns": [],
+            "work_item_types": [],
+            "target_branches": ["main"],
+        },
         "requirements": [
             {
                 "requirement_id": "00000000-0000-4000-8000-000000000503",
@@ -638,7 +1059,77 @@ EXAMPLES: Final[dict[str, dict[str, object]]] = {
                 "description": "Repository tests must pass.",
                 "enforcement": "BLOCKING",
                 "check_type": "EVIDENCE",
-                "required_evidence": ["TEST"],
+                "required_evidence": ["TEST_RESULT"],
+                "required_reviewers": [],
+                "required_approval": False,
+                "report_sections": ["tests"],
+            }
+        ],
+    },
+    "work-item-import": {
+        "schema_version": SCHEMA_VERSION,
+        "work_item_id": "00000000-0000-4000-8000-000000000701",
+        "organization_id": "00000000-0000-4000-8000-000000000001",
+        "repository_id": "00000000-0000-4000-8000-000000000304",
+        "access_scope_id": "00000000-0000-4000-8000-000000000504",
+        "revision": 1,
+        "external_key": "ANVA-6",
+        "title": "Deterministic intent and evidence",
+        "work_type": "FEATURE",
+        "status": "READY",
+        "summary": "Version intent and map evidence.",
+        "origin": "github-issue",
+        "source_references": ["https://example.test/issues/6"],
+        "requirements": [
+            {
+                "code": "REQ_VERSION_INTENT",
+                "normalized_text": "Version normalized intent.",
+                "origin": "issue",
+                "owner": "platform",
+                "status": "CONFIRMED",
+                "source_references": ["https://example.test/issues/6"],
+                "related_entity_ids": [],
+                "requires_approval": False,
+            }
+        ],
+        "non_requirements": [
+            {
+                "code": "NONREQ_RUN_ARTIFACTS",
+                "normalized_text": "Do not execute submitted artifacts.",
+                "rationale": "Evidence ingestion is declarative.",
+            }
+        ],
+        "assumptions": [
+            {
+                "code": "ASM_CI_TRUST",
+                "normalized_text": "CI producer identity is configured.",
+                "status": "OPEN",
+                "validation_reference": "",
+            }
+        ],
+        "acceptance_criteria": [
+            {
+                "code": "TESTS_PASS",
+                "requirement_code": "REQ_VERSION_INTENT",
+                "normalized_text": "Tests pass for the exact commit.",
+                "required_evidence_types": ["TEST_RESULT"],
+                "manual_approval_allowed": False,
+            }
+        ],
+        "decisions": [
+            {
+                "code": "DEC_MANIFEST_ONLY",
+                "title": "Manifest-only ingestion",
+                "outcome": "Never fetch or execute artifacts during ingestion.",
+                "rationale": "Treat all manifest fields as hostile input.",
+                "status": "ACCEPTED",
+            }
+        ],
+        "summaries": [
+            {
+                "summary_type": "PLAN",
+                "structured_data": {"text": "Context only; never evidence."},
+                "producer": "anva-cli",
             }
         ],
     },

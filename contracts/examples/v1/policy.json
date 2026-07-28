@@ -1,7 +1,24 @@
 {
+  "access_scope_id": "00000000-0000-4000-8000-000000000504",
+  "binding": {
+    "entity_ids": [],
+    "entity_types": [],
+    "mandatory": true,
+    "path_patterns": [],
+    "repository_ids": [
+      "00000000-0000-4000-8000-000000000304"
+    ],
+    "scope_level": "REPOSITORY",
+    "target_branches": [
+      "main"
+    ],
+    "work_item_types": []
+  },
   "effective_at": "2026-07-01T00:00:00Z",
+  "expires_at": null,
   "name": "Default repository assurance",
   "organization_id": "00000000-0000-4000-8000-000000000001",
+  "owner": "platform",
   "policy_id": "00000000-0000-4000-8000-000000000502",
   "requirements": [
     {
@@ -9,12 +26,18 @@
       "code": "TESTS_PASS",
       "description": "Repository tests must pass.",
       "enforcement": "BLOCKING",
-      "required_evidence": [
-        "TEST"
+      "report_sections": [
+        "tests"
       ],
+      "required_approval": false,
+      "required_evidence": [
+        "TEST_RESULT"
+      ],
+      "required_reviewers": [],
       "requirement_id": "00000000-0000-4000-8000-000000000503"
     }
   ],
   "schema_version": "1.0",
+  "status": "ACTIVE",
   "version": 3
 }

@@ -1,18 +1,39 @@
 {
+  "access_scope_id": "00000000-0000-4000-8000-000000000504",
   "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "created_at": "2026-07-28T00:01:00Z",
   "entries": [
     {
-      "artifact_uri": "s3://anva/evidence/tests.json",
+      "approval_id": null,
+      "artifact_reference": "artifacts/tests.json",
+      "command": "pytest -m unit",
+      "completed_at": "2026-07-28T00:01:00Z",
       "content_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-      "created_at": "2026-07-28T00:01:00Z",
+      "criterion_codes": [
+        "TESTS_PASS"
+      ],
+      "environment": "ci",
       "evidence_id": "00000000-0000-4000-8000-000000000402",
-      "kind": "TEST",
+      "kind": "TEST_RESULT",
+      "limitations": [],
+      "name": "unit tests",
       "producer": "github-actions",
+      "producer_version": "1",
+      "retention_class": "ASSURANCE_1Y",
+      "retention_expires_at": "2027-07-28T00:01:00Z",
+      "scenario": "unit",
+      "source_url": "https://example.test/runs/17",
+      "started_at": "2026-07-28T00:00:00Z",
       "status": "PASSED"
     }
   ],
   "manifest_id": "00000000-0000-4000-8000-000000000401",
   "organization_id": "00000000-0000-4000-8000-000000000001",
-  "schema_version": "1.0"
+  "producer": "github-actions",
+  "producer_mode": "CI",
+  "producer_version": "1",
+  "pull_request_number": 17,
+  "repository_id": "00000000-0000-4000-8000-000000000304",
+  "schema_version": "1.0",
+  "work_item_revision_id": null
 }

@@ -24,7 +24,7 @@ def test_contract_catalog_and_checked_in_generation_are_current() -> None:
     second = rendered_artifacts()
 
     assert first == second
-    assert len(first) == 16
+    assert len(first) == 18
     check_artifacts(first)
 
 
@@ -89,10 +89,23 @@ def test_openapi_exposes_versioned_tenancy_and_authorization_boundaries() -> Non
         "/canvas/assertions/{resource_id}",
         "/mcp/context",
         "/artifacts/{resource_id}",
+        "/work-items",
+        "/work-items/import",
+        "/work-items/{resource_id}",
+        "/work-item-revisions/{resource_id}/approvals",
+        "/work-item-revisions/{resource_id}/evidence-map",
+        "/work-approvals/{resource_id}/revoke",
+        "/policies",
+        "/policies/import",
+        "/policies/simulate",
+        "/policies/{resource_id}",
         "/knowledge/assertions/{resource_id}/review",
         "/assurance-runs/{resource_id}/transition",
         "/findings/{resource_id}/dismiss",
         "/policies/{resource_id}/override",
+        "/repositories/{repository_id}/pull-requests/{pull_request_number}/evidence",
+        "/evidence-manifests/{resource_id}",
+        "/policy-overrides/{resource_id}/revoke",
         "/source-connections/filesystem",
         "/source-connections/{resource_id}",
         "/source-connections/{resource_id}/sync",
@@ -103,3 +116,32 @@ def test_openapi_exposes_versioned_tenancy_and_authorization_boundaries() -> Non
     bootstrap = cast(dict[str, object], paths["/bootstrap"])
     bootstrap_post = cast(dict[str, object], bootstrap["post"])
     assert bootstrap_post["security"] == []
+
+    for path in (
+        "/work-item-revisions/{resource_id}/approvals",
+        "/work-approvals/{resource_id}/revoke",
+        "/work-item-revisions/{resource_id}/evidence-map",
+        "/policies/simulate",
+        "/policies/{resource_id}/override",
+        "/policy-overrides/{resource_id}/revoke",
+    ):
+        operation = cast(dict[str, object], cast(dict[str, object], paths[path])["post"])
+        body = cast(dict[str, object], operation["requestBody"])
+        schema = cast(
+            dict[str, object],
+            cast(
+                dict[str, object],
+                cast(dict[str, object], body["content"])["application/json"],
+            )["schema"],
+        )
+        assert schema["additionalProperties"] is False
+
+    simulation = cast(
+        dict[str, object],
+        cast(dict[str, object], paths["/policies/simulate"])["post"],
+    )
+    assert {"200", "201"} <= cast(dict[str, object], simulation["responses"]).keys()
+    assert all(
+        parameter.get("name") != "Idempotency-Key"
+        for parameter in cast(list[dict[str, object]], simulation["parameters"])
+    )
