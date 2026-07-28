@@ -90,6 +90,17 @@ class DiscoveryPage:
     containers: tuple[ContainerDescriptor, ...]
     documents: tuple[DocumentDescriptor, ...]
     next_cursor: Mapping[str, JSONValue] | None
+    failures: tuple[DiscoveryFailure, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoveryFailure:
+    """One unsafe or unreadable discovery entry isolated from safe siblings."""
+
+    item_key: str
+    error_code: str
+    safe_message: str
+    is_transient: bool = False
 
 
 @dataclass(frozen=True, slots=True)

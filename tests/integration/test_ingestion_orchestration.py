@@ -13,7 +13,9 @@ from django.utils import timezone
 from anva.core.exceptions import ResourceNotFoundError
 from anva.core.models import (
     AccessScope,
+    AccessScopeSource,
     AssertionConflict,
+    AuditEvent,
     BackgroundJob,
     IngestionFailure,
     IngestionStageResult,
@@ -27,12 +29,15 @@ from anva.core.models import (
     SourceChunk,
     SourceChunkVisibility,
     SourceConnection,
+    SourceContentArtifact,
     SourceDocument,
     SourceObservation,
     SourceRevision,
+    SyncCursor,
     SyncRun,
     User,
 )
+from anva.core.services.authorization import Action
 from anva.core.services.context import ActorContext
 from anva.core.services.ingestion import (
     connect_filesystem_source,
@@ -41,10 +46,15 @@ from anva.core.services.ingestion import (
 )
 from anva.core.services.jobs import cancel_job, claim_next_job, complete_job, enqueue_job
 from anva.core.services.retrieval import (
+    authorized_assertions,
     authorized_relationships,
     authorized_source_chunks,
 )
 from anva.core.services.scopes import revoke_source_connection
+from anva.ingestion.errors import IngestionError
+from anva.ingestion.filesystem import FilesystemConnector
+from anva.ingestion.limits import IngestionLimits
+from anva.ingestion.parsers import JsonParser
 
 
 def _actor(
@@ -444,3 +454,234 @@ def test_whole_run_failure_is_observable(
     assert stage.status == IngestionStageResult.Status.FAILED
     assert stage.error_code == "invalid_source_configuration"
     assert stage.completed_at is not None
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_acl_only_reobservation_versions_assertions_and_relationship_visibility(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "service.json").write_text('{"service":"api","owner":"platform"}')
+    actor, source = _source_setup(tmp_path, monkeypatch, slug="acl-reobservation")
+    first = _execute_requested(actor, source)
+    old_scope = source.access_scope
+    assert old_scope is not None
+    old_assertion = KnowledgeAssertion.objects.get(
+        organization=source.organization,
+        predicate="owned_by",
+        valid_until__isnull=True,
+    )
+    old_relationship = KnowledgeRelationship.objects.get(
+        organization=source.organization,
+    )
+
+    old_scope.all_memberships = False
+    old_scope.save(update_fields=["all_memberships", "updated_at"])
+    new_scope = AccessScope.objects.create(
+        organization=source.organization,
+        name="new-visible-scope",
+        all_memberships=True,
+        all_repositories=True,
+    )
+    AccessScopeSource.objects.create(
+        organization=source.organization,
+        access_scope=new_scope,
+        source_connection=source,
+    )
+    source.access_scope = new_scope
+    source.save(update_fields=["access_scope", "updated_at"])
+
+    second = _execute_requested(actor, source)
+    old_assertion.refresh_from_db()
+    current_assertion = KnowledgeAssertion.objects.get(
+        organization=source.organization,
+        predicate="owned_by",
+        valid_until__isnull=True,
+    )
+    repository = source.repository
+    assert repository is not None
+    assert first.access_snapshot_id != second.access_snapshot_id
+    assert SourceRevision.objects.filter(organization=source.organization).count() == 1
+    assert old_assertion.valid_until is not None
+    assert current_assertion.id != old_assertion.id
+    assert current_assertion.access_scope_id == new_scope.id
+    assert list(
+        authorized_assertions(
+            actor=actor,
+            repository_id=repository.id,
+            action=Action.KNOWLEDGE_VIEW,
+        )
+        .filter(predicate="owned_by")
+        .values_list("id", flat=True)
+    ) == [current_assertion.id]
+    assert list(
+        authorized_relationships(
+            actor=actor,
+            repository_id=repository.id,
+        ).values_list("id", flat=True)
+    ) != [old_relationship.id]
+    assert KnowledgeRelationship.objects.filter(organization=source.organization).count() == 2
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_revocation_during_fetch_cancels_without_derived_writes_or_completion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "service.json").write_text('{"service":"api","owner":"platform"}')
+    actor, source = _source_setup(tmp_path, monkeypatch, slug="mid-fetch-revocation")
+    run, created = request_ingestion_sync(actor=actor, source_connection_id=source.id)
+    assert created
+    claimed = claim_next_job(worker_id="mid-fetch-worker", lease_seconds=600)
+    assert claimed is not None
+    original_fetch = FilesystemConnector.fetch
+
+    def revoking_fetch(
+        connector: FilesystemConnector,
+        document: object,
+        *,
+        max_bytes: int,
+    ) -> object:
+        fetched = original_fetch(connector, document, max_bytes=max_bytes)  # type: ignore[arg-type]
+        revoke_source_connection(
+            actor=actor,
+            source_connection_id=source.id,
+            expected_revision=source.revision,
+        )
+        return fetched
+
+    monkeypatch.setattr(FilesystemConnector, "fetch", revoking_fetch)
+    with pytest.raises(IngestionError, match="no longer active"):
+        execute_ingestion_job(job=claimed, worker_id="mid-fetch-worker")
+
+    run.refresh_from_db()
+    claimed.refresh_from_db()
+    assert run.state == SyncRun.State.CANCELLED
+    assert claimed.state != BackgroundJob.State.SUCCEEDED
+    assert not SourceContentArtifact.objects.filter(organization=source.organization).exists()
+    assert not ParsedSource.objects.filter(organization=source.organization).exists()
+    assert not KnowledgeAssertion.objects.filter(organization=source.organization).exists()
+    assert not AuditEvent.objects.filter(
+        organization=source.organization,
+        target_type="syncrun",
+        target_id=run.id,
+        to_state=SyncRun.State.COMPLETED,
+    ).exists()
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_retry_resumes_from_the_persisted_connector_cursor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "a.json").write_text('{"service":"a","owner":"platform"}')
+    (tmp_path / "b.json").write_text('{"service":"b","owner":"platform"}')
+    actor, source = _source_setup(tmp_path, monkeypatch, slug="cursor-resume")
+    run, created = request_ingestion_sync(actor=actor, source_connection_id=source.id)
+    assert created
+    claimed = claim_next_job(worker_id="cursor-worker", lease_seconds=600)
+    assert claimed is not None
+    original_discover = FilesystemConnector.discover
+    seen_cursors: list[object] = []
+    interrupted = False
+
+    def interrupted_discover(
+        connector: FilesystemConnector,
+        *,
+        cursor: object,
+        limit: int,
+    ) -> object:
+        nonlocal interrupted
+        seen_cursors.append(cursor)
+        if cursor is not None and not interrupted:
+            interrupted = True
+            raise IngestionError(
+                "temporary_discovery_failure",
+                "Source discovery is temporarily unavailable",
+                is_transient=True,
+            )
+        return original_discover(connector, cursor=cursor, limit=limit)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(FilesystemConnector, "discover", interrupted_discover)
+    limits = IngestionLimits(max_discovery_page=1)
+    with pytest.raises(IngestionError, match="temporarily unavailable"):
+        execute_ingestion_job(job=claimed, worker_id="cursor-worker", limits=limits)
+    stored = SyncCursor.objects.get(source_connection=source)
+    persisted_connector_cursor = stored.cursor_value["cursor"]
+
+    completed = execute_ingestion_job(
+        job=claimed,
+        worker_id="cursor-worker",
+        limits=limits,
+    )
+
+    assert seen_cursors[:3] == [None, persisted_connector_cursor, persisted_connector_cursor]
+    assert completed.state == SyncRun.State.COMPLETED
+    assert completed.processed_count == 2
+    assert SourceObservation.objects.filter(sync_run=run).count() == 2
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_parser_upgrade_exposes_only_current_assertions_and_chunks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "service.json").write_text('{"service":"api","owner":"platform"}')
+    actor, source = _source_setup(tmp_path, monkeypatch, slug="parser-upgrade")
+    _execute_requested(actor, source)
+    monkeypatch.setattr(JsonParser, "implementation_version", "2")
+
+    _execute_requested(actor, source)
+
+    repository = source.repository
+    assert repository is not None
+    assertions = authorized_assertions(
+        actor=actor,
+        repository_id=repository.id,
+        action=Action.KNOWLEDGE_VIEW,
+    )
+    chunks = authorized_source_chunks(actor=actor, repository_id=repository.id)
+    assert assertions.count() == 2
+    assert KnowledgeAssertion.objects.filter(
+        organization=source.organization,
+        valid_until__isnull=False,
+    ).exists()
+    assert chunks.count() == 1
+    assert chunks.get().parsed_source.parser_version == "2"
+    assert ParsedSource.objects.filter(organization=source.organization).count() == 2
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_hostile_discovery_entry_is_partial_while_safe_sibling_ingests(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "safe.json").write_text('{"service":"safe","owner":"platform"}')
+    (tmp_path / "this-path-is-too-long.json").write_text('{"service":"unsafe","owner":"platform"}')
+    actor, source = _source_setup(tmp_path, monkeypatch, slug="hostile-discovery")
+    run, created = request_ingestion_sync(actor=actor, source_connection_id=source.id)
+    assert created
+    claimed = claim_next_job(worker_id="hostile-path-worker", lease_seconds=600)
+    assert claimed is not None
+
+    completed = execute_ingestion_job(
+        job=claimed,
+        worker_id="hostile-path-worker",
+        limits=IngestionLimits(max_relative_path_bytes=12),
+    )
+
+    assert completed.state == SyncRun.State.PARTIALLY_COMPLETED
+    assert completed.processed_count == 1
+    assert completed.failed_count == 1
+    assert (
+        SourceDocument.objects.get(
+            source_container__source_connection=source,
+        ).external_id
+        == "safe.json"
+    )
+    assert IngestionFailure.objects.get(sync_run=run).error_code == "path_limit_exceeded"

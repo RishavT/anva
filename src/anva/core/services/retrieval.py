@@ -75,10 +75,18 @@ def authorized_assertions(
         KnowledgeAssertion.objects.filter(
             organization_id=actor.organization_id,
             access_scope__in=scopes,
+            valid_until__isnull=True,
         )
         .filter(
             Q(assertionprovenance__isnull=True)
-            | Q(assertionprovenance__access_snapshot__revoked_at__isnull=True)
+            | Q(
+                assertionprovenance__access_snapshot__revoked_at__isnull=True,
+                assertionvalidityinterval__valid_until__isnull=True,
+                assertionvalidityinterval__source_document__state=SourceDocument.State.PRESENT,
+                assertionvalidityinterval__source_observation__source_revision_id=F(
+                    "assertionvalidityinterval__source_document__current_revision_id"
+                ),
+            )
         )
         .distinct()
     )
@@ -106,6 +114,9 @@ def authorized_source_chunks(
         ),
         sourcechunkvisibility__source_observation__source_revision_id=F(
             "sourcechunkvisibility__source_observation__source_document__current_revision_id"
+        ),
+        sourcechunkvisibility__source_observation__sync_run_id=F(
+            "sourcechunkvisibility__source_observation__source_document__last_seen_run_id"
         ),
     ).distinct()
 

@@ -11,7 +11,7 @@ from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
 
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import QuerySet
 from django.utils import timezone
 
@@ -45,7 +45,6 @@ from anva.core.models import (
     SourceRevision,
     SyncCursor,
     SyncRun,
-    content_hash,
 )
 from anva.core.models import (
     ExtractionResult as StoredExtractionResult,
@@ -65,6 +64,7 @@ from anva.ingestion.errors import IngestionError
 from anva.ingestion.extractors import MechanicalExtractor
 from anva.ingestion.filesystem import FilesystemConnector
 from anva.ingestion.interfaces import (
+    DiscoveryFailure,
     DocumentDescriptor,
     ExtractedClaim,
     JSONValue,
@@ -78,6 +78,12 @@ INGESTION_JOB_KIND = "ingestion.sync"
 INGESTION_IMPLEMENTATION_VERSION = "1"
 MAX_SYNC_PAGES = 10_000
 SOURCE_CHUNK_CHARS = 4_000
+TERMINAL_SYNC_STATES = {
+    SyncRun.State.COMPLETED,
+    SyncRun.State.PARTIALLY_COMPLETED,
+    SyncRun.State.FAILED,
+    SyncRun.State.CANCELLED,
+}
 
 
 def _organization(actor: ActorContext) -> Organization:
@@ -321,8 +327,14 @@ def _worker_actor(organization_id: uuid.UUID, worker_id: str) -> ActorContext:
 
 
 def _transition_run(run: SyncRun, actor: ActorContext, state: str) -> None:
+    run.refresh_from_db(fields=["state", "revision", "completed_at"])
     if run.state == state:
         return
+    if run.state in TERMINAL_SYNC_STATES:
+        raise IngestionError(
+            "sync_run_terminal",
+            "A terminal sync run cannot transition to another state",
+        )
     previous = str(run.state)
     run.state = state
     run.revision += 1
@@ -402,6 +414,22 @@ def _location_defaults(
     }
 
 
+def _database_jsonb_hash(payload: object) -> str:
+    serialized = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+        allow_nan=False,
+    )
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT core_ingestion_jsonb_sha256(%s::jsonb)", [serialized])
+        row = cursor.fetchone()
+    if row is None or not isinstance(row[0], str):
+        raise IngestionError("digest_unavailable", "Payload identity could not be computed")
+    return row[0]
+
+
 def _persist_location(
     *,
     organization: Organization,
@@ -423,12 +451,13 @@ def _persist_location(
 
 def _assertion_id(
     organization: Organization,
+    scope: AccessScope,
     extraction: StoredExtractionResult,
     claim_index: int,
 ) -> uuid.UUID:
     return uuid.uuid5(
         uuid.NAMESPACE_URL,
-        f"anva:{organization.id}:{extraction.id}:{claim_index}",
+        f"anva:{organization.id}:{scope.id}:{extraction.id}:{claim_index}",
     )
 
 
@@ -624,7 +653,7 @@ def _persist_claim(
     )
     now = observation.observed_at
     assertion, created = KnowledgeAssertion.objects.get_or_create(
-        id=_assertion_id(organization, stored_extraction, claim_index),
+        id=_assertion_id(organization, scope, stored_extraction, claim_index),
         defaults={
             "organization": organization,
             "subject_key": subject_key,
@@ -804,17 +833,21 @@ def _process_document(
     connector: FilesystemConnector,
     descriptor: DocumentDescriptor,
     extractor: MechanicalExtractor,
+    worker_actor: ActorContext,
 ) -> None:
     if run.access_snapshot is None:
         raise IngestionError("missing_access_snapshot", "Sync access snapshot is missing")
     scope = run.access_snapshot.access_scope
     fetched = connector.fetch(descriptor, max_bytes=connector.limits.max_file_bytes)
+    _require_active_run_source(run, worker_actor)
     parser = choose_parser(descriptor, default_parsers(limits=connector.limits))
     parsed = parser.parse(fetched)
     extracted = extractor.extract(parsed)
+    _require_active_run_source(run, worker_actor)
     now = timezone.now()
     raw_hash = hashlib.sha256(fetched.content).hexdigest()
     with transaction.atomic():
+        _lock_active_run_source(run)
         document, _created = SourceDocument.objects.get_or_create(
             organization=run.organization,
             source_container=container,
@@ -876,7 +909,7 @@ def _process_document(
             defaults={
                 "document_kind": _source_document_kind(descriptor),
                 "normalized": normalized,
-                "output_hash": content_hash(normalized),
+                "output_hash": _database_jsonb_hash(normalized),
                 "duration_ms": 0,
             },
         )
@@ -906,7 +939,7 @@ def _process_document(
             extractor_version=extracted.extractor_version,
             defaults={
                 "claims": serialized_claims,
-                "output_hash": content_hash(serialized_claims),
+                "output_hash": _database_jsonb_hash(serialized_claims),
                 "duration_ms": 0,
             },
         )
@@ -977,6 +1010,20 @@ def _record_item_failure(
         )
 
 
+def _record_discovery_failure(*, run: SyncRun, failure: DiscoveryFailure) -> None:
+    IngestionFailure.objects.get_or_create(
+        organization=run.organization,
+        sync_run=run,
+        stage="DISCOVER",
+        item_key=failure.item_key,
+        error_code=failure.error_code,
+        defaults={
+            "safe_message": failure.safe_message,
+            "is_transient": failure.is_transient,
+        },
+    )
+
+
 def _write_cursor(
     *,
     run: SyncRun,
@@ -1005,6 +1052,38 @@ def _write_cursor(
         cursor.save(update_fields=["cursor_value", "revision", "updated_at"])
 
 
+def _read_cursor(run: SyncRun) -> dict[str, JSONValue] | None:
+    stored = SyncCursor.objects.filter(
+        organization=run.organization,
+        source_connection=run.source_connection,
+        cursor_key="filesystem-discovery",
+    ).first()
+    if stored is None or not isinstance(stored.cursor_value, dict):
+        return None
+    value = stored.cursor_value
+    if value.get("sync_run_id") != str(run.id) or value.get("complete") is not False:
+        return None
+    connector_cursor = value.get("cursor")
+    if not isinstance(connector_cursor, dict):
+        return None
+    return dict(connector_cursor)
+
+
+def _write_discovery_cursor(
+    *,
+    run: SyncRun,
+    connector_cursor: dict[str, JSONValue],
+) -> None:
+    _write_cursor(
+        run=run,
+        cursor_value={
+            "sync_run_id": str(run.id),
+            "complete": False,
+            "cursor": connector_cursor,
+        },
+    )
+
+
 def _require_active_run_source(run: SyncRun, worker_actor: ActorContext) -> None:
     active = SourceConnection.objects.filter(
         id=run.source_connection_id,
@@ -1022,14 +1101,40 @@ def _require_active_run_source(run: SyncRun, worker_actor: ActorContext) -> None
     if active and snapshot_active:
         return
     run.refresh_from_db()
-    if run.state not in {
-        SyncRun.State.COMPLETED,
-        SyncRun.State.PARTIALLY_COMPLETED,
-        SyncRun.State.FAILED,
-        SyncRun.State.CANCELLED,
-    }:
+    if run.state not in TERMINAL_SYNC_STATES:
         _transition_run(run, worker_actor, SyncRun.State.CANCELLED)
     raise IngestionError("source_revoked", "Source authorization is no longer active")
+
+
+def _lock_active_run_source(run: SyncRun) -> None:
+    if run.access_snapshot_id is None:
+        raise IngestionError("source_revoked", "Source authorization is no longer active")
+    source = (
+        SourceConnection.objects.select_for_update()
+        .filter(
+            id=run.source_connection_id,
+            organization=run.organization,
+        )
+        .first()
+    )
+    snapshot = (
+        AccessSnapshot.objects.select_for_update()
+        .select_related("access_scope")
+        .filter(
+            id=run.access_snapshot_id,
+            organization=run.organization,
+        )
+        .first()
+    )
+    if (
+        source is None
+        or source.state != SourceConnection.State.ACTIVE
+        or snapshot is None
+        or snapshot.revoked_at is not None
+    ):
+        raise IngestionError("source_revoked", "Source authorization is no longer active")
+    run.source_connection = source
+    run.access_snapshot = snapshot
 
 
 def _tombstone_missing(
@@ -1157,10 +1262,20 @@ def _execute_ingestion_job(
             "canonical_url": connector.container.canonical_url,
         },
     )
-    cursor: dict[str, JSONValue] | None = None
-    discovered: set[str] = set()
-    processed = 0
-    failed = 0
+    cursor = _read_cursor(run)
+    previous_observations = SourceObservation.objects.filter(
+        organization=run.organization,
+        sync_run=run,
+    )
+    discovered = set(previous_observations.values_list("source_document__external_id", flat=True))
+    previous_failures = IngestionFailure.objects.filter(
+        organization=run.organization,
+        sync_run=run,
+        stage__in=["DISCOVER", "PROCESS"],
+    )
+    discovered.update(previous_failures.values_list("item_key", flat=True))
+    processed = previous_observations.filter(status=SourceObservation.Status.PRESENT).count()
+    failed = previous_failures.count()
     page_count = 0
     extractor = MechanicalExtractor()
     while True:
@@ -1170,6 +1285,10 @@ def _execute_ingestion_job(
         if page_count > MAX_SYNC_PAGES:
             raise IngestionError("page_limit_exceeded", "Source page limit exceeded")
         page = connector.discover(cursor=cursor, limit=connector.limits.max_discovery_page)
+        for failure in page.failures:
+            discovered.add(failure.item_key)
+            _record_discovery_failure(run=run, failure=failure)
+            failed += 1
         for descriptor in page.documents:
             require_current_lease(job=job, worker_id=worker_id, now=timezone.now())
             _require_active_run_source(run, worker_actor)
@@ -1182,55 +1301,78 @@ def _execute_ingestion_job(
                     connector=connector,
                     descriptor=descriptor,
                     extractor=extractor,
+                    worker_actor=worker_actor,
                 )
+                _require_active_run_source(run, worker_actor)
                 processed += 1
             except Exception as error:
+                if isinstance(error, IngestionError) and error.code == "source_revoked":
+                    raise
                 _record_item_failure(run=run, descriptor=descriptor, error=error)
                 failed += 1
         if page.next_cursor is None:
             break
         cursor = dict(page.next_cursor)
-        _write_cursor(run=run, cursor_value=cursor)
-    tombstoned = _tombstone_missing(
-        run=run,
-        container=container,
-        discovered_ids=discovered,
-    )
-    _write_cursor(
-        run=run,
-        cursor_value={"complete": True, "last_run_id": str(run.id)},
-    )
-    run.discovered_count = len(discovered)
-    run.processed_count = processed
-    run.failed_count = failed
-    run.tombstoned_count = tombstoned
-    run.save(
-        update_fields=[
-            "discovered_count",
-            "processed_count",
-            "failed_count",
-            "tombstoned_count",
-            "updated_at",
-        ]
-    )
-    _transition_run(run, worker_actor, SyncRun.State.PUBLISHING)
-    terminal = SyncRun.State.PARTIALLY_COMPLETED if failed else SyncRun.State.COMPLETED
-    _transition_run(run, worker_actor, terminal)
-    run.source_connection.last_successful_sync_at = run.completed_at
-    run.source_connection.last_error_code = ""
-    run.source_connection.save(
-        update_fields=["last_successful_sync_at", "last_error_code", "updated_at"]
-    )
-    _stage(
-        run=run,
-        job=job,
-        stage="INGEST",
-        status=(
-            IngestionStageResult.Status.PARTIAL if failed else IngestionStageResult.Status.SUCCEEDED
-        ),
-        started_at=started,
-        duration_ms=max(0, int((time.monotonic() - started_monotonic) * 1_000)),
-    )
+        _write_discovery_cursor(run=run, connector_cursor=cursor)
+    processed = SourceObservation.objects.filter(
+        organization=run.organization,
+        sync_run=run,
+        status=SourceObservation.Status.PRESENT,
+    ).count()
+    failed = IngestionFailure.objects.filter(
+        organization=run.organization,
+        sync_run=run,
+        stage__in=["DISCOVER", "PROCESS"],
+    ).count()
+    _require_active_run_source(run, worker_actor)
+    with transaction.atomic():
+        _lock_active_run_source(run)
+        tombstoned = _tombstone_missing(
+            run=run,
+            container=container,
+            discovered_ids=discovered,
+        )
+        _write_cursor(
+            run=run,
+            cursor_value={
+                "sync_run_id": str(run.id),
+                "complete": True,
+                "cursor": {},
+            },
+        )
+        run.discovered_count = len(discovered)
+        run.processed_count = processed
+        run.failed_count = failed
+        run.tombstoned_count = tombstoned
+        run.save(
+            update_fields=[
+                "discovered_count",
+                "processed_count",
+                "failed_count",
+                "tombstoned_count",
+                "updated_at",
+            ]
+        )
+        _transition_run(run, worker_actor, SyncRun.State.PUBLISHING)
+        terminal = SyncRun.State.PARTIALLY_COMPLETED if failed else SyncRun.State.COMPLETED
+        _transition_run(run, worker_actor, terminal)
+        run.source_connection.last_successful_sync_at = run.completed_at
+        run.source_connection.last_error_code = ""
+        run.source_connection.save(
+            update_fields=["last_successful_sync_at", "last_error_code", "updated_at"]
+        )
+        _stage(
+            run=run,
+            job=job,
+            stage="INGEST",
+            status=(
+                IngestionStageResult.Status.PARTIAL
+                if failed
+                else IngestionStageResult.Status.SUCCEEDED
+            ),
+            started_at=started,
+            duration_ms=max(0, int((time.monotonic() - started_monotonic) * 1_000)),
+        )
     return run
 
 

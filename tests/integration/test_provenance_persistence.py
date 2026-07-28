@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -17,10 +18,12 @@ from anva.core.models import (
     AccessSnapshot,
     AssertionProvenance,
     AssertionValidityInterval,
+    ExtractionResult,
     KnowledgeAssertion,
     Organization,
     ParsedSource,
     Repository,
+    SourceChunk,
     SourceConnection,
     SourceContainer,
     SourceContentArtifact,
@@ -280,6 +283,91 @@ def test_database_rejects_cross_tenant_and_immutable_provenance_changes() -> Non
     with pytest.raises(DatabaseError, match="byte size"):
         with transaction.atomic():
             SourceContentArtifact.objects.bulk_create([malformed])
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_database_recomputes_all_ingestion_payload_digests_on_bulk_insert() -> None:
+    graph = _build_graph("digest-authority")
+    forged = "0" * 64
+    normalized_with_exponent = {"threshold": 1e20}
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT core_ingestion_jsonb_sha256(%s::jsonb)",
+            [json.dumps(normalized_with_exponent)],
+        )
+        row = cursor.fetchone()
+    assert row is not None
+    ParsedSource.objects.create(
+        organization=graph.organization,
+        source_revision=graph.revisions[0],
+        parser_name="json",
+        parser_version="database-canonical",
+        document_kind=graph.document.document_kind,
+        normalized=normalized_with_exponent,
+        output_hash=row[0],
+        duration_ms=1,
+    )
+
+    with pytest.raises(DatabaseError, match="hash does not match bytes"):
+        with transaction.atomic():
+            SourceContentArtifact.objects.bulk_create(
+                [
+                    SourceContentArtifact(
+                        organization=graph.organization,
+                        content_hash=forged,
+                        byte_size=6,
+                        media_type="text/plain",
+                        content=b"forged",
+                    )
+                ]
+            )
+    with pytest.raises(DatabaseError, match="normalized output"):
+        with transaction.atomic():
+            ParsedSource.objects.bulk_create(
+                [
+                    ParsedSource(
+                        organization=graph.organization,
+                        source_revision=graph.revisions[0],
+                        parser_name="json",
+                        parser_version="forged",
+                        document_kind=graph.document.document_kind,
+                        normalized={"owner": "forged"},
+                        output_hash=forged,
+                        duration_ms=1,
+                    )
+                ]
+            )
+    with pytest.raises(DatabaseError, match="hash does not match text"):
+        with transaction.atomic():
+            SourceChunk.objects.bulk_create(
+                [
+                    SourceChunk(
+                        organization=graph.organization,
+                        parsed_source=graph.parsed[0],
+                        chunk_index=99,
+                        pointer="/",
+                        text="forged",
+                        content_hash=forged,
+                        char_count=6,
+                    )
+                ]
+            )
+    with pytest.raises(DatabaseError, match="hash does not match claims"):
+        with transaction.atomic():
+            ExtractionResult.objects.bulk_create(
+                [
+                    ExtractionResult(
+                        organization=graph.organization,
+                        parsed_source=graph.parsed[0],
+                        extractor_name="mechanical",
+                        extractor_version="forged",
+                        claims=[{"predicate": "forged"}],
+                        output_hash=forged,
+                        duration_ms=1,
+                    )
+                ]
+            )
 
 
 @pytest.mark.integration

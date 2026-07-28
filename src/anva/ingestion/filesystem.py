@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import heapq
 import os
 import stat
 from collections.abc import Iterator, Mapping
@@ -11,6 +12,7 @@ from anva.ingestion.errors import IngestionError, UnsafeSourceError
 from anva.ingestion.interfaces import (
     ConnectorKind,
     ContainerDescriptor,
+    DiscoveryFailure,
     DiscoveryPage,
     DocumentDescriptor,
     DocumentFormat,
@@ -107,48 +109,108 @@ class FilesystemConnector:
             canonical_url=self.root.as_uri(),
         )
 
-    def _iter_files(self) -> Iterator[PurePosixPath]:
-        stack: list[tuple[Path, int]] = [(self.root, 0)]
+    def _iter_discovery_items(
+        self,
+    ) -> Iterator[tuple[str, DocumentDescriptor | DiscoveryFailure]]:
+        pending: list[tuple[str, Path, int]] = []
         observed_entries = 0
-        while stack:
-            directory, depth = stack.pop()
+
+        def add_directory(
+            directory: Path,
+            depth: int,
+            *,
+            root: bool = False,
+        ) -> DiscoveryFailure | None:
+            nonlocal observed_entries
             try:
-                entries = sorted(os.scandir(directory), key=lambda entry: entry.name)
+                entries = os.scandir(directory)
             except OSError as error:
+                if not root:
+                    relative = directory.relative_to(self.root).as_posix()
+                    return DiscoveryFailure(
+                        item_key=relative[:1_000],
+                        error_code="source_unavailable",
+                        safe_message="A source directory could not be read",
+                        is_transient=True,
+                    )
                 raise IngestionError(
                     "source_unavailable",
                     "A source directory could not be read",
                     is_transient=True,
                 ) from error
-            child_directories: list[Path] = []
-            for entry in entries:
-                observed_entries += 1
-                if observed_entries > self.limits.max_discovered_entries:
-                    raise IngestionError(
-                        "discovery_limit_exceeded",
-                        "Filesystem discovery entry limit exceeded",
+            with entries:
+                for entry in entries:
+                    observed_entries += 1
+                    if observed_entries > self.limits.max_discovered_entries:
+                        raise IngestionError(
+                            "discovery_limit_exceeded",
+                            "Filesystem discovery entry limit exceeded",
+                        )
+                    path = Path(entry.path)
+                    relative = path.relative_to(self.root).as_posix()
+                    heapq.heappush(pending, (relative, path, depth))
+            return None
+
+        root_failure = add_directory(self.root, 1, root=True)
+        assert root_failure is None
+        while pending:
+            key, path, depth = heapq.heappop(pending)
+            try:
+                metadata = os.lstat(path)
+            except OSError:
+                yield (
+                    key,
+                    DiscoveryFailure(
+                        item_key=key[:1_000],
+                        error_code="source_unavailable",
+                        safe_message="A source entry could not be read",
+                        is_transient=True,
+                    ),
+                )
+                continue
+            if stat.S_ISLNK(metadata.st_mode):
+                continue
+            if stat.S_ISDIR(metadata.st_mode):
+                if path.name in _IGNORED_DIRECTORIES:
+                    continue
+                if len(key.encode()) > self.limits.max_relative_path_bytes:
+                    yield (
+                        key,
+                        DiscoveryFailure(
+                            item_key=key[:1_000],
+                            error_code="path_limit_exceeded",
+                            safe_message="Filesystem relative path limit exceeded",
+                        ),
                     )
-                if entry.is_symlink():
                     continue
-                if entry.is_dir(follow_symlinks=False):
-                    if entry.name not in _IGNORED_DIRECTORIES:
-                        if depth >= self.limits.max_directory_depth:
-                            raise IngestionError(
-                                "directory_depth_exceeded",
-                                "Filesystem directory depth limit exceeded",
-                            )
-                        child_directories.append(Path(entry.path))
-                    continue
-                if not entry.is_file(follow_symlinks=False):
-                    continue
-                relative = PurePosixPath(Path(entry.path).relative_to(self.root).as_posix())
-                if len(relative.as_posix().encode()) > self.limits.max_relative_path_bytes:
-                    raise UnsafeSourceError(
-                        "path_limit_exceeded",
-                        "Filesystem relative path limit exceeded",
+                if depth > self.limits.max_directory_depth:
+                    yield (
+                        key,
+                        DiscoveryFailure(
+                            item_key=key[:1_000],
+                            error_code="directory_depth_exceeded",
+                            safe_message="Filesystem directory depth limit exceeded",
+                        ),
                     )
-                yield relative
-            stack.extend((child, depth + 1) for child in reversed(child_directories))
+                    continue
+                failure = add_directory(path, depth + 1)
+                if failure is not None:
+                    yield key, failure
+                continue
+            if not stat.S_ISREG(metadata.st_mode):
+                continue
+            if len(key.encode()) > self.limits.max_relative_path_bytes:
+                yield (
+                    key,
+                    DiscoveryFailure(
+                        item_key=key[:1_000],
+                        error_code="path_limit_exceeded",
+                        safe_message="Filesystem relative path limit exceeded",
+                    ),
+                )
+                continue
+            relative = PurePosixPath(key)
+            yield key, self._descriptor(relative)
 
     def discover(
         self,
@@ -168,24 +230,27 @@ class FilesystemConnector:
             if not isinstance(value, str) or not value:
                 raise IngestionError("invalid_cursor", "Filesystem cursor is invalid")
             after = value
-        selected: list[PurePosixPath] = []
+        selected: list[DocumentDescriptor | DiscoveryFailure] = []
         has_more = False
-        for relative in sorted(self._iter_files(), key=lambda item: item.as_posix()):
-            key = relative.as_posix()
+        last_key = ""
+        for key, item in self._iter_discovery_items():
             if key <= after:
                 continue
             if len(selected) == limit:
                 has_more = True
                 break
-            selected.append(relative)
-        documents = tuple(self._descriptor(relative) for relative in selected)
+            selected.append(item)
+            last_key = key
+        documents = tuple(item for item in selected if isinstance(item, DocumentDescriptor))
+        failures = tuple(item for item in selected if isinstance(item, DiscoveryFailure))
         next_cursor: Mapping[str, JSONValue] | None = None
         if has_more and selected:
-            next_cursor = {"after": selected[-1].as_posix()}
+            next_cursor = {"after": last_key}
         return DiscoveryPage(
             containers=(self.container,),
             documents=documents,
             next_cursor=next_cursor,
+            failures=failures,
         )
 
     def _descriptor(self, relative: PurePosixPath) -> DocumentDescriptor:

@@ -43,12 +43,16 @@ reuses an identical historical revision.
 - `FAILED` or a retried job: inspect worker logs by correlation/job/run UUID. Do not log raw source.
 - `file_too_large`, depth/token/node limits: confirm the file is legitimate before changing a
   central limit and rerunning all adversarial tests.
+- `path_limit_exceeded` or `directory_depth_exceeded`: the offending discovery entry is isolated;
+  verify that the run is partial and safe sibling files still ingested before adjusting limits.
 - `unsafe_or_unavailable_path`: check for symlinks, special files, mount disappearance, or an
   allowlist mismatch.
 - `source_revoked`: expected when queued or leased work lost authority.
 
-The discovery cursor is opaque and versioned. Do not hand-edit it. A full resync safely replaces
-its value while preserving revision history.
+The discovery cursor is opaque, versioned, and bound to its sync run. Do not hand-edit it. A retry
+of the same run resumes from the exact persisted connector page and includes already committed
+observations in full-scan accounting. A new full resync starts discovery from the beginning and
+safely replaces cursor state while preserving revision history.
 
 ## Revoke and recover
 
@@ -58,6 +62,8 @@ anva source revoke <source-connection-uuid> --expected-revision <n>
 
 Revocation atomically deactivates dependent scopes, revokes snapshots and available chunk
 visibility, cancels pending jobs and active runs, and causes leased workers to fail revalidation.
+Leased workers revalidate after fetch/parse and serialize persistence/publication against
+revocation by locking source authority. A cancelled run cannot return to publishing or completion.
 Retrieval filters revoked content before ranking or graph traversal. Reconnect as a new governed
 source after reviewing the incident; a revoked connection is not silently reactivated.
 

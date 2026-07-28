@@ -18,15 +18,15 @@ model. Connector/parser/extractor registries are code-owned allowlists.
 | --- | --- | --- |
 | Path traversal or symlink race | Absolute allowlisted roots; root rejects symlinks; `openat`/`O_NOFOLLOW` on every component; regular files only | Hostile path, root/file symlink, and special-file tests |
 | Source mutation | Connector exposes discover/fetch only; Compose corpus mount is `:ro` | Mount read-only flag plus before/after SHA-256 fingerprints |
-| Oversized or deeply nested input | File, entry, page, path, line, YAML token, node, scalar, and depth limits | Boundary and bomb tests |
+| Oversized or deeply nested input | File, entry, page, path, line, YAML token, node, scalar, and depth limits; unsafe discovery entries are isolated from siblings | Boundary, bomb, and partial hostile-path tests |
 | YAML alias bomb or unsafe tags | Anchors/aliases rejected during token scan; safe YAML 1.2 loader | Alias and GitHub workflow tests |
 | SSRF or local-file inclusion | OpenAPI remote and `file://` references are rejected; parsers make no network calls | Remote-reference test |
 | Prompt injection | All text remains inert; only syntax-level deterministic claims are enabled | Adversarial Markdown produces no commands or claims |
 | Customer-code execution | Migrations and source code are parsed as text; no import, subprocess, eval, or sandbox invocation | Migration/parser tests and code review |
 | Cross-tenant grafting | Composite `(organization_id, id)` foreign keys on provenance, chunks, visibility, and edges | Forced PostgreSQL constraint tests |
-| Visibility widening | Scope comes from immutable observation snapshot; triggers align chunk/edge provenance; queries filter before ranking/traversal | Snapshot-change, revocation, and retrieval tests |
-| Stale queued authority | Authorization precedes idempotency; claim and each page/item revalidate source/snapshot; revoke cancels pending jobs/runs | Viewer-existing-run and queued/claimed revocation tests |
-| Corrupted history | Immutable triggers on revisions, observations, derivations, locations, chunks, provenance, resolutions, and edges; temporal rows close once | Direct bulk update/delete tests |
+| Visibility widening | Scope comes from immutable observation snapshot; assertions/edges are scope-versioned; retrieval requires active/current derivation state | ACL-only re-observation, parser-upgrade, revocation, and retrieval tests |
+| Stale queued authority | Authorization precedes idempotency; workers revalidate after fetch/parse; source locks serialize writes/publication with revocation; terminal runs cannot reopen | Viewer-existing-run, queued/claimed, and mid-fetch revocation tests |
+| Corrupted history or forged identity | Immutable history triggers plus PostgreSQL SHA-256 recomputation for raw bytes, normalized JSON, extraction claims, and chunks | Direct bulk update/delete and four forged-digest insert tests |
 | Malformed-item denial of service | Per-item transaction/failure record; remaining items continue; run becomes partial | Mixed good/bad corpus test |
 | Handler injection | Payload can select only an exact registered job kind, never a Python symbol | Registry and worker tests |
 
