@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from email.message import Message
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
@@ -453,7 +454,7 @@ def test_assurance_cli_prints_structured_http_error_without_token(
         "https://anva.example/api/v1/assurance-runs/missing",
         404,
         "Not Found",
-        {},
+        Message(),
         BytesIO(b'{"code":"not_found","message":"Missing"}'),
     )
     with patch("anva.entrypoints.cli.urlopen", side_effect=error):

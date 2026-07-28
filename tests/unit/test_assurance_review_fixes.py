@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from copy import deepcopy
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 from unittest.mock import Mock, patch
 
 import pytest
@@ -299,7 +299,7 @@ def test_post_merge_changes_use_the_canonical_knowledge_change_contract() -> Non
         with pytest.raises(ContractValidationError):
             validate_knowledge_changes([invalid_change])
 
-    document = openapi_document()
+    document = cast(dict[str, Any], openapi_document())
     dismiss = document["paths"]["/findings/{resource_id}/dismiss"]["post"]
     dismiss_schema = dismiss["requestBody"]["content"]["application/json"]["schema"]
     post_merge_schema = document["paths"]["/assurance-runs/{resource_id}/post-merge-proposals"][

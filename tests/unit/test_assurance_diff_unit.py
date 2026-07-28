@@ -306,7 +306,7 @@ def test_deterministic_check_validation_normalizes_order_and_rejects_ambiguity()
     assert [item["code"] for item in checks] == ["A_CHECK", "Z_CHECK"]
     assert checks[1]["evidence_ids"] == sorted([str(first_evidence), str(second_evidence)])
 
-    invalid_checks = [
+    invalid_checks: list[list[dict[str, object]]] = [
         [{"code": "ONLY"}],
         [
             {
@@ -395,10 +395,10 @@ def test_mapping_payload_and_fingerprint_are_stable_under_presentation_changes()
     finding["title"] = "Entirely different wording"
     finding["explanation"] = "Different prose"
     assert _finding_fingerprint(finding) == baseline
-    finding["citations"][0]["line"] += 100  # type: ignore[index]
+    finding["citations"][0]["line"] += 100
     assert _finding_fingerprint(finding) != baseline
-    finding["citations"][0]["line"] -= 100  # type: ignore[index]
-    finding["citations"][0]["path"] = "different/path.py"  # type: ignore[index]
+    finding["citations"][0]["line"] -= 100
+    finding["citations"][0]["path"] = "different/path.py"
     assert _finding_fingerprint(finding) != baseline
 
     source_finding = deepcopy(EXAMPLES["evaluator-result"]["findings"][0])  # type: ignore[index]
@@ -558,7 +558,7 @@ def _run_for_readiness(**overrides: object) -> AssuranceRun:
 
 @pytest.mark.unit
 def test_readiness_fails_closed_for_missing_stale_and_failed_run_inputs() -> None:
-    result = {"completion": "COMPLETE", "limitations": []}
+    result: dict[str, object] = {"completion": "COMPLETE", "limitations": []}
 
     assert _readiness(
         run=_run_for_readiness(pull_request_revision=None),
