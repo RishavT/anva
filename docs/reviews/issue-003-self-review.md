@@ -69,7 +69,8 @@ lifecycle remains available.
    terminal/idempotent transitions.
 9. A derived scope could be widened through direct ORM/SQL boundary or through-table mutation.
    Derivation now seals its fully materialized boundary, and PostgreSQL rejects subsequent
-   boundary/lineage mutation while preserving one-way revocation.
+   boundary/lineage mutation while preserving one-way revocation. Relation UPDATE triggers inspect
+   both old and new owning scopes so protected rows cannot be moved to an ordinary decoy.
 10. Audit/log filtering missed `api_key`, `sk_live`, nested secret fields, and exception messages.
     Audit metadata is recursively allowlisted and secret-bearing values fail before both audit and
     outbox persistence; structured logs redact common secret formats and emit only exception type.
@@ -102,5 +103,5 @@ lifecycle remains available.
 - Strict mypy: 56 source files, no issues.
 - Migration drift: `No changes detected`.
 - Generated contracts: 16 artifacts verified.
-- Pytest: 106 passed in 6.83 seconds.
+- Pytest: 106 passed in 6.15 seconds.
 - Branch coverage: 88%, above the required 85% gate.

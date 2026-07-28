@@ -34,7 +34,9 @@ an empty intersection as unrestricted. Derived scopes retain every contributing 
 revocation can invalidate direct and transitive descendants. Derivation populates the complete
 boundary and lineage before setting an explicit seal. PostgreSQL then prevents widening boundary
 flags, reactivation, unsealing, deletion, or mutation of membership, service, repository, source,
-and lineage rows. Non-derived administrator-owned scopes retain their normal lifecycle.
+and lineage rows. Relation updates inspect both the old and new owning scope, preventing a sealed
+row from being moved to an ordinary decoy. Non-derived administrator-owned scopes retain their
+normal lifecycle.
 
 Source permission boundaries are captured as content-addressed access snapshots. Snapshot
 identity is immutable in PostgreSQL; only the first revocation timestamp may be added. Revoking

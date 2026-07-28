@@ -35,7 +35,7 @@ finding decisions, membership data, credential material, and authorization histo
 | MCP context exfiltration | MCP context uses the same authorized assertion retrieval | Foreign and missing MCP requests are indistinguishable |
 | Artifact or title disclosure | Artifact requires active visible scope; errors omit object metadata | Canary artifact payload never appears in errors |
 | Cross-tenant relationship grafting | Deferrable composite foreign keys and a same-tenant derivation trigger | PostgreSQL integration tests force immediate validation |
-| Derived data widens access | Every dimension is intersected and materialized; empty is deny; a final seal makes boundary fields, lineage, and through rows database-immutable | Membership/repository intersection plus direct SQL/ORM mutation tests |
+| Derived data widens access | Every dimension is intersected and materialized; empty is deny; a final seal makes boundary fields, lineage, and through rows database-immutable; relation updates check both old and new owners | Membership/repository intersection plus direct SQL/ORM mutation and outbound-decoy-move tests |
 | Stale source access after revocation | Source lineage propagates to descendants; scopes and snapshots revoke atomically | Retrieval succeeds before revocation and fails after |
 | Role or service claim forgery | Active principal and role are loaded from PostgreSQL | Role/action tests ignore caller authorization-path claims |
 | Repository-token replay | Keyed SHA-256 storage, issuer/audience, expiry, repository/action binding | Expired, revoked, malformed, and unknown tokens share one 401 |

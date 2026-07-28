@@ -139,22 +139,27 @@ FOR EACH ROW EXECUTE FUNCTION core_enforce_derived_scope_boundary();
 
 CREATE FUNCTION core_enforce_derived_scope_relation_immutable() RETURNS trigger AS $$
 DECLARE
-    scope_id uuid;
+    old_scope_id uuid;
+    new_scope_id uuid;
 BEGIN
     IF TG_TABLE_NAME = 'core_accessscope_derived_from' THEN
-        scope_id := CASE
-            WHEN TG_OP = 'DELETE' THEN OLD.from_accessscope_id
-            ELSE NEW.from_accessscope_id
-        END;
+        IF TG_OP <> 'INSERT' THEN
+            old_scope_id := OLD.from_accessscope_id;
+        END IF;
+        IF TG_OP <> 'DELETE' THEN
+            new_scope_id := NEW.from_accessscope_id;
+        END IF;
     ELSE
-        scope_id := CASE
-            WHEN TG_OP = 'DELETE' THEN OLD.access_scope_id
-            ELSE NEW.access_scope_id
-        END;
+        IF TG_OP <> 'INSERT' THEN
+            old_scope_id := OLD.access_scope_id;
+        END IF;
+        IF TG_OP <> 'DELETE' THEN
+            new_scope_id := NEW.access_scope_id;
+        END IF;
     END IF;
     IF EXISTS (
         SELECT 1 FROM core_accessscope
-        WHERE id = scope_id AND is_derived
+        WHERE id IN (old_scope_id, new_scope_id) AND is_derived
     ) THEN
         RAISE EXCEPTION 'derived access scope relations are immutable'
             USING ERRCODE = '23514';

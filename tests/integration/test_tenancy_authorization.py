@@ -508,15 +508,25 @@ def test_derived_scope_is_exact_intersection_and_source_revocation_propagates() 
         external_key="github:derived/source",
         state=SourceConnection.State.ACTIVE,
     )
+    included_service = ServiceIdentity.objects.create(
+        organization=organization,
+        name="derived-included-service",
+        issuer="test",
+        audience="test",
+    )
+    excluded_service = ServiceIdentity.objects.create(
+        organization=organization,
+        name="derived-excluded-service",
+        issuer="test",
+        audience="test",
+    )
     broad = AccessScope.objects.create(
         organization=organization,
         name="broad",
-        all_service_identities=True,
     )
     narrow = AccessScope.objects.create(
         organization=organization,
         name="narrow",
-        all_service_identities=True,
     )
     AccessScopeMembership.objects.bulk_create(
         [
@@ -556,6 +566,20 @@ def test_derived_scope_is_exact_intersection_and_source_revocation_propagates() 
             ),
         ]
     )
+    AccessScopeServiceIdentity.objects.bulk_create(
+        [
+            AccessScopeServiceIdentity(
+                organization=organization,
+                access_scope=broad,
+                service_identity=included_service,
+            ),
+            AccessScopeServiceIdentity(
+                organization=organization,
+                access_scope=narrow,
+                service_identity=included_service,
+            ),
+        ]
+    )
     AccessScopeSource.objects.create(
         organization=organization,
         access_scope=broad,
@@ -578,6 +602,11 @@ def test_derived_scope_is_exact_intersection_and_source_revocation_propagates() 
             "repository_id", flat=True
         )
     ) == {repository_b.id}
+    assert set(
+        AccessScopeServiceIdentity.objects.filter(access_scope=derived).values_list(
+            "service_identity_id", flat=True
+        )
+    ) == {included_service.id}
     assert set(derived.derived_from.values_list("id", flat=True)) == {broad.id, narrow.id}
     assert derived.is_derived
     assert derived.boundary_sealed_at is not None
@@ -585,6 +614,49 @@ def test_derived_scope_is_exact_intersection_and_source_revocation_propagates() 
         access_scope=derived,
         source_connection=source,
     ).exists()
+    decoy = AccessScope.objects.create(
+        organization=organization,
+        name="ordinary-decoy",
+    )
+
+    outbound_moves = [
+        ("UPDATE core_accessscopemembership SET access_scope_id = %s WHERE access_scope_id = %s"),
+        (
+            "UPDATE core_accessscopeserviceidentity "
+            "SET access_scope_id = %s WHERE access_scope_id = %s"
+        ),
+        ("UPDATE core_accessscoperepository SET access_scope_id = %s WHERE access_scope_id = %s"),
+        ("UPDATE core_accessscopesource SET access_scope_id = %s WHERE access_scope_id = %s"),
+        (
+            "UPDATE core_accessscope_derived_from "
+            "SET from_accessscope_id = %s WHERE from_accessscope_id = %s"
+        ),
+    ]
+    for statement in outbound_moves:
+        with pytest.raises(DatabaseError, match="derived access scope relations"):
+            with transaction.atomic(), connection.cursor() as cursor:
+                cursor.execute(statement, [decoy.id, derived.id])
+
+    assert set(
+        AccessScopeMembership.objects.filter(access_scope=derived).values_list(
+            "membership_id", flat=True
+        )
+    ) == {viewer_membership.id}
+    assert set(
+        AccessScopeServiceIdentity.objects.filter(access_scope=derived).values_list(
+            "service_identity_id", flat=True
+        )
+    ) == {included_service.id}
+    assert set(
+        AccessScopeRepository.objects.filter(access_scope=derived).values_list(
+            "repository_id", flat=True
+        )
+    ) == {repository_b.id}
+    assert AccessScopeSource.objects.filter(
+        access_scope=derived,
+        source_connection=source,
+    ).exists()
+    assert set(derived.derived_from.values_list("id", flat=True)) == {broad.id, narrow.id}
 
     def widen_with_direct_sql() -> None:
         with connection.cursor() as cursor:
@@ -609,18 +681,12 @@ def test_derived_scope_is_exact_intersection_and_source_revocation_propagates() 
             with transaction.atomic():
                 mutation()
 
-    service = ServiceIdentity.objects.create(
-        organization=organization,
-        name="derived-mutation-canary",
-        issuer="test",
-        audience="test",
-    )
     with pytest.raises(DatabaseError, match="derived access scope"):
         with transaction.atomic():
             AccessScopeServiceIdentity.objects.create(
                 organization=organization,
                 access_scope=derived,
-                service_identity=service,
+                service_identity=excluded_service,
             )
 
     # Ordinary administrator-owned scopes retain their legitimate lifecycle.
