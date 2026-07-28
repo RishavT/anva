@@ -12,8 +12,25 @@ from django.conf import settings
 REDACTED = "[REDACTED]"
 SECRET_PATTERNS = (
     re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+"),
+    re.compile(r"(?i)\bBasic\s+[A-Za-z0-9+/=]+"),
     re.compile(r"\banva_v1\.[0-9a-fA-F-]{36}\.[A-Za-z0-9_-]+"),
-    re.compile(r"(?i)(authorization|x-anva-bootstrap-secret)\s*[:=]\s*[^\s,;]+"),
+    re.compile(r"\bsk_(?:live|test)_[A-Za-z0-9_-]{8,}"),
+    re.compile(r"\b(?:ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{12,})"),
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}"),
+    re.compile(r"\b(?:npm_[A-Za-z0-9]{20,}|pypi-[A-Za-z0-9_-]{20,})"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"),
+    re.compile(r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----"),
+    re.compile(r"(?i)\bhttps?://[^/\s:@]+:[^@\s/]+@"),
+    re.compile(
+        r"""(?ix)
+        ["']?
+        (?:authorization|x-anva-bootstrap-secret|api[_-]?key|access[_-]?token|
+           refresh[_-]?token|client[_-]?secret|password|passwd|pwd|
+           private[_-]?key|set[_-]?cookie|cookie|session[_-]?(?:id|token)?)
+        ["']?\s*[:=]\s*["']?[^\s,;}\]]+
+        """
+    ),
 )
 
 
@@ -52,4 +69,6 @@ class StructuredJsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": redact_text(record.getMessage()),
         }
+        if record.exc_info is not None and record.exc_info[0] is not None:
+            payload["exception_type"] = record.exc_info[0].__name__
         return json.dumps(payload, separators=(",", ":"), sort_keys=True)

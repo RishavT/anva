@@ -17,6 +17,10 @@ finding decisions, membership data, credential material, and authorization histo
   audience, and action set. Caller-supplied tenant or role claims are not trusted.
 - Internal workers may call low-level state machines; externally initiated assurance and
   knowledge operations must enter through authorization-owning service wrappers.
+- Authoritative creation services are trust boundaries. Sync, assurance, assertion, and artifact
+  creation resolve central authorization before target lookup, validation, or idempotent return.
+  Assertions and artifacts cannot enter these paths without an effective access scope; assertions
+  additionally require non-empty provenance.
 - PostgreSQL is the final tenant-integrity boundary. Application checks are reinforced with
   composite foreign keys and triggers.
 - Source content is untrusted data. It is not credential or authorization metadata.
@@ -31,17 +35,17 @@ finding decisions, membership data, credential material, and authorization histo
 | MCP context exfiltration | MCP context uses the same authorized assertion retrieval | Foreign and missing MCP requests are indistinguishable |
 | Artifact or title disclosure | Artifact requires active visible scope; errors omit object metadata | Canary artifact payload never appears in errors |
 | Cross-tenant relationship grafting | Deferrable composite foreign keys and a same-tenant derivation trigger | PostgreSQL integration tests force immediate validation |
-| Derived data widens access | Every dimension is intersected and materialized; empty is deny | Membership/repository intersection matrix |
+| Derived data widens access | Every dimension is intersected and materialized; empty is deny; a final seal makes boundary fields, lineage, and through rows database-immutable | Membership/repository intersection plus direct SQL/ORM mutation tests |
 | Stale source access after revocation | Source lineage propagates to descendants; scopes and snapshots revoke atomically | Retrieval succeeds before revocation and fails after |
 | Role or service claim forgery | Active principal and role are loaded from PostgreSQL | Role/action tests ignore caller authorization-path claims |
 | Repository-token replay | Keyed SHA-256 storage, issuer/audience, expiry, repository/action binding | Expired, revoked, malformed, and unknown tokens share one 401 |
 | Token theft through database | Only a keyed digest is stored; plaintext is returned once | Persistence and audit tests reject plaintext |
 | Rotation race or predecessor reuse | Row lock, one-to-one lineage, immediate predecessor revocation | Old token fails immediately; replacement succeeds |
-| Revocation bypass via idempotency | Authorization occurs before idempotent returns | Revocation services authorize before no-op |
+| Authorization bypass via idempotency | Creation, revocation, and assurance services authorize before an existing/no-op return | Existing-record viewer tests and terminal artifact canaries |
 | Unauthorized finding/policy change | Dedicated actions restricted to authorized roles/grants | Viewer credential gets 404 and no state mutation |
-| Unauthorized assurance mutation | Repository mapping plus `assurance.execute` before transition | Viewer denied; developer transition audit records role path |
+| Unauthorized assurance mutation or artifact attachment | Repository mapping plus `assurance.execute`; every supplied or already-attached artifact is re-resolved through caller/repository/source/scope visibility before transition | Viewer denied; same-tenant out-of-scope artifact fails on active and terminal/idempotent paths without side effects |
 | Bootstrap takeover | Constant-time secret comparison, PostgreSQL advisory transaction lock, one-time empty-database condition | First request succeeds; second fails without an existence detail |
-| Secret leakage in logs/audit | Pre-handler redaction, JSON formatter, metadata allowlisting | Bearer/header/configured-secret and audit tests |
+| Secret leakage in logs/audit/outbox | Recursive allowlisted audit metadata; common key, token, cookie, password, private-key, API-key, and provider-token detection; pre-handler structured redaction that omits exception messages | Nested key/value, `api_key`, `sk_live`, exception, audit, outbox, and logger tests |
 
 ## Credential lifecycle
 
@@ -54,6 +58,11 @@ Revocation affects the next authentication attempt; no application token cache e
 Operational logs may include the token record UUID as an audit correlation identifier. They must
 never include the plaintext secret, Authorization header, bootstrap secret, token pepper, source
 credentials, or unrestricted source content.
+
+Source ingestion is not yet an exposed boundary in this slice. When introduced, adapters must
+classify and redact untrusted source payloads before logging, and may call authoritative
+assertion/artifact creation only with the derived effective scope and provenance. Parser or
+connector convenience APIs must not bypass those creation services.
 
 ## Failure and abuse behavior
 
@@ -85,6 +94,8 @@ paste token strings or environment files into tickets.
   the current defense in depth.
 - Human login/federation, team-derived authorization, and delegated administration are not
   exposed through HTTP yet.
+- Pre-ingestion payload classification and connector-specific credential scrubbing remain future
+  adapter work; the current authoritative persistence and logging boundaries fail closed.
 - Finding and policy persistence is not part of this slice; their endpoints enforce the future
   authorization boundary and explicitly return `AUTHORIZED_NOT_IMPLEMENTED` only to allowed
   callers.

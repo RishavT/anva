@@ -119,11 +119,12 @@ def get_authorized_artifact(
     actor: ActorContext,
     repository_id: uuid.UUID,
     artifact_id: uuid.UUID,
+    action: Action = Action.ARTIFACT_VIEW,
 ) -> ImmutableArtifact:
     """Retrieve an artifact only through an active visible scope."""
     authorize_action(
         actor=actor,
-        action=Action.ARTIFACT_VIEW,
+        action=action,
         repository_id=repository_id,
     )
     scopes = visible_scope_ids(actor=actor, repository_id=repository_id)

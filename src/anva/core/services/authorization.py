@@ -20,6 +20,7 @@ from anva.core.models import (
     AccessScopeServiceIdentity,
     AccessScopeSource,
     Membership,
+    Repository,
     RepositoryAccessToken,
     Role,
     ServiceIdentity,
@@ -50,6 +51,7 @@ class Action(StrEnum):
     CANVAS_VIEW = "canvas.view"
     MCP_CONTEXT = "mcp.context"
     ARTIFACT_VIEW = "artifact.view"
+    ARTIFACT_CREATE = "artifact.create"
     SCOPE_MANAGE = "scope.manage"
 
 
@@ -68,17 +70,25 @@ VIEW_ACTIONS = frozenset(
 ROLE_ACTIONS: dict[str, frozenset[Action]] = {
     Role.Code.ORG_ADMIN: frozenset(Action),
     Role.Code.KNOWLEDGE_ADMIN: VIEW_ACTIONS
-    | frozenset({Action.KNOWLEDGE_REVIEW, Action.SCOPE_MANAGE}),
+    | frozenset(
+        {
+            Action.KNOWLEDGE_REVIEW,
+            Action.ARTIFACT_CREATE,
+            Action.SCOPE_MANAGE,
+        }
+    ),
     Role.Code.TECHNICAL_OWNER: VIEW_ACTIONS
     | frozenset(
         {
             Action.KNOWLEDGE_REVIEW,
             Action.SOURCE_SYNC,
             Action.ASSURANCE_EXECUTE,
+            Action.ARTIFACT_CREATE,
         }
     ),
     Role.Code.PRODUCT_OWNER: VIEW_ACTIONS | frozenset({Action.KNOWLEDGE_REVIEW}),
-    Role.Code.DEVELOPER: VIEW_ACTIONS | frozenset({Action.ASSURANCE_EXECUTE}),
+    Role.Code.DEVELOPER: VIEW_ACTIONS
+    | frozenset({Action.ASSURANCE_EXECUTE, Action.ARTIFACT_CREATE}),
     Role.Code.REVIEWER: VIEW_ACTIONS | frozenset({Action.KNOWLEDGE_REVIEW}),
     Role.Code.SECURITY_REVIEWER: VIEW_ACTIONS
     | frozenset({Action.FINDING_DISMISS, Action.POLICY_OVERRIDE}),
@@ -281,6 +291,16 @@ def authorize_action(
     if grants.exists():
         allowed = True
         path_parts.append("grant:active")
+
+    if (
+        repository_id is not None
+        and not Repository.objects.filter(
+            id=repository_id,
+            organization_id=actor.organization_id,
+            is_active=True,
+        ).exists()
+    ):
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
 
     if source_connection_id is not None:
         source = SourceConnection.objects.filter(

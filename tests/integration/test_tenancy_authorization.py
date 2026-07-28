@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 import pytest
-from django.db import IntegrityError, connection, transaction
+from django.db import DatabaseError, IntegrityError, connection, transaction
 from django.test import Client
 from django.utils import timezone
 
@@ -19,6 +19,7 @@ from anva.core.models import (
     AccessScope,
     AccessScopeMembership,
     AccessScopeRepository,
+    AccessScopeServiceIdentity,
     AccessScopeSource,
     AccessSnapshot,
     AssuranceRun,
@@ -27,15 +28,18 @@ from anva.core.models import (
     KnowledgeAssertion,
     Membership,
     Organization,
+    OutboxEvent,
     Repository,
     RepositoryAccessToken,
     Role,
     ServiceIdentity,
     SourceConnection,
+    SyncRun,
     Team,
     TeamMembership,
     User,
 )
+from anva.core.services.artifacts import create_artifact
 from anva.core.services.authorization import (
     INVALID_CREDENTIAL_MESSAGE,
     NOT_FOUND_MESSAGE,
@@ -43,6 +47,11 @@ from anva.core.services.authorization import (
     authorize_action,
 )
 from anva.core.services.context import ActorContext
+from anva.core.services.creation import (
+    create_assertion,
+    request_assurance_run,
+    request_sync_run,
+)
 from anva.core.services.events import record_transition
 from anva.core.services.retrieval import get_authorized_assertion
 from anva.core.services.scopes import (
@@ -192,6 +201,188 @@ def test_role_action_matrix(role_code: str, action: Action, allowed: bool) -> No
         assert_hidden(
             lambda: authorize_action(actor=actor, action=action, repository_id=repository.id)
         )
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_creation_paths_authorize_before_idempotency_and_persist_scopes() -> None:
+    organization = Organization.objects.create(slug="creation-auth", name="Creation auth")
+    repository = Repository.objects.create(
+        organization=organization,
+        external_id="github:creation/auth",
+        name="Creation auth",
+    )
+    source = SourceConnection.objects.create(
+        organization=organization,
+        external_key="github:creation/auth",
+        state=SourceConnection.State.ACTIVE,
+    )
+    scope = AccessScope.objects.create(
+        organization=organization,
+        name="creation scope",
+        all_memberships=True,
+        all_repositories=True,
+    )
+    admin, _admin_membership = user_actor(
+        organization,
+        Role.Code.ORG_ADMIN,
+        label="creation-admin",
+    )
+    viewer, _viewer_membership = user_actor(
+        organization,
+        Role.Code.VIEWER,
+        label="creation-viewer",
+    )
+    request_sync_run(actor=admin, source_connection_id=source.id)
+    request_assurance_run(
+        actor=admin,
+        repository_id=repository.id,
+        pull_request_number=8,
+        head_commit="a" * 40,
+        policy_version=1,
+    )
+
+    initial_counts = (
+        SyncRun.objects.count(),
+        AssuranceRun.objects.count(),
+        KnowledgeAssertion.objects.count(),
+        ImmutableArtifact.objects.count(),
+        AuditEvent.objects.count(),
+        OutboxEvent.objects.count(),
+    )
+    denied_operations: list[Callable[[], object]] = [
+        lambda: request_sync_run(actor=viewer, source_connection_id=source.id),
+        lambda: request_assurance_run(
+            actor=viewer,
+            repository_id=repository.id,
+            pull_request_number=8,
+            head_commit="a" * 40,
+            policy_version=1,
+        ),
+        lambda: create_assertion(
+            actor=viewer,
+            repository_id=repository.id,
+            access_scope_id=scope.id,
+            subject_key="CANARY-UNAUTHORIZED",
+            predicate="contains",
+            value=True,
+            provenance=[{"source_id": str(source.id)}],
+        ),
+        lambda: create_artifact(
+            actor=viewer,
+            repository_id=repository.id,
+            access_scope_id=scope.id,
+            kind=ImmutableArtifact.Kind.CONTEXT_PACKET,
+            schema_name="unknown-before-authorization",
+            schema_version="1.0",
+            payload={},
+        ),
+    ]
+    for operation in denied_operations:
+        assert_hidden(operation)
+    assert (
+        SyncRun.objects.count(),
+        AssuranceRun.objects.count(),
+        KnowledgeAssertion.objects.count(),
+        ImmutableArtifact.objects.count(),
+        AuditEvent.objects.count(),
+        OutboxEvent.objects.count(),
+    ) == initial_counts
+
+    foreign_organization = Organization.objects.create(
+        slug="creation-foreign",
+        name="Creation foreign",
+    )
+    foreign_repository = Repository.objects.create(
+        organization=foreign_organization,
+        external_id="github:creation/foreign",
+        name="Foreign",
+    )
+    foreign_source = SourceConnection.objects.create(
+        organization=foreign_organization,
+        external_key="github:creation/foreign",
+    )
+    foreign_scope = AccessScope.objects.create(
+        organization=foreign_organization,
+        name="foreign",
+        all_memberships=True,
+        all_repositories=True,
+    )
+    missing_source_id = uuid.uuid4()
+    for operation in [
+        lambda: request_sync_run(actor=admin, source_connection_id=foreign_source.id),
+        lambda: request_sync_run(actor=admin, source_connection_id=missing_source_id),
+        lambda: request_assurance_run(
+            actor=admin,
+            repository_id=foreign_repository.id,
+            pull_request_number=1,
+            head_commit="b" * 40,
+            policy_version=1,
+        ),
+        lambda: request_assurance_run(
+            actor=admin,
+            repository_id=uuid.uuid4(),
+            pull_request_number=1,
+            head_commit="b" * 40,
+            policy_version=1,
+        ),
+        lambda: create_assertion(
+            actor=admin,
+            repository_id=repository.id,
+            access_scope_id=foreign_scope.id,
+            subject_key="CANARY-FOREIGN",
+            predicate="contains",
+            value=True,
+            provenance=[{"source_id": str(foreign_source.id)}],
+        ),
+        lambda: create_assertion(
+            actor=admin,
+            repository_id=foreign_repository.id,
+            access_scope_id=scope.id,
+            subject_key="CANARY-FOREIGN-REPOSITORY",
+            predicate="contains",
+            value=True,
+            provenance=[{"source_id": str(source.id)}],
+        ),
+        lambda: create_artifact(
+            actor=admin,
+            repository_id=repository.id,
+            access_scope_id=uuid.uuid4(),
+            kind=ImmutableArtifact.Kind.CONTEXT_PACKET,
+            schema_name="unknown-before-authorization",
+            schema_version="1.0",
+            payload={},
+        ),
+        lambda: create_artifact(
+            actor=admin,
+            repository_id=uuid.uuid4(),
+            access_scope_id=scope.id,
+            kind=ImmutableArtifact.Kind.CONTEXT_PACKET,
+            schema_name="unknown-before-authorization",
+            schema_version="1.0",
+            payload={},
+        ),
+    ]:
+        assert_hidden(operation)
+    assert (
+        SyncRun.objects.count(),
+        AssuranceRun.objects.count(),
+        KnowledgeAssertion.objects.count(),
+        ImmutableArtifact.objects.count(),
+        AuditEvent.objects.count(),
+        OutboxEvent.objects.count(),
+    ) == initial_counts
+
+    assertion = create_assertion(
+        actor=admin,
+        repository_id=repository.id,
+        access_scope_id=scope.id,
+        subject_key="service:creation",
+        predicate="owned_by",
+        value={"team": "platform"},
+        provenance=[{"source_id": str(source.id)}],
+    )
+    assert assertion.access_scope_id == scope.id
 
 
 @pytest.mark.integration
@@ -388,10 +579,54 @@ def test_derived_scope_is_exact_intersection_and_source_revocation_propagates() 
         )
     ) == {repository_b.id}
     assert set(derived.derived_from.values_list("id", flat=True)) == {broad.id, narrow.id}
+    assert derived.is_derived
+    assert derived.boundary_sealed_at is not None
     assert AccessScopeSource.objects.filter(
         access_scope=derived,
         source_connection=source,
     ).exists()
+
+    def widen_with_direct_sql() -> None:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE core_accessscope SET all_memberships = TRUE WHERE id = %s",
+                [derived.id],
+            )
+
+    mutations: list[Callable[[], object]] = [
+        widen_with_direct_sql,
+        lambda: AccessScope.objects.filter(id=derived.id).update(is_derived=False),
+        lambda: AccessScopeMembership.objects.filter(access_scope=derived).delete(),
+        lambda: AccessScopeRepository.objects.create(
+            organization=organization,
+            access_scope=derived,
+            repository=repository_a,
+        ),
+        lambda: derived.derived_from.remove(broad),
+    ]
+    for mutation in mutations:
+        with pytest.raises(DatabaseError, match="derived access scope"):
+            with transaction.atomic():
+                mutation()
+
+    service = ServiceIdentity.objects.create(
+        organization=organization,
+        name="derived-mutation-canary",
+        issuer="test",
+        audience="test",
+    )
+    with pytest.raises(DatabaseError, match="derived access scope"):
+        with transaction.atomic():
+            AccessScopeServiceIdentity.objects.create(
+                organization=organization,
+                access_scope=derived,
+                service_identity=service,
+            )
+
+    # Ordinary administrator-owned scopes retain their legitimate lifecycle.
+    AccessScope.objects.filter(id=broad.id).update(name="broad-renamed")
+    broad.refresh_from_db()
+    assert broad.name == "broad-renamed"
     assert_hidden(
         lambda: authorize_action(
             actor=viewer,
@@ -538,18 +773,27 @@ def test_tokens_are_hashed_one_time_bounded_rotatable_and_immediately_revocable(
     for plaintext in [issued.plaintext, replacement.plaintext, expired.plaintext]:
         assert plaintext not in serialized_audit
     audit_count = AuditEvent.objects.filter(organization=organization).count()
-    with pytest.raises(ValueError, match="forbidden secret field"):
-        record_transition(
-            organization=organization,
-            actor=admin,
-            target_type="securitytest",
-            target_id=uuid.uuid4(),
-            from_state="",
-            to_state="REJECTED",
-            revision=1,
-            metadata={"authorization": f"Bearer {expired.plaintext}"},
-        )
+    outbox_count = OutboxEvent.objects.filter(organization=organization).count()
+    unsafe_metadata: list[dict[str, object]] = [
+        {"authorization": f"Bearer {expired.plaintext}"},
+        {"api_key": "sk_live_AUDITLEAK012345"},
+        {"kind": {"kind": {"password": "nested-password"}}},
+        {"kind": "upstream returned sk_live_EMBEDDED012345"},
+    ]
+    for metadata in unsafe_metadata:
+        with pytest.raises(ValueError, match="secret field|credential material"):
+            record_transition(
+                organization=organization,
+                actor=admin,
+                target_type="securitytest",
+                target_id=uuid.uuid4(),
+                from_state="",
+                to_state="REJECTED",
+                revision=1,
+                metadata=metadata,
+            )
     assert AuditEvent.objects.filter(organization=organization).count() == audit_count
+    assert OutboxEvent.objects.filter(organization=organization).count() == outbox_count
 
 
 @pytest.mark.integration
@@ -728,6 +972,86 @@ def test_unauthorized_actor_cannot_review_dismiss_or_override() -> None:
         target_id=assurance.id,
         authorization_path__startswith="role:DEVELOPER",
     ).exists()
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("initial_state", "target_state", "attach_existing", "supply_artifact"),
+    [
+        (
+            AssuranceRun.State.REQUESTED,
+            AssuranceRun.State.DEBOUNCING,
+            False,
+            True,
+        ),
+        (
+            AssuranceRun.State.REQUESTED,
+            AssuranceRun.State.DEBOUNCING,
+            True,
+            False,
+        ),
+        (
+            AssuranceRun.State.COMPLETED,
+            AssuranceRun.State.COMPLETED,
+            True,
+            False,
+        ),
+    ],
+)
+def test_assurance_transition_reauthorizes_every_attached_artifact(
+    initial_state: str,
+    target_state: str,
+    attach_existing: bool,
+    supply_artifact: bool,
+) -> None:
+    tenant = service_tenant(
+        f"artifact-canary-{uuid.uuid4()}",
+        frozenset({Action.ASSURANCE_EXECUTE}),
+    )
+    hidden_scope = AccessScope.objects.create(
+        organization=tenant.organization,
+        name="same-tenant-hidden",
+        all_repositories=True,
+    )
+    hidden_artifact = ImmutableArtifact.objects.create(
+        organization=tenant.organization,
+        access_scope=hidden_scope,
+        kind=ImmutableArtifact.Kind.CONTEXT_PACKET,
+        schema_name="context-packet",
+        schema_version="1.0",
+        payload={"schema_version": "1.0", "canary": "OUT-OF-SCOPE"},
+    )
+    run = AssuranceRun.objects.create(
+        organization=tenant.organization,
+        repository_external_id=tenant.repository.external_id,
+        pull_request_number=91,
+        head_commit="d" * 40,
+        evaluated_commit="d" * 40 if initial_state == AssuranceRun.State.COMPLETED else "",
+        report_commit="d" * 40 if initial_state == AssuranceRun.State.COMPLETED else "",
+        policy_version=1,
+        state=initial_state,
+        completed_at=timezone.now() if initial_state == AssuranceRun.State.COMPLETED else None,
+        context_artifact=hidden_artifact if attach_existing else None,
+    )
+    actor = authenticate_bearer(f"Bearer {tenant.plaintext_token}")
+    audit_count = AuditEvent.objects.count()
+    outbox_count = OutboxEvent.objects.count()
+
+    assert_hidden(
+        lambda: execute_assurance_transition(
+            actor=actor,
+            run_id=run.id,
+            target_state=target_state,
+            expected_revision=run.revision,
+            context_artifact_id=hidden_artifact.id if supply_artifact else None,
+        )
+    )
+
+    run.refresh_from_db()
+    assert run.state == initial_state
+    assert AuditEvent.objects.count() == audit_count
+    assert OutboxEvent.objects.count() == outbox_count
 
 
 @pytest.mark.integration

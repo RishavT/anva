@@ -31,7 +31,10 @@ Access scopes normalize membership, service identity, repository, and contributi
 boundaries. A derived scope is a materialized intersection of every input scope. `None` means an
 unrestricted dimension while an empty set means no access; the derivation algorithm never treats
 an empty intersection as unrestricted. Derived scopes retain every contributing source so source
-revocation can invalidate direct and transitive descendants.
+revocation can invalidate direct and transitive descendants. Derivation populates the complete
+boundary and lineage before setting an explicit seal. PostgreSQL then prevents widening boundary
+flags, reactivation, unsealing, deletion, or mutation of membership, service, repository, source,
+and lineage rows. Non-derived administrator-owned scopes retain their normal lifecycle.
 
 Source permission boundaries are captured as content-addressed access snapshots. Snapshot
 identity is immutable in PostgreSQL; only the first revocation timestamp may be added. Revoking
@@ -55,11 +58,19 @@ action needs a stable `Action`, role/grant decision, and security-matrix test. D
 carry an access scope and contributing-source lineage. Authorization paths are persisted in audit
 events, but raw credentials and source content are prohibited from audit metadata.
 
+Every authoritative creation path must authorize its action and concrete identifiers before
+lookup, validation, deduplication, or an idempotent return. Assertions and immutable artifacts
+must persist the effective access scope used by that decision. A transition that consumes or
+retains an artifact reauthorizes each supplied and already-attached artifact, including on
+terminal/no-op paths.
+
 ## Security and privacy impact
 
 The design fails closed and removes identifier-existence oracles across API, search, Canvas, MCP,
 artifact, and assurance boundaries. Composite PostgreSQL foreign keys prevent cross-tenant
-relationship grafting even when application validation is bypassed.
+relationship grafting even when application validation is bypassed. Database triggers prevent a
+direct SQL or ORM write from widening a sealed derived scope after its authorization boundary was
+computed.
 
 ## Operational impact
 

@@ -721,6 +721,8 @@ class AccessScope(RevisionedTenantModel):
     all_service_identities = models.BooleanField(default=False)
     all_repositories = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
+    is_derived = models.BooleanField(default=False)
+    boundary_sealed_at = models.DateTimeField(null=True, blank=True)
     derived_from = models.ManyToManyField(
         "self",
         symmetrical=False,
@@ -734,6 +736,13 @@ class AccessScope(RevisionedTenantModel):
             models.UniqueConstraint(
                 fields=["organization", "id"],
                 name="core_access_scope_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(is_derived=False, boundary_sealed_at__isnull=True)
+                    | Q(is_derived=True, boundary_sealed_at__isnull=False)
+                ),
+                name="core_access_scope_derived_seal_coherent",
             ),
         ]
 

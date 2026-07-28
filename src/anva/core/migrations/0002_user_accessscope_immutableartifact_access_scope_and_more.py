@@ -108,6 +108,90 @@ DROP TRIGGER IF EXISTS core_access_snapshot_immutable ON core_accesssnapshot;
 DROP FUNCTION IF EXISTS core_enforce_access_snapshot_immutable();
 """
 
+DERIVED_SCOPE_IMMUTABILITY_TRIGGER_SQL = """
+CREATE FUNCTION core_enforce_derived_scope_boundary() RETURNS trigger AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        IF OLD.is_derived THEN
+            RAISE EXCEPTION 'derived access scope boundaries are immutable'
+                USING ERRCODE = '23514';
+        END IF;
+        RETURN OLD;
+    END IF;
+    IF OLD.is_derived THEN
+        IF NEW.organization_id IS DISTINCT FROM OLD.organization_id
+           OR NEW.all_memberships IS DISTINCT FROM OLD.all_memberships
+           OR NEW.all_service_identities IS DISTINCT FROM OLD.all_service_identities
+           OR NEW.all_repositories IS DISTINCT FROM OLD.all_repositories
+           OR NEW.is_derived IS DISTINCT FROM OLD.is_derived
+           OR NEW.boundary_sealed_at IS DISTINCT FROM OLD.boundary_sealed_at
+           OR (NOT OLD.is_active AND NEW.is_active) THEN
+            RAISE EXCEPTION 'derived access scope boundaries are immutable'
+                USING ERRCODE = '23514';
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER core_derived_scope_boundary_immutable
+BEFORE UPDATE OR DELETE ON core_accessscope
+FOR EACH ROW EXECUTE FUNCTION core_enforce_derived_scope_boundary();
+
+CREATE FUNCTION core_enforce_derived_scope_relation_immutable() RETURNS trigger AS $$
+DECLARE
+    scope_id uuid;
+BEGIN
+    IF TG_TABLE_NAME = 'core_accessscope_derived_from' THEN
+        scope_id := CASE
+            WHEN TG_OP = 'DELETE' THEN OLD.from_accessscope_id
+            ELSE NEW.from_accessscope_id
+        END;
+    ELSE
+        scope_id := CASE
+            WHEN TG_OP = 'DELETE' THEN OLD.access_scope_id
+            ELSE NEW.access_scope_id
+        END;
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM core_accessscope
+        WHERE id = scope_id AND is_derived
+    ) THEN
+        RAISE EXCEPTION 'derived access scope relations are immutable'
+            USING ERRCODE = '23514';
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER core_derived_scope_lineage_immutable
+BEFORE INSERT OR UPDATE OR DELETE ON core_accessscope_derived_from
+FOR EACH ROW EXECUTE FUNCTION core_enforce_derived_scope_relation_immutable();
+CREATE TRIGGER core_derived_scope_membership_immutable
+BEFORE INSERT OR UPDATE OR DELETE ON core_accessscopemembership
+FOR EACH ROW EXECUTE FUNCTION core_enforce_derived_scope_relation_immutable();
+CREATE TRIGGER core_derived_scope_service_immutable
+BEFORE INSERT OR UPDATE OR DELETE ON core_accessscopeserviceidentity
+FOR EACH ROW EXECUTE FUNCTION core_enforce_derived_scope_relation_immutable();
+CREATE TRIGGER core_derived_scope_repository_immutable
+BEFORE INSERT OR UPDATE OR DELETE ON core_accessscoperepository
+FOR EACH ROW EXECUTE FUNCTION core_enforce_derived_scope_relation_immutable();
+CREATE TRIGGER core_derived_scope_source_immutable
+BEFORE INSERT OR UPDATE OR DELETE ON core_accessscopesource
+FOR EACH ROW EXECUTE FUNCTION core_enforce_derived_scope_relation_immutable();
+"""
+DROP_DERIVED_SCOPE_IMMUTABILITY_TRIGGER_SQL = """
+DROP TRIGGER IF EXISTS core_derived_scope_source_immutable ON core_accessscopesource;
+DROP TRIGGER IF EXISTS core_derived_scope_repository_immutable ON core_accessscoperepository;
+DROP TRIGGER IF EXISTS core_derived_scope_service_immutable ON core_accessscopeserviceidentity;
+DROP TRIGGER IF EXISTS core_derived_scope_membership_immutable ON core_accessscopemembership;
+DROP TRIGGER IF EXISTS core_derived_scope_lineage_immutable ON core_accessscope_derived_from;
+DROP FUNCTION IF EXISTS core_enforce_derived_scope_relation_immutable();
+DROP TRIGGER IF EXISTS core_derived_scope_boundary_immutable ON core_accessscope;
+DROP FUNCTION IF EXISTS core_enforce_derived_scope_boundary();
+"""
+
 
 class Migration(migrations.Migration):
     dependencies = [
@@ -157,6 +241,8 @@ class Migration(migrations.Migration):
                 ("all_service_identities", models.BooleanField(default=False)),
                 ("all_repositories", models.BooleanField(default=False)),
                 ("is_active", models.BooleanField(default=True)),
+                ("is_derived", models.BooleanField(default=False)),
+                ("boundary_sealed_at", models.DateTimeField(blank=True, null=True)),
                 (
                     "derived_from",
                     models.ManyToManyField(
@@ -700,6 +786,17 @@ class Migration(migrations.Migration):
             ),
         ),
         migrations.AddConstraint(
+            model_name="accessscope",
+            constraint=models.CheckConstraint(
+                condition=models.Q(
+                    models.Q(("boundary_sealed_at__isnull", True), ("is_derived", False)),
+                    models.Q(("boundary_sealed_at__isnull", False), ("is_derived", True)),
+                    _connector="OR",
+                ),
+                name="core_access_scope_derived_seal_coherent",
+            ),
+        ),
+        migrations.AddConstraint(
             model_name="accessscopesource",
             constraint=models.UniqueConstraint(
                 fields=("access_scope", "source_connection"), name="core_scope_source_unique"
@@ -902,5 +999,9 @@ class Migration(migrations.Migration):
         migrations.RunSQL(
             sql=SNAPSHOT_IMMUTABILITY_TRIGGER_SQL,
             reverse_sql=DROP_SNAPSHOT_IMMUTABILITY_TRIGGER_SQL,
+        ),
+        migrations.RunSQL(
+            sql=DERIVED_SCOPE_IMMUTABILITY_TRIGGER_SQL,
+            reverse_sql=DROP_DERIVED_SCOPE_IMMUTABILITY_TRIGGER_SQL,
         ),
     ]

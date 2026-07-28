@@ -8,28 +8,61 @@ from anva.core.logging import redact_text
 from anva.core.models import AuditEvent, Organization, OutboxEvent
 from anva.core.services.context import ActorContext
 
-FORBIDDEN_AUDIT_KEYS = frozenset(
+ALLOWED_AUDIT_METADATA_KEYS = frozenset(
     {
+        "allowed_actions",
+        "content_hash",
+        "error_code",
+        "expires_at",
+        "failure_code",
+        "head_commit",
+        "invalidated_scope_count",
+        "kind",
+        "lease_owner",
+        "membership_id",
+        "replacement_token_id",
+        "repository_id",
+        "role_code",
+        "service_identity_id",
+        "source_scope_ids",
+        "superseded_by_head_commit",
+        "token_id",
+    }
+)
+
+SENSITIVE_AUDIT_KEY_PARTS = frozenset(
+    {
+        "apikey",
         "authorization",
+        "clientsecret",
+        "cookie",
         "credential",
         "password",
-        "raw_source",
-        "raw_source_content",
+        "passwd",
+        "privatekey",
+        "pwd",
+        "rawsource",
+        "refreshtoken",
         "secret",
+        "session",
         "token",
     }
 )
 
 
-def _validate_audit_value(value: object, *, key: str = "") -> None:
-    normalized_key = key.lower().replace("-", "_")
-    if normalized_key in FORBIDDEN_AUDIT_KEYS or normalized_key.endswith(
-        ("_password", "_secret", "_token")
-    ):
-        raise ValueError("Audit metadata contains a forbidden secret field")
+def _normalized_audit_key(key: object) -> str:
+    return "".join(character for character in str(key).lower() if character.isalnum())
+
+
+def _validate_audit_value(value: object, *, metadata_key: bool = False) -> None:
     if isinstance(value, dict):
         for child_key, child_value in value.items():
-            _validate_audit_value(child_value, key=str(child_key))
+            normalized_key = _normalized_audit_key(child_key)
+            if str(child_key) not in ALLOWED_AUDIT_METADATA_KEYS:
+                if any(part in normalized_key for part in SENSITIVE_AUDIT_KEY_PARTS):
+                    raise ValueError("Audit metadata contains a forbidden secret field")
+                raise ValueError("Audit metadata contains a non-allowlisted field")
+            _validate_audit_value(child_value, metadata_key=True)
         return
     if isinstance(value, list | tuple):
         for child_value in value:
@@ -37,6 +70,9 @@ def _validate_audit_value(value: object, *, key: str = "") -> None:
         return
     if isinstance(value, str) and redact_text(value) != value:
         raise ValueError("Audit metadata contains credential material")
+    if not isinstance(value, str | int | float | bool | None):
+        location = "metadata" if metadata_key else "audit"
+        raise ValueError(f"{location.title()} value is not JSON-safe")
 
 
 def record_transition(

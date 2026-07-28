@@ -14,7 +14,7 @@ from anva.core.services.authorization import (
     get_tenant_record,
 )
 from anva.core.services.context import ActorContext
-from anva.core.services.retrieval import get_authorized_assertion
+from anva.core.services.retrieval import get_authorized_artifact, get_authorized_assertion
 from anva.core.services.transitions import transition_assertion_review, transition_assurance_run
 
 
@@ -90,6 +90,18 @@ def execute_assurance_transition(
         action=Action.ASSURANCE_EXECUTE,
         repository_id=repository.id,
     )
+    artifact_ids = {
+        artifact_id
+        for artifact_id in (run.context_artifact_id, context_artifact_id)
+        if artifact_id is not None
+    }
+    for artifact_id in artifact_ids:
+        get_authorized_artifact(
+            actor=actor,
+            repository_id=repository.id,
+            artifact_id=artifact_id,
+            action=Action.ASSURANCE_EXECUTE,
+        )
     authorized_actor = replace(actor, authorization_path=decision.authorization_path)
     return transition_assurance_run(
         actor=authorized_actor,

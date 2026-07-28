@@ -177,6 +177,15 @@ def derive_scope_intersection(
                 for source_id in sorted(contributing_sources)
             ]
         )
+        derived.is_derived = True
+        derived.boundary_sealed_at = timezone.now()
+        derived.save(
+            update_fields=[
+                "is_derived",
+                "boundary_sealed_at",
+                "updated_at",
+            ]
+        )
         audit_actor = replace(actor, authorization_path=decision.authorization_path)
         record_transition(
             organization=organization,

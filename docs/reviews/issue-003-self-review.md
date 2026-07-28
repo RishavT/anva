@@ -3,7 +3,7 @@
 - Date: 2026-07-28
 - Reviewer: implementing agent
 - Scope: `RishavT/anva#3`
-- Result: Accepted
+- Result: Accepted after independent-review remediation
 
 ## Acceptance-criteria review
 
@@ -13,14 +13,14 @@
 | Tenant integrity | Explicit organization ownership plus PostgreSQL composite foreign keys and a derived-scope trigger | Pass |
 | Role, repository, source, and action authorization | One central decision service; database-resolved roles/grants; parameterized matrix tests | Pass |
 | Access scopes and snapshots | Principal/repository/source scopes; content-addressed immutable snapshots | Pass |
-| Derived data never widens access | Set intersection with unrestricted and empty dimensions kept distinct; materialized lineage | Pass |
+| Derived data never widens access | Set intersection with unrestricted and empty dimensions kept distinct; sealed materialized boundary and lineage protected by PostgreSQL triggers | Pass |
 | Cross-tenant non-disclosure | Foreign and missing organization/API/search/Canvas/MCP/artifact cases have identical contracts | Pass |
 | Filtering before ranking/traversal | Shared authorized queryset precedes search matching and object serialization | Pass |
 | Source revocation propagation | Direct and transitive scopes deactivate and snapshots revoke in one bounded transaction | Pass |
 | Repository credential lifecycle | Keyed hash only, one-time plaintext return, expiry, revocation, rotation, last-use, issuer/audience, repository/action binding | Pass |
-| Sensitive mutation controls | Knowledge review and assurance transition use authorization-owning domain wrappers; finding/policy boundaries require dedicated actions | Pass |
+| Sensitive creation and mutation controls | Sync, assurance, assertion, and artifact creation authorize before lookup/no-op; assurance reauthorizes every artifact; finding/policy boundaries require dedicated actions | Pass |
 | Bootstrap and administration | Secret-gated, advisory-lock-protected, empty-database bootstrap creates roles, admin, repository, service identity, grants, scope, and seven-day token | Pass |
-| Audit and logging | Audit records resolved actor and decision path; JSON logging redacts credentials before handlers | Pass |
+| Audit and logging | Audit records resolved actor and decision path; recursively allowlisted metadata and JSON logging reject/redact common credentials before audit, outbox, or handlers | Pass |
 | Versioned REST contract | `/api/v1` routes and generated OpenAPI include tenancy, token, retrieval, assurance, and revocation boundaries | Pass |
 
 ## Security review
@@ -38,7 +38,11 @@ foreign canary titles and payloads to detect accidental serialization.
 Database constraints cover new same-tenant relationships even for direct ORM writes. The
 access-scope self-relation uses a trigger because Django's implicit many-to-many table has no
 organization column. Access snapshots use a database trigger so bulk updates cannot rewrite
-historical permission evidence.
+historical permission evidence. Derived scopes have an explicit final seal. PostgreSQL prevents
+boundary-flag widening, reactivation, unsealing, deletion, and mutation of membership,
+service-identity, repository, source, or derivation-lineage rows after that seal. Source
+revocation remains a permitted one-way deactivation, and non-derived administrative scope
+lifecycle remains available.
 
 ## Findings fixed during self-review
 
@@ -56,6 +60,19 @@ historical permission evidence.
 6. Application validation alone would not protect newly introduced relationships. Composite
    foreign keys now cover roles, memberships, teams, scopes, snapshots, grants, repositories,
    services, tokens, rotation lineage, knowledge, and artifacts.
+7. Creation services could previously return an existing sync/assurance record or create
+   assertions/artifacts before central authorization. They now authorize concrete IDs before
+   lookup, validation, or idempotency; assertions and artifacts require and persist an effective
+   scope.
+8. Assurance execution authorized the run but trusted tenant-only artifact lookup. It now
+   permission-resolves every supplied and already-attached artifact before mutation, including
+   terminal/idempotent transitions.
+9. A derived scope could be widened through direct ORM/SQL boundary or through-table mutation.
+   Derivation now seals its fully materialized boundary, and PostgreSQL rejects subsequent
+   boundary/lineage mutation while preserving one-way revocation.
+10. Audit/log filtering missed `api_key`, `sk_live`, nested secret fields, and exception messages.
+    Audit metadata is recursively allowlisted and secret-bearing values fail before both audit and
+    outbox persistence; structured logs redact common secret formats and emit only exception type.
 
 ## Known limitations
 
@@ -70,6 +87,9 @@ historical permission evidence.
   preserve pre-ranking permission filtering and revocation invalidation.
 - No distributed credential cache exists. Any future cache must prove immediate revocation or use
   a reviewed bounded-staleness policy.
+- Source-ingestion adapters are not present yet. They must classify/redact untrusted source data
+  and propagate effective scope and provenance into these authoritative creation paths rather
+  than adding a bypass.
 - PostgreSQL row-level security, rate limiting, production identity federation, tenant deletion,
   and retention automation remain follow-ups.
 
@@ -82,5 +102,5 @@ historical permission evidence.
 - Strict mypy: 56 source files, no issues.
 - Migration drift: `No changes detected`.
 - Generated contracts: 16 artifacts verified.
-- Pytest: 96 passed in 4.69 seconds.
+- Pytest: 106 passed in 6.83 seconds.
 - Branch coverage: 88%, above the required 85% gate.
