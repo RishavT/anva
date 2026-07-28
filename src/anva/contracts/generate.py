@@ -35,7 +35,38 @@ def openapi_document() -> dict[str, object]:
     structured_errors: dict[str, object] = {
         "400": {"$ref": "#/components/responses/StructuredError"},
         "401": {"$ref": "#/components/responses/StructuredError"},
+        "404": {"$ref": "#/components/responses/StructuredError"},
         "409": {"$ref": "#/components/responses/StructuredError"},
+    }
+    authorized_responses: dict[str, object] = {
+        "200": {"description": "Authorized tenant-scoped response."},
+        **structured_errors,
+    }
+    accepted_responses: dict[str, object] = {
+        "202": {"description": "Authorized request accepted."},
+        **structured_errors,
+    }
+    created_responses: dict[str, object] = {
+        "201": {"description": "Tenant-scoped resource created."},
+        **structured_errors,
+    }
+    organization_parameter = {
+        "name": "organization_id",
+        "in": "path",
+        "required": True,
+        "schema": {"type": "string", "format": "uuid"},
+    }
+    repository_parameter = {
+        "name": "repository_id",
+        "in": "path",
+        "required": True,
+        "schema": {"type": "string", "format": "uuid"},
+    }
+    resource_parameter = {
+        "name": "resource_id",
+        "in": "path",
+        "required": True,
+        "schema": {"type": "string", "format": "uuid"},
     }
     evaluator_responses: dict[str, object] = {
         "200": {
@@ -123,6 +154,192 @@ def openapi_document() -> dict[str, object]:
                     "responses": proposal_responses,
                 }
             },
+            "/bootstrap": {
+                "post": {
+                    "operationId": "bootstrapOrganization",
+                    "security": [],
+                    "parameters": [
+                        {
+                            "name": "X-Anva-Bootstrap-Secret",
+                            "in": "header",
+                            "required": True,
+                            "schema": {"type": "string", "minLength": 1},
+                        },
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": created_responses,
+                }
+            },
+            "/organizations/{organization_id}": {
+                "get": {
+                    "operationId": "getOrganization",
+                    "parameters": [
+                        organization_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": authorized_responses,
+                }
+            },
+            "/organizations/{organization_id}/members": {
+                "get": {
+                    "operationId": "listMemberships",
+                    "parameters": [
+                        organization_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": authorized_responses,
+                },
+                "post": {
+                    "operationId": "createMembership",
+                    "parameters": [
+                        organization_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": created_responses,
+                },
+            },
+            "/organizations/{organization_id}/members/{resource_id}": {
+                "patch": {
+                    "operationId": "updateMembership",
+                    "parameters": [
+                        organization_parameter,
+                        resource_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": authorized_responses,
+                },
+                "delete": {
+                    "operationId": "deactivateMembership",
+                    "parameters": [
+                        organization_parameter,
+                        resource_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": authorized_responses,
+                },
+            },
+            "/repositories/{repository_id}/tokens": {
+                "post": {
+                    "operationId": "issueRepositoryToken",
+                    "description": "Returns plaintext token material exactly once.",
+                    "parameters": [
+                        repository_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": created_responses,
+                }
+            },
+            "/tokens/{resource_id}/rotate": {
+                "post": {
+                    "operationId": "rotateRepositoryToken",
+                    "description": "Revokes the predecessor and returns its replacement once.",
+                    "parameters": [
+                        resource_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": created_responses,
+                }
+            },
+            "/tokens/{resource_id}": {
+                "delete": {
+                    "operationId": "revokeRepositoryToken",
+                    "parameters": [
+                        resource_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": authorized_responses,
+                }
+            },
+            "/search": {
+                "post": {
+                    "operationId": "searchAuthorizedKnowledge",
+                    "parameters": [{"$ref": "#/components/parameters/CorrelationId"}],
+                    "responses": authorized_responses,
+                }
+            },
+            "/canvas/assertions/{resource_id}": {
+                "get": {
+                    "operationId": "getCanvasAssertion",
+                    "parameters": [
+                        resource_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": authorized_responses,
+                }
+            },
+            "/mcp/context": {
+                "post": {
+                    "operationId": "getMcpContext",
+                    "parameters": [{"$ref": "#/components/parameters/CorrelationId"}],
+                    "responses": authorized_responses,
+                }
+            },
+            "/artifacts/{resource_id}": {
+                "get": {
+                    "operationId": "getAuthorizedArtifact",
+                    "parameters": [
+                        resource_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": authorized_responses,
+                }
+            },
+            "/knowledge/assertions/{resource_id}/review": {
+                "post": {
+                    "operationId": "reviewKnowledgeAssertion",
+                    "parameters": [
+                        resource_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": authorized_responses,
+                }
+            },
+            "/assurance-runs/{resource_id}/transition": {
+                "post": {
+                    "operationId": "transitionAssuranceRun",
+                    "parameters": [
+                        resource_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": authorized_responses,
+                }
+            },
+            "/findings/{resource_id}/dismiss": {
+                "post": {
+                    "operationId": "dismissFinding",
+                    "description": (
+                        "Authorization boundary; mutation arrives with the finding model."
+                    ),
+                    "parameters": [
+                        resource_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": accepted_responses,
+                }
+            },
+            "/policies/{resource_id}/override": {
+                "post": {
+                    "operationId": "overridePolicy",
+                    "description": (
+                        "Authorization boundary; mutation arrives with policy persistence."
+                    ),
+                    "parameters": [
+                        resource_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": accepted_responses,
+                }
+            },
+            "/source-connections/{resource_id}/revoke": {
+                "post": {
+                    "operationId": "revokeSourceConnection",
+                    "parameters": [
+                        resource_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": authorized_responses,
+                }
+            },
         },
         "components": {
             "schemas": {
@@ -142,7 +359,7 @@ def openapi_document() -> dict[str, object]:
                 "bearerAuth": {
                     "type": "http",
                     "scheme": "bearer",
-                    "bearerFormat": "JWT",
+                    "bearerFormat": "AnvaRepositoryToken",
                 }
             },
             "parameters": {

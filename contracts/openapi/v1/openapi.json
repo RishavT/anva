@@ -1088,7 +1088,7 @@
     },
     "securitySchemes": {
       "bearerAuth": {
-        "bearerFormat": "JWT",
+        "bearerFormat": "AnvaRepositoryToken",
         "scheme": "bearer",
         "type": "http"
       }
@@ -1101,6 +1101,151 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/artifacts/{resource_id}": {
+      "get": {
+        "operationId": "getAuthorizedArtifact",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/assurance-runs/{resource_id}/transition": {
+      "post": {
+        "operationId": "transitionAssuranceRun",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/bootstrap": {
+      "post": {
+        "operationId": "bootstrapOrganization",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Anva-Bootstrap-Secret",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Tenant-scoped resource created."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        },
+        "security": []
+      }
+    },
+    "/canvas/assertions/{resource_id}": {
+      "get": {
+        "operationId": "getCanvasAssertion",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
     "/capabilities": {
       "get": {
         "operationId": "getCapabilities",
@@ -1183,6 +1328,46 @@
           "401": {
             "$ref": "#/components/responses/StructuredError"
           },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/findings/{resource_id}/dismiss": {
+      "post": {
+        "description": "Authorization boundary; mutation arrives with the finding model.",
+        "operationId": "dismissFinding",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Authorized request accepted."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
           "409": {
             "$ref": "#/components/responses/StructuredError"
           }
@@ -1225,6 +1410,476 @@
             "$ref": "#/components/responses/StructuredError"
           },
           "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/knowledge/assertions/{resource_id}/review": {
+      "post": {
+        "operationId": "reviewKnowledgeAssertion",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/mcp/context": {
+      "post": {
+        "operationId": "getMcpContext",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/organizations/{organization_id}": {
+      "get": {
+        "operationId": "getOrganization",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/organizations/{organization_id}/members": {
+      "get": {
+        "operationId": "listMemberships",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createMembership",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Tenant-scoped resource created."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/organizations/{organization_id}/members/{resource_id}": {
+      "delete": {
+        "operationId": "deactivateMembership",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateMembership",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/policies/{resource_id}/override": {
+      "post": {
+        "description": "Authorization boundary; mutation arrives with policy persistence.",
+        "operationId": "overridePolicy",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Authorized request accepted."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/repositories/{repository_id}/tokens": {
+      "post": {
+        "description": "Returns plaintext token material exactly once.",
+        "operationId": "issueRepositoryToken",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "repository_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Tenant-scoped resource created."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/search": {
+      "post": {
+        "operationId": "searchAuthorizedKnowledge",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/source-connections/{resource_id}/revoke": {
+      "post": {
+        "operationId": "revokeSourceConnection",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/tokens/{resource_id}": {
+      "delete": {
+        "operationId": "revokeRepositoryToken",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/tokens/{resource_id}/rotate": {
+      "post": {
+        "description": "Revokes the predecessor and returns its replacement once.",
+        "operationId": "rotateRepositoryToken",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Tenant-scoped resource created."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
             "$ref": "#/components/responses/StructuredError"
           },
           "409": {

@@ -4,7 +4,9 @@ Anva is the connective intelligence behind how your organization builds.
 
 This repository currently contains the installable engineering foundation: a Python 3.12
 Django modular monolith with independent API, worker, MCP, and CLI process boundaries,
-PostgreSQL with pgvector, and S3-compatible object storage. The foundation intentionally
+PostgreSQL with pgvector, and S3-compatible object storage. The current backend includes
+tenant identity, repository credentials, access scopes, permission-filtered retrieval, and
+source revocation. It intentionally
 does **not** contain a coding-agent runtime, workflow engine, graph database, or customer-code
 sandbox.
 
@@ -106,8 +108,13 @@ make down
 ```
 
 The worker is a deliberately empty process shell. MCP exposes health endpoints, while
-`/mcp` returns `501 Not Implemented` until the protocol and authorization model are built
-in their own milestone.
+the full MCP protocol still returns `501 Not Implemented`; the versioned
+`/api/v1/mcp/context` permission boundary is available for authorization integration tests.
+
+Bootstrap and repository-token operations are documented in
+[the credential runbook](docs/runbooks/bootstrap-and-repository-tokens.md). A repository token
+is opaque, repository/action scoped, stored only as a keyed digest, and returned in plaintext
+only when issued or rotated.
 
 ## Reset
 
@@ -133,9 +140,11 @@ The reset removes the local PostgreSQL database and MinIO objects. It cannot be 
   must match across the two services.
 - Lock mismatch: run `make lock`, inspect `uv.lock`, and rebuild.
 
-See [the local development runbook](docs/runbooks/local-development.md) for dependency
-failure behavior and [the foundation threat model](docs/security/foundation-threat-model.md)
-for trust boundaries and production hardening requirements.
+See [the local development runbook](docs/runbooks/local-development.md) for dependency failure
+behavior, [the authorization threat model](docs/security/tenancy-authorization-threat-model.md)
+for tenant and credential boundaries, and
+[the foundation threat model](docs/security/foundation-threat-model.md) for deployment
+hardening requirements.
 
 ## Repository map
 

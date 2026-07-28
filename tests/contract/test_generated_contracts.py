@@ -42,7 +42,7 @@ def test_openapi_and_mcp_share_the_canonical_schemas() -> None:
         "bearerAuth": {
             "type": "http",
             "scheme": "bearer",
-            "bearerFormat": "JWT",
+            "bearerFormat": "AnvaRepositoryToken",
         }
     }
     assert mcp["contract_version"] == "1"
@@ -64,3 +64,30 @@ def test_external_contracts_never_expose_legacy_brain_sources() -> None:
 
     assert "brain_sources" not in rendered
     assert "anva_sources" in rendered
+
+
+@pytest.mark.contract
+def test_openapi_exposes_versioned_tenancy_and_authorization_boundaries() -> None:
+    paths = cast(dict[str, object], openapi_document()["paths"])
+
+    assert {
+        "/bootstrap",
+        "/organizations/{organization_id}",
+        "/organizations/{organization_id}/members",
+        "/organizations/{organization_id}/members/{resource_id}",
+        "/repositories/{repository_id}/tokens",
+        "/tokens/{resource_id}/rotate",
+        "/tokens/{resource_id}",
+        "/search",
+        "/canvas/assertions/{resource_id}",
+        "/mcp/context",
+        "/artifacts/{resource_id}",
+        "/knowledge/assertions/{resource_id}/review",
+        "/assurance-runs/{resource_id}/transition",
+        "/findings/{resource_id}/dismiss",
+        "/policies/{resource_id}/override",
+        "/source-connections/{resource_id}/revoke",
+    } <= paths.keys()
+    bootstrap = cast(dict[str, object], paths["/bootstrap"])
+    bootstrap_post = cast(dict[str, object], bootstrap["post"])
+    assert bootstrap_post["security"] == []

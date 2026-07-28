@@ -21,6 +21,12 @@ class ResourceNotFoundError(DomainOperationError):
     code = "resource_not_found"
 
 
+class AuthenticationError(DomainOperationError):
+    """A credential is malformed, unknown, expired, revoked, or inactive."""
+
+    code = "invalid_credential"
+
+
 class InvalidStateTransitionError(DomainOperationError):
     """A requested state edge is not part of the authoritative graph."""
 

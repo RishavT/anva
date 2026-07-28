@@ -16,6 +16,9 @@ class ActorContext:
     authorization_path: str
     request_id: uuid.UUID
     source_ip_hash: str = ""
+    repository_id: uuid.UUID | None = None
+    credential_id: uuid.UUID | None = None
+    credential_actions: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         if not self.actor_type.strip():

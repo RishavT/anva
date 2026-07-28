@@ -4,18 +4,24 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from dataclasses import replace
 
 from django.db import transaction
 from django.utils import timezone
 
-from anva.core.exceptions import TenantBoundaryError
 from anva.core.models import (
     AssuranceRun,
     KnowledgeAssertion,
     KnowledgeProposal,
     Organization,
+    Repository,
     SourceConnection,
     SyncRun,
+)
+from anva.core.services.authorization import (
+    Action,
+    authorize_action,
+    get_tenant_record_for_update,
 )
 from anva.core.services.context import ActorContext
 from anva.core.services.events import record_transition
@@ -73,13 +79,23 @@ def _record_created(
 def request_sync_run(
     *,
     actor: ActorContext,
-    source_connection: SourceConnection,
+    source_connection_id: uuid.UUID,
 ) -> tuple[SyncRun, bool]:
     """Create one active run per source connection, returning an existing active run."""
     with transaction.atomic():
+        decision = authorize_action(
+            actor=actor,
+            action=Action.SOURCE_SYNC,
+            repository_id=actor.repository_id,
+            source_connection_id=source_connection_id,
+        )
+        actor = replace(actor, authorization_path=decision.authorization_path)
+        source_connection = get_tenant_record_for_update(
+            queryset=SourceConnection.objects.all(),
+            record_id=source_connection_id,
+            organization_id=actor.organization_id,
+        )
         organization = _organization_for_actor(actor)
-        if source_connection.organization_id != organization.id:
-            raise TenantBoundaryError("Source connection belongs to another organization")
         existing = (
             SyncRun.objects.select_for_update()
             .filter(
@@ -109,6 +125,8 @@ def request_sync_run(
 def create_assertion(
     *,
     actor: ActorContext,
+    repository_id: uuid.UUID,
+    access_scope_id: uuid.UUID,
     subject_key: str,
     predicate: str,
     value: object,
@@ -116,9 +134,16 @@ def create_assertion(
     is_inferred: bool = False,
 ) -> KnowledgeAssertion:
     """Create a provenance-bearing assertion without silently replacing another."""
-    if not provenance:
-        raise ValueError("Assertion provenance must contain at least one source")
     with transaction.atomic():
+        decision = authorize_action(
+            actor=actor,
+            action=Action.KNOWLEDGE_REVIEW,
+            repository_id=repository_id,
+            access_scope_id=access_scope_id,
+        )
+        actor = replace(actor, authorization_path=decision.authorization_path)
+        if not provenance:
+            raise ValueError("Assertion provenance must contain at least one source")
         organization = _organization_for_actor(actor)
         assertion = KnowledgeAssertion.objects.create(
             organization=organization,
@@ -127,6 +152,7 @@ def create_assertion(
             value=value,
             provenance=list(provenance),
             is_inferred=is_inferred,
+            access_scope_id=access_scope_id,
         )
         _record_created(
             organization=organization,
@@ -142,19 +168,30 @@ def create_assertion(
 def request_assurance_run(
     *,
     actor: ActorContext,
-    repository_external_id: str,
+    repository_id: uuid.UUID,
     pull_request_number: int,
     head_commit: str,
     policy_version: int,
 ) -> tuple[AssuranceRun, bool]:
     """Create the one summary for a head commit and stale active older heads."""
     with transaction.atomic():
+        decision = authorize_action(
+            actor=actor,
+            action=Action.ASSURANCE_EXECUTE,
+            repository_id=repository_id,
+        )
+        actor = replace(actor, authorization_path=decision.authorization_path)
+        repository = get_tenant_record_for_update(
+            queryset=Repository.objects.filter(is_active=True),
+            record_id=repository_id,
+            organization_id=actor.organization_id,
+        )
         organization = _organization_for_actor(actor)
         existing = (
             AssuranceRun.objects.select_for_update()
             .filter(
                 organization=organization,
-                repository_external_id=repository_external_id,
+                repository_external_id=repository.external_id,
                 pull_request_number=pull_request_number,
                 head_commit=head_commit,
             )
@@ -168,7 +205,7 @@ def request_assurance_run(
             AssuranceRun.objects.select_for_update()
             .filter(
                 organization=organization,
-                repository_external_id=repository_external_id,
+                repository_external_id=repository.external_id,
                 pull_request_number=pull_request_number,
                 state__in=ACTIVE_ASSURANCE_STATES,
             )
@@ -189,7 +226,7 @@ def request_assurance_run(
 
         run = AssuranceRun.objects.create(
             organization=organization,
-            repository_external_id=repository_external_id,
+            repository_external_id=repository.external_id,
             pull_request_number=pull_request_number,
             head_commit=head_commit,
             policy_version=policy_version,

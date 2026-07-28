@@ -13,18 +13,22 @@ from anva.core.exceptions import (
     InvalidStateTransitionError,
     OptimisticConcurrencyError,
     ResourceNotFoundError,
-    TenantBoundaryError,
 )
 from anva.core.models import (
+    AccessScope,
     ArtifactImmutableError,
     AssuranceRun,
     AuditEvent,
     ImmutableArtifact,
     KnowledgeAssertion,
+    Membership,
     Organization,
     OutboxEvent,
+    Repository,
+    Role,
     SourceConnection,
     SyncRun,
+    User,
 )
 from anva.core.services.artifacts import create_artifact, require_artifact_organization
 from anva.core.services.authorization import NOT_FOUND_MESSAGE
@@ -44,11 +48,21 @@ from anva.core.services.transitions import (
 
 
 def actor_for(organization: Organization) -> ActorContext:
+    role, _ = Role.objects.get_or_create(
+        organization=organization,
+        code=Role.Code.ORG_ADMIN,
+        defaults={"name": "Organization administrator"},
+    )
+    user = User.objects.create(
+        email=f"{uuid.uuid4()}@example.test",
+        display_name="Test administrator",
+    )
+    Membership.objects.create(organization=organization, user=user, role=role)
     return ActorContext(
         organization_id=organization.id,
         actor_type="USER",
-        actor_id="user-17",
-        authorization_path="rbac:knowledge-editor",
+        actor_id=str(user.id),
+        authorization_path="untrusted-test-claim",
         request_id=uuid.uuid4(),
         source_ip_hash="a" * 64,
     )
@@ -99,9 +113,22 @@ def test_cross_organization_foreign_keys_fail_in_postgresql() -> None:
 def test_content_addressed_artifacts_are_idempotent_and_database_immutable() -> None:
     organization = Organization.objects.create(slug="artifacts", name="Artifacts")
     actor = actor_for(organization)
+    repository = Repository.objects.create(
+        organization=organization,
+        external_id="github:artifacts/repository",
+        name="Artifacts",
+    )
+    scope = AccessScope.objects.create(
+        organization=organization,
+        name="artifact authors",
+        all_memberships=True,
+        all_repositories=True,
+    )
 
     artifact, created = create_artifact(
         actor=actor,
+        repository_id=repository.id,
+        access_scope_id=scope.id,
         kind=ImmutableArtifact.Kind.CONTEXT_PACKET,
         schema_name="context-packet",
         schema_version="1.0",
@@ -109,6 +136,8 @@ def test_content_addressed_artifacts_are_idempotent_and_database_immutable() -> 
     )
     predecessor, created_again = create_artifact(
         actor=actor,
+        repository_id=repository.id,
+        access_scope_id=scope.id,
         kind=ImmutableArtifact.Kind.CONTEXT_PACKET,
         schema_name="context-packet",
         schema_version="1.0",
@@ -128,6 +157,8 @@ def test_content_addressed_artifacts_are_idempotent_and_database_immutable() -> 
     with pytest.raises(ValueError, match="metadata must match"):
         create_artifact(
             actor=actor,
+            repository_id=repository.id,
+            access_scope_id=scope.id,
             kind=ImmutableArtifact.Kind.CONTEXT_PACKET,
             schema_name="context-packet",
             schema_version="2.0",
@@ -166,7 +197,7 @@ def test_audit_rows_cannot_be_updated_or_deleted() -> None:
         organization=organization,
         external_key="github:audit/repository",
     )
-    run, _ = request_sync_run(actor=actor, source_connection=connection_record)
+    run, _ = request_sync_run(actor=actor, source_connection_id=connection_record.id)
     event = AuditEvent.objects.get(target_id=run.id)
 
     with pytest.raises(DatabaseError, match="immutable"):
@@ -182,8 +213,21 @@ def test_audit_rows_cannot_be_updated_or_deleted() -> None:
 def test_authoritative_transition_audits_and_enforces_revision() -> None:
     organization = Organization.objects.create(slug="states", name="States")
     actor = actor_for(organization)
+    repository = Repository.objects.create(
+        organization=organization,
+        external_id="github:states/repository",
+        name="States",
+    )
+    scope = AccessScope.objects.create(
+        organization=organization,
+        name="knowledge authors",
+        all_memberships=True,
+        all_repositories=True,
+    )
     assertion = create_assertion(
         actor=actor,
+        repository_id=repository.id,
+        access_scope_id=scope.id,
         subject_key="service:checkout",
         predicate="owned_by",
         value={"team": "payments"},
@@ -225,7 +269,7 @@ def test_transition_and_audit_roll_back_together() -> None:
         organization=organization,
         external_key="github:rollback/repository",
     )
-    run, _ = request_sync_run(actor=actor, source_connection=connection_record)
+    run, _ = request_sync_run(actor=actor, source_connection_id=connection_record.id)
     initial_audits = AuditEvent.objects.count()
     initial_outbox = OutboxEvent.objects.count()
 
@@ -261,14 +305,14 @@ def test_sync_request_is_idempotent_and_tenant_scoped() -> None:
         external_key="github:sync/repository",
     )
 
-    first, created = request_sync_run(actor=actor, source_connection=connection_record)
-    second, created_again = request_sync_run(actor=actor, source_connection=connection_record)
+    first, created = request_sync_run(actor=actor, source_connection_id=connection_record.id)
+    second, created_again = request_sync_run(actor=actor, source_connection_id=connection_record.id)
 
     assert created
     assert not created_again
     assert first.id == second.id
-    with pytest.raises(TenantBoundaryError):
-        request_sync_run(actor=actor_for(other), source_connection=connection_record)
+    with pytest.raises(ResourceNotFoundError, match=NOT_FOUND_MESSAGE):
+        request_sync_run(actor=actor_for(other), source_connection_id=connection_record.id)
 
 
 @pytest.mark.integration
@@ -276,16 +320,21 @@ def test_sync_request_is_idempotent_and_tenant_scoped() -> None:
 def test_new_assurance_head_stales_older_run_and_completion_is_commit_pinned() -> None:
     organization = Organization.objects.create(slug="assurance", name="Assurance")
     actor = actor_for(organization)
+    repository = Repository.objects.create(
+        organization=organization,
+        external_id="github:anva/repository",
+        name="Anva",
+    )
     older, _ = request_assurance_run(
         actor=actor,
-        repository_external_id="github:anva/repository",
+        repository_id=repository.id,
         pull_request_number=42,
         head_commit="a" * 40,
         policy_version=2,
     )
     newer, created = request_assurance_run(
         actor=actor,
-        repository_external_id="github:anva/repository",
+        repository_id=repository.id,
         pull_request_number=42,
         head_commit="b" * 40,
         policy_version=2,
