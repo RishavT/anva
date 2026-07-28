@@ -1125,10 +1125,14 @@ def _authorized_assurance_run(request: HttpRequest, run_id: uuid.UUID) -> Assura
     )
     if run.repository_id is None:
         raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
-    task = EvaluatorTask.objects.select_related("request_artifact").filter(
-        organization_id=actor.organization_id,
-        assurance_run=run,
-    ).first()
+    task = (
+        EvaluatorTask.objects.select_related("request_artifact")
+        .filter(
+            organization_id=actor.organization_id,
+            assurance_run=run,
+        )
+        .first()
+    )
     packet = run.context_packet
     if task is None or packet is None:
         raise ResourceNotFoundError(NOT_FOUND_MESSAGE)

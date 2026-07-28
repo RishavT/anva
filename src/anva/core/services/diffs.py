@@ -80,11 +80,7 @@ def classify_path(path: str) -> str:
         )
     ):
         return "SECURITY_SENSITIVE"
-    if (
-        "migration" in parts
-        or "migrations" in parts
-        or name.endswith((".sql", ".ddl"))
-    ):
+    if "migration" in parts or "migrations" in parts or name.endswith((".sql", ".ddl")):
         return "MIGRATION"
     if (
         "test" in parts
@@ -93,20 +89,16 @@ def classify_path(path: str) -> str:
         or name.endswith(("_test.py", ".spec.py", ".test.py"))
     ):
         return "TEST"
-    if (
-        name
-        in {
-            "pyproject.toml",
-            "uv.lock",
-            "requirements.txt",
-            "poetry.lock",
-            "go.mod",
-            "go.sum",
-            "cargo.toml",
-            "cargo.lock",
-        }
-        or name.endswith(".lock")
-    ):
+    if name in {
+        "pyproject.toml",
+        "uv.lock",
+        "requirements.txt",
+        "poetry.lock",
+        "go.mod",
+        "go.sum",
+        "cargo.toml",
+        "cargo.lock",
+    } or name.endswith(".lock"):
         return "DEPENDENCY"
     if ".github" in parts or name.startswith(("dockerfile", "compose.")):
         return "CI"
@@ -252,9 +244,7 @@ def parse_unified_diff(unified_diff: str) -> ParsedDiff:
                 raise ValueError("Diff hunk appears before matching file path headers")
             hunk_lines = [line]
             index += 1
-            while index < len(lines) and not lines[index].startswith(
-                ("@@ ", "diff --git ")
-            ):
+            while index < len(lines) and not lines[index].startswith(("@@ ", "diff --git ")):
                 hunk_lines.append(lines[index])
                 index += 1
             old_count = int(hunk_match.group("old_count") or "1")

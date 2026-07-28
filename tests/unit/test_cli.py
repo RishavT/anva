@@ -183,8 +183,7 @@ def test_assurance_cli_reads_bounded_diff_and_posts_manual_ingestion(
     )
     diff = tmp_path / "change.diff"
     diff.write_text(
-        "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n"
-        "@@ -1,1 +1,1 @@\n-old\n+new\n"
+        "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1,1 +1,1 @@\n-old\n+new\n"
     )
     monkeypatch.setenv("ANVA_TOKEN", "CANARY-ASSURANCE-TOKEN")
     with patch("anva.entrypoints.cli.urlopen") as open_url:
@@ -210,9 +209,7 @@ def test_assurance_cli_reads_bounded_diff_and_posts_manual_ingestion(
 
     assert result == 0
     request = open_url.call_args.args[0]
-    assert request.full_url.endswith(
-        f"/repositories/{repository_id}/pull-requests/7/manual-diff"
-    )
+    assert request.full_url.endswith(f"/repositories/{repository_id}/pull-requests/7/manual-diff")
     assert json.loads(request.data)["unified_diff"].startswith("diff --git")
     assert "CANARY-ASSURANCE-TOKEN" not in capsys.readouterr().out
 

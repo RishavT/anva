@@ -455,8 +455,7 @@ def _evidence_available_at(*, evidence: Evidence, reference_time: datetime) -> b
         event is not None
         and event.state == Evidence.RetentionState.ACTIVE
         and (
-            evidence.retention_expires_at is None
-            or evidence.retention_expires_at > reference_time
+            evidence.retention_expires_at is None or evidence.retention_expires_at > reference_time
         )
     )
 
@@ -511,9 +510,7 @@ def _acceptance_criterion_payload(criterion: AcceptanceCriterion) -> dict[str, o
         "id": str(criterion.id),
         "code": criterion.code,
         "text": criterion.normalized_text,
-        "required_evidence_types": sorted(
-            cast(list[str], criterion.required_evidence_types)
-        ),
+        "required_evidence_types": sorted(cast(list[str], criterion.required_evidence_types)),
         "manual_approval_allowed": criterion.manual_approval_allowed,
     }
 
@@ -875,9 +872,7 @@ def start_assurance(
             "text": chunk.text,
             "content_hash": chunk.content_hash,
         }
-        for chunk in DiffChunk.objects.filter(pull_request_revision=revision).order_by(
-            "position"
-        )
+        for chunk in DiffChunk.objects.filter(pull_request_revision=revision).order_by("position")
     ]
     request_id = uuid.uuid5(run.id, f"{evaluator_version}:{prompt_version}")
     request_payload: dict[str, object] = {
@@ -1044,10 +1039,7 @@ def claim_evaluator_task(
             task = candidates.exclude(id=task.id).first()
             continue
         pr = run_revision.pull_request
-        if (
-            run.state == AssuranceRun.State.STALE
-            or pr.current_head_commit != run.head_commit
-        ):
+        if run.state == AssuranceRun.State.STALE or pr.current_head_commit != run.head_commit:
             task.state = EvaluatorTask.State.CANCELLED
             task.failure_code = "STALE_RUN"
             task.revision += 1
@@ -1197,9 +1189,7 @@ def _validate_result_references(
         ).values_list("id", flat=True)
     }
     allowed_evidence = {
-        str(mapping.evidence_id)
-        for mapping in mappings
-        if mapping.evidence_id is not None
+        str(mapping.evidence_id) for mapping in mappings if mapping.evidence_id is not None
     }
     for ids in AssuranceCheck.objects.filter(assurance_run=run).values_list(
         "evidence_ids",
@@ -1442,9 +1432,7 @@ def _readiness(
         if not satisfied:
             target = blockers if enforcement == "BLOCKING" else warnings
             target.add(f"POLICY_GAP_{code}")
-    active_findings = tuple(
-        finding for finding in findings if finding.state == Finding.State.OPEN
-    )
+    active_findings = tuple(finding for finding in findings if finding.state == Finding.State.OPEN)
     if any(finding.severity == Finding.Severity.BLOCKING for finding in active_findings):
         blockers.add("SUPPORTED_MODEL_BLOCKER")
     if any(
@@ -1487,16 +1475,8 @@ def _render_report(
     findings: tuple[Finding, ...],
     limitations: list[str],
 ) -> tuple[str, str]:
-    blockers = [
-        finding
-        for finding in findings
-        if finding.severity == Finding.Severity.BLOCKING
-    ]
-    warnings = [
-        finding
-        for finding in findings
-        if finding.severity != Finding.Severity.BLOCKING
-    ]
+    blockers = [finding for finding in findings if finding.severity == Finding.Severity.BLOCKING]
+    warnings = [finding for finding in findings if finding.severity != Finding.Severity.BLOCKING]
     markdown_lines = [
         "# Anva independent assurance",
         "",
@@ -1562,8 +1542,7 @@ def _render_report(
         "<h2>Readiness reasons</h2><ul>",
     ]
     html_parts.extend(
-        f"<li><code>{html.escape(_safe_report_text(reason))}</code></li>"
-        for reason in reasons
+        f"<li><code>{html.escape(_safe_report_text(reason))}</code></li>" for reason in reasons
     )
     if not reasons:
         html_parts.append("<li>None recorded.</li>")
@@ -1579,8 +1558,7 @@ def _render_report(
         html_parts.append("<li>No evaluator concerns recorded.</li>")
     html_parts.append("</ul><h2>Limitations</h2><ul>")
     html_parts.extend(
-        f"<li>{html.escape(_safe_report_text(item))}</li>"
-        for item in sorted(set(limitations))[:20]
+        f"<li>{html.escape(_safe_report_text(item))}</li>" for item in sorted(set(limitations))[:20]
     )
     if not limitations:
         html_parts.append("<li>None recorded.</li>")
@@ -2039,10 +2017,14 @@ def propose_post_merge_knowledge(
     if run.repository is None or run.pull_request_revision is None:
         raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
     repository_id = cast(uuid.UUID, run.repository_id)
-    task = EvaluatorTask.objects.select_related("request_artifact").filter(
-        organization_id=actor.organization_id,
-        assurance_run=run,
-    ).first()
+    task = (
+        EvaluatorTask.objects.select_related("request_artifact")
+        .filter(
+            organization_id=actor.organization_id,
+            assurance_run=run,
+        )
+        .first()
+    )
     packet = run.context_packet
     if task is None or packet is None:
         raise ResourceNotFoundError(NOT_FOUND_MESSAGE)

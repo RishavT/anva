@@ -264,9 +264,9 @@ def test_finding_fingerprint_uses_exact_anchors_and_is_order_independent() -> No
     assert _finding_fingerprint(different_line) != baseline
 
     different_source = deepcopy(finding)
-    cast(list[dict[str, object]], different_source["citations"])[1][
-        "context_citation_id"
-    ] = str(uuid.uuid4())
+    cast(list[dict[str, object]], different_source["citations"])[1]["context_citation_id"] = str(
+        uuid.uuid4()
+    )
     assert _finding_fingerprint(different_source) != baseline
 
 
@@ -302,16 +302,14 @@ def test_post_merge_changes_use_the_canonical_knowledge_change_contract() -> Non
     document = openapi_document()
     dismiss = document["paths"]["/findings/{resource_id}/dismiss"]["post"]
     dismiss_schema = dismiss["requestBody"]["content"]["application/json"]["schema"]
-    post_merge_schema = document["paths"][
-        "/assurance-runs/{resource_id}/post-merge-proposals"
-    ]["post"]["requestBody"]["content"]["application/json"]["schema"]
+    post_merge_schema = document["paths"]["/assurance-runs/{resource_id}/post-merge-proposals"][
+        "post"
+    ]["requestBody"]["content"]["application/json"]["schema"]
 
     assert dismiss_schema["additionalProperties"] is False
     assert dismiss_schema["required"] == ["repository_id"]
     assert "requestBody" not in document["paths"]["/work-items/{resource_id}"]["get"]
     assert (
-        post_merge_schema["properties"]["proposals"]["items"]["properties"]["changes"][
-            "items"
-        ]
+        post_merge_schema["properties"]["proposals"]["items"]["properties"]["changes"]["items"]
         == KNOWLEDGE_CHANGE
     )

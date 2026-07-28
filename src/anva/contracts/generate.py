@@ -876,9 +876,7 @@ def openapi_document() -> dict[str, object]:
                     "parameters": [*mutation_parameters, resource_parameter],
                     "requestBody": {
                         "required": True,
-                        "content": {
-                            "application/json": {"schema": assurance_start_request}
-                        },
+                        "content": {"application/json": {"schema": assurance_start_request}},
                     },
                     "responses": created_or_replayed_responses,
                 }
@@ -889,9 +887,7 @@ def openapi_document() -> dict[str, object]:
                     "parameters": [*mutation_parameters, repository_parameter],
                     "requestBody": {
                         "required": True,
-                        "content": {
-                            "application/json": {"schema": evaluator_claim_request}
-                        },
+                        "content": {"application/json": {"schema": evaluator_claim_request}},
                     },
                     "responses": authorized_responses,
                 }
@@ -902,9 +898,7 @@ def openapi_document() -> dict[str, object]:
                     "parameters": [*mutation_parameters, resource_parameter],
                     "requestBody": {
                         "required": True,
-                        "content": {
-                            "application/json": {"schema": evaluator_submit_request}
-                        },
+                        "content": {"application/json": {"schema": evaluator_submit_request}},
                     },
                     "responses": created_or_replayed_responses,
                 }
@@ -945,11 +939,7 @@ def openapi_document() -> dict[str, object]:
                     "parameters": [*mutation_parameters, resource_parameter],
                     "requestBody": {
                         "required": True,
-                        "content": {
-                            "application/json": {
-                                "schema": post_merge_proposals_request
-                            }
-                        },
+                        "content": {"application/json": {"schema": post_merge_proposals_request}},
                     },
                     "responses": created_responses,
                 }
@@ -964,9 +954,7 @@ def openapi_document() -> dict[str, object]:
                     ],
                     "requestBody": {
                         "required": True,
-                        "content": {
-                            "application/json": {"schema": finding_decision_request}
-                        },
+                        "content": {"application/json": {"schema": finding_decision_request}},
                     },
                     "responses": authorized_responses,
                 }

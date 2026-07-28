@@ -560,9 +560,7 @@ CONTEXT_CITATION: Final[dict[str, object]] = {
     "required": ["type", "context_citation_id"],
 }
 
-ASSURANCE_CITATION: Final[dict[str, object]] = {
-    "oneOf": [DIFF_CITATION, CONTEXT_CITATION]
-}
+ASSURANCE_CITATION: Final[dict[str, object]] = {"oneOf": [DIFF_CITATION, CONTEXT_CITATION]}
 
 FINDING_SCHEMA = versioned_schema(
     "finding",

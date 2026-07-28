@@ -154,7 +154,7 @@ def test_rename_diff_preserves_destination_and_zero_count_citations_are_invalid(
         "",
         "diff --git a/a.py b/a.py",
         "diff --raw a.py\n",
-        "diff --git a/\"a.py\" b/\"a.py\"\n@@ -1 +1 @@\n-old\n+new\n",
+        'diff --git a/"a.py" b/"a.py"\n@@ -1 +1 @@\n-old\n+new\n',
         "diff --git a/-a.py b/-a.py\n@@ -1 +1 @@\n-old\n+new\n",
         "diff --git a/a//b.py b/a//b.py\n@@ -1 +1 @@\n-old\n+new\n",
         "@@ -1 +1 @@\n-old\n+new\n",
@@ -476,13 +476,9 @@ def test_evaluator_references_are_limited_to_exact_diff_context_and_evidence() -
             "anva.core.services.assurance._parsed_chunks",
             return_value=chunks,
         ),
-        patch(
-            "anva.core.services.assurance.ContextPacketCitation.objects.filter"
-        ) as citations,
+        patch("anva.core.services.assurance.ContextPacketCitation.objects.filter") as citations,
         patch("anva.core.services.assurance.AssuranceCheck.objects.filter") as checks,
-        patch(
-            "anva.core.services.assurance.AcceptanceCriterion.objects.filter"
-        ) as criteria,
+        patch("anva.core.services.assurance.AcceptanceCriterion.objects.filter") as criteria,
     ):
         citations.return_value.values_list.return_value = [context_citation_id]
         checks.return_value.values_list.return_value = [[str(check_evidence_id)]]
@@ -643,9 +639,7 @@ def test_readiness_preserves_deterministic_dominance_and_warning_reasons() -> No
             SimpleNamespace(severity=Finding.Severity.HIGH, state=Finding.State.OPEN),
         ),
     )
-    with patch(
-        "anva.core.services.assurance.AssuranceCheck.objects.filter"
-    ) as check_filter:
+    with patch("anva.core.services.assurance.AssuranceCheck.objects.filter") as check_filter:
         check_filter.return_value.order_by.return_value = checks
         status, reasons = _readiness(
             run=_run_for_readiness(policy_evaluation=policy),
@@ -673,9 +667,7 @@ def test_readiness_preserves_deterministic_dominance_and_warning_reasons() -> No
 
 @pytest.mark.unit
 def test_readiness_distinguishes_warning_only_and_clean_results() -> None:
-    with patch(
-        "anva.core.services.assurance.AssuranceCheck.objects.filter"
-    ) as check_filter:
+    with patch("anva.core.services.assurance.AssuranceCheck.objects.filter") as check_filter:
         check_filter.return_value.order_by.return_value = []
         warning = _readiness(
             run=_run_for_readiness(),
