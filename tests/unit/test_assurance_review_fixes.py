@@ -15,13 +15,16 @@ from anva.contracts.catalog import KNOWLEDGE_CHANGE
 from anva.contracts.generate import openapi_document
 from anva.core.models import AssuranceRun, Finding, WorkItemRevision
 from anva.core.services.assurance import (
+    MAX_LIMITATIONS,
+    REQUIREMENT_TRACEABILITY_LIMITATION,
+    _bounded_limitations,
     _finding_fingerprint,
     _fingerprinted_payloads,
     _render_report,
     _requirement_payload,
     _safe_report_text,
 )
-from anva.core.services.diffs import parse_unified_diff
+from anva.core.services.diffs import citation_in_diff, parse_unified_diff
 
 NORMAL_DIFF = """diff --git a/src/app.py b/src/app.py
 --- a/src/app.py
@@ -40,33 +43,75 @@ new file mode 100644
 +second
 """
 
-DELETED_FILE_DIFF = """diff --git a/src/old.py b/src/old.py
+DELETED_FILE_DIFF = """diff --git a/src/auth/credentials.py b/src/auth/credentials.py
 deleted file mode 100644
---- a/src/old.py
+--- a/src/auth/credentials.py
 +++ /dev/null
 @@ -1,2 +0,0 @@
 -first
 -second
 """
 
+RENAMED_FILE_DIFF = """diff --git a/src/old.py b/docs/new.md
+similarity index 80%
+rename from src/old.py
+rename to docs/new.md
+--- a/src/old.py
++++ b/docs/new.md
+@@ -1 +1 @@
+-old
++new
+"""
+
+
+def _modify_diff_for(path: str) -> str:
+    return f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -1 +1 @@\n-old\n+new\n"
+
 
 @pytest.mark.unit
 @pytest.mark.parametrize(
-    ("unified_diff", "expected_path"),
+    ("unified_diff", "expected_path", "expected_classification"),
     [
-        (NORMAL_DIFF, "src/app.py"),
-        (NEW_FILE_DIFF, "src/new.py"),
-        (DELETED_FILE_DIFF, "src/old.py"),
+        (NORMAL_DIFF, "src/app.py", "SOURCE"),
+        (NEW_FILE_DIFF, "src/new.py", "SOURCE"),
+        (DELETED_FILE_DIFF, "src/auth/credentials.py", "SECURITY_SENSITIVE"),
+        (RENAMED_FILE_DIFF, "docs/new.md", "DOCUMENTATION"),
     ],
 )
-def test_diff_path_headers_accept_exact_normal_add_and_delete_forms(
+def test_diff_identity_is_coherent_for_modify_add_delete_and_rename(
     unified_diff: str,
     expected_path: str,
+    expected_classification: str,
 ) -> None:
     parsed = parse_unified_diff(unified_diff)
 
     assert parsed.changed_paths == (expected_path,)
     assert parsed.chunks[0].path == expected_path
+    assert parsed.chunks[0].classification == expected_classification
+
+
+@pytest.mark.unit
+def test_deleted_file_citations_use_the_validated_old_path() -> None:
+    parsed = parse_unified_diff(DELETED_FILE_DIFF)
+
+    assert citation_in_diff(
+        chunks=parsed.chunks,
+        path="src/auth/credentials.py",
+        side="OLD",
+        line=1,
+    )
+    assert not citation_in_diff(
+        chunks=parsed.chunks,
+        path="docs/readme.md",
+        side="OLD",
+        line=1,
+    )
+    assert not citation_in_diff(
+        chunks=parsed.chunks,
+        path="src/auth/credentials.py",
+        side="NEW",
+        line=1,
+    )
 
 
 @pytest.mark.unit
@@ -88,9 +133,33 @@ def test_diff_path_headers_accept_exact_normal_add_and_delete_forms(
             "-first\n",
             " first\n",
         ),
+        DELETED_FILE_DIFF.replace(
+            "b/src/auth/credentials.py",
+            "b/docs/readme.md",
+        ),
+        NEW_FILE_DIFF.replace(
+            "a/src/new.py",
+            "a/docs/advertised.md",
+        ),
+        RENAMED_FILE_DIFF.replace("rename from src/old.py", "rename from docs/old.md"),
+        RENAMED_FILE_DIFF.replace("rename to docs/new.md\n", ""),
+        NORMAL_DIFF.replace(
+            "--- a/src/app.py",
+            "new file mode 100644\n--- a/src/app.py",
+        ),
+        NORMAL_DIFF.replace(
+            "--- a/src/app.py",
+            "deleted file mode 100644\n--- a/src/app.py",
+        ),
+        _modify_diff_for("C:/temp/app.py"),
+        _modify_diff_for("C:temp/app.py"),
+        _modify_diff_for("//server/share/app.py"),
+        _modify_diff_for(r"src\\hostile.py"),
+        _modify_diff_for("src/../docs/app.py"),
+        _modify_diff_for("."),
     ],
 )
-def test_diff_path_headers_reject_mismatch_missing_and_invalid_dev_null_ranges(
+def test_diff_identity_rejects_mismatch_evasion_and_unsafe_paths(
     unified_diff: str,
 ) -> None:
     with pytest.raises(ValueError):
@@ -106,11 +175,27 @@ def test_diff_path_headers_reject_mismatch_missing_and_invalid_dev_null_ranges(
         "deployment_authorized",
         "ready for deployment",
         "defect_free",
+        "Deployment is safe and merge can proceed",
+        "deployment_is_safe and merge-can-proceed",
+        "safe to be deployed",
+        "can safely merge",
+        "merge should proceed",
+        "Deployment can go ahead",
+        "Merging is risk-free",
+        "Green light for deployment",
+        "Merging poses no risk",
     ],
 )
 def test_report_sanitizer_neutralizes_deployment_claim_variants(claim: str) -> None:
     assert claim.casefold() not in _safe_report_text(f"Result: {claim}.").casefold()
     assert "[deployment-claim removed]" in _safe_report_text(f"Result: {claim}.")
+
+
+@pytest.mark.unit
+def test_report_sanitizer_preserves_legitimate_deployment_and_merge_context() -> None:
+    context = "Review deployment rollback evidence and merge conflict handling."
+
+    assert _safe_report_text(context) == context
 
 
 @pytest.mark.unit
@@ -121,6 +206,10 @@ def test_report_uses_neutral_reason_label_and_escapes_untrusted_finding_text() -
         fingerprint="f" * 64,
         path="src/<unsafe>.py",
         line=9,
+        explanation="Deployment is safe and merge can proceed <detail>.",
+        uncertainty="Merging is risk-free <uncertainty>.",
+        suggested_resolution="Deployment can go ahead after <staging>.",
+        citations=[],
     )
     run = cast(
         AssuranceRun,
@@ -152,7 +241,33 @@ def test_report_uses_neutral_reason_label_and_escapes_untrusted_finding_text() -
     assert "deployment-authorized" not in markdown.casefold()
     assert "<script>" not in rendered_html
     assert "&lt;script&gt;" in rendered_html
+    assert "Deployment is safe" not in markdown
+    assert "merge can proceed" not in rendered_html
+    assert "risk-free" not in markdown.casefold()
+    assert "risk-free" not in rendered_html.casefold()
+    assert "can go ahead" not in markdown.casefold()
+    assert "can go ahead" not in rendered_html.casefold()
+    assert "src/\\<unsafe\\>.py:9" in markdown
+    assert "src/&lt;unsafe&gt;.py:9" in rendered_html
     assert "Readiness reasons" in rendered_html
+
+
+@pytest.mark.unit
+def test_required_traceability_limitation_survives_saturated_limit() -> None:
+    optional = [f"000 evaluator limitation {index:03d}" for index in range(MAX_LIMITATIONS + 5)]
+
+    bounded = _bounded_limitations(
+        optional,
+        required=(REQUIREMENT_TRACEABILITY_LIMITATION,),
+    )
+    replay = _bounded_limitations(
+        list(reversed(optional)),
+        required=(REQUIREMENT_TRACEABILITY_LIMITATION,),
+    )
+
+    assert len(bounded) == MAX_LIMITATIONS
+    assert REQUIREMENT_TRACEABILITY_LIMITATION in bounded
+    assert bounded == replay
 
 
 @pytest.mark.unit

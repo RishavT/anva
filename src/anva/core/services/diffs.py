@@ -22,6 +22,7 @@ _HUNK_HEADER = re.compile(
     r"^@@ -(?P<old_start>\d+)(?:,(?P<old_count>\d+))? "
     r"\+(?P<new_start>\d+)(?:,(?P<new_count>\d+))? @@(?: .*)?\n$"
 )
+_WINDOWS_DRIVE_PATH = re.compile(r"^[A-Za-z]:")
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,11 +109,25 @@ def classify_path(path: str) -> str:
 
 
 def _validate_path(path: str) -> None:
+    if not path or path == ".":
+        raise ValueError("Diff path must identify a file")
     if path.startswith(('"', "'")) or path.endswith(('"', "'")):
         raise ValueError("Quoted diff paths are unsupported")
+    if _WINDOWS_DRIVE_PATH.match(path) or path.startswith(("//", "\\\\")):
+        raise ValueError("Absolute and Windows drive-qualified diff paths are unsupported")
     validate_relative_artifact_path(path)
     if path.startswith("-") or "//" in path:
         raise ValueError("Diff path is ambiguous")
+
+
+def _validated_header_path(header: str, *, prefix: str, side: str) -> str | None:
+    if header == "/dev/null":
+        return None
+    if not header.startswith(prefix):
+        raise ValueError(f"{side} diff path header has an invalid prefix")
+    path = header.removeprefix(prefix)
+    _validate_path(path)
+    return path
 
 
 def _validate_file_path_headers(
@@ -121,15 +136,45 @@ def _validate_file_path_headers(
     git_new_path: str,
     old_header: str,
     new_header: str,
-) -> None:
-    expected_old = f"a/{git_old_path}"
-    expected_new = f"b/{git_new_path}"
-    if old_header not in {expected_old, "/dev/null"}:
+) -> tuple[str, str]:
+    header_old_path = _validated_header_path(old_header, prefix="a/", side="Old")
+    header_new_path = _validated_header_path(new_header, prefix="b/", side="New")
+    if header_old_path is not None and header_old_path != git_old_path:
         raise ValueError("Old diff path header does not match its Git file header")
-    if new_header not in {expected_new, "/dev/null"}:
+    if header_new_path is not None and header_new_path != git_new_path:
         raise ValueError("New diff path header does not match its Git file header")
-    if old_header == "/dev/null" and new_header == "/dev/null":
+    if header_old_path is None and header_new_path is None:
         raise ValueError("Diff path headers cannot both be /dev/null")
+    if header_old_path is None:
+        if git_old_path != git_new_path:
+            raise ValueError("New-file diff Git paths must identify the same destination")
+        return git_new_path, "ADD"
+    if header_new_path is None:
+        if git_old_path != git_new_path:
+            raise ValueError("Deleted-file diff Git paths must identify the same source")
+        return git_old_path, "DELETE"
+    if git_old_path != git_new_path:
+        return git_new_path, "RENAME"
+    return git_new_path, "MODIFY"
+
+
+def _validate_change_metadata(
+    *,
+    change_kind: str,
+    git_old_path: str,
+    git_new_path: str,
+    declared_file_kind: str | None,
+    rename_from: str | None,
+    rename_to: str | None,
+) -> None:
+    if declared_file_kind is not None and declared_file_kind != change_kind:
+        raise ValueError("Diff file-mode metadata conflicts with its path headers")
+    if (rename_from is None) != (rename_to is None):
+        raise ValueError("Rename metadata must contain both source and destination")
+    if rename_from is None or rename_to is None:
+        return
+    if change_kind != "RENAME" or rename_from != git_old_path or rename_to != git_new_path:
+        raise ValueError("Rename metadata does not match the Git file header")
 
 
 def _validate_hunk_counts(
@@ -180,13 +225,16 @@ def parse_unified_diff(unified_diff: str) -> ParsedDiff:
     current_new_path: str | None = None
     old_path_header: str | None = None
     new_path_header: str | None = None
+    declared_file_kind: str | None = None
+    rename_from: str | None = None
+    rename_to: str | None = None
     current_has_hunk = False
     index = 0
     while index < len(lines):
         line = lines[index]
         file_match = _FILE_HEADER.fullmatch(line)
         if file_match is not None:
-            if current_path is not None and (
+            if current_old_path is not None and (
                 old_path_header is None or new_path_header is None or not current_has_hunk
             ):
                 raise ValueError("Every changed file must contain matching path headers and a hunk")
@@ -197,39 +245,71 @@ def parse_unified_diff(unified_diff: str) -> ParsedDiff:
             current_new_path = new_path
             old_path_header = None
             new_path_header = None
+            declared_file_kind = None
+            rename_from = None
+            rename_to = None
             current_has_hunk = False
-            current_path = new_path
-            if old_path != new_path:
-                # Renames are represented by their destination while preserving the exact raw diff.
-                current_path = new_path
-            if current_path not in paths:
-                paths.append(current_path)
-            if len(paths) > MAX_CHANGED_PATHS:
-                raise ValueError("unified_diff exceeds the changed-path limit")
+            current_path = None
+            index += 1
+            continue
+        if line.startswith(("new file mode ", "deleted file mode ")):
+            if (
+                current_old_path is None
+                or old_path_header is not None
+                or declared_file_kind is not None
+            ):
+                raise ValueError("Diff file-mode metadata is duplicated or misplaced")
+            declared_file_kind = "ADD" if line.startswith("new file mode ") else "DELETE"
+            index += 1
+            continue
+        if line.startswith(("rename from ", "rename to ")):
+            if current_old_path is None or old_path_header is not None:
+                raise ValueError("Rename metadata is misplaced")
+            if line.startswith("rename from "):
+                if rename_from is not None:
+                    raise ValueError("Rename source metadata is duplicated")
+                rename_from = line.removeprefix("rename from ").removesuffix("\n")
+                _validate_path(rename_from)
+            else:
+                if rename_to is not None:
+                    raise ValueError("Rename destination metadata is duplicated")
+                rename_to = line.removeprefix("rename to ").removesuffix("\n")
+                _validate_path(rename_to)
             index += 1
             continue
         if line.startswith("--- "):
-            if current_path is None or current_old_path is None or old_path_header is not None:
+            if current_old_path is None or old_path_header is not None:
                 raise ValueError("Old diff path header is missing, duplicated, or misplaced")
             old_path_header = line.removeprefix("--- ").removesuffix("\n")
             index += 1
             continue
         if line.startswith("+++ "):
             if (
-                current_path is None
-                or current_old_path is None
+                current_old_path is None
                 or current_new_path is None
                 or old_path_header is None
                 or new_path_header is not None
             ):
                 raise ValueError("New diff path header is missing, duplicated, or misplaced")
             new_path_header = line.removeprefix("+++ ").removesuffix("\n")
-            _validate_file_path_headers(
+            current_path, change_kind = _validate_file_path_headers(
                 git_old_path=current_old_path,
                 git_new_path=current_new_path,
                 old_header=old_path_header,
                 new_header=new_path_header,
             )
+            _validate_change_metadata(
+                change_kind=change_kind,
+                git_old_path=current_old_path,
+                git_new_path=current_new_path,
+                declared_file_kind=declared_file_kind,
+                rename_from=rename_from,
+                rename_to=rename_to,
+            )
+            if current_path not in paths:
+                paths.append(current_path)
+            if len(paths) > MAX_CHANGED_PATHS:
+                raise ValueError("unified_diff exceeds the changed-path limit")
             index += 1
             continue
         hunk_match = _HUNK_HEADER.fullmatch(line)
@@ -283,7 +363,7 @@ def parse_unified_diff(unified_diff: str) -> ParsedDiff:
             raise ValueError("Only Git unified diffs are supported")
         index += 1
 
-    if current_path is not None and (
+    if current_old_path is not None and (
         old_path_header is None or new_path_header is None or not current_has_hunk
     ):
         raise ValueError("Every changed file must contain matching path headers and a hunk")

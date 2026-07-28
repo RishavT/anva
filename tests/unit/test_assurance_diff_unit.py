@@ -698,6 +698,23 @@ def test_readiness_distinguishes_warning_only_and_clean_results() -> None:
 
 
 @pytest.mark.unit
+def test_readiness_warns_when_requirement_traceability_is_not_established() -> None:
+    with patch("anva.core.services.assurance.AssuranceCheck.objects.filter") as check_filter:
+        check_filter.return_value.order_by.return_value = []
+        readiness = _readiness(
+            run=_run_for_readiness(work_item_revision_id=None),
+            result={"completion": "COMPLETE", "limitations": []},
+            findings=(),
+            mappings=(),
+        )
+
+    assert readiness == (
+        "READY_WITH_WARNINGS",
+        ["REQUIREMENT_TRACEABILITY_NOT_ESTABLISHED"],
+    )
+
+
+@pytest.mark.unit
 def test_text_normalization_and_markdown_escaping_remove_unsafe_claims() -> None:
     assert _normalized_text("  review   boundary ", name="title", maximum=100) == (
         "review boundary"
@@ -749,6 +766,10 @@ def test_report_markdown_and_html_match_deterministic_goldens() -> None:
             path="src/auth.py",
             line=4,
             fingerprint="9" * 64,
+            explanation="Inspect <authorization> boundary.",
+            uncertainty="Only the supplied diff was reviewed.",
+            suggested_resolution="Confirm with a targeted test.",
+            citations=[],
         ),
     )
     markdown, rendered_html = _render_report(
@@ -788,6 +809,29 @@ def test_report_renders_blockers_and_empty_sections_without_html_injection() -> 
             path="",
             line=None,
             fingerprint="f" * 64,
+            explanation="Deployment is safe and merge can proceed <detail>.",
+            uncertainty="Only <bounded> context was reviewed.",
+            suggested_resolution="Inspect <rollback> evidence before any decision.",
+            citations=[
+                {
+                    "type": "ANVA_SOURCE",
+                    "context_citation_id": "citation-1",
+                }
+            ],
+        ),
+    )
+    earlier_blocker = cast(
+        Finding,
+        SimpleNamespace(
+            severity=Finding.Severity.BLOCKING,
+            title="Earlier blocker",
+            path="src/earlier.py",
+            line=3,
+            fingerprint="0" * 64,
+            explanation="A second blocking finding.",
+            uncertainty="The impact remains bounded to the supplied evidence.",
+            suggested_resolution="Resolve the earlier issue.",
+            citations=[],
         ),
     )
 
@@ -795,13 +839,69 @@ def test_report_renders_blockers_and_empty_sections_without_html_injection() -> 
         run=run,
         status="BLOCKED",
         reasons=[],
-        findings=(blocker,),
+        findings=(blocker, earlier_blocker),
         limitations=[],
     )
 
+    assert markdown.index("Earlier blocker") < markdown.index(r"\<script\>unsafe\</script\>")
+    assert rendered_html.index("Earlier blocker") < rendered_html.index("&lt;script&gt;unsafe")
     assert r"\<script\>unsafe\</script\>" in markdown
     assert "<script>unsafe</script>" not in rendered_html
+    assert "Anva source citation-1" in markdown
+    assert "Anva source citation-1" in rendered_html
+    assert "Deployment is safe" not in markdown
+    assert "merge can proceed" not in rendered_html
+    assert "Inspect \\<rollback\\> evidence" in markdown
+    assert "Inspect &lt;rollback&gt; evidence" in rendered_html
     assert "&lt;manual&gt;" not in rendered_html  # versions are intentionally omitted from HTML.
     assert "None recorded." in markdown
     assert "<li>None recorded.</li>" in rendered_html
-    assert "No evaluator concerns recorded." in rendered_html
+    assert "No evaluator concerns recorded." not in markdown
+    assert "No evaluator concerns recorded." not in rendered_html
+    assert "blocking findings above are the immediate review focus" in rendered_html
+
+
+@pytest.mark.unit
+def test_report_renders_every_key_review_area() -> None:
+    run = cast(
+        AssuranceRun,
+        SimpleNamespace(
+            pull_request_number=10,
+            head_commit="d" * 40,
+            diff_artifact=None,
+            context_artifact=None,
+            requirements_hash="a" * 64,
+            policy_bundle_hash="b" * 64,
+            evidence_bundle_hash="c" * 64,
+            evaluator_version="manual",
+            prompt_version="prompt_v1",
+        ),
+    )
+    findings = tuple(
+        cast(
+            Finding,
+            SimpleNamespace(
+                severity=Finding.Severity.ADVISORY,
+                title=f"Review area {index}",
+                path=f"src/review_{index}.py",
+                line=index + 1,
+                fingerprint=f"{index:064x}",
+                explanation=f"Inspect review area {index}.",
+                uncertainty="Only supplied evidence was reviewed.",
+                suggested_resolution=f"Resolve review area {index}.",
+                citations=[],
+            ),
+        )
+        for index in range(11)
+    )
+
+    markdown, rendered_html = _render_report(
+        run=run,
+        status="READY_WITH_WARNINGS",
+        reasons=["MODEL_CONCERNS"],
+        findings=findings,
+        limitations=[],
+    )
+
+    assert markdown.count("Review area") == 11
+    assert rendered_html.count("Review area") == 11

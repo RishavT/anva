@@ -10,9 +10,17 @@ This report supports focused human review. It is not deployment approval.
 
 - `MODEL\_CONCERNS`
 
+## Blocking findings
+
+- None recorded.
+
 ## Review focus
 
 - **ADVISORY:** Review \<boundary\> (`src/auth.py:4`)
+  - Detail: Inspect \<authorization\> boundary.
+  - Uncertainty: Only the supplied diff was reviewed.
+  - Suggested resolution: Confirm with a targeted test.
+  - Fingerprint: `9999999999999999999999999999999999999999999999999999999999999999`
 
 ## Exact inputs
 

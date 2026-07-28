@@ -31,6 +31,8 @@ from anva.core.models import (
     User,
 )
 from anva.core.services.assurance import (
+    MAX_LIMITATIONS,
+    REQUIREMENT_TRACEABILITY_LIMITATION,
     AssuranceCompletion,
     DiffIngestionResult,
     claim_evaluator_task,
@@ -245,6 +247,7 @@ def test_exact_replay_manual_queue_report_and_new_revision_staleness() -> None:
     assert started.created is True
     assert duplicate.created is False
     assert duplicate.run.id == started.run.id
+    assert started.run.limitations.count(REQUIREMENT_TRACEABILITY_LIMITATION) == 1
 
     claim = claim_evaluator_task(
         actor=actor,
@@ -256,6 +259,9 @@ def test_exact_replay_manual_queue_report_and_new_revision_staleness() -> None:
     assert "claim_token" not in serialized_request
     assert "ANVA_DATABASE_URL" not in serialized_request
     result = evaluator.evaluate(claim.request)
+    result["limitations"] = [
+        f"000 evaluator limitation {index:03d}" for index in range(MAX_LIMITATIONS + 5)
+    ]
     completed = submit_evaluator_result(
         actor=actor,
         task_id=claim.task.id,
@@ -272,8 +278,18 @@ def test_exact_replay_manual_queue_report_and_new_revision_staleness() -> None:
     )
     assert completed.run.state == AssuranceRun.State.COMPLETED
     assert completed.readiness.status == "READY_WITH_WARNINGS"
+    assert "REQUIREMENT_TRACEABILITY_NOT_ESTABLISHED" in completed.readiness.reason_codes
+    assert len(completed.run.limitations) == MAX_LIMITATIONS
+    assert REQUIREMENT_TRACEABILITY_LIMITATION in completed.run.limitations
     assert replayed.created is False
     assert completed.report.markdown == replayed.report.markdown
+    assert completed.report.html == replayed.report.html
+    assert completed.report.content_hash == replayed.report.content_hash
+    assert completed.report.artifact.content_hash == replayed.report.artifact.content_hash
+    assert REQUIREMENT_TRACEABILITY_LIMITATION in completed.report.markdown
+    assert REQUIREMENT_TRACEABILITY_LIMITATION in completed.report.html
+    assert "REQUIREMENT\\_TRACEABILITY\\_NOT\\_ESTABLISHED" in completed.report.markdown
+    assert "REQUIREMENT_TRACEABILITY_NOT_ESTABLISHED" in completed.report.html
     assert "safe to deploy" not in completed.report.markdown.casefold()
     assert "<script>" not in completed.report.html.casefold()
     assert EvaluatorAttempt.objects.filter(evaluator_task=claim.task).count() == 2

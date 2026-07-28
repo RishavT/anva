@@ -11,7 +11,7 @@
 | Provider-neutral evaluator | `Evaluator` protocol, all v3 fake scenarios, leased claim/submit queue for a fresh context-limited reviewer | Unit/eval and PostgreSQL queue tests |
 | Valid structured findings | Closed schema, confidence/uncertainty, exact diff or authorized-source citations, evidence/criterion allowlists, stable semantic fingerprint and occurrences | Contract, citation, fingerprint tests |
 | Server-only readiness | Fixed precedence; evaluator result has no readiness/outcome; deterministic failure remains blocked | Contract and failure-wins integration test |
-| Concise deterministic reports | Stable Markdown and escaped HTML, top blockers/focus/versions/limitations, no deployment grant | Goldens and injection test |
+| Concise deterministic reports | Stable Markdown and escaped HTML, every blocker and review area, exact versions/limitations, no deployment grant | Goldens and injection test |
 | Post-merge proposal safety | Exact completed merged revision and authorized citations required; only `KnowledgeProposal` links created | Safety integration case |
 | API/CLI/docs/generated artifacts | Versioned routes, bounded non-symlink CLI, JSON schemas/examples/OpenAPI/MCP, ADR/runbook/threat model | Contract drift and CLI tests |
 
@@ -49,6 +49,20 @@
 12. Review also found incomplete standalone criteria, narrow finding fingerprints, and open
     post-merge change bodies. Criteria are complete, fingerprints include exact semantic citation
     anchors with collision rejection, and finding/post-merge inputs use closed canonical schemas.
+13. A deletion could advertise an unrelated destination in `diff --git`, causing its source path,
+    classification, and citations to be misattributed. File identity is now coherent across Git
+    paths, unified headers, add/delete modes, rename metadata, and `/dev/null`; unsafe Windows,
+    UNC, backslash, and traversal paths fail before classification.
+14. Blocking findings were summarized only in Markdown and could be followed by a misleading
+    no-concerns review section; reports also omitted their actionable detail. Markdown and escaped
+    HTML now render every blocker and nonblocking review area deterministically with location,
+    detail, uncertainty, suggested resolution, and fingerprint. Semantic merge/deploy safety claims
+    are neutralized in every rendered untrusted field while legitimate review context remains.
+15. Runs without a work item silently appeared to have clean requirement coverage. They now persist
+    a deterministic requirement-traceability limitation, emit
+    `REQUIREMENT_TRACEABILITY_NOT_ESTABLISHED`, and are at least `READY_WITH_WARNINGS` unless a
+    stronger blocker applies. The mandatory limitation survives bounded evaluator output, and exact
+    replay preserves report bytes and hashes.
 
 ## Limitations
 
@@ -62,10 +76,17 @@ input envelope; delegated evaluator identities need an explicit future federatio
 
 ## Verification
 
-The isolated Docker/Compose checks passed with 98 focused unit/contract/CLI/HTTP tests, seven
+The original isolated Docker/Compose gate passed 98 focused unit/contract/CLI/HTTP tests, seven
 assurance lifecycle integrations, three legacy authorization/state regressions, Ruff, strict mypy
 across eleven touched source files, deterministic validation of 22 generated contract artifacts,
-and no migration drift. The full repository gate passed 300 tests with one intentionally skipped
-unmounted corpus and 86% combined branch coverage. In production mode, migration `0011` applied;
-API, MCP, worker, PostgreSQL, and object storage became healthy; both readiness endpoints reported
-database and object storage available.
+and no migration drift. Its full repository gate passed 300 tests with one intentionally skipped
+unmounted corpus and 86% combined branch coverage. Its production-mode smoke applied migration
+`0011`; API, MCP, worker, PostgreSQL, and object storage became healthy; both readiness endpoints
+reported database and object storage available.
+
+The request-changes remediation first reproduced all three blockers in disposable Docker containers
+against reviewed head `4337f0a`. The final focused Docker gate passed 93 unit regressions, the
+PostgreSQL exact-replay/report lifecycle, Ruff, canonical formatting, and strict mypy for both
+changed services. The remediation adds no contract or migration surface. Per review coordination,
+the exact-head hosted full CI is the final broad gate; the local full and production suites were not
+redundantly rerun.

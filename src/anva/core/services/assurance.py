@@ -84,6 +84,10 @@ RENDERER_VERSION = "assurance-report-v1"
 MAX_CHECKS = 200
 MAX_LIMITATIONS = 100
 MAX_PROPOSALS = 50
+REQUIREMENT_TRACEABILITY_LIMITATION = (
+    "Requirement-level traceability could not be established because no work item "
+    "revision was linked."
+)
 REPORT_PROHIBITED = re.compile(
     r"""(?ix)(
         safe[\s_-]+to[\s_-]+(?:deploy|merge)
@@ -93,6 +97,24 @@ REPORT_PROHIBITED = re.compile(
         |(?:deployment|merge)[\s_-]+(?:approved|authorized|cleared)
         |defect[\s_-]+free
     )"""
+)
+REPORT_ACTION = re.compile(r"\b(?:deploy(?:ment|ing|ed)?|merg(?:e|ing|ed))\b", re.IGNORECASE)
+REPORT_SAFETY_ASSERTION = re.compile(
+    r"""(?ix)\b(
+        safe(?:ly)?
+        |risk[\s_-]*(?:free|less)
+        |(?:no|zero|without)[\s_-]+risk
+        |go[\s_-]+ahead
+        |green[\s_-]+light
+        |proceed
+        |continue
+        |ready
+        |approved
+        |authorized
+        |cleared
+        |permitted
+        |no[\s_-]+(?:known[\s_-]+)?blockers?
+    )\b"""
 )
 
 
@@ -155,6 +177,18 @@ def _normalized_text(value: str, *, name: str, maximum: int, required: bool = Tr
         raise ValueError(f"{name} is outside its allowed size")
     reject_secrets(normalized)
     return normalized
+
+
+def _bounded_limitations(
+    *groups: list[str],
+    required: tuple[str, ...] = (),
+) -> list[str]:
+    required_set = set(required)
+    optional = set().union(*groups) - required_set
+    remaining = MAX_LIMITATIONS - len(required_set)
+    if remaining < 0:
+        raise ValueError("Required assurance limitations exceed the limit")
+    return sorted(required_set | set(sorted(optional)[:remaining]))
 
 
 def _stale_run(*, actor: ActorContext, run: AssuranceRun, new_head: str) -> None:
@@ -823,9 +857,11 @@ def start_assurance(
         evidence_bundle_hash=evidence_bundle_hash,
         evaluator_version=evaluator_version,
         prompt_version=prompt_version,
-        limitations=sorted(
-            set(cast(list[str], revision.limitations) + cast(list[str], packet.limitations))
-        )[:MAX_LIMITATIONS],
+        limitations=_bounded_limitations(
+            cast(list[str], revision.limitations),
+            cast(list[str], packet.limitations),
+            required=((REQUIREMENT_TRACEABILITY_LIMITATION,) if work_revision is None else ()),
+        ),
     )
     record_transition(
         organization=organization,
@@ -1395,6 +1431,8 @@ def _readiness(
         return "FAILED", [run.failure_code]
     blockers: set[str] = set()
     warnings: set[str] = set()
+    if run.work_item_revision_id is None:
+        warnings.add("REQUIREMENT_TRACEABILITY_NOT_ESTABLISHED")
     checks = {
         check.code: check
         for check in AssuranceCheck.objects.filter(assurance_run=run).order_by("code")
@@ -1460,11 +1498,74 @@ def _readiness(
 def _safe_report_text(value: object) -> str:
     normalized = " ".join(str(value).split())
     normalized = REPORT_PROHIBITED.sub("[deployment-claim removed]", normalized)
+    separator = r"[\s_-]+"
+    prohibited_claims = (
+        rf"\bdeployment{separator}(?:is{separator})?safe\b",
+        rf"\bmerge{separator}(?:is{separator})?safe\b",
+        rf"\b(?:deployment|merge){separator}(?:can|may|should){separator}proceed\b",
+        rf"\b(?:safe|ready|approved|authorized|clear|cleared){separator}"
+        rf"(?:to|for){separator}(?:be{separator})?"
+        rf"(?:deploy(?:ment|ed)?|merge(?:d)?)\b",
+        rf"\b(?:deploy(?:ment)?|merge){separator}"
+        rf"(?:is{separator})?(?:ready|approved|authorized|clear|cleared)\b",
+        rf"\bcan{separator}safely{separator}(?:be{separator})?"
+        rf"(?:deploy(?:ed)?|merge(?:d)?)\b",
+        rf"\b(?:deployed|merged){separator}safely\b",
+        rf"\bno{separator}(?:known{separator})?blockers?{separator}"
+        rf"(?:to|for){separator}(?:deploy(?:ment)?|merge)\b",
+    )
+    for pattern in prohibited_claims:
+        normalized = re.sub(
+            pattern,
+            "[deployment-claim removed]",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+    if REPORT_ACTION.search(normalized) and REPORT_SAFETY_ASSERTION.search(normalized):
+        normalized = "[deployment-claim removed]"
     return normalized[:2_000]
 
 
 def _markdown_escape(value: object) -> str:
     return re.sub(r"([\\`*_[\]<>#])", r"\\\1", _safe_report_text(value))
+
+
+def _finding_report_location(finding: Finding) -> str:
+    if finding.path:
+        return f"{finding.path}:{finding.line}" if finding.line is not None else finding.path
+    for citation in cast(list[dict[str, object]], finding.citations):
+        if citation.get("type") == "ANVA_SOURCE":
+            return f"Anva source {citation.get('context_citation_id', '')}"
+    return "No localized location supplied"
+
+
+def _markdown_finding(finding: Finding) -> list[str]:
+    return [
+        (
+            f"- **{_markdown_escape(finding.severity)}:** "
+            f"{_markdown_escape(finding.title)} "
+            f"(`{_markdown_escape(_finding_report_location(finding))}`)"
+        ),
+        f"  - Detail: {_markdown_escape(finding.explanation)}",
+        f"  - Uncertainty: {_markdown_escape(finding.uncertainty)}",
+        f"  - Suggested resolution: {_markdown_escape(finding.suggested_resolution)}",
+        f"  - Fingerprint: `{_markdown_escape(finding.fingerprint)}`",
+    ]
+
+
+def _html_finding(finding: Finding) -> str:
+    return (
+        f"<li><strong>{html.escape(_safe_report_text(finding.severity))}: "
+        f"{html.escape(_safe_report_text(finding.title))}</strong>"
+        f"<br><span>Location: <code>"
+        f"{html.escape(_safe_report_text(_finding_report_location(finding)))}</code></span>"
+        f"<br><span>Detail: {html.escape(_safe_report_text(finding.explanation))}</span>"
+        f"<br><span>Uncertainty: {html.escape(_safe_report_text(finding.uncertainty))}</span>"
+        f"<br><span>Suggested resolution: "
+        f"{html.escape(_safe_report_text(finding.suggested_resolution))}</span>"
+        f"<br><span>Fingerprint: <code>"
+        f"{html.escape(_safe_report_text(finding.fingerprint))}</code></span></li>"
+    )
 
 
 def _render_report(
@@ -1475,8 +1576,20 @@ def _render_report(
     findings: tuple[Finding, ...],
     limitations: list[str],
 ) -> tuple[str, str]:
-    blockers = [finding for finding in findings if finding.severity == Finding.Severity.BLOCKING]
-    warnings = [finding for finding in findings if finding.severity != Finding.Severity.BLOCKING]
+    ordered_findings = sorted(
+        findings,
+        key=lambda finding: (
+            finding.fingerprint,
+            finding.path,
+            finding.line if finding.line is not None else -1,
+        ),
+    )
+    blockers = [
+        finding for finding in ordered_findings if finding.severity == Finding.Severity.BLOCKING
+    ]
+    warnings = [
+        finding for finding in ordered_findings if finding.severity != Finding.Severity.BLOCKING
+    ]
     markdown_lines = [
         "# Anva independent assurance",
         "",
@@ -1492,22 +1605,20 @@ def _render_report(
     markdown_lines.extend(
         [f"- `{_markdown_escape(reason)}`" for reason in reasons] or ["- None recorded."]
     )
+    markdown_lines.extend(["", "## Blocking findings", ""])
     if blockers:
-        markdown_lines.extend(
-            f"- {_markdown_escape(item.title)} — `{item.fingerprint}`" for item in blockers[:10]
-        )
+        for finding in blockers:
+            markdown_lines.extend(_markdown_finding(finding))
+    else:
+        markdown_lines.append("- None recorded.")
     markdown_lines.extend(["", "## Review focus", ""])
-    markdown_lines.extend(
-        [
-            (
-                f"- **{_markdown_escape(item.severity)}:** "
-                f"{_markdown_escape(item.title)}"
-                + (f" (`{_markdown_escape(item.path)}:{item.line}`)" if item.path else "")
-            )
-            for item in warnings[:10]
-        ]
-        or ["- No evaluator concerns recorded."]
-    )
+    if warnings:
+        for finding in warnings:
+            markdown_lines.extend(_markdown_finding(finding))
+    elif blockers:
+        markdown_lines.append("- The blocking findings above are the immediate review focus.")
+    else:
+        markdown_lines.append("- No evaluator concerns recorded.")
     markdown_lines.extend(["", "## Exact inputs", ""])
     markdown_lines.extend(
         [
@@ -1527,8 +1638,7 @@ def _render_report(
         ]
     )
     markdown_lines.extend(
-        [f"- {_markdown_escape(item)}" for item in sorted(set(limitations))[:20]]
-        or ["- None recorded."]
+        [f"- {_markdown_escape(item)}" for item in sorted(set(limitations))] or ["- None recorded."]
     )
     markdown = "\n".join(markdown_lines).rstrip() + "\n"
 
@@ -1546,19 +1656,19 @@ def _render_report(
     )
     if not reasons:
         html_parts.append("<li>None recorded.</li>")
+    html_parts.append("</ul><h2>Blocking findings</h2><ul>")
+    html_parts.extend(_html_finding(finding) for finding in blockers)
+    if not blockers:
+        html_parts.append("<li>None recorded.</li>")
     html_parts.append("</ul><h2>Review focus</h2><ul>")
-    for finding in warnings[:10]:
-        location = f" ({finding.path}:{finding.line})" if finding.path else ""
-        html_parts.append(
-            f"<li><strong>{html.escape(finding.severity)}:</strong> "
-            f"{html.escape(_safe_report_text(finding.title))}"
-            f"{html.escape(location)}</li>"
-        )
-    if not warnings:
+    html_parts.extend(_html_finding(finding) for finding in warnings)
+    if blockers and not warnings:
+        html_parts.append("<li>The blocking findings above are the immediate review focus.</li>")
+    elif not warnings:
         html_parts.append("<li>No evaluator concerns recorded.</li>")
     html_parts.append("</ul><h2>Limitations</h2><ul>")
     html_parts.extend(
-        f"<li>{html.escape(_safe_report_text(item))}</li>" for item in sorted(set(limitations))[:20]
+        f"<li>{html.escape(_safe_report_text(item))}</li>" for item in sorted(set(limitations))
     )
     if not limitations:
         html_parts.append("<li>None recorded.</li>")
@@ -1596,11 +1706,12 @@ def _finalize_evaluator_failure(
             "input_hash": content_hash(failure_input),
         },
     )
-    limitations = sorted(
-        {
-            *cast(list[str], run.limitations),
-            "Independent evaluator review did not complete.",
-        }
+    limitations = _bounded_limitations(
+        cast(list[str], run.limitations),
+        ["Independent evaluator review did not complete."],
+        required=(
+            (REQUIREMENT_TRACEABILITY_LIMITATION,) if run.work_item_revision_id is None else ()
+        ),
     )
     markdown, rendered_html = _render_report(
         run=run,
@@ -1817,13 +1928,14 @@ def submit_evaluator_result(
         reason_codes=reason_codes,
         input_hash=content_hash(readiness_input),
     )
-    all_limitations = sorted(
-        set(
-            cast(list[str], run.limitations)
-            + cast(list[str], result["limitations"])
-            + ["No repository code was fetched or executed by this assurance engine."]
-        )
-    )[:MAX_LIMITATIONS]
+    all_limitations = _bounded_limitations(
+        cast(list[str], run.limitations),
+        cast(list[str], result["limitations"]),
+        ["No repository code was fetched or executed by this assurance engine."],
+        required=(
+            (REQUIREMENT_TRACEABILITY_LIMITATION,) if run.work_item_revision_id is None else ()
+        ),
+    )
     markdown, rendered_html = _render_report(
         run=run,
         status=status,
