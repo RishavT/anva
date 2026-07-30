@@ -15,6 +15,7 @@ import pytest
 from anva.skills.trusted_evals import (
     TrustedEvalError,
     _host_version,
+    _provider_output_schema,
     grade_evaluation,
     main,
     prepare_evaluation,
@@ -161,7 +162,12 @@ def test_prepare_physically_excludes_oracle_grader_and_prior_outputs(
         if path.is_file()
     }
     assert input_names == set(cast(dict[str, str], manifest["input_hashes"]))
-    assert {"task.txt", "synthetic-mcp-transcript.json", "host-output.schema.json"} <= (input_names)
+    assert {
+        "task.txt",
+        "synthetic-mcp-transcript.json",
+        "host-output.schema.json",
+        "validation-output.schema.json",
+    } <= input_names
     serialized_inputs = b"".join(
         path.read_bytes() for path in (evidence / "input").rglob("*") if path.is_file()
     )
@@ -340,6 +346,56 @@ def test_trusted_evaluation_gate_exists_as_a_reproducible_script() -> None:
 
     assert gate.is_file()
     assert "trusted_evals import main" in gate.read_text(encoding="utf-8")
+
+
+@pytest.mark.unit
+def test_provider_schema_preserves_canonical_schema_for_post_seal_validation(
+    tmp_path: Path,
+) -> None:
+    evidence = _prepare(tmp_path, "codex")
+    input_directory = evidence / "input"
+    canonical = json.loads(
+        (input_directory / "validation-output.schema.json").read_text(encoding="utf-8")
+    )
+    provider_path = input_directory / "host-output.schema.json"
+    provider_bytes = provider_path.read_bytes()
+    provider = json.loads(provider_bytes)
+
+    assert canonical["allOf"]
+    assert "allOf" not in provider
+    assert provider["required"] == list(provider["properties"])
+    material = provider["$defs"]["materialClaim"]["properties"]["material"]
+    assert material == {"enum": [True], "type": "boolean"}
+    assert _provider_output_schema(
+        (input_directory / "validation-output.schema.json").read_bytes()
+    ) == provider_bytes
+
+    unsupported = {
+        "allOf",
+        "if",
+        "then",
+        "else",
+        "not",
+        "oneOf",
+        "uniqueItems",
+        "minLength",
+        "maxLength",
+    }
+
+    def assert_supported(value: object) -> None:
+        if isinstance(value, dict):
+            assert unsupported.isdisjoint(value)
+            properties = value.get("properties")
+            if isinstance(properties, dict):
+                assert value["additionalProperties"] is False
+                assert value["required"] == list(properties)
+            for child in value.values():
+                assert_supported(child)
+        elif isinstance(value, list):
+            for child in value:
+                assert_supported(child)
+
+    assert_supported(provider)
 
 
 @pytest.mark.unit

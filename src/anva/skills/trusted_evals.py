@@ -25,6 +25,17 @@ _MAX_TASK_BYTES = 64 * 1024
 _MAX_TRANSCRIPT_BYTES = 512 * 1024
 _MAX_HOST_CAPTURE_BYTES = 1024 * 1024
 _COMMON_SCHEMA_ID = "https://schemas.anva.dev/skills/v1/common.schema.json"
+_STRUCTURED_OUTPUT_FORMATS = {
+    "date-time",
+    "time",
+    "date",
+    "duration",
+    "email",
+    "hostname",
+    "ipv4",
+    "ipv6",
+    "uuid",
+}
 _SAFE_ENVIRONMENT = {
     "PATH",
     "HOME",
@@ -157,6 +168,77 @@ def _self_contained_schema(output_schema: bytes, common_schema: bytes) -> bytes:
     flattened["$defs"] = definitions
     Draft202012Validator.check_schema(flattened)
     return _canonical_json(flattened)
+
+
+def _enum_types(values: list[object]) -> str | list[str] | None:
+    names: list[str] = []
+    for value in values:
+        if value is None:
+            name = "null"
+        elif isinstance(value, bool):
+            name = "boolean"
+        elif isinstance(value, str):
+            name = "string"
+        elif isinstance(value, int):
+            name = "integer"
+        elif isinstance(value, float):
+            name = "number"
+        else:
+            return None
+        if name not in names:
+            names.append(name)
+    if len(names) == 1:
+        return names[0]
+    return names or None
+
+
+def _provider_output_schema(canonical_schema: bytes) -> bytes:
+    """Derive a generation schema without weakening the canonical post-seal check."""
+    canonical = _load_object(canonical_schema, "canonical output schema")
+    unsupported = {
+        "$schema",
+        "$id",
+        "allOf",
+        "if",
+        "then",
+        "else",
+        "not",
+        "uniqueItems",
+        "minLength",
+        "maxLength",
+    }
+
+    def adapt(value: object, *, root: bool = False) -> object:
+        if isinstance(value, list):
+            return [adapt(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        rewritten: dict[str, object] = {}
+        for key, child in value.items():
+            if key in unsupported or (root and key == "oneOf"):
+                continue
+            if key == "oneOf":
+                rewritten["anyOf"] = adapt(child)
+            elif key == "const":
+                rewritten["enum"] = [child]
+            elif key == "format" and child not in _STRUCTURED_OUTPUT_FORMATS:
+                continue
+            else:
+                rewritten[key] = adapt(child)
+        properties = rewritten.get("properties")
+        if isinstance(properties, dict):
+            rewritten["additionalProperties"] = False
+            rewritten["required"] = list(properties)
+        enum = rewritten.get("enum")
+        if "type" not in rewritten and isinstance(enum, list):
+            inferred = _enum_types(enum)
+            if inferred is not None:
+                rewritten["type"] = inferred
+        return rewritten
+
+    provider = cast(dict[str, object], adapt(canonical, root=True))
+    Draft202012Validator.check_schema(provider)
+    return _canonical_json(provider)
 
 
 def _read_manifest(evidence_directory: Path) -> dict[str, object]:
@@ -295,11 +377,18 @@ def prepare_evaluation(
             transcript_payload,
         )
         references = input_directory / "skill" / "references"
-        flattened = _self_contained_schema(
+        canonical_schema = _self_contained_schema(
             (references / "output.schema.json").read_bytes(),
             (references / "common.schema.json").read_bytes(),
         )
-        _write_exclusive(input_directory / "host-output.schema.json", flattened)
+        _write_exclusive(
+            input_directory / "validation-output.schema.json",
+            canonical_schema,
+        )
+        _write_exclusive(
+            input_directory / "host-output.schema.json",
+            _provider_output_schema(canonical_schema),
+        )
         input_hashes = _tree_hashes(input_directory)
         manifest: dict[str, object] = {
             "format_version": 1,
@@ -701,8 +790,8 @@ def grade_evaluation(
     ):
         raise TrustedEvalError("Grader score configuration is invalid")
     schema = _load_object(
-        (evidence_directory / "input" / "host-output.schema.json").read_bytes(),
-        "host output schema",
+        (evidence_directory / "input" / "validation-output.schema.json").read_bytes(),
+        "canonical validation output schema",
     )
     schema_errors = sorted(
         Draft202012Validator(

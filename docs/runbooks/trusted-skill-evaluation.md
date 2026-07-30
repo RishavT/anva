@@ -9,10 +9,13 @@ below produces a passing `grade-record.json`.
 The gate deliberately has three commands. `prepare` and `run` do not accept an
 oracle or grader argument. They create a new read-only input workspace
 containing only the selected packaged skill, raw task, synthetic MCP
-transcript, and the schema derived from that packaged skill. The workspace
-does not contain the repository worktree, prior outputs, ambient MCP
-configuration, oracle, or grader. The native host output is captured and
-hashed before `grade` can read the separately held oracle and grader.
+transcript, the canonical schema derived from that packaged skill, and a
+provider-compatible generation schema derived from the canonical schema. The
+workspace does not contain the repository worktree, prior outputs, ambient MCP
+configuration, oracle, or grader. Provider restrictions therefore cannot
+weaken post-seal validation: `grade` uses the canonical schema. The native host
+output is captured and hashed before `grade` can read the separately held
+oracle and grader.
 
 ```console
 python scripts/trusted_skill_eval.py prepare \

@@ -65,7 +65,7 @@ format validation.
   introduced by either package.
 - Deterministic render/package checking reported no drift, and both committed
   archives passed checksum and member-safety verification.
-- The full rebuilt-image Compose gate passed 549 tests with 2 expected skips
+- The full rebuilt-image Compose gate passed 550 tests with 2 expected skips
   and 85% branch coverage. The live official MCP client Compose smoke passed
   both contract/auth/read-only/revocation/HTTP-parity and safe-unavailable
   scenarios. Strict real `/diagnostics` checks passed against both the
