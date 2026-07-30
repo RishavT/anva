@@ -6,7 +6,7 @@ import uuid
 from collections.abc import Mapping
 from typing import cast
 
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
 
 from anva.core.exceptions import (
@@ -403,6 +403,11 @@ def transition_knowledge_proposal(
             }
             else None
         )
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT set_config('anva.knowledge_proposal_lifecycle_id', %s, true)",
+                [str(proposal.id)],
+            )
         return cast(
             KnowledgeProposal,
             apply_transition(

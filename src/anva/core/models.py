@@ -3174,6 +3174,10 @@ class RepositoryAccessToken(UUIDModel):
                 name="core_repository_token_org_id_unique",
             ),
             models.UniqueConstraint(
+                fields=["organization", "repository", "id"],
+                name="core_repository_token_org_repo_id_unique",
+            ),
+            models.UniqueConstraint(
                 fields=["token_hash"],
                 name="core_repository_token_hash_unique",
             ),
@@ -3997,4 +4001,108 @@ class EvidenceRetentionEvent(UUIDModel):
                 fields=["organization", "id"],
                 name="core_evidence_retention_org_id_unique",
             )
+        ]
+
+
+class MCPToolInvocation(UUIDModel):
+    """Content-free audit record for one authenticated MCP or parity HTTP call."""
+
+    class Outcome(models.TextChoices):
+        SUCCEEDED = "SUCCEEDED"
+        FAILED = "FAILED"
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    repository = models.ForeignKey(Repository, on_delete=models.PROTECT)
+    credential = models.ForeignKey(
+        RepositoryAccessToken,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    actor_type = models.CharField(max_length=20)
+    actor_id = models.CharField(max_length=200)
+    transport = models.CharField(max_length=16)
+    tool_name = models.CharField(max_length=100)
+    required_action = models.CharField(max_length=100)
+    arguments_hash = models.CharField(max_length=64)
+    request_id = models.UUIDField()
+    outcome = models.CharField(max_length=16, choices=Outcome)
+    error_code = models.CharField(max_length=100, blank=True)
+    target_id = models.UUIDField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(
+                fields=["organization", "repository", "created_at"],
+                name="core_mcp_audit_repo_idx",
+            )
+        ]
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_mcp_invocation_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "request_id"],
+                name="core_mcp_invocation_request_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(arguments_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_mcp_invocation_args_sha256",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(outcome="SUCCEEDED", error_code="") | Q(outcome="FAILED", error_code__gt="")
+                ),
+                name="core_mcp_invocation_outcome_coherent",
+            ),
+        ]
+
+
+class MCPProposalSubmission(UUIDModel):
+    """Repository/scope-bound provenance for a review-only MCP proposal."""
+
+    class Kind(models.TextChoices):
+        CORRECTION = "CORRECTION"
+        RELATIONSHIP = "RELATIONSHIP"
+        DECISION = "DECISION"
+        WORK_SUMMARY = "WORK_SUMMARY"
+        PREFLIGHT_SUMMARY = "PREFLIGHT_SUMMARY"
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    repository = models.ForeignKey(Repository, on_delete=models.PROTECT)
+    access_scope = models.ForeignKey(AccessScope, on_delete=models.PROTECT)
+    knowledge_proposal = models.OneToOneField(KnowledgeProposal, on_delete=models.PROTECT)
+    credential = models.ForeignKey(
+        RepositoryAccessToken,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    proposal_kind = models.CharField(max_length=32, choices=Kind)
+    actor_type = models.CharField(max_length=20)
+    actor_id = models.CharField(max_length=200)
+    payload_hash = models.CharField(max_length=64)
+    idempotency_hash = models.CharField(max_length=64)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_mcp_submission_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "repository", "idempotency_hash"],
+                name="core_mcp_submission_idempotent_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(payload_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_mcp_submission_payload_sha256",
+            ),
+            models.CheckConstraint(
+                condition=Q(idempotency_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_mcp_submission_key_sha256",
+            ),
         ]

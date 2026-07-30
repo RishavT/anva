@@ -65,6 +65,10 @@ if ENVIRONMENT == "production" and BOOTSTRAP_SECRET == "anva-local-bootstrap":
 ANVA_PUBLIC_BASE_URL = os.getenv("ANVA_PUBLIC_BASE_URL", "http://localhost:8000")
 if not ANVA_PUBLIC_BASE_URL.startswith(("http://", "https://")):
     raise ImproperlyConfigured("ANVA_PUBLIC_BASE_URL must be an HTTP(S) URL")
+ANVA_MCP_PUBLIC_BASE_URL = os.getenv("ANVA_MCP_PUBLIC_BASE_URL", "http://localhost:8001")
+if not ANVA_MCP_PUBLIC_BASE_URL.startswith(("http://", "https://")):
+    raise ImproperlyConfigured("ANVA_MCP_PUBLIC_BASE_URL must be an HTTP(S) URL")
+ANVA_MCP_READ_ONLY = env_bool("ANVA_MCP_READ_ONLY", default=False)
 ANVA_GITHUB_WEBHOOK_SECRETS = tuple(
     value
     for value in os.getenv(

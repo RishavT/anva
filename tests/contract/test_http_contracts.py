@@ -4,20 +4,18 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import Callable
 from datetime import UTC, datetime
-from io import BytesIO
 from types import SimpleNamespace
-from typing import Any
 from unittest.mock import patch
 
 import pytest
 from django.http import HttpRequest, JsonResponse
 from django.test import Client, RequestFactory
+from starlette.testclient import TestClient
 
 from anva.core import views as core_views
 from anva.core.exceptions import AuthenticationError, IdempotencyConflictError
-from anva.entrypoints.mcp import application
+from anva.entrypoints.mcp import create_application
 from anva.foundation.services import DependencyStatus, ReadinessStatus
 
 
@@ -50,40 +48,28 @@ def test_api_health_endpoints_reject_unsupported_methods(client: Client) -> None
     assert client.post("/health/ready").status_code == 405
 
 
-def call_mcp(path: str, method: str = "GET") -> tuple[str, dict[str, object]]:
-    """Invoke the MCP WSGI contract without a listening socket."""
-    result_status = ""
-
-    def start_response(
-        status: str,
-        headers: list[tuple[str, str]],
-        exc_info: Any = None,
-    ) -> Callable[[bytes], object]:
-        del headers, exc_info
-        nonlocal result_status
-        result_status = status
-        return BytesIO().write
-
-    chunks = application(
-        {"PATH_INFO": path, "REQUEST_METHOD": method},
-        start_response,
-    )
-    return result_status, json.loads(b"".join(chunks))
+def call_mcp(path: str, method: str = "GET") -> tuple[int, dict[str, object]]:
+    """Invoke the MCP ASGI contract through an in-process HTTP client."""
+    with TestClient(create_application()) as client:
+        response = client.request(method, path)
+    if response.headers.get("content-type", "").startswith("application/json"):
+        return response.status_code, response.json()
+    return response.status_code, {"detail": response.text}
 
 
 @pytest.mark.contract
-def test_mcp_explicitly_does_not_claim_protocol_readiness() -> None:
+def test_mcp_requires_bearer_authentication_before_protocol_work() -> None:
     status, payload = call_mcp("/mcp")
 
-    assert status == "501 Not Implemented"
-    assert payload["error"] == "mcp_not_implemented"
+    assert status == 401
+    assert payload["error"] == "invalid_token"
 
 
 @pytest.mark.contract
 def test_mcp_liveness_contract() -> None:
     status, payload = call_mcp("/health/live")
 
-    assert status == "200 OK"
+    assert status == 200
     assert payload["service"] == "mcp"
     assert payload["status"] == "alive"
 
@@ -91,9 +77,9 @@ def test_mcp_liveness_contract() -> None:
 @pytest.mark.contract
 @pytest.mark.parametrize(
     ("healthy", "expected_http"),
-    [(True, "200 OK"), (False, "503 Service Unavailable")],
+    [(True, 200), (False, 503)],
 )
-def test_mcp_readiness_contract(healthy: bool, expected_http: str) -> None:
+def test_mcp_readiness_contract(healthy: bool, expected_http: int) -> None:
     dependency = DependencyStatus("database", healthy, "available" if healthy else "unavailable")
     readiness = ReadinessStatus("ready" if healthy else "not_ready", (dependency,))
 
@@ -106,8 +92,8 @@ def test_mcp_readiness_contract(healthy: bool, expected_http: str) -> None:
 
 @pytest.mark.contract
 def test_mcp_rejects_unknown_routes_and_methods() -> None:
-    assert call_mcp("/missing")[0] == "404 Not Found"
-    assert call_mcp("/health/live", "POST")[0] == "405 Method Not Allowed"
+    assert call_mcp("/missing")[0] == 404
+    assert call_mcp("/health/live", "POST")[0] == 405
 
 
 @pytest.mark.contract

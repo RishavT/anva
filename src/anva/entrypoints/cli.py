@@ -152,6 +152,13 @@ def build_parser() -> argparse.ArgumentParser:
     github_status.add_argument("--repository-id", required=True, type=uuid.UUID)
     github_revoke = github_commands.add_parser("revoke")
     github_revoke.add_argument("--repository-id", required=True, type=uuid.UUID)
+    mcp = subparsers.add_parser("mcp", help="Diagnose the remote MCP gateway")
+    mcp.add_argument(
+        "--mcp-url",
+        default=os.getenv("ANVA_MCP_URL", "http://localhost:8001"),
+    )
+    mcp_commands = mcp.add_subparsers(dest="mcp_command", required=True)
+    mcp_commands.add_parser("diagnose")
     return parser
 
 
@@ -464,6 +471,36 @@ def _github_request(arguments: argparse.Namespace) -> int:
     )
 
 
+def _mcp_diagnose(arguments: argparse.Namespace) -> int:
+    request = Request(  # noqa: S310 - operator-selected Anva MCP endpoint
+        f"{str(arguments.mcp_url).rstrip('/')}/diagnostics",
+        method="GET",
+        headers={"Accept": "application/json"},
+    )
+    try:
+        with urlopen(request, timeout=10) as response:  # noqa: S310
+            result = json.loads(response.read())
+    except HTTPError as error:
+        result = json.loads(error.read() or b"{}")
+        print(json.dumps(result, sort_keys=True))
+        return 1
+    except (URLError, TimeoutError):
+        print(
+            json.dumps(
+                {
+                    "code": "mcp_unavailable",
+                    "message": (
+                        "Anva MCP is unavailable; verify the URL, network, and "
+                        "docker compose mcp service"
+                    ),
+                }
+            )
+        )
+        return 1
+    print(json.dumps(result, sort_keys=True))
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Execute one CLI command and return a process exit code."""
     arguments = build_parser().parse_args(argv)
@@ -494,6 +531,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (json.JSONDecodeError, OSError, ValueError):
             print(json.dumps({"code": "invalid_input", "message": "Input file is invalid"}))
             return 2
+    if arguments.command == "mcp":
+        return _mcp_diagnose(arguments)
 
     configure_django()
     from anva.foundation.services import readiness_status

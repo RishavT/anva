@@ -3677,7 +3677,7 @@
     },
     "/mcp/context": {
       "post": {
-        "description": "Reserved for issue #9; returns 501 after authorization.",
+        "description": "Compatibility endpoint returning authenticated gateway diagnostics; call /mcp/tools/{tool_name} for canonical HTTP parity.",
         "operationId": "getMcpContext",
         "parameters": [
           {
@@ -3685,6 +3685,9 @@
           }
         ],
         "responses": {
+          "200": {
+            "description": "Authenticated MCP compatibility response."
+          },
           "400": {
             "$ref": "#/components/responses/StructuredError"
           },
@@ -3696,9 +3699,1497 @@
           },
           "409": {
             "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/mcp/diagnostics": {
+      "get": {
+        "operationId": "diagnoseMcpGateway",
+        "responses": {
+          "200": {
+            "description": "Non-secret MCP compatibility and availability data."
+          }
+        },
+        "security": []
+      }
+    },
+    "/mcp/tools/{tool_name}": {
+      "post": {
+        "description": "Calls the same canonical domain facade as MCP tools and returns a semantically identical structured result.",
+        "operationId": "callMcpParityTool",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tool_name",
+            "required": true,
+            "schema": {
+              "enum": [
+                "anva.resolve_repository",
+                "anva.resolve_work_item",
+                "anva.get_context_packet",
+                "anva.search",
+                "anva.get_entity",
+                "anva.get_relationships",
+                "anva.get_repository_profile",
+                "anva.get_policy_bundle",
+                "anva.get_requirements",
+                "anva.explain_assertion",
+                "anva.get_source_excerpt",
+                "anva.propose_correction",
+                "anva.propose_relationship",
+                "anva.propose_decision",
+                "anva.submit_work_summary",
+                "anva.submit_preflight_summary"
+              ],
+              "type": "string"
+            }
           },
-          "501": {
-            "description": "MCP transport is not implemented."
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.resolve_repository/input.schema.json",
+                    "additionalProperties": false,
+                    "properties": {
+                      "contract_version": {
+                        "const": "1",
+                        "type": "string"
+                      },
+                      "repository_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "contract_version",
+                      "repository_id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.resolve_work_item/input.schema.json",
+                    "additionalProperties": false,
+                    "oneOf": [
+                      {
+                        "not": {
+                          "required": [
+                            "external_key"
+                          ]
+                        },
+                        "required": [
+                          "work_item_id"
+                        ]
+                      },
+                      {
+                        "not": {
+                          "required": [
+                            "work_item_id"
+                          ]
+                        },
+                        "required": [
+                          "external_key"
+                        ]
+                      }
+                    ],
+                    "properties": {
+                      "contract_version": {
+                        "const": "1",
+                        "type": "string"
+                      },
+                      "external_key": {
+                        "maxLength": 300,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "repository_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "work_item_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "contract_version",
+                      "repository_id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.get_context_packet/input.schema.json",
+                    "additionalProperties": false,
+                    "oneOf": [
+                      {
+                        "not": {
+                          "anyOf": [
+                            {
+                              "required": [
+                                "task"
+                              ]
+                            },
+                            {
+                              "required": [
+                                "phase"
+                              ]
+                            }
+                          ]
+                        },
+                        "required": [
+                          "packet_id"
+                        ]
+                      },
+                      {
+                        "not": {
+                          "required": [
+                            "packet_id"
+                          ]
+                        },
+                        "required": [
+                          "task",
+                          "phase"
+                        ]
+                      }
+                    ],
+                    "properties": {
+                      "budget": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "max_bytes": {
+                            "maximum": 250000,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "max_citations": {
+                            "maximum": 200,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "max_items": {
+                            "maximum": 100,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "max_tokens": {
+                            "maximum": 20000,
+                            "minimum": 1,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [],
+                        "type": "object"
+                      },
+                      "contract_version": {
+                        "const": "1",
+                        "type": "string"
+                      },
+                      "packet_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "phase": {
+                        "enum": [
+                          "PREPARE",
+                          "BUILD",
+                          "PREFLIGHT",
+                          "ASSURANCE"
+                        ],
+                        "type": "string"
+                      },
+                      "repository_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "task": {
+                        "maxLength": 2000,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "contract_version",
+                      "repository_id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.search/input.schema.json",
+                    "additionalProperties": false,
+                    "properties": {
+                      "contract_version": {
+                        "const": "1",
+                        "type": "string"
+                      },
+                      "cursor": {
+                        "oneOf": [
+                          {
+                            "maxLength": 2048,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "limit": {
+                        "default": 20,
+                        "maximum": 50,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "phase": {
+                        "oneOf": [
+                          {
+                            "enum": [
+                              "PREPARE",
+                              "BUILD",
+                              "PREFLIGHT",
+                              "ASSURANCE"
+                            ],
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "query": {
+                        "maxLength": 500,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "repository_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "contract_version",
+                      "repository_id",
+                      "query"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.get_entity/input.schema.json",
+                    "additionalProperties": false,
+                    "properties": {
+                      "contract_version": {
+                        "const": "1",
+                        "type": "string"
+                      },
+                      "entity_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "repository_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "contract_version",
+                      "repository_id",
+                      "entity_id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.get_relationships/input.schema.json",
+                    "additionalProperties": false,
+                    "properties": {
+                      "contract_version": {
+                        "const": "1",
+                        "type": "string"
+                      },
+                      "cursor": {
+                        "oneOf": [
+                          {
+                            "maxLength": 2048,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "entity_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "limit": {
+                        "default": 20,
+                        "maximum": 50,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "repository_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "contract_version",
+                      "repository_id",
+                      "entity_id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.get_repository_profile/input.schema.json",
+                    "additionalProperties": false,
+                    "properties": {
+                      "contract_version": {
+                        "const": "1",
+                        "type": "string"
+                      },
+                      "repository_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "contract_version",
+                      "repository_id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.get_policy_bundle/input.schema.json",
+                    "additionalProperties": false,
+                    "properties": {
+                      "contract_version": {
+                        "const": "1",
+                        "type": "string"
+                      },
+                      "cursor": {
+                        "oneOf": [
+                          {
+                            "maxLength": 2048,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "limit": {
+                        "default": 20,
+                        "maximum": 50,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "repository_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "contract_version",
+                      "repository_id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.get_requirements/input.schema.json",
+                    "additionalProperties": false,
+                    "properties": {
+                      "contract_version": {
+                        "const": "1",
+                        "type": "string"
+                      },
+                      "cursor": {
+                        "oneOf": [
+                          {
+                            "maxLength": 2048,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "limit": {
+                        "default": 20,
+                        "maximum": 50,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "repository_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "work_item_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "contract_version",
+                      "repository_id",
+                      "work_item_id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.explain_assertion/input.schema.json",
+                    "additionalProperties": false,
+                    "properties": {
+                      "assertion_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "contract_version": {
+                        "const": "1",
+                        "type": "string"
+                      },
+                      "repository_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "contract_version",
+                      "repository_id",
+                      "assertion_id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.get_source_excerpt/input.schema.json",
+                    "additionalProperties": false,
+                    "properties": {
+                      "chunk_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "contract_version": {
+                        "const": "1",
+                        "type": "string"
+                      },
+                      "max_characters": {
+                        "default": 2000,
+                        "maximum": 4000,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "offset": {
+                        "maximum": 1000000,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "repository_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "contract_version",
+                      "repository_id",
+                      "chunk_id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.propose_correction/input.schema.json",
+                    "additionalProperties": false,
+                    "properties": {
+                      "access_scope_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "assertion_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "contract_version": {
+                        "const": "1",
+                        "type": "string"
+                      },
+                      "correction": {
+                        "additionalProperties": {
+                          "$ref": "#/$defs/bounded_json_value"
+                        },
+                        "maxProperties": 20,
+                        "minProperties": 1,
+                        "type": "object"
+                      },
+                      "idempotency_key": {
+                        "maxLength": 200,
+                        "minLength": 8,
+                        "type": "string"
+                      },
+                      "repository_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "source_references": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "ASSERTION",
+                                "SOURCE_CHUNK",
+                                "ENTITY",
+                                "WORK_ITEM",
+                                "POLICY",
+                                "CONTEXT_PACKET"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 50,
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "summary": {
+                        "maxLength": 5000,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "contract_version",
+                      "repository_id",
+                      "access_scope_id",
+                      "summary",
+                      "source_references",
+                      "idempotency_key",
+                      "assertion_id",
+                      "correction"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.propose_relationship/input.schema.json",
+                    "additionalProperties": false,
+                    "properties": {
+                      "access_scope_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "contract_version": {
+                        "const": "1",
+                        "type": "string"
+                      },
+                      "idempotency_key": {
+                        "maxLength": 200,
+                        "minLength": 8,
+                        "type": "string"
+                      },
+                      "rationale": {
+                        "maxLength": 2000,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "relationship_type": {
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "repository_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "source_entity_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "source_references": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "ASSERTION",
+                                "SOURCE_CHUNK",
+                                "ENTITY",
+                                "WORK_ITEM",
+                                "POLICY",
+                                "CONTEXT_PACKET"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 50,
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "summary": {
+                        "maxLength": 5000,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "target_entity_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "contract_version",
+                      "repository_id",
+                      "access_scope_id",
+                      "summary",
+                      "source_references",
+                      "idempotency_key",
+                      "source_entity_id",
+                      "target_entity_id",
+                      "relationship_type",
+                      "rationale"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.propose_decision/input.schema.json",
+                    "additionalProperties": false,
+                    "properties": {
+                      "access_scope_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "contract_version": {
+                        "const": "1",
+                        "type": "string"
+                      },
+                      "idempotency_key": {
+                        "maxLength": 200,
+                        "minLength": 8,
+                        "type": "string"
+                      },
+                      "outcome": {
+                        "maxLength": 5000,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "rationale": {
+                        "maxLength": 5000,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "repository_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "source_references": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "ASSERTION",
+                                "SOURCE_CHUNK",
+                                "ENTITY",
+                                "WORK_ITEM",
+                                "POLICY",
+                                "CONTEXT_PACKET"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 50,
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "summary": {
+                        "maxLength": 5000,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "title": {
+                        "maxLength": 500,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "work_item_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "contract_version",
+                      "repository_id",
+                      "access_scope_id",
+                      "summary",
+                      "source_references",
+                      "idempotency_key",
+                      "work_item_id",
+                      "title",
+                      "outcome",
+                      "rationale"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.submit_work_summary/input.schema.json",
+                    "additionalProperties": false,
+                    "properties": {
+                      "access_scope_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "contract_version": {
+                        "const": "1",
+                        "type": "string"
+                      },
+                      "idempotency_key": {
+                        "maxLength": 200,
+                        "minLength": 8,
+                        "type": "string"
+                      },
+                      "repository_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "source_references": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "ASSERTION",
+                                "SOURCE_CHUNK",
+                                "ENTITY",
+                                "WORK_ITEM",
+                                "POLICY",
+                                "CONTEXT_PACKET"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 50,
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "summary": {
+                        "maxLength": 5000,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "summary_data": {
+                        "additionalProperties": {
+                          "$ref": "#/$defs/bounded_json_value"
+                        },
+                        "maxProperties": 50,
+                        "minProperties": 1,
+                        "type": "object"
+                      },
+                      "work_item_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "contract_version",
+                      "repository_id",
+                      "access_scope_id",
+                      "summary",
+                      "source_references",
+                      "idempotency_key",
+                      "work_item_id",
+                      "summary_data"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.submit_preflight_summary/input.schema.json",
+                    "additionalProperties": false,
+                    "properties": {
+                      "access_scope_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "checks": {
+                        "items": {
+                          "additionalProperties": {
+                            "$ref": "#/$defs/bounded_json_value"
+                          },
+                          "maxProperties": 100,
+                          "type": "object"
+                        },
+                        "maxItems": 100,
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "commit_sha": {
+                        "pattern": "^[a-f0-9]{40}$",
+                        "type": "string"
+                      },
+                      "contract_version": {
+                        "const": "1",
+                        "type": "string"
+                      },
+                      "idempotency_key": {
+                        "maxLength": 200,
+                        "minLength": 8,
+                        "type": "string"
+                      },
+                      "limitations": {
+                        "items": {
+                          "maxLength": 2000,
+                          "type": "string"
+                        },
+                        "maxItems": 20,
+                        "type": "array"
+                      },
+                      "repository_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "source_references": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "ASSERTION",
+                                "SOURCE_CHUNK",
+                                "ENTITY",
+                                "WORK_ITEM",
+                                "POLICY",
+                                "CONTEXT_PACKET"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 50,
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "summary": {
+                        "maxLength": 5000,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "work_item_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "contract_version",
+                      "repository_id",
+                      "access_scope_id",
+                      "summary",
+                      "source_references",
+                      "idempotency_key",
+                      "work_item_id",
+                      "commit_sha",
+                      "checks",
+                      "limitations"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
           }
         }
       }

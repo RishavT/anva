@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
+from datetime import datetime
 
 from django.db.models import F, Q, QuerySet
 
@@ -11,6 +13,7 @@ from anva.core.models import (
     AccessScope,
     ImmutableArtifact,
     KnowledgeAssertion,
+    KnowledgeEntity,
     KnowledgeRelationship,
     SourceChunk,
     SourceChunkVisibility,
@@ -161,6 +164,105 @@ def authorized_relationships(
         source_observation__source_revision_id=F(
             "source_observation__source_document__current_revision_id"
         ),
+    )
+
+
+def authorized_entities(
+    *,
+    actor: ActorContext,
+    repository_id: uuid.UUID,
+) -> QuerySet[KnowledgeEntity]:
+    """Return active entities only through currently visible access scopes."""
+    authorize_action(
+        actor=actor,
+        action=Action.KNOWLEDGE_VIEW,
+        repository_id=repository_id,
+    )
+    scopes = visible_scope_ids(actor=actor, repository_id=repository_id)
+    return KnowledgeEntity.objects.filter(
+        organization_id=actor.organization_id,
+        access_scope__in=scopes,
+        is_active=True,
+    )
+
+
+def get_authorized_entity(
+    *,
+    actor: ActorContext,
+    repository_id: uuid.UUID,
+    entity_id: uuid.UUID,
+) -> KnowledgeEntity:
+    """Hide inaccessible and missing entity identifiers behind one response."""
+    entity = (
+        authorized_entities(actor=actor, repository_id=repository_id).filter(id=entity_id).first()
+    )
+    if entity is None:
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    return entity
+
+
+@dataclass(frozen=True, slots=True)
+class SourceExcerpt:
+    """One current authorized source chunk and normalized provenance locator."""
+
+    chunk_id: uuid.UUID
+    text: str
+    content_hash: str
+    pointer: str
+    canonical_url: str
+    source_location_id: uuid.UUID
+    source_observation_id: uuid.UUID
+    access_snapshot_id: uuid.UUID
+    observed_at: datetime
+
+
+def get_authorized_source_excerpt(
+    *,
+    actor: ActorContext,
+    repository_id: uuid.UUID,
+    chunk_id: uuid.UUID,
+) -> SourceExcerpt:
+    """Resolve exact source text through current normalized visibility, never legacy JSON."""
+    chunk = (
+        authorized_source_chunks(actor=actor, repository_id=repository_id)
+        .filter(id=chunk_id)
+        .first()
+    )
+    if chunk is None:
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    scopes = visible_scope_ids(actor=actor, repository_id=repository_id)
+    visibility = (
+        SourceChunkVisibility.objects.filter(
+            organization_id=actor.organization_id,
+            source_chunk_id=chunk.id,
+            access_scope__in=scopes,
+            state=SourceChunkVisibility.State.AVAILABLE,
+            revoked_at__isnull=True,
+            access_snapshot__revoked_at__isnull=True,
+            source_observation__source_document__state=SourceDocument.State.PRESENT,
+            source_observation__source_revision_id=F(
+                "source_observation__source_document__current_revision_id"
+            ),
+            source_observation__sync_run_id=F(
+                "source_observation__source_document__last_seen_run_id"
+            ),
+        )
+        .select_related("source_location", "source_observation__source_document")
+        .order_by("observed_at", "id")
+        .first()
+    )
+    if visibility is None:
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    return SourceExcerpt(
+        chunk_id=chunk.id,
+        text=chunk.text,
+        content_hash=chunk.content_hash,
+        pointer=visibility.source_location.pointer,
+        canonical_url=visibility.source_observation.source_document.canonical_url,
+        source_location_id=visibility.source_location_id,
+        source_observation_id=visibility.source_observation_id,
+        access_snapshot_id=visibility.access_snapshot_id,
+        observed_at=visibility.observed_at,
     )
 
 

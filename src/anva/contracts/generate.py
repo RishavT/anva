@@ -9,8 +9,9 @@ from pathlib import Path
 
 from jsonschema import Draft202012Validator
 
-from anva.contracts.catalog import EXAMPLES, KNOWLEDGE_CHANGE, SCHEMA_VERSION, SCHEMAS
+from anva.contracts.catalog import EXAMPLES, KNOWLEDGE_CHANGE, SCHEMAS
 from anva.contracts.validation import validate_payload
+from anva.mcp.contracts import TOOL_CONTRACTS, mcp_contract_document
 
 REPOSITORY_ROOT = Path.cwd()
 CONTRACT_ROOT = REPOSITORY_ROOT / "contracts"
@@ -463,7 +464,7 @@ def openapi_document() -> dict[str, object]:
         **structured_errors,
     }
     mcp_responses: dict[str, object] = {
-        "501": {"description": "MCP transport is not implemented."},
+        "200": {"description": "Authenticated MCP compatibility response."},
         **structured_errors,
     }
     return {
@@ -974,9 +975,57 @@ def openapi_document() -> dict[str, object]:
             "/mcp/context": {
                 "post": {
                     "operationId": "getMcpContext",
-                    "description": "Reserved for issue #9; returns 501 after authorization.",
+                    "description": (
+                        "Compatibility endpoint returning authenticated gateway diagnostics; "
+                        "call /mcp/tools/{tool_name} for canonical HTTP parity."
+                    ),
                     "parameters": [{"$ref": "#/components/parameters/CorrelationId"}],
                     "responses": mcp_responses,
+                }
+            },
+            "/mcp/diagnostics": {
+                "get": {
+                    "operationId": "diagnoseMcpGateway",
+                    "security": [],
+                    "responses": {
+                        "200": {
+                            "description": "Non-secret MCP compatibility and availability data."
+                        }
+                    },
+                }
+            },
+            "/mcp/tools/{tool_name}": {
+                "post": {
+                    "operationId": "callMcpParityTool",
+                    "description": (
+                        "Calls the same canonical domain facade as MCP tools and returns "
+                        "a semantically identical structured result."
+                    ),
+                    "parameters": [
+                        {
+                            "name": "tool_name",
+                            "in": "path",
+                            "required": True,
+                            "schema": {
+                                "type": "string",
+                                "enum": [contract["name"] for contract in TOOL_CONTRACTS],
+                            },
+                        },
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "oneOf": [
+                                        contract["input_schema"] for contract in TOOL_CONTRACTS
+                                    ]
+                                }
+                            }
+                        },
+                    },
+                    "responses": authorized_responses,
                 }
             },
             "/artifacts/{resource_id}": {
@@ -1230,46 +1279,8 @@ def openapi_document() -> dict[str, object]:
 
 
 def mcp_document() -> dict[str, object]:
-    """Generate versioned MCP tool skeletons from the same schema source."""
-    return {
-        "contract_version": "1",
-        "schema_versions": [SCHEMA_VERSION],
-        "capabilities": {
-            "resources": False,
-            "tools": True,
-            "write_operations_require_explicit_confirmation": True,
-        },
-        "tools": [
-            {
-                "name": "anva.evaluate_change",
-                "description": (
-                    "Evaluate a change against stored policy and evidence; "
-                    "does not claim production readiness without evidence."
-                ),
-                "inputSchema": SCHEMAS["evaluator-request"],
-                "outputSchema": SCHEMAS["evaluator-result"],
-                "readOnlyHint": True,
-            },
-            {
-                "name": "anva.submit_knowledge_proposal",
-                "description": (
-                    "Submit a proposed knowledge change for validation and human review; "
-                    "never directly mutates approved knowledge."
-                ),
-                "inputSchema": SCHEMAS["knowledge-proposal"],
-                "outputSchema": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "proposal_id": {"type": "string", "format": "uuid"},
-                        "state": {"const": "PROPOSED"},
-                    },
-                    "required": ["proposal_id", "state"],
-                },
-                "readOnlyHint": False,
-            },
-        ],
-    }
+    """Generate the complete versioned MCP tool/resource contract."""
+    return mcp_contract_document()
 
 
 def rendered_artifacts() -> dict[Path, bytes]:

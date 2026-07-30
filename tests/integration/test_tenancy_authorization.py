@@ -174,6 +174,7 @@ def assert_hidden(operation: Callable[[], object]) -> None:
         (Role.Code.VIEWER, Action.SEARCH, True),
         (Role.Code.VIEWER, Action.POLICY_VIEW, True),
         (Role.Code.VIEWER, Action.EVIDENCE_VIEW, True),
+        (Role.Code.VIEWER, Action.KNOWLEDGE_PROPOSE, False),
         (Role.Code.VIEWER, Action.KNOWLEDGE_REVIEW, False),
         (Role.Code.VIEWER, Action.ASSURANCE_EXECUTE, False),
         (Role.Code.KNOWLEDGE_ADMIN, Action.WORK_MANAGE, True),
@@ -957,7 +958,7 @@ def test_api_filters_before_search_and_hides_foreign_ids_on_every_read_surface()
         ),
         content_type="application/json",
     )
-    assert foreign_mcp.status_code == missing_mcp.status_code == 501
+    assert foreign_mcp.status_code == missing_mcp.status_code == 200
     assert foreign_mcp.json() == missing_mcp.json()
     assert "CANARY" not in foreign_mcp.content.decode()
 

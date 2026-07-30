@@ -120,13 +120,27 @@ make down
 ```
 
 The worker claims PostgreSQL-leased allowlisted jobs and revalidates source/snapshot access before
-and during ingestion. MCP exposes health endpoints, while the full MCP protocol and versioned
-`/api/v1/mcp/context` route return `501 Not Implemented` until issue #9.
+and during ingestion. The dedicated MCP process exposes authenticated, stateless, versioned
+Streamable HTTP at `/mcp`. Its tools call the same bounded domain facade as
+`POST /api/v1/mcp/tools/{tool_name}`; source text is untrusted inert data and proposal tools create
+review-only `PROPOSED` records.
 
 Bootstrap and repository-token operations are documented in
 [the credential runbook](docs/runbooks/bootstrap-and-repository-tokens.md). A repository token
 is opaque, repository/action scoped, stored only as a keyed digest, and returned in plaintext
 only when issued or rotated.
+
+Start and diagnose MCP, or run the real official-Python-client Compose acceptance:
+
+```bash
+docker compose up --build -d postgres minio minio-init migrate api mcp
+docker compose run --rm cli mcp diagnose --mcp-url http://mcp:8001
+docker compose --profile mcp-test run --rm mcp-client-test
+```
+
+See [the MCP runbook](docs/runbooks/mcp-gateway.md), [architecture
+decision](docs/adr/ADR-025-versioned-authenticated-mcp-gateway.md), and [threat
+model](docs/security/mcp-gateway-threat-model.md).
 
 Filesystem source lifecycle commands use the versioned API. Put the repository token in
 `ANVA_TOKEN` (never a command-line argument), then run commands such as:

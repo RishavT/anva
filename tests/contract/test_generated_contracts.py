@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import cast
 
 import pytest
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError
 
 from anva.contracts.catalog import SCHEMAS
 from anva.contracts.generate import (
@@ -15,6 +18,19 @@ from anva.contracts.generate import (
     rendered_artifacts,
     validate_catalog,
 )
+from anva.mcp.contracts import TOOL_BY_NAME
+
+
+def _mcp_request_schema(document: dict[str, object]) -> dict[str, object]:
+    paths = cast(dict[str, object], document["paths"])
+    operation = cast(
+        dict[str, object],
+        cast(dict[str, object], paths["/mcp/tools/{tool_name}"])["post"],
+    )
+    request_body = cast(dict[str, object], operation["requestBody"])
+    content = cast(dict[str, object], request_body["content"])
+    media_type = cast(dict[str, object], content["application/json"])
+    return cast(dict[str, object], media_type["schema"])
 
 
 @pytest.mark.contract
@@ -47,9 +63,71 @@ def test_openapi_and_mcp_share_the_canonical_schemas() -> None:
     }
     assert mcp["contract_version"] == "1"
     assert [tool["name"] for tool in tools] == [
-        "anva.evaluate_change",
-        "anva.submit_knowledge_proposal",
+        "anva.resolve_repository",
+        "anva.resolve_work_item",
+        "anva.get_context_packet",
+        "anva.search",
+        "anva.get_entity",
+        "anva.get_relationships",
+        "anva.get_repository_profile",
+        "anva.get_policy_bundle",
+        "anva.get_requirements",
+        "anva.explain_assertion",
+        "anva.get_source_excerpt",
+        "anva.propose_correction",
+        "anva.propose_relationship",
+        "anva.propose_decision",
+        "anva.submit_work_summary",
+        "anva.submit_preflight_summary",
     ]
+
+
+@pytest.mark.contract
+def test_openapi_mcp_request_schema_resolves_recursive_bounded_payloads() -> None:
+    payload: dict[str, object] = {
+        "contract_version": "1",
+        "repository_id": "00000000-0000-4000-8000-000000000009",
+        "access_scope_id": "00000000-0000-4000-8000-000000000010",
+        "summary": "Correct recursively nested knowledge.",
+        "source_references": [
+            {
+                "kind": "ASSERTION",
+                "id": "00000000-0000-4000-8000-000000000011",
+            }
+        ],
+        "idempotency_key": "recursive-openapi-proposal",
+        "assertion_id": "00000000-0000-4000-8000-000000000011",
+        "correction": {
+            "nested": [
+                {
+                    "deeper": {
+                        "value": "bounded",
+                    }
+                }
+            ]
+        },
+    }
+    generated_schema = _mcp_request_schema(openapi_document())
+    checked_document = cast(
+        dict[str, object],
+        json.loads(Path("contracts/openapi/v1/openapi.json").read_text()),
+    )
+    checked_schema = _mcp_request_schema(checked_document)
+
+    Draft202012Validator.check_schema(generated_schema)
+    Draft202012Validator(generated_schema).validate(payload)
+    Draft202012Validator(checked_schema).validate(payload)
+    Draft202012Validator(TOOL_BY_NAME["anva.propose_correction"]["input_schema"]).validate(payload)
+    assert checked_schema == generated_schema
+
+    oversized = {
+        **payload,
+        "correction": {
+            "nested": {f"key_{index}": index for index in range(101)},
+        },
+    }
+    with pytest.raises(ValidationError):
+        Draft202012Validator(generated_schema).validate(oversized)
 
 
 @pytest.mark.contract
@@ -91,6 +169,8 @@ def test_openapi_exposes_versioned_tenancy_and_authorization_boundaries() -> Non
         "/assertions/{resource_id}/explanation",
         "/canvas/assertions/{resource_id}",
         "/mcp/context",
+        "/mcp/diagnostics",
+        "/mcp/tools/{tool_name}",
         "/artifacts/{resource_id}",
         "/work-items",
         "/work-items/import",
