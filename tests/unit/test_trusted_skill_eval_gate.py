@@ -348,12 +348,16 @@ def test_native_codex_run_uses_isolated_profile_and_seals_raw_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     evidence = _prepare(tmp_path, "codex")
+    monkeypatch.chdir(tmp_path)
+    relative_evidence = evidence.relative_to(tmp_path)
     monkeypatch.setenv("ANVA_TOKEN", "CANARY-SECRET-MUST-NOT-ENTER-HOST")
     monkeypatch.setenv("PATH", "/usr/bin")
     output = (json.dumps(_valid_prepare_output(), sort_keys=True) + "\n").encode()
 
     def codex_process(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
         pending = Path(command[command.index("--output-last-message") + 1])
+        assert pending.is_absolute()
+        assert Path(cast(str, kwargs["cwd"])).is_absolute()
         pending.write_bytes(output)
         prompt = kwargs["input"]
         assert isinstance(prompt, bytes)
@@ -368,7 +372,10 @@ def test_native_codex_run_uses_isolated_profile_and_seals_raw_output(
         ),
         patch("anva.skills.trusted_evals.subprocess.run", side_effect=codex_process),
     ):
-        record = run_evaluation(evidence_directory=evidence, timeout_seconds=30)
+        record = run_evaluation(
+            evidence_directory=relative_evidence,
+            timeout_seconds=30,
+        )
 
     assert record["status"] == "OUTPUT_SEALED_UNGRADED"
     command = record["command"]

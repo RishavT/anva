@@ -446,6 +446,9 @@ def run_evaluation(
     """Run the selected native host before any oracle or grader is available."""
     if timeout_seconds < 30 or timeout_seconds > 1800:
         raise TrustedEvalError("Host timeout must be between 30 and 1800 seconds")
+    if evidence_directory.is_symlink() or not evidence_directory.is_dir():
+        raise TrustedEvalError("Evidence directory must be a regular directory")
+    evidence_directory = evidence_directory.resolve(strict=True)
     manifest = _verify_pregrade_inputs(evidence_directory)
     if (evidence_directory / "run-record.json").exists():
         raise TrustedEvalError("Evaluation has already been run")
