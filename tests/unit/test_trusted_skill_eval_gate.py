@@ -366,9 +366,10 @@ def test_provider_schema_preserves_canonical_schema_for_post_seal_validation(
     assert provider["required"] == list(provider["properties"])
     material = provider["$defs"]["materialClaim"]["properties"]["material"]
     assert material == {"enum": [True], "type": "boolean"}
-    assert _provider_output_schema(
-        (input_directory / "validation-output.schema.json").read_bytes()
-    ) == provider_bytes
+    assert (
+        _provider_output_schema((input_directory / "validation-output.schema.json").read_bytes())
+        == provider_bytes
+    )
 
     unsupported = {
         "allOf",
