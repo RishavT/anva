@@ -48,6 +48,7 @@ def _workflow_fingerprint(root: Path, workflow: Workflow) -> str:
         root / "shared" / "boundary.md",
         root / "shared" / "provenance.md",
         root / "shared" / "safe-unavailable.md",
+        root / "shared" / "output-schemas" / "common.schema.json",
         root / workflow.output_schema,
     ]
     if workflow.name == "anva-preflight":
@@ -125,7 +126,8 @@ def _skill_markdown(
         "## Degrade safely\n\n"
         f"{degraded}\n\n"
         "## Return the structured result\n\n"
-        "Follow `references/output.schema.json` and include these visible sections:\n\n"
+        "Follow `references/output.schema.json` (including its bundled "
+        "`references/common.schema.json` definitions) and include these visible sections:\n\n"
         f"{sections}\n\n"
         "Every material fact, requirement, policy, owner, decision, or finding must carry "
         "normalized provenance. If URL, locator, content hash, or observation time is "
@@ -188,6 +190,10 @@ def _write_skill(
             references / "evidence-rules.md",
         )
     shutil.copyfile(root / workflow.output_schema, references / "output.schema.json")
+    shutil.copyfile(
+        root / "shared" / "output-schemas" / "common.schema.json",
+        references / "common.schema.json",
+    )
     if host == "codex":
         agents = destination / "agents"
         agents.mkdir()

@@ -11,7 +11,7 @@ disable-model-invocation: true
 
 Use portable skill version `1.0.0` with Anva MCP contract `1` for phase `LEARN`. Keep the existing coding agent in control; Anva supplies bounded context and review-only proposals.
 
-<!-- anva-workflow-fingerprint: 9c2ad2a9b4d0b637bb0c7db8ac4a6f3340ed608d714f0f17543aef8e9988a34d -->
+<!-- anva-workflow-fingerprint: 53a1e31ced2da0133dd524b452cee82bfc3ebc0066dca2c8ab6c8282327500b6 -->
 
 ## Record invocation context
 
@@ -56,7 +56,7 @@ Call `anva.resolve_repository`, then `anva.resolve_work_item`, then `anva.get_co
 
 ## Return the structured result
 
-Follow `references/output.schema.json` and include these visible sections:
+Follow `references/output.schema.json` (including its bundled `references/common.schema.json` definitions) and include these visible sections:
 
 - `Proposal type`
 - `Target`

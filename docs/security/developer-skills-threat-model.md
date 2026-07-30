@@ -67,9 +67,13 @@ assurance or deployment safety. `READY`, `PASSED ASSURANCE`, and
 
 ### Tampered installation or archive traversal
 
-The installer accepts an explicit destination, rejects traversal and
-symlinks, preflights every existing skill, performs staged replacement, rolls
-back created trees on interruption, and never overwrites changed content.
+The installer anchors traversal, copy, digest, cleanup, and final handoff to
+open directory descriptors. It rejects traversal, every existing symlink or
+non-directory ancestor (including derived host paths), unknown partial state,
+and links or special files inside a skill. Unpredictable private stages use an
+atomic no-clobber handoff; configuration uses an exclusive hard-link handoff.
+Race winners are preserved, and interruption rolls back only trees created by
+the current invocation.
 Archive verification checks checksums, absolute/traversal paths, links, and
 file-only members. Rebuilds must be byte-identical.
 
@@ -85,9 +89,14 @@ learn creates nothing.
 
 Deterministic fake-MCP fixtures and package checks need no live credentials.
 The normal workflow retains `contents: read` and has no model/customer/token
-secret path. Blind host evaluations mount only raw skill/task artifacts and a
-synthetic MCP fixture; graders and sentinels stay outside the agent
-mount/prompt/environment.
+secret path. Trusted host evaluation creates a fresh read-only workspace from
+only one packaged skill, the raw task, a synthetic MCP transcript, and its
+bundled schema. Codex denies agent reads outside that workspace; Claude has no
+model tools. The environment is allowlisted, model-command network is
+disabled, and ambient MCP configuration is excluded. Oracle, grader, and
+prior outputs cannot enter `prepare` or `run`; they become available only
+after raw streams and structured output are sealed and hashed. Unavailable
+native authentication is `NOT_RUN`, never provider evidence.
 
 ## Residual risks
 
@@ -102,7 +111,8 @@ mount/prompt/environment.
 ## Verification
 
 - Unit: install replay/tamper/interruption/symlinks, MCP handoffs, unavailable
-  and unsupported diagnostics, canary non-disclosure.
+  and unsupported diagnostics, race-winner preservation, response resource
+  bounds, evidence isolation/tamper detection, and canary non-disclosure.
 - Contract: canonical tools/schemas, cross-host normalization, plugin hygiene,
   reproducible safe archives.
 - Integration: both host traces use the same actor/task and exact authorized

@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import cast
 
 import yaml
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, FormatChecker
+from referencing import Registry, Resource
 
 
 class SkillContractError(ValueError):
@@ -70,6 +71,112 @@ def _strings(payload: dict[str, object], key: str) -> tuple[str, ...]:
     return tuple(value)
 
 
+def _schema_documents(root: Path) -> dict[str, dict[str, object]]:
+    schema_root = root / "shared" / "output-schemas"
+    documents: dict[str, dict[str, object]] = {}
+    for path in sorted(schema_root.glob("*.schema.json")):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or not isinstance(payload.get("$id"), str):
+            raise SkillContractError(f"{path} must be an identified JSON Schema object")
+        Draft202012Validator.check_schema(payload)
+        identifier = cast(str, payload["$id"])
+        if identifier in documents:
+            raise SkillContractError(f"Duplicate output schema identifier: {identifier}")
+        documents[identifier] = cast(dict[str, object], payload)
+    if "https://schemas.anva.dev/skills/v1/common.schema.json" not in documents:
+        raise SkillContractError("Common output schema is missing")
+    return documents
+
+
+def _schema_registry(
+    documents: dict[str, dict[str, object]],
+) -> Registry[dict[str, object]]:
+    registry: Registry[dict[str, object]] = Registry()
+    for identifier, payload in documents.items():
+        registry = registry.with_resource(identifier, Resource.from_contents(payload))
+    return registry
+
+
+def _output_validator(
+    root: Path,
+    workflow: Workflow,
+) -> Draft202012Validator:
+    documents = _schema_documents(root)
+    output_path = (root / workflow.output_schema).resolve()
+    schema = json.loads(output_path.read_text(encoding="utf-8"))
+    return Draft202012Validator(
+        schema,
+        registry=_schema_registry(documents),
+        format_checker=FormatChecker(),
+    )
+
+
+def _collect_source_refs(value: object) -> set[str]:
+    references: set[str] = set()
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key in {"source_refs", "source_references"} and isinstance(child, list):
+                references.update(item for item in child if isinstance(item, str))
+            else:
+                references.update(_collect_source_refs(child))
+    elif isinstance(value, list):
+        for child in value:
+            references.update(_collect_source_refs(child))
+    return references
+
+
+def validate_skill_output(
+    workflow_name: str,
+    payload: object,
+    *,
+    package_root: Path | None = None,
+) -> None:
+    """Validate one real host result against schema and cross-reference invariants."""
+    root = (package_root or default_package_root()).resolve()
+    distribution = load_distribution(root)
+    workflow = distribution.workflows.get(workflow_name)
+    if workflow is None:
+        raise SkillContractError(f"Unknown workflow: {workflow_name}")
+    errors = sorted(
+        _output_validator(root, workflow).iter_errors(payload),
+        key=lambda error: list(error.absolute_path),
+    )
+    if errors:
+        first = errors[0]
+        location = ".".join(str(part) for part in first.absolute_path) or "$"
+        raise SkillContractError(f"{workflow_name} output {location}: {first.message}")
+    if not isinstance(payload, dict):
+        raise SkillContractError(f"{workflow_name} output must be an object")
+    source_values = payload.get("anva_sources", payload.get("normalized_sources", []))
+    if not isinstance(source_values, list):
+        raise SkillContractError(f"{workflow_name} normalized sources must be an array")
+    source_refs = [
+        source.get("source_ref")
+        for source in source_values
+        if isinstance(source, dict) and isinstance(source.get("source_ref"), str)
+    ]
+    if len(source_refs) != len(set(source_refs)):
+        raise SkillContractError(f"{workflow_name} normalized source references must be unique")
+    unknown = _collect_source_refs(payload) - set(source_refs)
+    if unknown:
+        raise SkillContractError(
+            f"{workflow_name} source references lack normalized provenance: {sorted(unknown)}"
+        )
+    if workflow_name == "anva-learn":
+        preview = payload.get("preview")
+        if not isinstance(preview, dict):
+            raise SkillContractError("anva-learn preview must be an object")
+        compared = (
+            ("proposal_type", "proposal_type"),
+            ("target", "target"),
+            ("proposed_content", "proposed_content"),
+            ("rationale", "rationale"),
+            ("source_references", "source_references"),
+        )
+        if any(payload[root_key] != preview[preview_key] for root_key, preview_key in compared):
+            raise SkillContractError("anva-learn preview must exactly match submitted content")
+
+
 def load_distribution(package_root: Path | None = None) -> Distribution:
     """Load a validated canonical distribution."""
     root = (package_root or default_package_root()).resolve()
@@ -81,6 +188,8 @@ def load_distribution(package_root: Path | None = None) -> Distribution:
         raise SkillContractError("manifest workflows must be a list of names")
     schema = json.loads((root / "workflow-contract.schema.json").read_text(encoding="utf-8"))
     validator = Draft202012Validator(schema)
+    documents = _schema_documents(root)
+    registry = _schema_registry(documents)
     workflows: dict[str, Workflow] = {}
     for name in workflow_names:
         payload = _mapping(root / "workflows" / f"{name}.yaml")
@@ -107,7 +216,13 @@ def load_distribution(package_root: Path | None = None) -> Distribution:
         output_path = (root / workflow.output_schema).resolve()
         if not output_path.is_relative_to(root) or not output_path.is_file():
             raise SkillContractError(f"{name} output schema is outside the package")
-        Draft202012Validator.check_schema(json.loads(output_path.read_text(encoding="utf-8")))
+        output_schema = json.loads(output_path.read_text(encoding="utf-8"))
+        Draft202012Validator.check_schema(output_schema)
+        Draft202012Validator(
+            output_schema,
+            registry=registry,
+            format_checker=FormatChecker(),
+        )
         workflows[name] = workflow
 
     versions = manifest.get("mcp_contract_versions")

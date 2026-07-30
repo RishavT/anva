@@ -10,7 +10,7 @@ description: Build an approved task with live Anva requirements, repository poli
 
 Use portable skill version `1.0.0` with Anva MCP contract `1` for phase `BUILD`. Keep the existing coding agent in control; Anva supplies bounded context and review-only proposals.
 
-<!-- anva-workflow-fingerprint: 94d19568ddf3fb198cf5e38e5cdfc230daf2228bea6d6b3fde4f547c2fc5e541 -->
+<!-- anva-workflow-fingerprint: 1d6ef8a94eeb35ef5c0fc9fcfc8e30dcc410ecd5cc1c837451a3a24da8f9efa2 -->
 
 ## Record invocation context
 
@@ -57,7 +57,7 @@ Call `anva.resolve_repository`, then `anva.resolve_work_item`, then `anva.get_co
 
 ## Return the structured result
 
-Follow `references/output.schema.json` and include these visible sections:
+Follow `references/output.schema.json` (including its bundled `references/common.schema.json` definitions) and include these visible sections:
 
 - `Scope`
 - `Grounded requirements`

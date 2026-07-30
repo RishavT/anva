@@ -9,7 +9,7 @@ description: Prepare an implementation task with live, permission-filtered Anva 
 
 Use portable skill version `1.0.0` with Anva MCP contract `1` for phase `PREPARE`. Keep the existing coding agent in control; Anva supplies bounded context and review-only proposals.
 
-<!-- anva-workflow-fingerprint: 249fb8a5cb19b32f7735df31e348d0150b58ba4aba130d879262bc52180152b3 -->
+<!-- anva-workflow-fingerprint: 13cc288442059fabc9f7f95a4a8b8fa0a8ea3b4ce0dad19575faf0d581c387c8 -->
 
 ## Record invocation context
 
@@ -51,7 +51,7 @@ Call `anva.resolve_repository`, then `anva.resolve_work_item`, then `anva.get_co
 
 ## Return the structured result
 
-Follow `references/output.schema.json` and include these visible sections:
+Follow `references/output.schema.json` (including its bundled `references/common.schema.json` definitions) and include these visible sections:
 
 - `Problem`
 - `Confirmed requirements`

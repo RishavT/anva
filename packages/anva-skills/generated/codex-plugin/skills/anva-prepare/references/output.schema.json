@@ -4,26 +4,86 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "status", "problem", "facts", "requirements", "out_of_scope", "assumptions",
-    "conflicts", "acceptance_criteria", "affected_systems_and_owners",
-    "decisions_and_policies", "implementation_plan", "verification_plan",
-    "unresolved_questions", "limitations", "anva_sources"
+    "status",
+    "problem",
+    "facts",
+    "requirements",
+    "out_of_scope",
+    "assumptions",
+    "conflicts",
+    "acceptance_criteria",
+    "affected_systems_and_owners",
+    "decisions_and_policies",
+    "implementation_plan",
+    "verification_plan",
+    "unresolved_questions",
+    "limitations",
+    "anva_sources"
   ],
   "properties": {
     "status": {"enum": ["GROUNDED", "UNVERIFIED"]},
-    "problem": {"type": "string"},
-    "facts": {"type": "array"},
-    "requirements": {"type": "array"},
-    "out_of_scope": {"type": "array"},
-    "assumptions": {"type": "array"},
-    "conflicts": {"type": "array"},
-    "acceptance_criteria": {"type": "array"},
-    "affected_systems_and_owners": {"type": "array"},
-    "decisions_and_policies": {"type": "array"},
-    "implementation_plan": {"type": "array"},
-    "verification_plan": {"type": "array"},
-    "unresolved_questions": {"type": "array"},
-    "limitations": {"type": "array"},
-    "anva_sources": {"type": "array"}
-  }
+    "problem": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "facts": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/materialClaims"
+    },
+    "requirements": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/materialClaims"
+    },
+    "out_of_scope": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/localItems"
+    },
+    "assumptions": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/localItems"
+    },
+    "conflicts": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/materialClaims"
+    },
+    "acceptance_criteria": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/localItems"
+    },
+    "affected_systems_and_owners": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/materialClaims"
+    },
+    "decisions_and_policies": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/materialClaims"
+    },
+    "implementation_plan": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/localItems"
+    },
+    "verification_plan": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/localItems"
+    },
+    "unresolved_questions": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/localItems"
+    },
+    "limitations": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/localItems"
+    },
+    "anva_sources": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/normalizedSources"
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "GROUNDED"}}},
+      "then": {"properties": {"anva_sources": {"minItems": 1}}}
+    },
+    {
+      "if": {"properties": {"status": {"const": "UNVERIFIED"}}},
+      "then": {
+        "properties": {
+          "facts": {"maxItems": 0},
+          "requirements": {"maxItems": 0},
+          "conflicts": {"maxItems": 0},
+          "affected_systems_and_owners": {"maxItems": 0},
+          "decisions_and_policies": {"maxItems": 0},
+          "anva_sources": {"maxItems": 0}
+        }
+      }
+    }
+  ]
 }

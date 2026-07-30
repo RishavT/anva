@@ -10,7 +10,7 @@ description: Review a local diff against Anva requirements, policy, provenance, 
 
 Use portable skill version `1.0.0` with Anva MCP contract `1` for phase `PREFLIGHT`. Keep the existing coding agent in control; Anva supplies bounded context and review-only proposals.
 
-<!-- anva-workflow-fingerprint: e6ad92f8bf6bdf9050a6506ffe65ae9802873301503a9e9e2e16472931c45b96 -->
+<!-- anva-workflow-fingerprint: 50dcdf0ac37221a859a355cabca3465955802b7598479dc0bb4f4242f885ce35 -->
 
 ## Record invocation context
 
@@ -54,7 +54,7 @@ Call `anva.resolve_repository`, then `anva.resolve_work_item`, then `anva.get_co
 
 ## Return the structured result
 
-Follow `references/output.schema.json` and include these visible sections:
+Follow `references/output.schema.json` (including its bundled `references/common.schema.json` definitions) and include these visible sections:
 
 - `Review target`
 - `Advisory status`

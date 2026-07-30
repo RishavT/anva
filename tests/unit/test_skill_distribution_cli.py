@@ -91,17 +91,23 @@ def test_install_refuses_tamper_symlink_and_path_escape(tmp_path: Path) -> None:
 
 @pytest.mark.unit
 def test_interrupted_install_rolls_back_all_created_skills(tmp_path: Path) -> None:
-    real_replace = os.replace
+    from anva.skills.installer import _rename_no_replace
+
     calls = 0
 
-    def interrupted(source: Path, destination: Path) -> None:
+    def interrupted(
+        source_fd: int,
+        source_name: str,
+        destination_fd: int,
+        destination_name: str,
+    ) -> None:
         nonlocal calls
         calls += 1
         if calls == 2:
             raise OSError("synthetic interruption")
-        real_replace(source, destination)
+        _rename_no_replace(source_fd, source_name, destination_fd, destination_name)
 
-    with patch("anva.skills.installer.os.replace", side_effect=interrupted):
+    with patch("anva.skills.installer._rename_no_replace", side_effect=interrupted):
         with pytest.raises(OSError, match="synthetic interruption"):
             install_skills(
                 package_root=PACKAGE_ROOT,
@@ -112,7 +118,7 @@ def test_interrupted_install_rolls_back_all_created_skills(tmp_path: Path) -> No
 
     skill_root = tmp_path / ".agents/skills"
     assert not any(skill_root.iterdir())
-    assert not tuple(tmp_path.glob(".anva-skills-stage-*"))
+    assert not tuple(tmp_path.rglob(".anva-skills-stage-*"))
 
 
 @pytest.mark.unit
@@ -168,18 +174,32 @@ def test_diagnostics_checks_real_endpoint_without_leaking_token(
     monkeypatch.setenv("ANVA_TOKEN", "CANARY-SKILL-DIAGNOSTIC-TOKEN")
     payload = {
         "status": "available",
+        "service": "anva-mcp",
+        "transport": "streamable-http",
+        "endpoint": "https://mcp.example.test/mcp",
         "contract_version": "1",
         "supported_contract_versions": ["1"],
         "supported_protocol_versions": ["2025-11-25"],
         "read_only": True,
-        "authentication": {"type": "bearer"},
+        "authentication": {
+            "type": "bearer",
+            "scope": "organization-and-exact-repository",
+            "rotation": True,
+            "revocation": True,
+        },
+        "limits": {
+            "page_size": 50,
+            "input_bytes": 65536,
+            "output_bytes": 65536,
+            "source_excerpt_characters": 4000,
+        },
     }
     response_headers = Message()
     response_headers["Content-Type"] = "application/json"
     with patch("anva.skills.diagnostics.urlopen") as open_url:
-        open_url.return_value.__enter__.return_value.read.return_value = json.dumps(
-            payload
-        ).encode()
+        response = open_url.return_value.__enter__.return_value
+        response.read.return_value = json.dumps(payload).encode()
+        response.headers = response_headers
         result = diagnose_skills(
             mcp_url="https://mcp.example.test/mcp",
             host="codex",
@@ -215,14 +235,32 @@ def test_diagnostics_fail_safely_for_unavailable_and_unsupported(
     assert "CANARY-DETAIL" not in json.dumps(unavailable)
 
     with patch("anva.skills.diagnostics.urlopen") as open_url:
-        open_url.return_value.__enter__.return_value.read.return_value = json.dumps(
+        response_headers = Message()
+        response_headers["Content-Type"] = "application/json"
+        response = open_url.return_value.__enter__.return_value
+        response.headers = response_headers
+        response.read.return_value = json.dumps(
             {
                 "status": "available",
+                "service": "anva-mcp",
+                "transport": "streamable-http",
+                "endpoint": "https://mcp.example.test/mcp",
                 "contract_version": "99",
                 "supported_contract_versions": ["99"],
                 "supported_protocol_versions": ["2025-11-25"],
                 "read_only": False,
-                "authentication": {"type": "bearer"},
+                "authentication": {
+                    "type": "bearer",
+                    "scope": "organization-and-exact-repository",
+                    "rotation": True,
+                    "revocation": True,
+                },
+                "limits": {
+                    "page_size": 50,
+                    "input_bytes": 65536,
+                    "output_bytes": 65536,
+                    "source_excerpt_characters": 4000,
+                },
             }
         ).encode()
         unsupported = diagnose_skills(

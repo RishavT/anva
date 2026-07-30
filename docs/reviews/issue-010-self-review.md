@@ -40,39 +40,39 @@ format validation.
 
 - Required `skill-creator` guidance and `openai_yaml` reference were read
   before design; all eight initial host skill scaffolds used `init_skill.py`.
-- Focused package/install/eval tests: 35 passed.
-- Real-facade host parity integration: 1 passed; both traces returned the same
-  context packet identity and semantics for the same actor/task.
-- Blind forward preparation was run independently from only the public task,
-  transcript, and one host adapter. Codex and Claude each scored 14/14 against
-  the hidden semantic oracle and each structured payload validated against
-  `prepare.schema.json`. Both preserved all four exact provenance tuples,
-  rejected the hostile scope/secret/proposal instruction, kept the current
-  versus stale decision conflict blocking, left owners and budgets unknown,
-  labeled task-only migration/browser scope unverified, stopped before
-  implementation, and disclaimed authoritative assurance.
-- Codex returned structured JSON while Claude returned a human-readable view
-  plus matching structured JSON. This presentation difference is allowlisted;
-  required semantics and the portable schema are host-neutral.
-- The post-run evidence hashes were
-  `e1160fa2c9f546a38429db60af39a46274fc7eba629fdb903d9325f7af3fd81a`
-  (Codex JSON) and
-  `9b821d75359e0948ec66c9fa31af073fd61f8cef2cf1aa972d7bf445264e0a27`
-  (Claude response). Raw grading outputs were removed before commit.
+- Deterministic fixture tests validate package semantics, safety boundaries,
+  and the same strict structured-output schemas used by the live gate. These
+  authored fixtures are package-native validation, not independent host or
+  model evidence.
+- Real-facade host parity integration validates the canonical MCP boundary. It
+  does not show that a coding-agent host independently followed a skill.
+- The reproducible trusted gate in
+  [the live evaluation runbook](../runbooks/trusted-skill-evaluation.md)
+  physically excludes the oracle, grader, prior outputs, worktree, and ambient
+  MCP configuration until after a native-host output is sealed and hashed.
+  It records the raw streams and hashes of all input, artifact, output, oracle,
+  grader, gate, host/version, schema, score, exact-SHA, and CI provenance.
+- No live Codex or Claude model result is claimed in the repository without a
+  complete immutable evidence directory and passing `grade-record.json`.
+  Fresh-agent evaluations, when run, are labeled with their actual evaluator
+  host and are not relabeled as native Codex or Claude evidence.
 - All eight repo/plugin Codex skills passed the official `quick_validate.py`
   helper. Claude's plugin and repository marketplace each passed
   `claude plugin validate --strict`.
-- Fresh isolated native installs passed with Codex CLI `0.145.0` and Claude
-  Code `2.1.220`; no MCP configuration, hook, or executable was introduced by
-  either plugin install.
+- Fresh isolated install/config regression tests pass for Codex and Claude,
+  including ancestor/final symlinks, non-directories, unknown partial state,
+  interruption, and concurrent race winners. No hook or executable is
+  introduced by either package.
 - Deterministic render/package checking reported no drift, and both committed
   archives passed checksum and member-safety verification.
-- The full rebuilt-image Compose gate passed 490 tests with 2 expected skips
+- The full rebuilt-image Compose gate passed 549 tests with 2 expected skips
   and 85% branch coverage. The live official MCP client Compose smoke passed
   both contract/auth/read-only/revocation/HTTP-parity and safe-unavailable
-  scenarios.
-- Hosted exact-SHA CI and final storage cleanup are recorded in the PR
-  evidence.
+  scenarios. Strict real `/diagnostics` checks passed against both the
+  write-capable and read-only MCP services.
+- Trusted native-model evidence, hosted exact-head CI, and final task-resource
+  cleanup remain required release gates and are recorded only after they
+  actually run.
 
 ## Current official documentation
 

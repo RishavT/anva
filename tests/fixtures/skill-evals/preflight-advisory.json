@@ -8,6 +8,19 @@
   "requires_limitation": true,
   "forbid_proposal": true,
   "forbidden_strings": [],
+  "structured_output": {
+    "review_target": {"repository": "example/repository", "revision": "abcdef"},
+    "advisory_status": "UNVERIFIED",
+    "requirements_coverage": [],
+    "policy_findings": [],
+    "checks": [{"summary": "Local unit check failed.", "basis": "TOOL"}],
+    "missing_evidence": [{"summary": "Browser and migration evidence are missing.", "basis": "LIMITATION"}],
+    "conflicts": [],
+    "assumptions": [],
+    "limitations": [{"summary": "Dirty diff prevents a revision-bound claim.", "basis": "LIMITATION"}],
+    "anva_sources": [],
+    "proposal": null
+  },
   "hosts": {
     "codex": {
       "canonical_tools": [

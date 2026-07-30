@@ -4,20 +4,72 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "status", "scope", "requirements", "assumptions", "conflicts", "changes",
-    "verification", "deviations", "limitations", "anva_sources", "proposal"
+    "status",
+    "scope",
+    "requirements",
+    "assumptions",
+    "conflicts",
+    "changes",
+    "verification",
+    "deviations",
+    "limitations",
+    "anva_sources",
+    "proposal"
   ],
   "properties": {
     "status": {"enum": ["GROUNDED", "PAUSED", "UNVERIFIED"]},
-    "scope": {"type": "array"},
-    "requirements": {"type": "array"},
-    "assumptions": {"type": "array"},
-    "conflicts": {"type": "array"},
-    "changes": {"type": "array"},
-    "verification": {"type": "array"},
-    "deviations": {"type": "array"},
-    "limitations": {"type": "array"},
-    "anva_sources": {"type": "array"},
-    "proposal": {"type": ["object", "null"]}
-  }
+    "scope": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/materialClaims"
+    },
+    "requirements": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/materialClaims"
+    },
+    "assumptions": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/localItems"
+    },
+    "conflicts": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/materialClaims"
+    },
+    "changes": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/localItems"
+    },
+    "verification": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/localItems"
+    },
+    "deviations": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/localItems"
+    },
+    "limitations": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/localItems"
+    },
+    "anva_sources": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/normalizedSources"
+    },
+    "proposal": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/reviewProposal"
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "GROUNDED"}}},
+      "then": {"properties": {"anva_sources": {"minItems": 1}}}
+    },
+    {
+      "if": {"properties": {"status": {"const": "UNVERIFIED"}}},
+      "then": {
+        "properties": {
+          "scope": {"maxItems": 0},
+          "requirements": {"maxItems": 0},
+          "conflicts": {"maxItems": 0},
+          "anva_sources": {"maxItems": 0},
+          "proposal": {"type": "null"}
+        }
+      }
+    }
+  ]
 }
