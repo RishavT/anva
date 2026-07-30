@@ -3755,6 +3755,39 @@
               "schema": {
                 "oneOf": [
                   {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
                     "additionalProperties": false,
                     "properties": {
                       "contract_version": {
@@ -3773,6 +3806,39 @@
                     "type": "object"
                   },
                   {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
                     "additionalProperties": false,
                     "oneOf": [
                       {
@@ -3822,6 +3888,39 @@
                     "type": "object"
                   },
                   {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
                     "additionalProperties": false,
                     "oneOf": [
                       {
@@ -3917,6 +4016,39 @@
                     "type": "object"
                   },
                   {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
                     "additionalProperties": false,
                     "properties": {
                       "contract_version": {
@@ -3975,6 +4107,39 @@
                     "type": "object"
                   },
                   {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
                     "additionalProperties": false,
                     "properties": {
                       "contract_version": {
@@ -3998,6 +4163,39 @@
                     "type": "object"
                   },
                   {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
                     "additionalProperties": false,
                     "properties": {
                       "contract_version": {
@@ -4039,6 +4237,39 @@
                     "type": "object"
                   },
                   {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
                     "additionalProperties": false,
                     "properties": {
                       "contract_version": {
@@ -4057,6 +4288,39 @@
                     "type": "object"
                   },
                   {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
                     "additionalProperties": false,
                     "properties": {
                       "contract_version": {
@@ -4093,6 +4357,39 @@
                     "type": "object"
                   },
                   {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
                     "additionalProperties": false,
                     "properties": {
                       "contract_version": {
@@ -4134,6 +4431,39 @@
                     "type": "object"
                   },
                   {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
                     "additionalProperties": false,
                     "properties": {
                       "assertion_id": {
@@ -4157,6 +4487,39 @@
                     "type": "object"
                   },
                   {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
                     "additionalProperties": false,
                     "properties": {
                       "chunk_id": {
@@ -4191,6 +4554,39 @@
                     "type": "object"
                   },
                   {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
                     "additionalProperties": false,
                     "properties": {
                       "access_scope_id": {
@@ -4206,6 +4602,9 @@
                         "type": "string"
                       },
                       "correction": {
+                        "additionalProperties": {
+                          "$ref": "#/$defs/bounded_json_value"
+                        },
                         "maxProperties": 20,
                         "minProperties": 1,
                         "type": "object"
@@ -4268,6 +4667,39 @@
                     "type": "object"
                   },
                   {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
                     "additionalProperties": false,
                     "properties": {
                       "access_scope_id": {
@@ -4356,6 +4788,39 @@
                     "type": "object"
                   },
                   {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
                     "additionalProperties": false,
                     "properties": {
                       "access_scope_id": {
@@ -4445,6 +4910,39 @@
                     "type": "object"
                   },
                   {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
                     "additionalProperties": false,
                     "properties": {
                       "access_scope_id": {
@@ -4500,6 +4998,9 @@
                         "type": "string"
                       },
                       "summary_data": {
+                        "additionalProperties": {
+                          "$ref": "#/$defs/bounded_json_value"
+                        },
                         "maxProperties": 50,
                         "minProperties": 1,
                         "type": "object"
@@ -4522,6 +5023,39 @@
                     "type": "object"
                   },
                   {
+                    "$defs": {
+                      "bounded_json_value": {
+                        "oneOf": [
+                          {
+                            "maxLength": 10000,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "items": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxItems": 200,
+                            "type": "array"
+                          },
+                          {
+                            "additionalProperties": {
+                              "$ref": "#/$defs/bounded_json_value"
+                            },
+                            "maxProperties": 100,
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
                     "additionalProperties": false,
                     "properties": {
                       "access_scope_id": {
@@ -4530,6 +5064,10 @@
                       },
                       "checks": {
                         "items": {
+                          "additionalProperties": {
+                            "$ref": "#/$defs/bounded_json_value"
+                          },
+                          "maxProperties": 100,
                           "type": "object"
                         },
                         "maxItems": 100,

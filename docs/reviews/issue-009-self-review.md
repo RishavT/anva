@@ -32,7 +32,7 @@ Compose client acceptance, and operator/security docs.
 - Generated contracts: 24 deterministic artifacts verified with example and
   JSON Schema validation.
 - Full Docker gate: Ruff/format clean; strict MyPy clean across 114 source
-  files; 448 passed, 2 intentionally skipped; aggregate coverage 85%.
+  files; 452 passed, 2 intentionally skipped; aggregate coverage 85%.
 - Migration check: no model drift; migration 0013 applied on fresh PostgreSQL.
 - Production-configured Compose: official Python client 2 passed; protocol
   negotiation, 16 tools, one static resource, four resource templates,
@@ -45,6 +45,39 @@ Compose client acceptance, and operator/security docs.
   removed after hosted verification; exact figures are recorded in the PR
   handoff.
 - Hosted CI: authoritative result is recorded on the linked pull request.
+
+## Pull-request review remediation
+
+- Proposal inputs now undergo recursive credential detection before contract
+  lookup, hashing, idempotency, audit, outbox, or proposal persistence.
+  Review-only results explicitly return `review_required: true`.
+- PostgreSQL migration 0014 makes proposal tenant/content/source/change fields
+  immutable and permits only one-use, service-guarded lifecycle transitions
+  that independently satisfy the proposal state machine.
+- Pagination cursors contain bounded issued/expiry times and bind the
+  credential, actor, tool, repository, query, current grants/scopes, and
+  retrieval/source visibility watermark. Every page reauthorizes before
+  validating that watermark.
+- Every nested object in tool and resource input/output schemas is closed or a
+  recursively typed, size-bounded map. Official SDK `tools/list` schemas are
+  exact contract copies.
+- Authenticated unknown-tool and pre-dispatch validation failures record one
+  content-free stable audit. Unauthenticated HTTP calls do not create a
+  tenant-attributed audit.
+- Validation failures expose stable path/reason codes without submitted values;
+  MCP, HTTP, audit, and process-log regressions cover `ghp_` and canary
+  non-disclosure.
+- Remediation-focused Docker evidence: 8 unit/handler tests and 7 PostgreSQL
+  integration tests passed; migration 0014 applied, rolled back to 0013, and
+  reapplied; all 24 generated artifacts exact-checked; focused Ruff and strict
+  MyPy passed; the live official-client acceptance test passed with no
+  secret/canary matches in process logs.
+- The post-remediation full gate passed 452 tests with 2 intentional skips and
+  85% aggregate coverage. Fresh production-configured Compose applied migration
+  0014, ran all four long-lived processes as UID 10001 with debug disabled,
+  and passed both official-client smoke tests. Peak unique task storage was
+  approximately 0.59 GB against the 5 GB cap; every task container, network,
+  volume, image tag, and exact BuildKit record was removed afterward.
 
 ## Limitations
 

@@ -97,6 +97,10 @@ def test_real_mcp_client_contract_auth_read_only_revocation_and_http_parity() ->
                     assert initialized.protocolVersion in MCP_PROTOCOL_VERSIONS
                     tools = await session.list_tools()
                     assert {tool.name for tool in tools.tools} == set(TOOL_BY_NAME)
+                    for sdk_tool in tools.tools:
+                        contract = TOOL_BY_NAME[sdk_tool.name]
+                        assert sdk_tool.inputSchema == contract["input_schema"]
+                        assert sdk_tool.outputSchema == contract["output_schema"]
                     resources = await session.list_resources()
                     assert {str(resource.uri) for resource in resources.resources} == {
                         "anva://diagnostics"
@@ -126,6 +130,55 @@ def test_real_mcp_client_contract_auth_read_only_revocation_and_http_parity() ->
                     )
                     assert parity.status_code == 200, parity.text
                     assert parity.json() == mcp_result.structuredContent
+
+                    secret = f"ghp_{'A' * 36}"
+                    secret_rejected = await session.call_tool(
+                        "anva.search",
+                        arguments={
+                            "contract_version": "1",
+                            "repository_id": repository_id,
+                            "query": "bounded",
+                            "phase": secret,
+                        },
+                    )
+                    assert secret_rejected.isError
+                    secret_content = secret_rejected.content[0]
+                    assert isinstance(secret_content, TextContent)
+                    assert "secret_material_rejected" in secret_content.text
+                    assert secret not in secret_content.text
+
+                    canary = "CANARY_INVALID_ENUM_MUST_NOT_ECHO"
+                    invalid = await session.call_tool(
+                        "anva.search",
+                        arguments={
+                            "contract_version": "1",
+                            "repository_id": repository_id,
+                            "query": "bounded",
+                            "phase": canary,
+                        },
+                    )
+                    assert invalid.isError
+                    invalid_content = invalid.content[0]
+                    assert isinstance(invalid_content, TextContent)
+                    invalid_payload = json.loads(invalid_content.text)
+                    assert invalid_payload["code"] == "invalid_tool_input"
+                    assert invalid_payload["path"] == "$.phase"
+                    assert invalid_payload["reason"] == "allowed_value"
+                    assert canary not in invalid_content.text
+                    invalid_http = await http_client.post(
+                        f"{api_url}/api/v1/mcp/tools/anva.search",
+                        headers={"X-Correlation-ID": str(uuid.uuid4())},
+                        json={
+                            "contract_version": "1",
+                            "repository_id": repository_id,
+                            "query": "bounded",
+                            "phase": canary,
+                        },
+                    )
+                    assert invalid_http.status_code == 400
+                    assert invalid_http.json()["path"] == "$.phase"
+                    assert invalid_http.json()["reason"] == "allowed_value"
+                    assert canary not in invalid_http.text
 
                     hidden = await session.call_tool(
                         "anva.resolve_repository",

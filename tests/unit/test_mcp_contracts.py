@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import uuid
 from datetime import UTC, datetime
 
@@ -40,10 +42,36 @@ def test_every_tool_has_closed_valid_versioned_input_and_output_schema() -> None
         assert isinstance(properties, dict)
         assert properties["contract_version"] == {"type": "string", "const": "1"}
         assert contract["required_action"]
+        for schema in (contract["input_schema"], contract["output_schema"]):
+            pending: list[object] = [schema]
+            while pending:
+                node = pending.pop()
+                if isinstance(node, dict):
+                    if node.get("type") == "object":
+                        assert "additionalProperties" in node
+                    pending.extend(node.values())
+                elif isinstance(node, list):
+                    pending.extend(node)
+    for resource_contract in RESOURCE_CONTRACTS:
+        for schema_name in ("input_schema", "output_schema"):
+            resource_schema = resource_contract[schema_name]
+            assert isinstance(resource_schema, dict)
+            Draft202012Validator.check_schema(resource_schema)
+            pending = [resource_schema]
+            while pending:
+                node = pending.pop()
+                if isinstance(node, dict):
+                    if node.get("type") == "object":
+                        assert "additionalProperties" in node
+                    pending.extend(node.values())
+                elif isinstance(node, list):
+                    pending.extend(node)
 
 
 @pytest.mark.unit
-def test_signed_cursor_is_bound_to_actor_credential_tool_and_arguments() -> None:
+def test_signed_cursor_is_bound_expires_and_has_authorization_watermark(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     actor = ActorContext(
         organization_id=uuid.uuid4(),
         repository_id=uuid.uuid4(),
@@ -59,12 +87,24 @@ def test_signed_cursor_is_bound_to_actor_credential_tool_and_arguments() -> None
         "entity_id": str(uuid.uuid4()),
         "limit": 20,
     }
+    monkeypatch.setattr(
+        "anva.core.services.mcp_gateway._authorization_watermark",
+        lambda **_kwargs: "a" * 64,
+    )
+    monkeypatch.setattr(
+        "anva.core.services.mcp_gateway._cursor_expires_at",
+        lambda *, actor, issued_at: issued_at + 300,
+    )
     cursor = _encode_cursor(
         actor=actor,
         tool_name="anva.get_relationships",
         arguments=arguments,
         offset=20,
     )
+    encoded = cursor.partition(".")[0]
+    payload = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
+    assert payload["issued_at"] < payload["expires_at"]
+    assert payload["authorization_watermark"] == "a" * 64
     assert (
         _decode_cursor(
             actor=actor,
@@ -73,7 +113,7 @@ def test_signed_cursor_is_bound_to_actor_credential_tool_and_arguments() -> None
         )
         == 20
     )
-    with pytest.raises(MCPGatewayError, match="not valid for this credential"):
+    with pytest.raises(MCPGatewayError, match="invalid"):
         _decode_cursor(
             actor=ActorContext(
                 organization_id=actor.organization_id,
@@ -92,6 +132,26 @@ def test_signed_cursor_is_bound_to_actor_credential_tool_and_arguments() -> None
             actor=actor,
             tool_name="anva.get_relationships",
             arguments={**arguments, "cursor": f"{cursor[:-1]}x"},
+        )
+    with pytest.raises(MCPGatewayError, match="invalid"):
+        _decode_cursor(
+            actor=actor,
+            tool_name="anva.get_relationships",
+            arguments={
+                **arguments,
+                "entity_id": str(uuid.uuid4()),
+                "cursor": cursor,
+            },
+        )
+    monkeypatch.setattr(
+        "anva.core.services.mcp_gateway._cursor_timestamp",
+        lambda: payload["expires_at"] + 1,
+    )
+    with pytest.raises(MCPGatewayError, match="invalid"):
+        _decode_cursor(
+            actor=actor,
+            tool_name="anva.get_relationships",
+            arguments={**arguments, "cursor": cursor},
         )
 
 

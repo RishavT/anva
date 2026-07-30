@@ -131,15 +131,24 @@ def _correlation_id(request: HttpRequest) -> uuid.UUID:
         return uuid.uuid4()
 
 
-def _error(code: str, message: str, correlation_id: uuid.UUID, status: int) -> JsonResponse:
-    return JsonResponse(
-        {
-            "code": code,
-            "message": message,
-            "correlation_id": str(correlation_id),
-        },
-        status=status,
-    )
+def _error(
+    code: str,
+    message: str,
+    correlation_id: uuid.UUID,
+    status: int,
+    *,
+    path: str | None = None,
+    reason: str | None = None,
+) -> JsonResponse:
+    payload = {
+        "code": code,
+        "message": message,
+        "correlation_id": str(correlation_id),
+    }
+    if path is not None and reason is not None:
+        payload["path"] = path
+        payload["reason"] = reason
+    return JsonResponse(payload, status=status)
 
 
 def api_errors[**Parameters](
@@ -158,7 +167,14 @@ def api_errors[**Parameters](
         except ResourceNotFoundError as error:
             return _error(error.code, str(error), correlation_id, 404)
         except MCPGatewayError as error:
-            return _error(error.code, str(error), correlation_id, error.http_status)
+            return _error(
+                error.code,
+                str(error),
+                correlation_id,
+                error.http_status,
+                path=error.path,
+                reason=error.reason,
+            )
         except DomainOperationError as error:
             return _error(error.code, str(error), correlation_id, 409)
         except (json.JSONDecodeError, TypeError, ValueError):

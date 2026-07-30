@@ -48,13 +48,40 @@ def _closed(
     return schema
 
 
+BOUNDED_JSON_DEFS: Final[dict[str, object]] = {
+    "bounded_json_value": {
+        "oneOf": [
+            {"type": "string", "maxLength": 10_000},
+            {"type": "number"},
+            {"type": "boolean"},
+            {"type": "null"},
+            {
+                "type": "array",
+                "maxItems": 200,
+                "items": {"$ref": "#/$defs/bounded_json_value"},
+            },
+            {
+                "type": "object",
+                "maxProperties": 100,
+                "additionalProperties": {"$ref": "#/$defs/bounded_json_value"},
+            },
+        ]
+    }
+}
+BOUNDED_MAP: Final[dict[str, object]] = {
+    "type": "object",
+    "maxProperties": 100,
+    "additionalProperties": {"$ref": "#/$defs/bounded_json_value"},
+}
+
+
 def _input(
     properties: dict[str, object],
     required: tuple[str, ...],
     *,
     one_of: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
-    return _closed(
+    schema = _closed(
         {
             "contract_version": {"type": "string", "const": CONTRACT_VERSION},
             "repository_id": deepcopy(UUID),
@@ -63,6 +90,8 @@ def _input(
         ("contract_version", "repository_id", *required),
         one_of=one_of,
     )
+    schema["$defs"] = deepcopy(BOUNDED_JSON_DEFS)
+    return schema
 
 
 def _output(
@@ -81,7 +110,9 @@ def _output(
     if paginated:
         properties["next_cursor"] = deepcopy(NULLABLE_CURSOR)
         required.append("next_cursor")
-    return _closed(properties, tuple(required))
+    schema = _closed(properties, tuple(required))
+    schema["$defs"] = deepcopy(BOUNDED_JSON_DEFS)
+    return schema
 
 
 PAGE_INPUT: Final[dict[str, object]] = {
@@ -146,6 +177,7 @@ PROPOSAL_DATA: Final[dict[str, object]] = {
     "proposal_kind": {"type": "string"},
     "review_state": {"type": "string", "const": "PROPOSED"},
     "approved": {"type": "boolean", "const": False},
+    "review_required": {"type": "boolean", "const": True},
     "created": {"type": "boolean"},
 }
 
@@ -233,7 +265,7 @@ TOOL_CONTRACTS: Final[tuple[ToolContract, ...]] = (
             {
                 "packet_id": deepcopy(UUID),
                 "created": {"type": "boolean"},
-                "packet": {"type": "object"},
+                "packet": deepcopy(BOUNDED_MAP),
             },
             ("packet_id", "created", "packet"),
         ),
@@ -264,7 +296,7 @@ TOOL_CONTRACTS: Final[tuple[ToolContract, ...]] = (
                 "results": {
                     "type": "array",
                     "maxItems": MAX_PAGE_SIZE,
-                    "items": {"type": "object"},
+                    "items": deepcopy(BOUNDED_MAP),
                 },
             },
             ("results",),
@@ -283,7 +315,7 @@ TOOL_CONTRACTS: Final[tuple[ToolContract, ...]] = (
                 "entity_type": {"type": "string"},
                 "canonical_key": {"type": "string"},
                 "display_name": {"type": "string"},
-                "attributes": {"type": "object"},
+                "attributes": deepcopy(BOUNDED_MAP),
                 "revision": {"type": "integer", "minimum": 1},
             },
             (
@@ -308,7 +340,7 @@ TOOL_CONTRACTS: Final[tuple[ToolContract, ...]] = (
                 "relationships": {
                     "type": "array",
                     "maxItems": MAX_PAGE_SIZE,
-                    "items": {"type": "object"},
+                    "items": deepcopy(BOUNDED_MAP),
                 },
             },
             ("entity_id", "relationships"),
@@ -341,7 +373,7 @@ TOOL_CONTRACTS: Final[tuple[ToolContract, ...]] = (
                 "policies": {
                     "type": "array",
                     "maxItems": MAX_PAGE_SIZE,
-                    "items": {"type": "object"},
+                    "items": deepcopy(BOUNDED_MAP),
                 }
             },
             ("policies",),
@@ -361,7 +393,7 @@ TOOL_CONTRACTS: Final[tuple[ToolContract, ...]] = (
                 "requirements": {
                     "type": "array",
                     "maxItems": MAX_PAGE_SIZE,
-                    "items": {"type": "object"},
+                    "items": deepcopy(BOUNDED_MAP),
                 },
             },
             ("work_item_id", "revision", "requirements"),
@@ -381,7 +413,11 @@ TOOL_CONTRACTS: Final[tuple[ToolContract, ...]] = (
                 "freshness": {"type": "string"},
                 "is_inferred": {"type": "boolean"},
                 "review_state": {"type": "string"},
-                "sources": {"type": "array", "items": {"type": "object"}},
+                "sources": {
+                    "type": "array",
+                    "maxItems": 200,
+                    "items": deepcopy(BOUNDED_MAP),
+                },
             },
             (
                 "assertion_id",
@@ -418,7 +454,7 @@ TOOL_CONTRACTS: Final[tuple[ToolContract, ...]] = (
                 "content_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
                 "offset": {"type": "integer", "minimum": 0},
                 "truncated": {"type": "boolean"},
-                "provenance": {"type": "object"},
+                "provenance": deepcopy(BOUNDED_MAP),
                 "trust": {"type": "string", "const": "UNTRUSTED_INERT_SOURCE_TEXT"},
             },
             (
@@ -440,7 +476,11 @@ TOOL_CONTRACTS: Final[tuple[ToolContract, ...]] = (
             {
                 **PROPOSAL_COMMON,
                 "assertion_id": deepcopy(UUID),
-                "correction": {"type": "object", "minProperties": 1, "maxProperties": 20},
+                "correction": {
+                    **deepcopy(BOUNDED_MAP),
+                    "minProperties": 1,
+                    "maxProperties": 20,
+                },
             },
             (*PROPOSAL_REQUIRED, "assertion_id", "correction"),
         ),
@@ -507,7 +547,11 @@ TOOL_CONTRACTS: Final[tuple[ToolContract, ...]] = (
             {
                 **PROPOSAL_COMMON,
                 "work_item_id": deepcopy(UUID),
-                "summary_data": {"type": "object", "minProperties": 1, "maxProperties": 50},
+                "summary_data": {
+                    **deepcopy(BOUNDED_MAP),
+                    "minProperties": 1,
+                    "maxProperties": 50,
+                },
             },
             (*PROPOSAL_REQUIRED, "work_item_id", "summary_data"),
         ),
@@ -531,7 +575,7 @@ TOOL_CONTRACTS: Final[tuple[ToolContract, ...]] = (
                     "type": "array",
                     "minItems": 1,
                     "maxItems": 100,
-                    "items": {"type": "object"},
+                    "items": deepcopy(BOUNDED_MAP),
                 },
                 "limitations": {
                     "type": "array",
@@ -572,24 +616,32 @@ RESOURCE_CONTRACTS: Final[tuple[dict[str, object], ...]] = (
         "name": "anva.repository_profile",
         "description": "Credential-bound repository profile.",
         "tool": "anva.get_repository_profile",
+        "input_schema": deepcopy(TOOL_BY_NAME["anva.get_repository_profile"]["input_schema"]),
+        "output_schema": deepcopy(TOOL_BY_NAME["anva.get_repository_profile"]["output_schema"]),
     },
     {
         "uri_template": "anva://work-items/{work_item_id}/requirements",
         "name": "anva.work_item_requirements",
         "description": "Current authorized work-item requirements.",
         "tool": "anva.get_requirements",
+        "input_schema": deepcopy(TOOL_BY_NAME["anva.get_requirements"]["input_schema"]),
+        "output_schema": deepcopy(TOOL_BY_NAME["anva.get_requirements"]["output_schema"]),
     },
     {
         "uri_template": "anva://entities/{entity_id}",
         "name": "anva.entity",
         "description": "Current authorized entity.",
         "tool": "anva.get_entity",
+        "input_schema": deepcopy(TOOL_BY_NAME["anva.get_entity"]["input_schema"]),
+        "output_schema": deepcopy(TOOL_BY_NAME["anva.get_entity"]["output_schema"]),
     },
     {
         "uri_template": "anva://context-packets/{packet_id}",
         "name": "anva.context_packet",
         "description": "Exact immutable context packet after current reauthorization.",
         "tool": "anva.get_context_packet",
+        "input_schema": deepcopy(TOOL_BY_NAME["anva.get_context_packet"]["input_schema"]),
+        "output_schema": deepcopy(TOOL_BY_NAME["anva.get_context_packet"]["output_schema"]),
     },
 )
 

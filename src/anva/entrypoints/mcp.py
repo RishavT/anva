@@ -148,6 +148,9 @@ def _safe_tool_error(error: Exception, request_id: uuid.UUID) -> CallToolResult:
         "message": message,
         "correlation_id": str(request_id),
     }
+    if isinstance(error, MCPGatewayError):
+        payload["path"] = error.path
+        payload["reason"] = error.reason
     return CallToolResult(
         content=[
             TextContent(
@@ -230,7 +233,7 @@ def create_application() -> Starlette:
             if not settings.ANVA_MCP_READ_ONLY or bool(contract["read_only"])
         ]
 
-    @server.call_tool(validate_input=True)  # type: ignore[misc]
+    @server.call_tool(validate_input=False)  # type: ignore[misc]
     async def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any] | CallToolResult:
         actor = _actor()
         try:

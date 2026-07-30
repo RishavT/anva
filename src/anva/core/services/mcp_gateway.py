@@ -8,13 +8,14 @@ import hmac
 import json
 import logging
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import replace
+from datetime import datetime
 from typing import cast
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Prefetch
+from django.db.models import Prefetch, Q
 from django.utils import timezone
 from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import ValidationError
@@ -28,6 +29,13 @@ from anva.core.exceptions import (
 )
 from anva.core.models import (
     AcceptanceCriterion,
+    AccessGrant,
+    AccessScope,
+    AccessScopeMembership,
+    AccessScopeRepository,
+    AccessScopeServiceIdentity,
+    AccessScopeSource,
+    AccessSnapshot,
     ContextPacketRecord,
     KnowledgeProposal,
     KnowledgeRelationship,
@@ -36,7 +44,10 @@ from anva.core.models import (
     Policy,
     PolicyVersion,
     Repository,
+    RepositoryAccessToken,
     Requirement,
+    SourceChunkVisibility,
+    SourceConnection,
     WorkItem,
     WorkItemRevision,
     canonical_payload_bytes,
@@ -58,6 +69,7 @@ from anva.core.services.context_packets import (
 )
 from anva.core.services.creation import submit_knowledge_proposal
 from anva.core.services.graph import traverse_graph
+from anva.core.services.hostile_inputs import reject_secrets
 from anva.core.services.retrieval import (
     authorized_source_chunks,
     get_authorized_assertion,
@@ -77,6 +89,7 @@ from anva.mcp.contracts import (
 MAX_GATEWAY_OUTPUT_BYTES = 250_000
 MAX_GATEWAY_INPUT_BYTES = 250_000
 MAX_CURSOR_OFFSET = 10_000
+CURSOR_TTL_SECONDS = 300
 _SOURCE_TYPE = {
     "ASSERTION": "DOCUMENT",
     "SOURCE_CHUNK": "DOCUMENT",
@@ -91,9 +104,19 @@ logger = logging.getLogger(__name__)
 class MCPGatewayError(DomainOperationError):
     """A structured, safe failure at the shared MCP/HTTP contract boundary."""
 
-    def __init__(self, code: str, message: str, *, http_status: int = 400) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        http_status: int = 400,
+        path: str = "$",
+        reason: str = "boundary_rejected",
+    ) -> None:
         self.code = code
         self.http_status = http_status
+        self.path = path
+        self.reason = reason
         super().__init__(message)
 
 
@@ -118,6 +141,212 @@ def _keyed_payload_hash(payload: object) -> str:
     ).hexdigest()
 
 
+def _cursor_timestamp() -> int:
+    return int(timezone.now().timestamp())
+
+
+def _cursor_expires_at(*, actor: ActorContext, issued_at: int) -> int:
+    expires_at = issued_at + CURSOR_TTL_SECONDS
+    if actor.credential_id is None:
+        return expires_at
+    credential_expiry = (
+        RepositoryAccessToken.objects.filter(
+            id=actor.credential_id,
+            organization_id=actor.organization_id,
+        )
+        .values_list("expires_at", flat=True)
+        .first()
+    )
+    if credential_expiry is not None:
+        expires_at = min(expires_at, int(credential_expiry.timestamp()))
+    return expires_at
+
+
+def _watermark_rows(rows: Iterable[tuple[object, ...]]) -> list[list[object]]:
+    normalized: list[list[object]] = []
+    for row in rows:
+        normalized.append(
+            [
+                value.isoformat()
+                if isinstance(value, datetime)
+                else value
+                if value is None or isinstance(value, bool | int | float | str)
+                else str(value)
+                for value in row
+            ]
+        )
+    return normalized
+
+
+def _authorization_watermark(
+    *,
+    actor: ActorContext,
+    tool_name: str,
+) -> str:
+    """Hash current grants, scopes, credential state, and retrieval visibility."""
+    contract = TOOL_BY_NAME.get(tool_name)
+    action = Action(contract["required_action"]) if contract is not None else Action.REPOSITORY_VIEW
+    repository_id = actor.repository_id
+    credential_id = actor.credential_id
+    if repository_id is None or credential_id is None:
+        raise MCPGatewayError("invalid_cursor", "Pagination cursor is invalid")
+    authorize_action(
+        actor=actor,
+        action=action,
+        repository_id=repository_id,
+    )
+    scope_ids = tuple(
+        visible_scope_ids(actor=actor, repository_id=repository_id)
+        .order_by("id")
+        .values_list("id", flat=True)
+    )
+    principal_filter = (
+        Q(service_identity_id=actor.actor_id)
+        if actor.actor_type == "SERVICE"
+        else Q(membership_id=actor.actor_id)
+    )
+    parts: dict[str, object] = {
+        "credential": _watermark_rows(
+            RepositoryAccessToken.objects.filter(
+                organization_id=actor.organization_id,
+                repository_id=repository_id,
+                id=credential_id,
+            ).values_list(
+                "id",
+                "service_identity_id",
+                "allowed_actions",
+                "expires_at",
+                "revoked_at",
+            )
+        ),
+        "repository": _watermark_rows(
+            Repository.objects.filter(
+                organization_id=actor.organization_id,
+                id=repository_id,
+            ).values_list("id", "is_active", "updated_at")
+        ),
+        "grants": _watermark_rows(
+            AccessGrant.objects.filter(
+                Q(repository_id=repository_id) | Q(repository__isnull=True),
+                organization_id=actor.organization_id,
+            )
+            .filter(principal_filter)
+            .order_by("id")
+            .values_list(
+                "id",
+                "repository_id",
+                "source_connection_id",
+                "action",
+                "expires_at",
+                "revoked_at",
+                "updated_at",
+            )
+        ),
+        "scopes": _watermark_rows(
+            AccessScope.objects.filter(
+                organization_id=actor.organization_id,
+                id__in=scope_ids,
+            )
+            .order_by("id")
+            .values_list(
+                "id",
+                "revision",
+                "is_active",
+                "all_memberships",
+                "all_service_identities",
+                "all_repositories",
+                "updated_at",
+            )
+        ),
+        "scope_memberships": _watermark_rows(
+            AccessScopeMembership.objects.filter(
+                organization_id=actor.organization_id,
+                access_scope_id__in=scope_ids,
+            )
+            .order_by("id")
+            .values_list("id", "access_scope_id", "membership_id", "updated_at")
+        ),
+        "scope_services": _watermark_rows(
+            AccessScopeServiceIdentity.objects.filter(
+                organization_id=actor.organization_id,
+                access_scope_id__in=scope_ids,
+            )
+            .order_by("id")
+            .values_list("id", "access_scope_id", "service_identity_id", "updated_at")
+        ),
+        "scope_repositories": _watermark_rows(
+            AccessScopeRepository.objects.filter(
+                organization_id=actor.organization_id,
+                access_scope_id__in=scope_ids,
+            )
+            .order_by("id")
+            .values_list("id", "access_scope_id", "repository_id", "updated_at")
+        ),
+        "scope_sources": _watermark_rows(
+            AccessScopeSource.objects.filter(
+                organization_id=actor.organization_id,
+                access_scope_id__in=scope_ids,
+            )
+            .order_by("id")
+            .values_list("id", "access_scope_id", "source_connection_id", "updated_at")
+        ),
+        "sources": _watermark_rows(
+            SourceConnection.objects.filter(
+                organization_id=actor.organization_id,
+            )
+            .filter(
+                Q(repository_id=repository_id)
+                | Q(access_scope_id__in=scope_ids)
+                | Q(accessscopesource__access_scope_id__in=scope_ids)
+            )
+            .distinct()
+            .order_by("id")
+            .values_list(
+                "id",
+                "repository_id",
+                "access_scope_id",
+                "state",
+                "revision",
+                "updated_at",
+            )
+        ),
+        "snapshots": _watermark_rows(
+            AccessSnapshot.objects.filter(
+                organization_id=actor.organization_id,
+                access_scope_id__in=scope_ids,
+            )
+            .order_by("id")
+            .values_list(
+                "id",
+                "source_connection_id",
+                "access_scope_id",
+                "scope_revision",
+                "content_hash",
+                "captured_at",
+                "revoked_at",
+            )
+        ),
+        "visibility": _watermark_rows(
+            SourceChunkVisibility.objects.filter(
+                organization_id=actor.organization_id,
+                access_scope_id__in=scope_ids,
+            )
+            .order_by("id")
+            .values_list(
+                "id",
+                "source_chunk_id",
+                "source_observation_id",
+                "access_snapshot_id",
+                "access_scope_id",
+                "state",
+                "observed_at",
+                "revoked_at",
+            )
+        ),
+    }
+    return _keyed_payload_hash(parts)
+
+
 def _binding_payload(
     *,
     actor: ActorContext,
@@ -136,6 +365,10 @@ def _binding_payload(
         "actor_id": actor.actor_id,
         "credential_id": str(actor.credential_id) if actor.credential_id else None,
         "request_hash": _keyed_payload_hash(stable_arguments),
+        "authorization_watermark": _authorization_watermark(
+            actor=actor,
+            tool_name=tool_name,
+        ),
     }
 
 
@@ -146,9 +379,13 @@ def _encode_cursor(
     arguments: dict[str, object],
     offset: int,
 ) -> str:
+    issued_at = _cursor_timestamp()
+    expires_at = _cursor_expires_at(actor=actor, issued_at=issued_at)
     payload = {
         **_binding_payload(actor=actor, tool_name=tool_name, arguments=arguments),
         "offset": offset,
+        "issued_at": issued_at,
+        "expires_at": expires_at,
     }
     encoded = base64.urlsafe_b64encode(canonical_payload_bytes(payload)).rstrip(b"=")
     signature = hmac.new(_cursor_key(), encoded, hashlib.sha256).hexdigest().encode()
@@ -177,16 +414,26 @@ def _decode_cursor(
         raise MCPGatewayError("invalid_cursor", "Pagination cursor is invalid") from None
     if not isinstance(payload, dict):
         raise MCPGatewayError("invalid_cursor", "Pagination cursor is invalid")
+    now = _cursor_timestamp()
+    issued_at = payload.get("issued_at")
+    expires_at = payload.get("expires_at")
+    if (
+        not isinstance(issued_at, int)
+        or isinstance(issued_at, bool)
+        or not isinstance(expires_at, int)
+        or isinstance(expires_at, bool)
+        or issued_at > now + 5
+        or expires_at <= now
+        or expires_at - issued_at > CURSOR_TTL_SECONDS
+    ):
+        raise MCPGatewayError("invalid_cursor", "Pagination cursor is invalid")
     expected_binding = _binding_payload(
         actor=actor,
         tool_name=tool_name,
         arguments=arguments,
     )
     if any(payload.get(key) != value for key, value in expected_binding.items()):
-        raise MCPGatewayError(
-            "invalid_cursor",
-            "Pagination cursor is not valid for this credential and request",
-        )
+        raise MCPGatewayError("invalid_cursor", "Pagination cursor is invalid")
     offset = payload.get("offset")
     if (
         not isinstance(offset, int)
@@ -959,6 +1206,7 @@ def _proposal(
             "proposal_kind": existing.proposal_kind,
             "review_state": KnowledgeProposal.State.PROPOSED,
             "approved": False,
+            "review_required": True,
             "created": False,
         }
     references = [
@@ -1004,6 +1252,7 @@ def _proposal(
         "proposal_kind": kind,
         "review_state": KnowledgeProposal.State.PROPOSED,
         "approved": False,
+        "review_required": True,
         "created": True,
     }
 
@@ -1059,10 +1308,50 @@ def _validate(schema: dict[str, object], payload: object, *, code: str, label: s
     try:
         Draft202012Validator(schema, format_checker=FormatChecker()).validate(payload)
     except ValidationError as error:
-        location = ".".join(str(part) for part in error.absolute_path) or "<root>"
+        path = "$"
+        for part in error.absolute_path:
+            if isinstance(part, int):
+                path += f"[{part}]"
+            elif isinstance(part, str) and part.replace("_", "").replace("-", "").isalnum():
+                path += f".{part}"
+            else:
+                path += ".*"
+        validators = {error.validator}
+        pending = list(error.context)
+        while pending:
+            nested = pending.pop()
+            validators.add(nested.validator)
+            pending.extend(nested.context)
+        reason = {
+            "additionalProperties": "closed_object",
+            "anyOf": "value_shape",
+            "const": "allowed_value",
+            "enum": "allowed_value",
+            "format": "value_format",
+            "maxItems": "collection_limit",
+            "maxLength": "value_limit",
+            "maxProperties": "collection_limit",
+            "minItems": "collection_limit",
+            "minLength": "value_limit",
+            "minProperties": "collection_limit",
+            "not": "value_shape",
+            "oneOf": "value_shape",
+            "pattern": "value_format",
+            "required": "required_field",
+            "type": "value_type",
+        }.get(
+            "enum"
+            if "enum" in validators
+            else "const"
+            if "const" in validators
+            else error.validator,
+            "schema_rule",
+        )
         raise MCPGatewayError(
             code,
-            f"{label} failed at {location}: {error.message}",
+            f"{label} failed (path={path}, reason={reason})",
+            path=path,
+            reason=reason,
         ) from error
 
 
@@ -1091,14 +1380,26 @@ def dispatch_tool(
     transport: str,
 ) -> dict[str, object]:
     """Validate, authorize, execute, bound, validate, and audit one tool call."""
-    contract = TOOL_BY_NAME.get(tool_name)
-    if contract is None:
-        raise MCPGatewayError(
-            "capability_unavailable",
-            f"Unknown tool {tool_name!r}; refresh MCP capability discovery",
-            http_status=404,
-        )
     try:
+        reject_secrets({"tool": tool_name, "arguments": arguments})
+    except ValueError:
+        raise MCPGatewayError(
+            "secret_material_rejected",
+            "Tool input contains prohibited credential material",
+            path="$",
+            reason="secret_material",
+        ) from None
+    contract = TOOL_BY_NAME.get(tool_name)
+    audit_tool_name = tool_name if contract is not None else "unrecognized"
+    audit_action = contract["required_action"] if contract is not None else "unrecognized"
+    try:
+        if contract is None:
+            raise MCPGatewayError(
+                "capability_unavailable",
+                "Requested capability is unavailable; refresh MCP capability discovery",
+                http_status=404,
+                reason="unknown_capability",
+            )
         if len(canonical_payload_bytes(arguments)) > MAX_GATEWAY_INPUT_BYTES:
             raise MCPGatewayError(
                 "input_limit_exceeded",
@@ -1158,8 +1459,8 @@ def dispatch_tool(
             _record_invocation(
                 actor=actor,
                 transport=transport,
-                tool_name=tool_name,
-                required_action=contract["required_action"],
+                tool_name=audit_tool_name,
+                required_action=audit_action,
                 arguments=arguments,
                 outcome=MCPToolInvocation.Outcome.SUCCEEDED,
                 target_id=_target_id(data),
@@ -1172,8 +1473,8 @@ def dispatch_tool(
                 _record_invocation(
                     actor=actor,
                     transport=transport,
-                    tool_name=tool_name,
-                    required_action=contract["required_action"],
+                    tool_name=audit_tool_name,
+                    required_action=audit_action,
                     arguments=arguments,
                     outcome=MCPToolInvocation.Outcome.FAILED,
                     error_code=code,
@@ -1181,7 +1482,7 @@ def dispatch_tool(
         except Exception:
             logger.exception(
                 "Unable to persist MCP failure audit",
-                extra={"tool_name": tool_name},
+                extra={"tool_name": audit_tool_name},
             )
         raise
 

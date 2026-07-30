@@ -64,6 +64,16 @@ class _Query:
 @pytest.mark.unit
 def test_read_handlers_share_bounded_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
     actor = _actor()
+    monkeypatch.setattr(
+        mcp_gateway,
+        "_cursor_expires_at",
+        lambda *, actor, issued_at: issued_at + mcp_gateway.CURSOR_TTL_SECONDS,
+    )
+    monkeypatch.setattr(
+        mcp_gateway,
+        "_authorization_watermark",
+        lambda **_kwargs: "a" * 64,
+    )
     repository_id = cast(uuid.UUID, actor.repository_id)
     repository = SimpleNamespace(
         id=repository_id,
