@@ -1,0 +1,7 @@
+Use $anva-prepare to prepare EXAM-314: add a moderated regrade export.
+
+The export needs a database migration and a browser-visible download state. The
+issue says the existing moderation API should be reused. Please identify the
+requirements, affected systems and owners, acceptance criteria, implementation
+plan, verification plan, open questions, limitations, and Anva sources before
+any implementation.
