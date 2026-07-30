@@ -379,6 +379,74 @@ def openapi_document() -> dict[str, object]:
         },
         "required": ["proposals"],
     }
+    github_permissions = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "actions": {"type": "string", "const": "read"},
+            "checks": {"type": "string", "const": "write"},
+            "contents": {"type": "string", "const": "read"},
+            "issues": {"type": "string", "const": "write"},
+            "metadata": {"type": "string", "const": "read"},
+            "pull_requests": {"type": "string", "enum": ["read", "write"]},
+        },
+        "required": ["checks", "contents", "issues", "pull_requests"],
+    }
+    github_binding_request = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "access_scope_id": {"type": "string", "format": "uuid"},
+            "installation_id": {"type": "integer", "minimum": 1},
+            "account_id": {"type": "integer", "minimum": 1},
+            "account_login": {"type": "string", "minLength": 1, "maxLength": 300},
+            "account_type": {"type": "string", "enum": ["Organization", "User"]},
+            "repository_selection": {"type": "string", "enum": ["all", "selected"]},
+            "permissions": github_permissions,
+            "external_repository_id": {"type": "integer", "minimum": 1},
+            "full_name": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$",
+            },
+            "default_branch": {"type": "string", "minLength": 1, "maxLength": 300},
+            "private": {"type": "boolean"},
+            "archived": {"type": "boolean"},
+            "auto_assurance": {"type": "boolean"},
+            "policy_version_ids": {
+                "type": "array",
+                "items": {"type": "string", "format": "uuid"},
+                "maxItems": 100,
+                "uniqueItems": True,
+            },
+            "work_item_revision_id": {
+                "oneOf": [
+                    {"type": "string", "format": "uuid"},
+                    {"type": "null"},
+                ]
+            },
+        },
+        "required": [
+            "access_scope_id",
+            "installation_id",
+            "account_id",
+            "account_login",
+            "account_type",
+            "repository_selection",
+            "permissions",
+            "external_repository_id",
+            "full_name",
+            "default_branch",
+            "private",
+            "archived",
+            "auto_assurance",
+            "policy_version_ids",
+        ],
+    }
+    empty_object_request = {
+        "type": "object",
+        "additionalProperties": False,
+        "maxProperties": 0,
+    }
     evaluator_responses: dict[str, object] = {
         "200": {
             "description": "Stored evaluator result.",
@@ -408,6 +476,67 @@ def openapi_document() -> dict[str, object]:
         "servers": [{"url": "/api/v1"}],
         "security": [{"bearerAuth": []}],
         "paths": {
+            "/webhooks/github": {
+                "post": {
+                    "operationId": "acceptGitHubWebhook",
+                    "description": (
+                        "Verify the raw-body HMAC before parsing and acknowledge mapped, "
+                        "unmapped, or duplicate GitHub deliveries without a tenant oracle."
+                    ),
+                    "servers": [{"url": "/"}],
+                    "security": [],
+                    "parameters": [
+                        {
+                            "name": "X-Hub-Signature-256",
+                            "in": "header",
+                            "required": True,
+                            "schema": {
+                                "type": "string",
+                                "pattern": "^sha256=[a-f0-9]{64}$",
+                            },
+                        },
+                        {
+                            "name": "X-GitHub-Delivery",
+                            "in": "header",
+                            "required": True,
+                            "schema": {"type": "string", "format": "uuid"},
+                        },
+                        {
+                            "name": "X-GitHub-Event",
+                            "in": "header",
+                            "required": True,
+                            "schema": {
+                                "type": "string",
+                                "enum": [
+                                    "installation",
+                                    "installation_repositories",
+                                    "repository",
+                                    "pull_request",
+                                    "check_run",
+                                    "check_suite",
+                                    "workflow_run",
+                                ],
+                            },
+                        },
+                    ],
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {"type": "object"},
+                            }
+                        },
+                    },
+                    "responses": {
+                        "202": {"description": "Verified delivery acknowledged."},
+                        "400": {"$ref": "#/components/responses/StructuredError"},
+                        "401": {"$ref": "#/components/responses/StructuredError"},
+                        "409": {"$ref": "#/components/responses/StructuredError"},
+                        "413": {"$ref": "#/components/responses/StructuredError"},
+                        "503": {"$ref": "#/components/responses/StructuredError"},
+                    },
+                }
+            },
             "/capabilities": {
                 "get": {
                     "operationId": "getCapabilities",
@@ -708,6 +837,36 @@ def openapi_document() -> dict[str, object]:
                         {"$ref": "#/components/parameters/CorrelationId"},
                     ],
                     "responses": created_responses,
+                }
+            },
+            "/repositories/{repository_id}/github-binding": {
+                "get": {
+                    "operationId": "getGitHubRepositoryBinding",
+                    "parameters": [
+                        repository_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": authorized_responses,
+                },
+                "post": {
+                    "operationId": "configureGitHubRepositoryBinding",
+                    "parameters": [*mutation_parameters, repository_parameter],
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": github_binding_request}},
+                    },
+                    "responses": created_or_replayed_responses,
+                },
+            },
+            "/repositories/{repository_id}/github-binding/revoke": {
+                "post": {
+                    "operationId": "revokeGitHubRepositoryBinding",
+                    "parameters": [*mutation_parameters, repository_parameter],
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": empty_object_request}},
+                    },
+                    "responses": authorized_responses,
                 }
             },
             "/tokens/{resource_id}/rotate": {

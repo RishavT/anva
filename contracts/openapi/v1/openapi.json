@@ -1527,6 +1527,144 @@
         "title": "Anva Assurance Finding",
         "type": "object"
       },
+      "github-publication": {
+        "$id": "https://schemas.anva.dev/v1/github-publication.schema.json",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "assurance_run_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "attempt_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "completed_at": {
+            "oneOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "external_id": {
+            "oneOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "external_url": {
+            "oneOf": [
+              {
+                "format": "uri",
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "head_commit": {
+            "pattern": "^[a-f0-9]{40}$",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "is_current": {
+            "type": "boolean"
+          },
+          "kind": {
+            "enum": [
+              "CHECK",
+              "COMMENT"
+            ],
+            "type": "string"
+          },
+          "max_attempts": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "payload_hash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "publication_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "pull_request_number": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "rendered_payload": {
+            "type": "object"
+          },
+          "repository_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "1.0",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "PENDING",
+              "RUNNING",
+              "RETRY",
+              "SUCCEEDED",
+              "FAILED",
+              "CANCELLED"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "publication_id",
+          "organization_id",
+          "repository_id",
+          "pull_request_number",
+          "assurance_run_id",
+          "kind",
+          "head_commit",
+          "payload_hash",
+          "idempotency_key",
+          "rendered_payload",
+          "state",
+          "attempt_count",
+          "max_attempts",
+          "is_current",
+          "external_id",
+          "external_url",
+          "created_at",
+          "completed_at"
+        ],
+        "title": "Anva GitHub Publication",
+        "type": "object"
+      },
       "knowledge-proposal": {
         "$defs": {
           "source_reference": {
@@ -4415,6 +4553,268 @@
         }
       }
     },
+    "/repositories/{repository_id}/github-binding": {
+      "get": {
+        "operationId": "getGitHubRepositoryBinding",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "repository_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      },
+      "post": {
+        "operationId": "configureGitHubRepositoryBinding",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          },
+          {
+            "in": "path",
+            "name": "repository_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "access_scope_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "account_id": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "account_login": {
+                    "maxLength": 300,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "account_type": {
+                    "enum": [
+                      "Organization",
+                      "User"
+                    ],
+                    "type": "string"
+                  },
+                  "archived": {
+                    "type": "boolean"
+                  },
+                  "auto_assurance": {
+                    "type": "boolean"
+                  },
+                  "default_branch": {
+                    "maxLength": 300,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "external_repository_id": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "full_name": {
+                    "pattern": "^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$",
+                    "type": "string"
+                  },
+                  "installation_id": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "permissions": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "actions": {
+                        "const": "read",
+                        "type": "string"
+                      },
+                      "checks": {
+                        "const": "write",
+                        "type": "string"
+                      },
+                      "contents": {
+                        "const": "read",
+                        "type": "string"
+                      },
+                      "issues": {
+                        "const": "write",
+                        "type": "string"
+                      },
+                      "metadata": {
+                        "const": "read",
+                        "type": "string"
+                      },
+                      "pull_requests": {
+                        "enum": [
+                          "read",
+                          "write"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "checks",
+                      "contents",
+                      "issues",
+                      "pull_requests"
+                    ],
+                    "type": "object"
+                  },
+                  "policy_version_ids": {
+                    "items": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "maxItems": 100,
+                    "type": "array",
+                    "uniqueItems": true
+                  },
+                  "private": {
+                    "type": "boolean"
+                  },
+                  "repository_selection": {
+                    "enum": [
+                      "all",
+                      "selected"
+                    ],
+                    "type": "string"
+                  },
+                  "work_item_revision_id": {
+                    "oneOf": [
+                      {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "access_scope_id",
+                  "installation_id",
+                  "account_id",
+                  "account_login",
+                  "account_type",
+                  "repository_selection",
+                  "permissions",
+                  "external_repository_id",
+                  "full_name",
+                  "default_branch",
+                  "private",
+                  "archived",
+                  "auto_assurance",
+                  "policy_version_ids"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing resource returned for an exact canonical replay."
+          },
+          "201": {
+            "description": "Tenant-scoped resource created."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/repositories/{repository_id}/github-binding/revoke": {
+      "post": {
+        "operationId": "revokeGitHubRepositoryBinding",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          },
+          {
+            "in": "path",
+            "name": "repository_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "maxProperties": 0,
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
     "/repositories/{repository_id}/pull-requests/{pull_request_number}/evidence": {
       "post": {
         "operationId": "submitEvidenceManifest",
@@ -4930,6 +5330,85 @@
             "$ref": "#/components/responses/StructuredError"
           }
         }
+      }
+    },
+    "/webhooks/github": {
+      "post": {
+        "description": "Verify the raw-body HMAC before parsing and acknowledge mapped, unmapped, or duplicate GitHub deliveries without a tenant oracle.",
+        "operationId": "acceptGitHubWebhook",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Hub-Signature-256",
+            "required": true,
+            "schema": {
+              "pattern": "^sha256=[a-f0-9]{64}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-GitHub-Delivery",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-GitHub-Event",
+            "required": true,
+            "schema": {
+              "enum": [
+                "installation",
+                "installation_repositories",
+                "repository",
+                "pull_request",
+                "check_run",
+                "check_suite",
+                "workflow_run"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Verified delivery acknowledged."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "413": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "503": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        },
+        "security": [],
+        "servers": [
+          {
+            "url": "/"
+          }
+        ]
       }
     },
     "/work-approvals/{resource_id}/revoke": {

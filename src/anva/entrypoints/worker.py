@@ -20,7 +20,7 @@ READY_FILE = Path("/app/run/worker-ready")
 def process_one_job(*, worker_id: str, lease_seconds: int) -> bool:
     """Claim and safely dispatch at most one allowlisted job."""
     from anva.core.services.context import ActorContext
-    from anva.core.services.job_handlers import dispatch_job
+    from anva.core.services.job_handlers import HANDLERS, dispatch_job
     from anva.core.services.jobs import (
         cancel_job,
         claim_next_job,
@@ -29,7 +29,11 @@ def process_one_job(*, worker_id: str, lease_seconds: int) -> bool:
     )
     from anva.ingestion.errors import IngestionError
 
-    job = claim_next_job(worker_id=worker_id, lease_seconds=lease_seconds)
+    job = claim_next_job(
+        worker_id=worker_id,
+        lease_seconds=lease_seconds,
+        allowed_kinds=frozenset(HANDLERS),
+    )
     if job is None:
         return False
     actor = ActorContext(

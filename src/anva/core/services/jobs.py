@@ -71,6 +71,7 @@ def claim_next_job(
     *,
     worker_id: str,
     lease_seconds: int,
+    allowed_kinds: frozenset[str] | None = None,
     now: datetime | None = None,
 ) -> BackgroundJob | None:
     """Atomically claim one available or expired job using `SKIP LOCKED`."""
@@ -133,13 +134,14 @@ def claim_next_job(
             lease_expires_at__lte=claimed_at,
             attempt_count__lt=F("max_attempts"),
         )
-        job = (
+        candidates = (
             BackgroundJob.objects.select_for_update(skip_locked=True)
             .select_related("organization")
             .filter(eligible)
-            .order_by("-priority", "available_at", "created_at")
-            .first()
         )
+        if allowed_kinds is not None:
+            candidates = candidates.filter(kind__in=allowed_kinds)
+        job = candidates.order_by("-priority", "available_at", "created_at").first()
         if job is None:
             return None
 

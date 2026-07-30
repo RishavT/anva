@@ -16,6 +16,7 @@ SECRET_PATTERNS = (
     re.compile(r"\banva_v1\.[0-9a-fA-F-]{36}\.[A-Za-z0-9_-]+"),
     re.compile(r"\bsk_(?:live|test)_[A-Za-z0-9_-]{8,}"),
     re.compile(r"\b(?:ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{12,})"),
+    re.compile(r"\bgh[usro]_[A-Za-z0-9_]{20,}"),
     re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}"),
     re.compile(r"\b(?:npm_[A-Za-z0-9]{20,}|pypi-[A-Za-z0-9_-]{20,})"),
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
@@ -57,6 +58,7 @@ def redact_text(value: object) -> str:
         str(settings.SECRET_KEY),
         str(settings.TOKEN_PEPPER),
         str(settings.BOOTSTRAP_SECRET),
+        *(str(secret) for secret in settings.ANVA_GITHUB_WEBHOOK_SECRETS),
     }
     for secret in configured_secrets:
         if secret:

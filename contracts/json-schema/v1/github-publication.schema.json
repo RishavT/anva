@@ -1,0 +1,138 @@
+{
+  "$id": "https://schemas.anva.dev/v1/github-publication.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "assurance_run_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "attempt_count": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "completed_at": {
+      "oneOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "created_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "external_id": {
+      "oneOf": [
+        {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "external_url": {
+      "oneOf": [
+        {
+          "format": "uri",
+          "maxLength": 2000,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "head_commit": {
+      "pattern": "^[a-f0-9]{40}$",
+      "type": "string"
+    },
+    "idempotency_key": {
+      "maxLength": 200,
+      "minLength": 1,
+      "type": "string"
+    },
+    "is_current": {
+      "type": "boolean"
+    },
+    "kind": {
+      "enum": [
+        "CHECK",
+        "COMMENT"
+      ],
+      "type": "string"
+    },
+    "max_attempts": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "organization_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "payload_hash": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "publication_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "pull_request_number": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "rendered_payload": {
+      "type": "object"
+    },
+    "repository_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "type": "string"
+    },
+    "state": {
+      "enum": [
+        "PENDING",
+        "RUNNING",
+        "RETRY",
+        "SUCCEEDED",
+        "FAILED",
+        "CANCELLED"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "publication_id",
+    "organization_id",
+    "repository_id",
+    "pull_request_number",
+    "assurance_run_id",
+    "kind",
+    "head_commit",
+    "payload_hash",
+    "idempotency_key",
+    "rendered_payload",
+    "state",
+    "attempt_count",
+    "max_attempts",
+    "is_current",
+    "external_id",
+    "external_url",
+    "created_at",
+    "completed_at"
+  ],
+  "title": "Anva GitHub Publication",
+  "type": "object"
+}

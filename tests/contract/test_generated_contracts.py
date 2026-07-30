@@ -24,7 +24,7 @@ def test_contract_catalog_and_checked_in_generation_are_current() -> None:
     second = rendered_artifacts()
 
     assert first == second
-    assert len(first) == 22
+    assert len(first) == 24
     check_artifacts(first)
 
 
@@ -76,6 +76,9 @@ def test_openapi_exposes_versioned_tenancy_and_authorization_boundaries() -> Non
         "/organizations/{organization_id}/members",
         "/organizations/{organization_id}/members/{resource_id}",
         "/repositories/{repository_id}/tokens",
+        "/repositories/{repository_id}/github-binding",
+        "/repositories/{repository_id}/github-binding/revoke",
+        "/webhooks/github",
         "/tokens/{resource_id}/rotate",
         "/tokens/{resource_id}",
         "/search",
@@ -137,6 +140,8 @@ def test_openapi_exposes_versioned_tenancy_and_authorization_boundaries() -> Non
         "/repositories/{repository_id}/evaluator-tasks/claim",
         "/evaluator-tasks/{resource_id}/submit",
         "/assurance-runs/{resource_id}/post-merge-proposals",
+        "/repositories/{repository_id}/github-binding",
+        "/repositories/{repository_id}/github-binding/revoke",
     ):
         operation = cast(dict[str, object], cast(dict[str, object], paths[path])["post"])
         body = cast(dict[str, object], operation["requestBody"])

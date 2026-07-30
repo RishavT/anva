@@ -1,0 +1,30 @@
+{
+  "assurance_run_id": "00000000-0000-4000-8000-000000000601",
+  "attempt_count": 0,
+  "completed_at": null,
+  "created_at": "2026-07-30T10:00:00Z",
+  "external_id": null,
+  "external_url": null,
+  "head_commit": "dddddddddddddddddddddddddddddddddddddddd",
+  "idempotency_key": "github-write:00000000-0000-4000-8000-000000000801:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "is_current": true,
+  "kind": "CHECK",
+  "max_attempts": 8,
+  "organization_id": "00000000-0000-4000-8000-000000000001",
+  "payload_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "publication_id": "00000000-0000-4000-8000-000000000801",
+  "pull_request_number": 17,
+  "rendered_payload": {
+    "conclusion": "neutral",
+    "details_url": "https://anva.example.test/api/v1/assurance-runs/00000000-0000-4000-8000-000000000601/report",
+    "output": {
+      "annotations": [],
+      "summary": "Evaluated commit: dddddddddddddddddddddddddddddddddddddddd",
+      "title": "Anva: Ready With Warnings"
+    },
+    "status": "completed"
+  },
+  "repository_id": "00000000-0000-4000-8000-000000000304",
+  "schema_version": "1.0",
+  "state": "PENDING"
+}

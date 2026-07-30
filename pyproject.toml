@@ -16,6 +16,7 @@ dependencies = [
   "jsonschema[format]==4.25.1",
   "pgvector==0.5.0",
   "psycopg[binary]==3.2.9",
+  "PyJWT[crypto]==2.10.1",
   "PyYAML==6.0.2",
   "whitenoise==6.9.0",
 ]
@@ -34,6 +35,7 @@ dev = [
 anva = "anva.entrypoints.cli:main"
 anva-mcp = "anva.entrypoints.mcp:main"
 anva-worker = "anva.entrypoints.worker:main"
+anva-github-worker = "anva.entrypoints.github_worker:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/anva"]

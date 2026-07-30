@@ -249,6 +249,106 @@ def test_assurance_cli_rejects_symlink_diff(
 
 
 @pytest.mark.unit
+def test_github_configure_cli_posts_bounded_file_without_printing_token(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repository_id = uuid.uuid4()
+    configuration = tmp_path / "github-binding.json"
+    configuration.write_text(
+        json.dumps(
+            {
+                "access_scope_id": str(uuid.uuid4()),
+                "installation_id": 7001,
+                "account_id": 9001,
+                "account_login": "anva-example",
+                "account_type": "Organization",
+                "repository_selection": "selected",
+                "permissions": {
+                    "checks": "write",
+                    "contents": "read",
+                    "issues": "write",
+                    "pull_requests": "read",
+                },
+                "external_repository_id": 8001,
+                "full_name": "anva/example",
+                "default_branch": "main",
+                "private": True,
+                "archived": False,
+                "auto_assurance": False,
+                "policy_version_ids": [],
+            }
+        )
+    )
+    monkeypatch.setenv("ANVA_TOKEN", "CANARY-GITHUB-ADMIN-TOKEN")
+    with patch("anva.entrypoints.cli.urlopen") as open_url:
+        open_url.return_value.__enter__.return_value.read.return_value = json.dumps(
+            {"id": str(uuid.uuid4()), "state": "ACTIVE", "created": True}
+        ).encode()
+        result = main(
+            [
+                "github",
+                "--api-url",
+                "https://anva.example/api/v1",
+                "configure",
+                "--repository-id",
+                str(repository_id),
+                "--config",
+                str(configuration),
+            ]
+        )
+
+    assert result == 0
+    request = open_url.call_args.args[0]
+    assert request.method == "POST"
+    assert request.full_url.endswith(f"/repositories/{repository_id}/github-binding")
+    assert json.loads(request.data)["installation_id"] == 7001
+    assert "CANARY-GITHUB-ADMIN-TOKEN" not in capsys.readouterr().out
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("command", "method", "suffix"),
+    [
+        ("status", "GET", ""),
+        ("revoke", "POST", "/revoke"),
+    ],
+)
+def test_github_status_and_revoke_cli_use_versioned_binding_api(
+    command: str,
+    method: str,
+    suffix: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repository_id = uuid.uuid4()
+    monkeypatch.setenv("ANVA_TOKEN", "CANARY-GITHUB-ADMIN-TOKEN")
+    with patch("anva.entrypoints.cli.urlopen") as open_url:
+        open_url.return_value.__enter__.return_value.read.return_value = json.dumps(
+            {"id": str(uuid.uuid4()), "state": "ACTIVE"}
+        ).encode()
+        result = main(
+            [
+                "github",
+                "--api-url",
+                "https://anva.example/api/v1",
+                command,
+                "--repository-id",
+                str(repository_id),
+            ]
+        )
+
+    assert result == 0
+    request = open_url.call_args.args[0]
+    assert request.method == method
+    assert request.full_url == (
+        f"https://anva.example/api/v1/repositories/{repository_id}/github-binding{suffix}"
+    )
+    assert "CANARY-GITHUB-ADMIN-TOKEN" not in capsys.readouterr().out
+
+
+@pytest.mark.unit
 def test_evaluator_submit_reads_claim_token_only_from_environment(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
