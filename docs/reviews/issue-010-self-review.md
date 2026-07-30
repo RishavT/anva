@@ -48,14 +48,16 @@ format validation.
   does not show that a coding-agent host independently followed a skill.
 - The reproducible trusted gate in
   [the live evaluation runbook](../runbooks/trusted-skill-evaluation.md)
-  physically excludes the oracle, grader, prior outputs, worktree, and ambient
-  MCP configuration until after a native-host output is sealed and hashed.
-  It records the raw streams and hashes of all input, artifact, output, oracle,
-  grader, gate, host/version, schema, score, exact-SHA, and CI provenance.
-- No live Codex or Claude model result is claimed in the repository without a
-  complete immutable evidence directory and passing `grade-record.json`.
-  Fresh-agent evaluations, when run, are labeled with their actual evaluator
-  host and are not relabeled as native Codex or Claude evidence.
+  physically excludes evaluator contents, prior outputs, worktree, and ambient
+  MCP configuration. Its v2 flow precommits both host artifacts, exact version
+  targets, and oracle/grader hashes before either host runs, then withholds
+  grading until both runs are terminal. It records the raw streams and hashes
+  of every input, artifact, output, commitment, rule, oracle, grader, gate,
+  host/version, schema, score, exact SHA, and CI provenance.
+- A live Codex or Claude result is release evidence only with its complete
+  immutable session and passing `grade-record.json`. Failed and `NOT_RUN`
+  records remain preserved under their accurate evidence classes. Fresh-agent
+  evaluations are labeled with their actual host and are never relabeled.
 - All eight repo/plugin Codex skills passed the official `quick_validate.py`
   helper. Claude's plugin and repository marketplace each passed
   `claude plugin validate --strict`.

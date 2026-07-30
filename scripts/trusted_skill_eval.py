@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reproducible two-stage trusted skill evaluation evidence gate."""
+"""Reproducible precommitted paired-host skill evaluation evidence gate."""
 
 from __future__ import annotations
 

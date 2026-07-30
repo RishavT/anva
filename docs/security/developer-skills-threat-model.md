@@ -89,14 +89,17 @@ learn creates nothing.
 
 Deterministic fake-MCP fixtures and package checks need no live credentials.
 The normal workflow retains `contents: read` and has no model/customer/token
-secret path. Trusted host evaluation creates a fresh read-only workspace from
-only one packaged skill, the raw task, a synthetic MCP transcript, and its
-bundled schema. Codex denies agent reads outside that workspace; Claude has no
-model tools. The environment is allowlisted, model-command network is
-disabled, and ambient MCP configuration is excluded. Oracle, grader, and
-prior outputs cannot enter `prepare` or `run`; they become available only
-after raw streams and structured output are sealed and hashed. Unavailable
-native authentication is `NOT_RUN`, never provider evidence.
+secret path. Trusted host evaluation creates paired fresh read-only workspaces
+from one packaged skill, the raw task, a synthetic MCP transcript, and bundled
+generation and validation schemas. Codex denies agent reads outside its
+workspace; Claude has no model tools. The environment is allowlisted,
+model-command network is disabled, and ambient MCP configuration is excluded.
+Before either host runs, an immutable hash-only commitment binds both prepared
+artifacts, exact host versions, and the separately held oracle and grader.
+Evaluator contents and prior outputs cannot enter `prepare`, `commit`, or
+`run`; `grade` cannot read them until both hosts have sealed output or explicit
+`NOT_RUN` records. Grade records hash typed rules and redact rejected values.
+Unavailable native authentication is `NOT_RUN`, never provider evidence.
 
 ## Residual risks
 
@@ -112,7 +115,8 @@ native authentication is `NOT_RUN`, never provider evidence.
 
 - Unit: install replay/tamper/interruption/symlinks, MCP handoffs, unavailable
   and unsupported diagnostics, race-winner preservation, response resource
-  bounds, evidence isolation/tamper detection, and canary non-disclosure.
+  bounds, paired precommit isolation/tamper detection, contextual hard/scored
+  evaluator rules, and secret-value non-disclosure.
 - Contract: canonical tools/schemas, cross-host normalization, plugin hygiene,
   reproducible safe archives.
 - Integration: both host traces use the same actor/task and exact authorized
