@@ -383,8 +383,9 @@ def test_native_codex_run_uses_isolated_profile_and_seals_raw_output(
     serialized = " ".join(command)
     assert "--ephemeral" in command
     assert "--ignore-user-config" in command
-    assert 'permissions.eval-only.filesystem.":root"="deny"' in serialized
-    assert "permissions.eval-only.network.enabled=false" in serialized
+    assert 'filesystem={":root"="deny",":minimal"="read"' in serialized
+    assert '":workspace_roots"={"."="read"}' in serialized
+    assert "network={enabled=false}" in serialized
     environment_names = record["environment_names"]
     assert isinstance(environment_names, list)
     assert "ANVA_TOKEN" not in environment_names

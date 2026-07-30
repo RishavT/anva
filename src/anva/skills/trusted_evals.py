@@ -387,19 +387,13 @@ def _codex_command(
         "-c",
         'default_permissions="eval-only"',
         "-c",
-        'permissions.eval-only.extends=":workspace"',
-        "-c",
-        'permissions.eval-only.filesystem.":root"="deny"',
-        "-c",
-        'permissions.eval-only.filesystem.":minimal"="read"',
-        "-c",
-        'permissions.eval-only.filesystem.":tmpdir"="deny"',
-        "-c",
-        'permissions.eval-only.filesystem.":slash_tmp"="deny"',
-        "-c",
-        'permissions.eval-only.filesystem.":workspace_roots"."="read"',
-        "-c",
-        "permissions.eval-only.network.enabled=false",
+        (
+            'permissions.eval-only={extends=":workspace",'
+            'filesystem={":root"="deny",":minimal"="read",'
+            '":tmpdir"="deny",":slash_tmp"="deny",'
+            '":workspace_roots"={"."="read"}},'
+            "network={enabled=false}}"
+        ),
         "-",
     ]
 
