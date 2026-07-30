@@ -86,18 +86,55 @@ outbound-write state/error. Expected publication behavior is one current `Anva /
 and one App-authored marked comment for each evaluated head. The content names the exact commit and
 does not grant merge or deployment approval.
 
+PR synchronization is serialized per binding and PR. The worker locks active installation/binding
+authority before any provider call, accepts a diff only when identical full provider snapshots
+bracket it, then rechecks provider truth before committing local effects. This protects both the
+suspension drain boundary and the current projection when delivery workers observe different heads.
+
 ## Retry and recovery
 
 - `github_rate_limited`: the durable write moves to `RETRY` using the greater of exponential
   backoff and provider `Retry-After`.
 - `github_ambiguous_write`: the next attempt searches for the same App Check/name/head or
   App-authored marker and adopts it; human marker copies are ignored.
+- `github_pull_request_changed_during_sync`: provider truth changed during the bounded refresh or
+  final recheck. The local transaction was rolled back; allow the durable job to retry.
+- `github_http_3xx`: the live client deliberately rejects all redirects, including same-origin
+  redirects. Verify GitHub/API routing; do not bypass this control or manually replay a bearer
+  token.
+- `github_token_response_invalid`: the token was not bounded `ghs_` syntax, lacked a timezone-aware
+  expiry, or its remaining lifetime was outside 30 seconds to 65 minutes. Verify system time and
+  App configuration, then rotate credentials if the response remains unexpected.
 - `STALE_HEAD` or `SUPERSEDED_PUBLICATION`: the write is cancelled without constructing a client.
 - `GITHUB_ACCESS_REVOKED`: the write and outbox event are retired without network access.
 - invalid signature/body: GitHub receives a stable 4xx response; inspect only safe correlation and
   delivery IDs, never body/token/key data.
 - unmapped delivery: returns `202` without revealing tenant state; configure the mapping before a
   deliberate redelivery.
+
+## Suspend and unsuspend
+
+A GitHub installation suspension is a temporary but complete access stop. When the verified
+`installation/suspend` event finishes, Anva has deactivated the installation service identity,
+reviewed grants, eligible bindings and repository context; cancelled active assurance/evaluator
+work, queued provider jobs and pending writes; retired current publications; revoked repository
+tokens; and marked associated source connections revoked. New non-lifecycle deliveries are stored
+as ignored and are not queued.
+
+There are two intentional race outcomes:
+
+- If suspension acquires installation authority first, no later provider read or write begins.
+- A provider read or outbound write that already acquired installation/binding authority is allowed
+  to finish. Suspension waits for that transaction and returns only after it has drained; all
+  remaining eligible work is then cancelled.
+
+Only a verified `installation/unsuspend` event reactivates a suspended installation. It restores the
+service identity, non-revoked/non-archived bindings and repository context, and exactly the reviewed
+grants. It does not replay cancelled deliveries/jobs/writes, revive publications or assurance,
+publish a completed pre-suspension run that had not yet produced an intent, unrevoke source
+connections, or issue replacement repository tokens. After unsuspension, verify the binding status,
+reconnect required sources, issue fresh credentials through their normal workflow, and deliberately
+redeliver or restart only current work.
 
 ## Revoke
 
@@ -107,10 +144,11 @@ docker compose --profile tools run --rm \
   --repository-id <repository-uuid>
 ```
 
-Revocation cancels active assurance/evaluator/provider jobs and pending writes, revokes associated
-repository tokens and source health, deactivates future repository context, and preserves immutable
-delivery, observation, report, attempt, and audit history. Reconfiguration is an explicit admin
-operation and requires newly issued repository credentials and source reconnection where needed.
+Revocation is terminal for that binding/installation record. It cancels active
+assurance/evaluator/provider jobs and pending writes, revokes associated repository tokens and
+source health, deactivates future repository context, and preserves immutable delivery,
+observation, report, attempt, and audit history. Reconfiguration is an explicit admin operation and
+requires newly issued repository credentials and source reconnection where needed.
 
 For an installation-wide incident, revoke/delete the installation in GitHub first, stop the GitHub
 worker, rotate the key and webhook secret, then investigate using identifiers only.

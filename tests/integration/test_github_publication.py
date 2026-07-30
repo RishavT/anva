@@ -18,6 +18,7 @@ from anva.contracts.catalog import EXAMPLES
 from anva.core.models import (
     AccessScope,
     AssuranceRun,
+    GitHubInstallation,
     GitHubPublication,
     GitHubRepositoryBinding,
     GitHubWriteAttempt,
@@ -44,16 +45,20 @@ from anva.integrations.github.client import (
     AmbiguousGitHubWriteError,
     FakeGitHubClient,
     GitHubRateLimitError,
+    GitHubWriteResult,
     RepositoryReference,
 )
 from anva.integrations.github.publication import (
     claim_next_write,
     dispatch_next_write,
     queue_assurance_publications,
+    queue_completed_assurance_publications,
 )
 from anva.integrations.github.service import (
     configure_repository_binding,
+    reactivate_installation,
     revoke_repository_binding,
+    suspend_installation,
 )
 
 REFERENCE_TIME = datetime(2026, 7, 30, 10, tzinfo=UTC)
@@ -395,6 +400,137 @@ def test_revocation_retires_all_pending_writes_without_network() -> None:
         published_at__isnull=True,
     ).exists()
     assert fake.calls == []
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_suspension_drains_an_authorized_inflight_write_before_returning() -> None:
+    run, _unused = _completed_bound_run()
+    queued = queue_assurance_publications(run_id=run.id)
+    check_intent = next(
+        intent
+        for intent in queued.intents
+        if intent.publication.kind == GitHubPublication.Kind.CHECK
+    )
+    dispatch_time = timezone.now() + timedelta(seconds=1)
+    GitHubWriteIntent.objects.update(available_at=dispatch_time + timedelta(days=1))
+    GitHubWriteIntent.objects.filter(id=check_intent.id).update(
+        available_at=dispatch_time - timedelta(seconds=1)
+    )
+    write_started = threading.Event()
+    release_write = threading.Event()
+    suspension_started = threading.Event()
+    suspension_finished = threading.Event()
+    failures: list[BaseException] = []
+
+    class BlockingWriteClient(FakeGitHubClient):
+        def upsert_check(
+            self,
+            *,
+            repository: RepositoryReference,
+            head_commit: str,
+            check_name: str,
+            payload: dict[str, object],
+            external_id: str,
+            idempotency_key: str,
+        ) -> GitHubWriteResult:
+            write_started.set()
+            if not release_write.wait(timeout=10):
+                raise TimeoutError("test did not release provider write")
+            return super().upsert_check(
+                repository=repository,
+                head_commit=head_commit,
+                check_name=check_name,
+                payload=payload,
+                external_id=external_id,
+                idempotency_key=idempotency_key,
+            )
+
+    client = BlockingWriteClient()
+    binding = GitHubRepositoryBinding.objects.get(repository=run.repository)
+    installation_id = binding.installation_id
+
+    def dispatch() -> None:
+        close_old_connections()
+        try:
+            dispatch_next_write(
+                worker_id="github-worker-suspend-race",
+                client_for_installation=lambda _installation_id: client,
+                now=dispatch_time,
+            )
+        except BaseException as error:
+            failures.append(error)
+        finally:
+            connections.close_all()
+
+    def suspend() -> None:
+        close_old_connections()
+        try:
+            installation = GitHubInstallation.objects.get(id=installation_id)
+            suspension_started.set()
+            suspend_installation(
+                installation=installation,
+                request_id=uuid.uuid4(),
+            )
+            suspension_finished.set()
+        except BaseException as error:
+            failures.append(error)
+        finally:
+            connections.close_all()
+
+    dispatch_worker = threading.Thread(target=dispatch)
+    dispatch_worker.start()
+    assert write_started.wait(timeout=10)
+    suspension_worker = threading.Thread(target=suspend)
+    suspension_worker.start()
+    assert suspension_started.wait(timeout=10)
+    assert not suspension_finished.wait(timeout=0.2)
+    release_write.set()
+    dispatch_worker.join(timeout=20)
+    suspension_worker.join(timeout=20)
+
+    assert not dispatch_worker.is_alive()
+    assert not suspension_worker.is_alive()
+    assert failures == []
+    assert suspension_finished.is_set()
+    assert len(client.checks) == 1
+    assert (
+        dispatch_next_write(
+            worker_id="github-worker-after-suspend",
+            client_for_installation=lambda _installation_id: client,
+            now=dispatch_time + timedelta(days=2),
+        )
+        is None
+    )
+    check_intent.refresh_from_db()
+    assert check_intent.state == GitHubWriteIntent.State.SUCCEEDED
+    assert set(GitHubWriteIntent.objects.values_list("state", flat=True)) == {
+        GitHubWriteIntent.State.SUCCEEDED,
+        GitHubWriteIntent.State.CANCELLED,
+    }
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_unsuspend_does_not_materialize_an_unqueued_pre_suspension_run() -> None:
+    run, _fake = _completed_bound_run()
+    binding = GitHubRepositoryBinding.objects.select_related("installation").get(
+        repository=run.repository
+    )
+
+    suspend_installation(
+        installation=binding.installation,
+        request_id=uuid.uuid4(),
+    )
+    reactivate_installation(
+        installation=binding.installation,
+        request_id=uuid.uuid4(),
+    )
+
+    assert queue_assurance_publications(run_id=run.id).created_count == 0
+    assert queue_completed_assurance_publications(limit=100) == 0
+    assert not GitHubPublication.objects.filter(assurance_run=run).exists()
+    assert not GitHubWriteIntent.objects.filter(assurance_run=run).exists()
 
 
 @pytest.mark.integration

@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import json
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from email.message import Message
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 from urllib.error import HTTPError, URLError
@@ -25,6 +30,8 @@ from anva.integrations.github.live import (
     LiveGitHubClient,
 )
 
+VALID_INSTALLATION_TOKEN = "ghs_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"  # noqa: S105
+
 
 def _client(key_path: Path) -> LiveGitHubClient:
     return LiveGitHubClient(
@@ -43,6 +50,21 @@ def _response(payload: bytes) -> MagicMock:
     return response
 
 
+@contextmanager
+def _http_server(
+    handler: type[BaseHTTPRequestHandler],
+) -> Iterator[ThreadingHTTPServer]:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 @pytest.mark.unit
 def test_installation_token_is_short_lived_repository_scoped_and_not_persisted(
     tmp_path: Path,
@@ -52,19 +74,19 @@ def test_installation_token_is_short_lived_repository_scoped_and_not_persisted(
     response = MagicMock()
     response.__enter__.return_value.read.return_value = json.dumps(
         {
-            "token": "ghs_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890",
-            "expires_at": "2099-01-01T00:00:00Z",
+            "token": VALID_INSTALLATION_TOKEN,
+            "expires_at": (datetime.now(UTC) + timedelta(minutes=55)).isoformat(),
         }
     ).encode()
     client = _client(key_path)
 
     with (
         patch("anva.integrations.github.live.jwt.encode", return_value="app-jwt") as encode,
-        patch("anva.integrations.github.live.urlopen", return_value=response) as open_url,
+        patch("anva.integrations.github.live._open_url", return_value=response) as open_url,
     ):
         token = client._installation_token(24680)
 
-    assert token == "ghs_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"  # noqa: S105
+    assert token == VALID_INSTALLATION_TOKEN
     encode.assert_called_once()
     claims = encode.call_args.args[0]
     assert claims["exp"] - claims["iat"] == 570
@@ -93,7 +115,7 @@ def test_installation_token_rejects_malformed_expiry_with_safe_error(
     response = MagicMock()
     response.__enter__.return_value.read.return_value = json.dumps(
         {
-            "token": "ghs_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890",
+            "token": VALID_INSTALLATION_TOKEN,
             "expires_at": "not-a-date",
         }
     ).encode()
@@ -101,7 +123,7 @@ def test_installation_token_rejects_malformed_expiry_with_safe_error(
 
     with (
         patch("anva.integrations.github.live.jwt.encode", return_value="app-jwt"),
-        patch("anva.integrations.github.live.urlopen", return_value=response),
+        patch("anva.integrations.github.live._open_url", return_value=response),
         pytest.raises(GitHubClientError, match="github_token_response_invalid"),
     ):
         client._installation_token(24680)
@@ -433,7 +455,7 @@ def test_live_client_bounds_response_and_classifies_uncertain_writes(
     with (
         patch.object(client, "_installation_token", return_value="short-lived-token"),
         patch(
-            "anva.integrations.github.live.urlopen",
+            "anva.integrations.github.live._open_url",
             return_value=_response(b"x" * (MAX_RESPONSE_BYTES + 1)),
         ),
         pytest.raises(GitHubClientError, match="github_response_too_large"),
@@ -449,7 +471,7 @@ def test_live_client_bounds_response_and_classifies_uncertain_writes(
     with (
         patch.object(client, "_installation_token", return_value="short-lived-token"),
         patch(
-            "anva.integrations.github.live.urlopen",
+            "anva.integrations.github.live._open_url",
             side_effect=URLError("unavailable"),
         ),
         pytest.raises(GitHubClientError, match="github_network_unavailable"),
@@ -465,7 +487,7 @@ def test_live_client_bounds_response_and_classifies_uncertain_writes(
     with (
         patch.object(client, "_installation_token", return_value="short-lived-token"),
         patch(
-            "anva.integrations.github.live.urlopen",
+            "anva.integrations.github.live._open_url",
             side_effect=TimeoutError(),
         ),
         pytest.raises(AmbiguousGitHubWriteError),
@@ -489,8 +511,24 @@ def test_live_client_bounds_response_and_classifies_uncertain_writes(
         b"not-json",
         b"[]",
         b"{}",
-        json.dumps({"token": "token", "expires_at": "2000-01-01T00:00:00Z"}).encode(),
-        json.dumps({"token": "token", "expires_at": "2099-01-01T00:00:00"}).encode(),
+        json.dumps(
+            {
+                "token": VALID_INSTALLATION_TOKEN,
+                "expires_at": "2000-01-01T00:00:00Z",
+            }
+        ).encode(),
+        json.dumps(
+            {
+                "token": VALID_INSTALLATION_TOKEN,
+                "expires_at": "2099-01-01T00:00:00Z",
+            }
+        ).encode(),
+        json.dumps(
+            {
+                "token": VALID_INSTALLATION_TOKEN,
+                "expires_at": "2099-01-01T00:00:00",
+            }
+        ).encode(),
     ],
 )
 def test_installation_token_rejects_unsafe_provider_responses(
@@ -502,8 +540,27 @@ def test_installation_token_rejects_unsafe_provider_responses(
     client = _client(key_path)
     with (
         patch("anva.integrations.github.live.jwt.encode", return_value="app-jwt"),
-        patch("anva.integrations.github.live.urlopen", return_value=_response(raw)),
+        patch("anva.integrations.github.live._open_url", return_value=_response(raw)),
         pytest.raises(GitHubClientError, match="github_token_response_(too_large|invalid)"),
+    ):
+        client._installation_token(24680)
+
+
+@pytest.mark.unit
+def test_installation_token_rejects_unsafe_token_syntax(tmp_path: Path) -> None:
+    key_path = tmp_path / "github-app.pem"
+    key_path.write_text("synthetic-private-key")
+    client = _client(key_path)
+    raw = json.dumps(
+        {
+            "token": "not-a-github-token with spaces",
+            "expires_at": (datetime.now(UTC) + timedelta(minutes=55)).isoformat(),
+        }
+    ).encode()
+    with (
+        patch("anva.integrations.github.live.jwt.encode", return_value="app-jwt"),
+        patch("anva.integrations.github.live._open_url", return_value=_response(raw)),
+        pytest.raises(GitHubClientError, match="github_token_response_invalid"),
     ):
         client._installation_token(24680)
 
@@ -515,7 +572,7 @@ def test_installation_token_network_failure_is_transient(tmp_path: Path) -> None
     client = _client(key_path)
     with (
         patch("anva.integrations.github.live.jwt.encode", return_value="app-jwt"),
-        patch("anva.integrations.github.live.urlopen", side_effect=TimeoutError()),
+        patch("anva.integrations.github.live._open_url", side_effect=TimeoutError()),
         pytest.raises(GitHubClientError, match="github_token_unavailable") as raised,
     ):
         client._installation_token(24680)
@@ -585,3 +642,104 @@ def test_live_client_factory_enforces_enabled_absolute_key_and_builds_client(
     client = live_client_for_installation(67890)
 
     assert isinstance(client, LiveGitHubClient)
+
+
+@pytest.mark.unit
+def test_live_client_never_forwards_bearer_across_origin_redirect(
+    tmp_path: Path,
+) -> None:
+    attacker_authorization: list[str | None] = []
+
+    class AttackerHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            attacker_authorization.append(self.headers.get("Authorization"))
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, format_string: str, *args: object) -> None:
+            del format_string, args
+
+    with _http_server(AttackerHandler) as attacker:
+        attacker_url = f"http://127.0.0.1:{attacker.server_address[1]}/collect"
+
+        class OriginHandler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                self.send_response(302)
+                self.send_header("Location", attacker_url)
+                self.end_headers()
+
+            def log_message(self, format_string: str, *args: object) -> None:
+                del format_string, args
+
+        with _http_server(OriginHandler) as origin:
+            client = _client(tmp_path / "github-app.pem")
+            client._credentials = GitHubAppCredentials(
+                app_id=12345,
+                app_slug="anva-example",
+                private_key_path=tmp_path / "github-app.pem",
+                api_base_url=f"http://127.0.0.1:{origin.server_address[1]}",
+            )
+            with (
+                patch.object(
+                    client,
+                    "_installation_token",
+                    return_value=VALID_INSTALLATION_TOKEN,
+                ),
+                pytest.raises(GitHubClientError, match="github_http_302"),
+            ):
+                client._request(
+                    method="GET",
+                    path="/redirect",
+                    repository=RepositoryReference(24680, "anva/example"),
+                    accept="application/json",
+                    max_bytes=MAX_RESPONSE_BYTES,
+                )
+
+    assert attacker_authorization == []
+
+
+@pytest.mark.unit
+def test_live_client_deliberately_rejects_same_origin_redirects(tmp_path: Path) -> None:
+    redirected_authorization: list[str | None] = []
+
+    class SameOriginHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            if self.path == "/redirect":
+                self.send_response(307)
+                self.send_header("Location", "/final")
+                self.end_headers()
+                return
+            redirected_authorization.append(self.headers.get("Authorization"))
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, format_string: str, *args: object) -> None:
+            del format_string, args
+
+    with _http_server(SameOriginHandler) as origin:
+        client = _client(tmp_path / "github-app.pem")
+        client._credentials = GitHubAppCredentials(
+            app_id=12345,
+            app_slug="anva-example",
+            private_key_path=tmp_path / "github-app.pem",
+            api_base_url=f"http://127.0.0.1:{origin.server_address[1]}",
+        )
+        with (
+            patch.object(
+                client,
+                "_installation_token",
+                return_value=VALID_INSTALLATION_TOKEN,
+            ),
+            pytest.raises(GitHubClientError, match="github_http_307"),
+        ):
+            client._request(
+                method="GET",
+                path="/redirect",
+                repository=RepositoryReference(24680, "anva/example"),
+                accept="application/json",
+                max_bytes=MAX_RESPONSE_BYTES,
+            )
+
+    assert redirected_authorization == []

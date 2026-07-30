@@ -7,11 +7,11 @@
 | Least-privilege installable App | Reviewed manifest, closed setup permission allowlist, one-repository short-lived token minting | Manifest/contract/security tests and permissions review |
 | Signature and replay safety | Raw-byte HMAC before parsing, bounded normalized JSON, global delivery UUID/checksum identity | Parser, HTTP, collision, and concurrent-delivery tests |
 | Tenant-safe installation/repository mapping | Explicit numeric mapping, central admin authorization, composite tenant foreign keys | Authorization and PostgreSQL graft tests |
-| PR and Check ingestion | Current provider PR/diff fetch, immutable core revision/observations, exact-commit check observations | Out-of-order, duplicate, fork, and check tests |
+| PR and Check ingestion | Per-PR PostgreSQL serialization and locked authority before provider I/O, provider snapshots bracketing the diff, final provider recheck with transactional rollback, immutable core revision/observations, exact-commit check observations | Delayed-head concurrency, synchronized duplicate, provider-change, rollback, fork, and check tests |
 | Exact-head Check/report | One current projection per PR/kind, deterministic Check/comment rendering, bounded annotations and marker | Queue/render integration tests |
 | Durable outbound effects | Frozen write intent, explicit outbox event, lease/attempt history, rate-limit backoff and ambiguous-write adoption | Retry, concurrency, ambiguity, spoof, and immutability tests |
-| Revocation | Cancels assurance/evaluator/jobs/writes, revokes grants/tokens/sources, blocks future network calls | Revocation integration tests |
-| Credential/process isolation | Webhook secret only in API; App key only in dedicated worker; no provider network code in core services | Compose and source-boundary tests |
+| Suspension and revocation | Suspension drains an already-authorized write, blocks in-flight reads from producing local effects, cancels derived work/access, and requires explicit narrow reactivation; revocation remains terminal | Suspension lifecycle/race/drain and revocation integration tests |
+| Credential/process isolation | Webhook secret only in API; App key only in dedicated worker; no provider network code in core services; live HTTP rejects every redirect and validates installation-token syntax/lifetime | Compose, source-boundary, redirect, and token-response tests |
 | API/CLI/worker/contracts/docs | Versioned binding/status/revoke routes, bounded CLI file input, dedicated worker, publication schema/OpenAPI, runbook/ADR/threat model | Contract, CLI, worker, and drift tests |
 
 ## Self-review findings fixed
@@ -40,6 +40,25 @@
    verification is not implemented. GitHub warns that setup `installation_id` values are
    spoofable. Those URLs were removed; the private MVP App now requires documented
    deployment-operator verification, and self-service installation is an explicit non-goal.
+10. Installation suspension initially changed only the installation state, leaving the service
+    identity, bindings, grants, queued work, assurance, publications, repository tokens, and
+    sources usable. Suspension now atomically disables that authority and derived work. Every
+    credential-bearing provider read/write holds installation/binding authority locks, so
+    suspension either wins before network access or waits for the already-authorized transaction
+    to drain. Unsuspension is an explicit installation event that restores only the service
+    identity, non-revoked and non-archived bindings/repositories, and the reviewed grants; it does
+    not replay cancelled work, restore revoked tokens/source connections, or materialize a
+    completed pre-suspension run that had not already produced a publication.
+11. The sequential stale-delivery test did not cover two workers that observed different provider
+    heads and completed in reverse order. Pull-request refresh now uses a transaction-scoped
+    PostgreSQL advisory lock per binding/PR, accepts only a diff bracketed by identical full
+    provider snapshots, and performs a final provider recheck before commit. A moving provider
+    state is retried within a bound; a final mismatch raises a transient safe error and rolls back
+    the revision, observation, assurance, and other local effects.
+12. The live client initially relied on the standard redirect handler and accepted an arbitrary
+    non-empty installation token with any future expiry. The credential-bearing client now rejects
+    all redirects, including same-origin redirects, requires bounded `ghs_` token syntax, and
+    accepts only timezone-aware expiries between 30 seconds and 65 minutes from validation time.
 
 ## Limitations
 
@@ -51,29 +70,31 @@ code, download workflow artifacts, ingest issues/reviews/push events, manage bra
 organization membership, or grant merge/deployment approval. Adoption examines at most 100 Checks
 or comments and fails closed on ambiguity. Automatic assurance requires configured exact policy
 versions; otherwise PR/check state is still ingested. Retention quotas and GitHub Enterprise Server
-support remain future work.
+support remain future work. Provider truth that does not stabilize within three bracket attempts is
+retried as a transient synchronization failure rather than ingested.
 
 ## Verification
 
-All local application tooling ran in the isolated `anva-i8-impl` Docker project:
+The final independent-review remediation was verified in the isolated task Docker project:
 
-- The expanded focused gate passed 116 tests. The final client/boundary/contract subset passed
-  24 tests before the full gate.
-- Ruff formatting and linting passed; strict mypy passed for all 107 source and test files.
-- Django configuration, migration drift, generated-contract drift (24 artifacts), Compose
-  rendering, and `git diff --check` passed.
-- The final full gate passed 405 tests with one expected skip for the deliberately unmounted
-  external corpus. Coverage met the repository's 85% threshold.
+- The complete focused GitHub boundary passed 84 of 84 tests, including suspension lifecycle and
+  drain races, delayed/current provider concurrency, advisory-lock contention, bracket/final
+  provider changes, publication staleness, redirect rejection, and token-response validation.
+- Ruff formatting checked all 122 files and linting passed. Strict mypy passed all 107 source
+  files. Django configuration checks passed, there was no migration drift, and all 24 generated
+  contracts matched their checked-in artifacts.
+- The repository-wide full gate passed 418 tests with one intentional skip for the deliberately
+  unmounted external corpus. Coverage was 86%.
 - A production-settings smoke applied every migration through `core.0012_github_app_adapter` to a
-  fresh database, reported no deployment-check errors, and brought a read-only API, core worker,
-  and dedicated GitHub worker to readiness against PostgreSQL and MinIO. Runtime inspection
-  confirmed the API received only the webhook secret, the core worker received no GitHub
-  configuration, and the GitHub worker received App configuration without the webhook secret.
-- Task-owned Docker resources remained below 1 GB effective footprint and were removed after the
-  gates.
+  fresh database. The deployment check reported zero errors and four existing warnings. The API,
+  core worker, and dedicated GitHub worker became healthy against PostgreSQL and MinIO.
+- Runtime assertions confirmed safe credential isolation: the API received only its webhook
+  secret, the core worker received no GitHub credentials, and only the GitHub worker received its
+  App configuration/private-key mount without the webhook secret.
+- The task's effective peak Docker footprint was approximately 1.3 GB, below the 5 GB limit. Exact
+  task containers, networks, volumes, and temporary files were cleaned after verification.
 
 The local Docker daemon could not resolve package-index hosts while rebuilding the image, so local
 tests used the preserved locked test image with the current source mounted read-only and the newly
-locked PyJWT/cryptography packages in a temporary dependency volume. Hosted CI must therefore
-provide the clean-image build evidence; its result is recorded on the pull request rather than
-claimed here.
+locked PyJWT/cryptography packages in a temporary dependency volume. Clean-image build evidence is
+therefore not part of these local remediation gates and must be provided separately by hosted CI.

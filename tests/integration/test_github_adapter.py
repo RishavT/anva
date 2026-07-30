@@ -6,7 +6,9 @@ import hashlib
 import hmac
 import json
 import threading
+import time
 import uuid
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import cast
 from unittest.mock import patch
@@ -16,14 +18,19 @@ from django.conf import settings
 from django.db import DatabaseError, close_old_connections, connections, transaction
 from django.test import Client
 
+from anva.contracts.catalog import EXAMPLES
 from anva.core.exceptions import ResourceNotFoundError
 from anva.core.models import (
+    AccessGrant,
     AccessScope,
     AssuranceRun,
+    AuditEvent,
     BackgroundJob,
+    EvaluatorTask,
     GitHubCheckObservation,
     GitHubEventProcessing,
     GitHubInstallation,
+    GitHubPublication,
     GitHubPullRequestObservation,
     GitHubRepositoryBinding,
     GitHubWebhookDelivery,
@@ -37,14 +44,21 @@ from anva.core.models import (
     SourceConnection,
     User,
 )
+from anva.core.services.assurance import claim_evaluator_task, submit_evaluator_result
 from anva.core.services.bootstrap import bootstrap_local_organization
 from anva.core.services.context import ActorContext
+from anva.core.services.evaluators import FakeEvaluator, FakeScenario
+from anva.core.services.policies import import_policy
+from anva.integrations.github import service as github_service
 from anva.integrations.github.client import (
     FakeGitHubClient,
+    GitHubClientError,
     PullRequestSnapshot,
     RepositoryReference,
 )
+from anva.integrations.github.publication import queue_assurance_publications
 from anva.integrations.github.service import (
+    GITHUB_SERVICE_ACTIONS,
     BindingResult,
     accept_verified_event,
     configure_repository_binding,
@@ -120,6 +134,7 @@ def _binding(
     installation_id: int = 7001,
     external_repository_id: int = 8001,
     auto_assurance: bool = False,
+    policy_version_ids: list[uuid.UUID] | None = None,
 ) -> BindingResult:
     return configure_repository_binding(
         actor=tenant.actor,
@@ -144,9 +159,25 @@ def _binding(
         is_private=True,
         is_archived=False,
         auto_assurance=auto_assurance,
-        policy_version_ids=[],
+        policy_version_ids=policy_version_ids or [],
         work_item_revision_id=None,
     )
+
+
+def _policy_version_id(tenant: Tenant) -> uuid.UUID:
+    payload = deepcopy(EXAMPLES["policy"])
+    payload.update(
+        {
+            "organization_id": str(tenant.organization.id),
+            "access_scope_id": str(tenant.scope.id),
+            "policy_id": str(uuid.uuid4()),
+            "version": 1,
+            "effective_at": "2026-07-01T00:00:00Z",
+        }
+    )
+    payload["binding"]["repository_ids"] = [str(tenant.repository.id)]  # type: ignore[index]
+    payload["requirements"][0]["requirement_id"] = str(uuid.uuid4())  # type: ignore[index]
+    return import_policy(actor=tenant.actor, payload=payload).policy_version.id
 
 
 def _pr_payload(
@@ -202,6 +233,38 @@ def _parsed_pr_event(
         raw_body=raw,
         delivery_header=str(identifier),
         event_header="pull_request",
+    )
+
+
+def _installation_event(
+    *,
+    action: str,
+    installation_id: int = 7001,
+) -> VerifiedGitHubEvent:
+    payload = {
+        "action": action,
+        "installation": {
+            "id": installation_id,
+            "account": {
+                "id": 9001,
+                "login": "anva-example",
+                "type": "Organization",
+            },
+            "repository_selection": "selected",
+            "permissions": {
+                "actions": "read",
+                "checks": "write",
+                "contents": "read",
+                "issues": "write",
+                "metadata": "read",
+                "pull_requests": "read",
+            },
+        },
+    }
+    return parse_verified_event(
+        raw_body=json.dumps(payload, separators=(",", ":")).encode(),
+        delivery_header=str(uuid.uuid4()),
+        event_header="installation",
     )
 
 
@@ -567,6 +630,8 @@ def test_untrusted_fork_is_read_server_side_without_credentials_or_execution() -
     assert [call["operation"] for call in fake.calls] == [
         "get_pull_request",
         "get_pull_request_diff",
+        "get_pull_request",
+        "get_pull_request",
     ]
     serialized_calls = json.dumps(fake.calls).lower()
     assert "authorization" not in serialized_calls
@@ -576,6 +641,368 @@ def test_untrusted_fork_is_read_server_side_without_credentials_or_execution() -
     stored = json.dumps(list(ImmutableArtifact.objects.values_list("payload", flat=True))).lower()
     assert "authorization: bearer" not in stored
     assert "private_key" not in stored
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_suspension_atomically_stops_and_explicit_unsuspend_restores_least_privilege() -> None:
+    tenant = _tenant("suspend-lifecycle")
+    result = _binding(tenant)
+    queued_event = _parsed_pr_event()
+    queued_delivery = cast(
+        GitHubWebhookDelivery,
+        accept_verified_event(queued_event).delivery,
+    )
+    queued_job = BackgroundJob.objects.get(
+        kind="github.event.process",
+        payload__delivery_id=str(queued_delivery.id),
+    )
+    SourceConnection.objects.create(
+        organization=tenant.organization,
+        external_key="github-suspended-source",
+        display_name="Repository source",
+        repository=tenant.repository,
+        access_scope=tenant.scope,
+        state=SourceConnection.State.ACTIVE,
+    )
+
+    suspend_delivery = cast(
+        GitHubWebhookDelivery,
+        accept_verified_event(_installation_event(action="suspend")).delivery,
+    )
+    process_delivery(delivery_id=suspend_delivery.id, client=None)
+
+    result.installation.refresh_from_db()
+    result.installation.service_identity.refresh_from_db()
+    result.binding.refresh_from_db()
+    tenant.repository.refresh_from_db()
+    queued_job.refresh_from_db()
+    queued_processing = GitHubEventProcessing.objects.get(delivery=queued_delivery)
+    assert result.installation.state == GitHubInstallation.State.SUSPENDED
+    assert result.installation.service_identity.is_active is False
+    assert not AccessGrant.objects.filter(
+        service_identity=result.installation.service_identity,
+        revoked_at__isnull=True,
+    ).exists()
+    assert result.binding.is_active is False
+    assert result.binding.revoked_at is None
+    assert tenant.repository.is_active is False
+    assert queued_job.state == BackgroundJob.State.CANCELLED
+    assert queued_processing.state == GitHubEventProcessing.State.IGNORED
+    assert queued_processing.last_error_code == "github_installation_suspended"
+    assert (
+        SourceConnection.objects.get(external_key="github-suspended-source").state
+        == SourceConnection.State.REVOKED
+    )
+
+    ignored_event = _check_event(delivery_id=uuid.uuid4())
+    ignored_delivery = cast(
+        GitHubWebhookDelivery,
+        accept_verified_event(ignored_event).delivery,
+    )
+    ignored_processing = GitHubEventProcessing.objects.get(delivery=ignored_delivery)
+    assert ignored_processing.state == GitHubEventProcessing.State.IGNORED
+    assert not BackgroundJob.objects.filter(
+        kind="github.event.process",
+        payload__delivery_id=str(ignored_delivery.id),
+    ).exists()
+
+    unsuspend_delivery = cast(
+        GitHubWebhookDelivery,
+        accept_verified_event(_installation_event(action="unsuspend")).delivery,
+    )
+    process_delivery(delivery_id=unsuspend_delivery.id, client=None)
+
+    result.installation.refresh_from_db()
+    result.installation.service_identity.refresh_from_db()
+    result.binding.refresh_from_db()
+    tenant.repository.refresh_from_db()
+    queued_job.refresh_from_db()
+    queued_processing.refresh_from_db()
+    assert result.installation.state == GitHubInstallation.State.ACTIVE
+    assert result.installation.service_identity.is_active is True
+    assert result.binding.is_active is True
+    assert result.binding.revoked_at is None
+    assert tenant.repository.is_active is True
+    assert set(
+        AccessGrant.objects.filter(
+            service_identity=result.installation.service_identity,
+            revoked_at__isnull=True,
+        ).values_list("action", flat=True)
+    ) == {action.value for action in GITHUB_SERVICE_ACTIONS}
+    assert queued_job.state == BackgroundJob.State.CANCELLED
+    assert queued_processing.state == GitHubEventProcessing.State.IGNORED
+    assert (
+        SourceConnection.objects.get(external_key="github-suspended-source").state
+        == SourceConnection.State.REVOKED
+    )
+    installation_transitions = AuditEvent.objects.filter(
+        target_type="githubinstallation",
+        target_id=result.installation.id,
+    )
+    assert installation_transitions.filter(
+        from_state=GitHubInstallation.State.ACTIVE,
+        to_state=GitHubInstallation.State.SUSPENDED,
+    ).exists()
+    assert installation_transitions.filter(
+        from_state=GitHubInstallation.State.SUSPENDED,
+        to_state=GitHubInstallation.State.ACTIVE,
+    ).exists()
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_suspension_drains_blocked_provider_fetch_then_blocks_later_work() -> None:
+    tenant = _tenant("suspend-fetch-race")
+    result = _binding(tenant)
+    event = _parsed_pr_event()
+    delivery = cast(GitHubWebhookDelivery, accept_verified_event(event).delivery)
+    repository = RepositoryReference(
+        result.binding.external_repository_id,
+        result.binding.full_name,
+    )
+    fetch_started = threading.Event()
+    release_fetch = threading.Event()
+
+    class BlockingGitHubClient(FakeGitHubClient):
+        def get_pull_request(
+            self,
+            *,
+            repository: RepositoryReference,
+            pull_request_number: int,
+        ) -> PullRequestSnapshot:
+            snapshot = super().get_pull_request(
+                repository=repository,
+                pull_request_number=pull_request_number,
+            )
+            fetch_started.set()
+            if not release_fetch.wait(timeout=10):
+                raise TimeoutError("test did not release provider fetch")
+            return snapshot
+
+    client = BlockingGitHubClient()
+    client.add_pull_request(
+        repository=repository,
+        snapshot=PullRequestSnapshot(
+            external_id=5001,
+            number=17,
+            base_commit="a" * 40,
+            head_commit="b" * 40,
+            title="Blocked provider fetch",
+            description="Suspend before any follow-on effect.",
+            target_branch="main",
+            is_draft=False,
+            state="OPEN",
+            merged=False,
+            head_repository_id=result.binding.external_repository_id,
+            head_ref="feature",
+            is_fork=False,
+        ),
+        unified_diff=MANUAL_DIFF,
+    )
+    failures: list[BaseException] = []
+    suspension_started = threading.Event()
+    suspension_finished = threading.Event()
+    suspend_delivery = cast(
+        GitHubWebhookDelivery,
+        accept_verified_event(_installation_event(action="suspend")).delivery,
+    )
+
+    def process_pull_request() -> None:
+        close_old_connections()
+        try:
+            process_delivery(delivery_id=delivery.id, client=client)
+        except BaseException as error:
+            failures.append(error)
+        finally:
+            connections.close_all()
+
+    def suspend() -> None:
+        close_old_connections()
+        try:
+            suspension_started.set()
+            process_delivery(delivery_id=suspend_delivery.id, client=None)
+            suspension_finished.set()
+        except BaseException as error:
+            failures.append(error)
+        finally:
+            connections.close_all()
+
+    worker = threading.Thread(target=process_pull_request)
+    suspension_worker = threading.Thread(target=suspend)
+    worker.start()
+    try:
+        assert fetch_started.wait(timeout=10)
+        suspension_worker.start()
+        assert suspension_started.wait(timeout=10)
+        assert not suspension_finished.wait(timeout=0.2)
+    finally:
+        release_fetch.set()
+        worker.join(timeout=20)
+        if suspension_worker.ident is not None:
+            suspension_worker.join(timeout=20)
+
+    assert not worker.is_alive()
+    assert not suspension_worker.is_alive()
+    assert suspension_finished.is_set()
+    assert failures == []
+    result.installation.refresh_from_db()
+    assert result.installation.state == GitHubInstallation.State.SUSPENDED
+    assert [call["operation"] for call in client.calls] == [
+        "get_pull_request",
+        "get_pull_request_diff",
+        "get_pull_request",
+        "get_pull_request",
+    ]
+    assert PullRequest.objects.filter(repository=tenant.repository).count() == 1
+    assert (
+        GitHubPullRequestObservation.objects.filter(
+            repository_binding=result.binding,
+        ).count()
+        == 1
+    )
+    processing = GitHubEventProcessing.objects.get(delivery=delivery)
+    assert processing.state in {
+        GitHubEventProcessing.State.PROCESSED,
+        GitHubEventProcessing.State.IGNORED,
+    }
+
+    call_count = len(client.calls)
+    later_delivery = cast(
+        GitHubWebhookDelivery,
+        accept_verified_event(_parsed_pr_event(delivery_id=uuid.uuid4())).delivery,
+    )
+    later_processing = process_delivery(delivery_id=later_delivery.id, client=client)
+    assert later_processing.state == GitHubEventProcessing.State.IGNORED
+    assert len(client.calls) == call_count
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_suspension_drains_blocked_diff_fetch_then_blocks_later_work() -> None:
+    tenant = _tenant("suspend-diff-race")
+    result = _binding(tenant)
+    delivery = cast(
+        GitHubWebhookDelivery,
+        accept_verified_event(_parsed_pr_event()).delivery,
+    )
+    repository = RepositoryReference(
+        result.binding.external_repository_id,
+        result.binding.full_name,
+    )
+    fetch_started = threading.Event()
+    release_fetch = threading.Event()
+
+    class BlockingDiffClient(FakeGitHubClient):
+        def get_pull_request_diff(
+            self,
+            *,
+            repository: RepositoryReference,
+            pull_request_number: int,
+        ) -> str:
+            fetch_started.set()
+            if not release_fetch.wait(timeout=10):
+                raise TimeoutError("test did not release provider diff fetch")
+            return super().get_pull_request_diff(
+                repository=repository,
+                pull_request_number=pull_request_number,
+            )
+
+    client = BlockingDiffClient()
+    client.add_pull_request(
+        repository=repository,
+        snapshot=PullRequestSnapshot(
+            external_id=5001,
+            number=17,
+            base_commit="a" * 40,
+            head_commit="b" * 40,
+            title="Blocked diff fetch",
+            description="Suspend before persistence.",
+            target_branch="main",
+            is_draft=False,
+            state="OPEN",
+            merged=False,
+            head_repository_id=result.binding.external_repository_id,
+            head_ref="feature",
+            is_fork=False,
+        ),
+        unified_diff=MANUAL_DIFF,
+    )
+    failures: list[BaseException] = []
+    suspension_started = threading.Event()
+    suspension_finished = threading.Event()
+    suspend_delivery = cast(
+        GitHubWebhookDelivery,
+        accept_verified_event(_installation_event(action="suspend")).delivery,
+    )
+
+    def process_pull_request() -> None:
+        close_old_connections()
+        try:
+            process_delivery(delivery_id=delivery.id, client=client)
+        except BaseException as error:
+            failures.append(error)
+        finally:
+            connections.close_all()
+
+    def suspend() -> None:
+        close_old_connections()
+        try:
+            suspension_started.set()
+            process_delivery(delivery_id=suspend_delivery.id, client=None)
+            suspension_finished.set()
+        except BaseException as error:
+            failures.append(error)
+        finally:
+            connections.close_all()
+
+    worker = threading.Thread(target=process_pull_request)
+    suspension_worker = threading.Thread(target=suspend)
+    worker.start()
+    try:
+        assert fetch_started.wait(timeout=10)
+        suspension_worker.start()
+        assert suspension_started.wait(timeout=10)
+        assert not suspension_finished.wait(timeout=0.2)
+    finally:
+        release_fetch.set()
+        worker.join(timeout=20)
+        if suspension_worker.ident is not None:
+            suspension_worker.join(timeout=20)
+
+    assert not worker.is_alive()
+    assert not suspension_worker.is_alive()
+    assert suspension_finished.is_set()
+    assert failures == []
+    result.installation.refresh_from_db()
+    assert result.installation.state == GitHubInstallation.State.SUSPENDED
+    assert [call["operation"] for call in client.calls] == [
+        "get_pull_request",
+        "get_pull_request_diff",
+        "get_pull_request",
+        "get_pull_request",
+    ]
+    assert PullRequest.objects.filter(repository=tenant.repository).count() == 1
+    assert (
+        GitHubPullRequestObservation.objects.filter(
+            repository_binding=result.binding,
+        ).count()
+        == 1
+    )
+    processing = GitHubEventProcessing.objects.get(delivery=delivery)
+    assert processing.state in {
+        GitHubEventProcessing.State.PROCESSED,
+        GitHubEventProcessing.State.IGNORED,
+    }
+
+    call_count = len(client.calls)
+    later_delivery = cast(
+        GitHubWebhookDelivery,
+        accept_verified_event(_parsed_pr_event(delivery_id=uuid.uuid4())).delivery,
+    )
+    later_processing = process_delivery(delivery_id=later_delivery.id, client=client)
+    assert later_processing.state == GitHubEventProcessing.State.IGNORED
+    assert len(client.calls) == call_count
 
 
 def _check_event(
@@ -661,3 +1088,516 @@ def test_duplicate_check_content_and_revoked_installation_are_safe() -> None:
     processed = process_delivery(delivery_id=after_revoke.id, client=None)
     assert processed.state == GitHubEventProcessing.State.IGNORED
     assert GitHubCheckObservation.objects.count() == 1
+
+
+@dataclass(slots=True)
+class _ProviderTruth:
+    snapshot: PullRequestSnapshot
+    unified_diff: str
+
+
+class _SharedProvider:
+    def __init__(self, truth: _ProviderTruth) -> None:
+        self._truth = truth
+        self._lock = threading.Lock()
+
+    def replace(self, truth: _ProviderTruth) -> None:
+        with self._lock:
+            self._truth = truth
+
+    def snapshot(self) -> PullRequestSnapshot:
+        with self._lock:
+            return self._truth.snapshot
+
+    def diff(self) -> str:
+        with self._lock:
+            return self._truth.unified_diff
+
+
+class _ConcurrentReadClient(FakeGitHubClient):
+    def __init__(
+        self,
+        *,
+        provider: _SharedProvider,
+        diff_started: threading.Event | None = None,
+        release_diff: threading.Event | None = None,
+    ) -> None:
+        super().__init__()
+        self.provider = provider
+        self.diff_started = diff_started
+        self.release_diff = release_diff
+        self.block_next_diff = diff_started is not None
+
+    def get_pull_request(
+        self,
+        *,
+        repository: RepositoryReference,
+        pull_request_number: int,
+    ) -> PullRequestSnapshot:
+        del repository, pull_request_number
+        return self.provider.snapshot()
+
+    def get_pull_request_diff(
+        self,
+        *,
+        repository: RepositoryReference,
+        pull_request_number: int,
+    ) -> str:
+        del repository, pull_request_number
+        captured = self.provider.diff()
+        if self.block_next_diff:
+            self.block_next_diff = False
+            if self.diff_started is not None:
+                self.diff_started.set()
+                if self.release_diff is None or not self.release_diff.wait(timeout=15):
+                    raise TimeoutError("test did not release the delayed provider diff")
+        return captured
+
+
+def _provider_snapshot(*, head_commit: str, title: str) -> PullRequestSnapshot:
+    return PullRequestSnapshot(
+        external_id=5001,
+        number=17,
+        base_commit="a" * 40,
+        head_commit=head_commit,
+        title=title,
+        description="Current provider description",
+        target_branch="main",
+        is_draft=False,
+        state="OPEN",
+        merged=False,
+        head_repository_id=8001,
+        head_ref="feature",
+        is_fork=False,
+    )
+
+
+def _process_delivery_in_thread(
+    *,
+    delivery_id: uuid.UUID,
+    client: FakeGitHubClient,
+    results: list[GitHubEventProcessing],
+    failures: list[BaseException],
+) -> None:
+    close_old_connections()
+    try:
+        results.append(process_delivery(delivery_id=delivery_id, client=client))
+    except BaseException as error:
+        failures.append(error)
+    finally:
+        connections.close_all()
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_delayed_older_snapshot_cannot_regress_current_provider_head() -> None:
+    tenant = _tenant("provider-freshness")
+    policy_version_id = _policy_version_id(tenant)
+    binding = _binding(
+        tenant,
+        auto_assurance=True,
+        policy_version_ids=[policy_version_id],
+    ).binding
+    old_delivery = cast(
+        GitHubWebhookDelivery,
+        accept_verified_event(_parsed_pr_event(head_commit="b" * 40)).delivery,
+    )
+    current_delivery = cast(
+        GitHubWebhookDelivery,
+        accept_verified_event(_parsed_pr_event(head_commit="c" * 40)).delivery,
+    )
+    current_truth = _ProviderTruth(
+        _provider_snapshot(head_commit="c" * 40, title="Head C"),
+        MANUAL_DIFF.replace("+new", "+new-at-c"),
+    )
+    provider = _SharedProvider(current_truth)
+    old_client = _ConcurrentReadClient(provider=provider)
+    current_client = _ConcurrentReadClient(provider=provider)
+    old_worker_waiting = threading.Event()
+    release_old_worker = threading.Event()
+    old_results: list[GitHubEventProcessing] = []
+    current_results: list[GitHubEventProcessing] = []
+    failures: list[BaseException] = []
+
+    def process_delayed_old_delivery() -> None:
+        close_old_connections()
+        try:
+            old_worker_waiting.set()
+            if not release_old_worker.wait(timeout=20):
+                raise TimeoutError("test did not release the delayed delivery")
+            old_results.append(process_delivery(delivery_id=old_delivery.id, client=old_client))
+        except BaseException as error:
+            failures.append(error)
+        finally:
+            connections.close_all()
+
+    old_worker = threading.Thread(
+        target=process_delayed_old_delivery,
+    )
+    current_worker = threading.Thread(
+        target=_process_delivery_in_thread,
+        kwargs={
+            "delivery_id": current_delivery.id,
+            "client": current_client,
+            "results": current_results,
+            "failures": failures,
+        },
+    )
+    old_worker.start()
+    try:
+        assert old_worker_waiting.wait(timeout=10)
+        current_worker.start()
+        current_worker.join(timeout=30)
+        assert not current_worker.is_alive()
+        assert failures == []
+        assert len(current_results) == 1
+
+        current_run = AssuranceRun.objects.get(
+            id=current_results[0].result_identifiers["assurance_run_id"],
+        )
+        evaluator_task = EvaluatorTask.objects.get(assurance_run=current_run)
+        evaluator_actor = ActorContext(
+            organization_id=tenant.organization.id,
+            actor_type="SERVICE",
+            actor_id=str(binding.installation.service_identity_id),
+            authorization_path=f"github-installation:{binding.installation_id}",
+            request_id=uuid.uuid4(),
+        )
+        claim = claim_evaluator_task(
+            actor=evaluator_actor,
+            repository_id=tenant.repository.id,
+            claimant="provider-freshness-reviewer",
+        )
+        assert claim is not None
+        assert claim.task.id == evaluator_task.id
+        evaluator_result = FakeEvaluator(FakeScenario.SUCCESS_NO_FINDINGS).evaluate(claim.request)
+        evaluator_result["evaluator_version"] = current_run.evaluator_version
+        completion = submit_evaluator_result(
+            actor=evaluator_actor,
+            task_id=evaluator_task.id,
+            claimant="provider-freshness-reviewer",
+            claim_token=claim.claim_token,
+            result=evaluator_result,
+        )
+        queued = queue_assurance_publications(run_id=completion.run.id)
+        assert queued.created_count == 2
+    finally:
+        release_old_worker.set()
+        old_worker.join(timeout=30)
+        if current_worker.is_alive():
+            current_worker.join(timeout=30)
+
+    assert not old_worker.is_alive()
+    assert not current_worker.is_alive()
+    assert failures == []
+    assert len(old_results) == len(current_results) == 1
+    pull_request = PullRequest.objects.get(repository=tenant.repository, number=17)
+    revisions = list(
+        PullRequestRevision.objects.filter(pull_request=pull_request).order_by("revision")
+    )
+    assert pull_request.current_head_commit == "c" * 40
+    assert [revision.head_commit for revision in revisions] == ["c" * 40]
+    assert (
+        GitHubPullRequestObservation.objects.filter(
+            repository_binding=binding,
+        ).count()
+        == 1
+    )
+    assert old_results[0].result_identifiers["pull_request_revision_id"] == str(revisions[0].id)
+    assert current_results[0].result_identifiers["pull_request_revision_id"] == str(revisions[0].id)
+    current_run.refresh_from_db()
+    assert current_run.head_commit == "c" * 40
+    assert current_run.state == AssuranceRun.State.COMPLETED
+    assert (
+        GitHubPublication.objects.filter(
+            repository_binding=binding,
+            assurance_run=current_run,
+            head_commit="c" * 40,
+            is_current=True,
+        ).count()
+        == 2
+    )
+    assert not AssuranceRun.objects.filter(
+        repository=tenant.repository,
+        head_commit="b" * 40,
+    ).exists()
+    assert not GitHubPublication.objects.filter(
+        repository_binding=binding,
+        head_commit="b" * 40,
+    ).exists()
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_synchronized_current_deliveries_share_one_revision_and_observation() -> None:
+    tenant = _tenant("provider-duplicate")
+    binding = _binding(tenant).binding
+    deliveries = [
+        cast(
+            GitHubWebhookDelivery,
+            accept_verified_event(_parsed_pr_event(head_commit="c" * 40)).delivery,
+        )
+        for _ in range(2)
+    ]
+    provider = _SharedProvider(
+        _ProviderTruth(
+            _provider_snapshot(head_commit="c" * 40, title="Head C"),
+            MANUAL_DIFF.replace("+new", "+new-at-c"),
+        )
+    )
+    first_final_read_started = threading.Event()
+    release_first_final_read = threading.Event()
+    release_second_dispatch = threading.Event()
+    second_dispatch_waiting = threading.Event()
+    second_provider_read_started = threading.Event()
+    dispatch_barrier = threading.Barrier(2)
+    second_backend_pid: list[int] = []
+
+    class HoldFinalReadClient(_ConcurrentReadClient):
+        def __init__(self) -> None:
+            super().__init__(provider=provider)
+            self.snapshot_count = 0
+
+        def get_pull_request(
+            self,
+            *,
+            repository: RepositoryReference,
+            pull_request_number: int,
+        ) -> PullRequestSnapshot:
+            self.snapshot_count += 1
+            if self.snapshot_count == 3:
+                first_final_read_started.set()
+                if not release_first_final_read.wait(timeout=20):
+                    raise TimeoutError("test did not release the final provider read")
+            return super().get_pull_request(
+                repository=repository,
+                pull_request_number=pull_request_number,
+            )
+
+    class ObserveFirstReadClient(_ConcurrentReadClient):
+        def get_pull_request(
+            self,
+            *,
+            repository: RepositoryReference,
+            pull_request_number: int,
+        ) -> PullRequestSnapshot:
+            second_provider_read_started.set()
+            return super().get_pull_request(
+                repository=repository,
+                pull_request_number=pull_request_number,
+            )
+
+    first_client = HoldFinalReadClient()
+    second_client = ObserveFirstReadClient(provider=provider)
+    results: list[GitHubEventProcessing] = []
+    failures: list[BaseException] = []
+
+    original_dispatch = github_service._dispatch_delivery
+
+    def gated_dispatch(
+        *,
+        delivery: GitHubWebhookDelivery,
+        client: FakeGitHubClient | None,
+    ) -> dict[str, object]:
+        dispatch_barrier.wait(timeout=15)
+        if delivery.id == deliveries[1].id:
+            with connections["default"].cursor() as cursor:
+                cursor.execute("SELECT pg_backend_pid()")
+                backend_row = cursor.fetchone()
+                assert backend_row is not None
+                second_backend_pid.append(cast(int, backend_row[0]))
+            second_dispatch_waiting.set()
+            if not release_second_dispatch.wait(timeout=20):
+                raise TimeoutError("test did not release the second dispatch")
+        return original_dispatch(delivery=delivery, client=client)
+
+    workers = [
+        threading.Thread(
+            target=_process_delivery_in_thread,
+            kwargs={
+                "delivery_id": delivery.id,
+                "client": client,
+                "results": results,
+                "failures": failures,
+            },
+        )
+        for delivery, client in zip(
+            deliveries,
+            [first_client, second_client],
+            strict=True,
+        )
+    ]
+    first_worker, second_worker = workers
+    with patch(
+        "anva.integrations.github.service._dispatch_delivery",
+        side_effect=gated_dispatch,
+    ):
+        for worker in workers:
+            worker.start()
+        try:
+            assert second_dispatch_waiting.wait(timeout=15)
+            assert first_final_read_started.wait(timeout=15)
+            assert second_backend_pid
+            release_second_dispatch.set()
+
+            advisory_wait_observed = False
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                with connections["default"].cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT EXISTS (
+                            SELECT 1
+                            FROM pg_locks
+                            WHERE pid = %s
+                              AND locktype = 'advisory'
+                              AND NOT granted
+                        )
+                        """,
+                        [second_backend_pid[0]],
+                    )
+                    lock_row = cursor.fetchone()
+                    assert lock_row is not None
+                    advisory_wait_observed = cast(bool, lock_row[0])
+                if advisory_wait_observed:
+                    break
+                threading.Event().wait(0.01)
+
+            assert advisory_wait_observed
+            assert not second_provider_read_started.is_set()
+            assert second_worker.is_alive()
+        finally:
+            release_second_dispatch.set()
+            release_first_final_read.set()
+            for worker in workers:
+                worker.join(timeout=30)
+
+    assert not first_worker.is_alive()
+    assert not second_worker.is_alive()
+    assert second_provider_read_started.is_set()
+    assert failures == []
+    assert len(results) == 2
+    pull_request = PullRequest.objects.get(repository=tenant.repository, number=17)
+    revision = PullRequestRevision.objects.get(pull_request=pull_request)
+    assert pull_request.current_head_commit == "c" * 40
+    assert {result.result_identifiers["pull_request_revision_id"] for result in results} == {
+        str(revision.id)
+    }
+    assert GitHubWebhookDelivery.objects.filter(id__in=[row.id for row in deliveries]).count() == 2
+    assert (
+        GitHubPullRequestObservation.objects.filter(
+            repository_binding=binding,
+            pull_request_revision=revision,
+        ).count()
+        == 1
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_provider_change_during_authoritative_diff_retries_before_ingestion() -> None:
+    tenant = _tenant("provider-bracket")
+    binding = _binding(tenant).binding
+    delivery = cast(
+        GitHubWebhookDelivery,
+        accept_verified_event(_parsed_pr_event(head_commit="b" * 40)).delivery,
+    )
+    current_truth = _ProviderTruth(
+        _provider_snapshot(head_commit="c" * 40, title="Head C"),
+        MANUAL_DIFF.replace("+new", "+new-at-c"),
+    )
+    provider = _SharedProvider(
+        _ProviderTruth(
+            _provider_snapshot(head_commit="b" * 40, title="Head B"),
+            MANUAL_DIFF,
+        )
+    )
+
+    class SwitchDuringDiffClient(_ConcurrentReadClient):
+        def __init__(self) -> None:
+            super().__init__(provider=provider)
+            self.diff_count = 0
+
+        def get_pull_request_diff(
+            self,
+            *,
+            repository: RepositoryReference,
+            pull_request_number: int,
+        ) -> str:
+            captured = super().get_pull_request_diff(
+                repository=repository,
+                pull_request_number=pull_request_number,
+            )
+            self.diff_count += 1
+            if self.diff_count == 1:
+                provider.replace(current_truth)
+            return captured
+
+    processing = process_delivery(delivery_id=delivery.id, client=SwitchDuringDiffClient())
+
+    pull_request = PullRequest.objects.get(repository=tenant.repository, number=17)
+    revision = PullRequestRevision.objects.get(pull_request=pull_request)
+    assert pull_request.current_head_commit == "c" * 40
+    assert revision.head_commit == "c" * 40
+    assert processing.result_identifiers["pull_request_revision_id"] == str(revision.id)
+    assert (
+        GitHubPullRequestObservation.objects.filter(
+            repository_binding=binding,
+            pull_request_revision=revision,
+        ).count()
+        == 1
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_final_provider_change_rolls_back_every_local_pull_request_effect() -> None:
+    tenant = _tenant("provider-final-recheck")
+    binding = _binding(tenant).binding
+    delivery = cast(
+        GitHubWebhookDelivery,
+        accept_verified_event(_parsed_pr_event(head_commit="b" * 40)).delivery,
+    )
+    provider = _SharedProvider(
+        _ProviderTruth(
+            _provider_snapshot(head_commit="b" * 40, title="Head B"),
+            MANUAL_DIFF,
+        )
+    )
+    current_truth = _ProviderTruth(
+        _provider_snapshot(head_commit="c" * 40, title="Head C"),
+        MANUAL_DIFF.replace("+new", "+new-at-c"),
+    )
+
+    class AdvanceAtFinalCheckClient(_ConcurrentReadClient):
+        def __init__(self) -> None:
+            super().__init__(provider=provider)
+            self.snapshot_count = 0
+
+        def get_pull_request(
+            self,
+            *,
+            repository: RepositoryReference,
+            pull_request_number: int,
+        ) -> PullRequestSnapshot:
+            self.snapshot_count += 1
+            if self.snapshot_count == 3:
+                provider.replace(current_truth)
+            return super().get_pull_request(
+                repository=repository,
+                pull_request_number=pull_request_number,
+            )
+
+    with pytest.raises(GitHubClientError, match="github_pull_request_changed_during_sync"):
+        process_delivery(delivery_id=delivery.id, client=AdvanceAtFinalCheckClient())
+
+    assert not PullRequest.objects.filter(repository=tenant.repository).exists()
+    assert not PullRequestRevision.objects.filter(
+        pull_request__repository=tenant.repository,
+    ).exists()
+    assert not GitHubPullRequestObservation.objects.filter(
+        repository_binding=binding,
+    ).exists()
+    processing = GitHubEventProcessing.objects.get(delivery=delivery)
+    assert processing.state == GitHubEventProcessing.State.FAILED
+    assert processing.last_error_code == "github_pull_request_changed_during_sync"

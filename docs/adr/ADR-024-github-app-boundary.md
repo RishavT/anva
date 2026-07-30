@@ -19,15 +19,19 @@ GitHub is an adapter around the provider-neutral assurance domain:
   lookup;
 - a preconfigured installation and numeric repository mapping is the only tenant-routing input;
 - immutable normalized deliveries and mutable processing projections are stored separately;
-- pull-request processing fetches current provider state, then uses the existing nonexecuting
-  manual-diff ingestion and assurance services;
+- pull-request processing takes a transaction-scoped PostgreSQL advisory lock per binding/PR,
+  locks active installation/binding authority before any credential-bearing provider call, accepts
+  only a diff bracketed by identical full provider snapshots, and performs a final provider
+  recheck before committing the existing nonexecuting manual-diff ingestion and assurance effects;
 - Checks and comments are frozen, exact-head write intents backed by an outbox and append-only
   attempt history;
 - a dedicated GitHub worker is the only process with the App private key and live network client;
 - live clients mint short-lived tokens restricted to one stored numeric repository ID and the
-  reviewed permission set;
-- revocation cancels future adapter work, revokes associated repository access, and preserves
-  immutable audit history.
+  reviewed permission set, reject every HTTP redirect, and validate the returned token's bounded
+  `ghs_` syntax and expiry;
+- suspension atomically disables the installation principal, grants, bindings, repository context,
+  and derived work while preserving an explicit narrow unsuspend path; revocation remains terminal
+  and preserves immutable audit history.
 
 The ordinary worker claims only core allowlisted jobs. The GitHub worker claims only GitHub event
 jobs and outbound writes. Core assurance and other core services do not import provider clients or
@@ -43,20 +47,32 @@ network libraries.
   require durable intent, leasing, adoption, and attempt history.
 - Running a workflow in the pull-request branch was rejected because forks and changed code must
   never receive Anva credentials or execute inside this adapter.
+- Treating a provider read as current merely because it followed a webhook was rejected because
+  concurrent workers can complete in reverse order. A local PR refresh lock plus bracket/final
+  provider checks supplies a defined serialization point without trusting delivery order.
+- Treating suspension as a state label was rejected because queued and in-flight effects require an
+  atomic drain/cancellation boundary and explicit reauthorization semantics.
 
 ## Consequences
 
 GitHub outages delay event processing and publication without changing assurance history. Exact
-head changes and revocation cancel stale writes before network access. The adapter requires
-PostgreSQL and a separately deployed credential-bearing worker. Initial operation supports public
-GitHub only and bounds adoption searches to the first 100 provider results.
+head changes, suspension, and revocation cancel stale writes before network access. A provider
+snapshot that changes during synchronization causes bounded refresh or full transactional rollback
+and retry. Provider reads and outbound writes occur while holding installation/binding authority
+locks: suspension either wins before network access or waits for the already-authorized transaction
+to drain. Explicit unsuspension restores reviewed authority but not cancelled jobs, revoked tokens,
+source connections, or completed pre-suspension runs that had not yet been published. The adapter
+requires PostgreSQL and a separately deployed credential-bearing worker. Initial operation supports
+public GitHub only and bounds adoption searches to the first 100 provider results.
 
 ## Security impact
 
 The API receives only rotating webhook secrets. The GitHub worker receives only the App ID, slug,
 and read-only private-key secret mount; it does not receive webhook secrets. Installation tokens
-are held in memory for one request and are not logged or persisted. Human comments with a copied
-Anva marker are never adopted unless the author is the configured App bot.
+are held in memory for one request and are not logged or persisted. Token responses must use
+bounded `ghs_` syntax and an aware expiry 30 seconds to 65 minutes in the future. Credentialed
+requests reject all redirects rather than forwarding authorization to another hop. Human comments
+with a copied Anva marker are never adopted unless the author is the configured App bot.
 
 ## Privacy impact
 
@@ -68,7 +84,9 @@ remain governed data under the existing assurance retention rules.
 
 Operators must register the reviewed manifest, configure repository mappings, provide a private-key
 secret file, run the `github` Compose profile, monitor event/write status, and rotate webhook
-secrets and App keys independently.
+secrets and App keys independently. Operators must treat suspension as a drain point and explicitly
+redeliver/restart desired current work after an installation is unsuspended; unmaterialized
+pre-suspension completed runs remain retired.
 
 ## Revisit conditions
 

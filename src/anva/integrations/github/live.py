@@ -9,11 +9,12 @@ import stat
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from http.client import HTTPResponse
 from pathlib import Path
 from typing import cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 import jwt
 
@@ -31,7 +32,10 @@ USER_AGENT = "Anva-GitHub-App/0.1"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_DIFF_BYTES = 1_200_000
 MAX_PRIVATE_KEY_BYTES = 64 * 1024
+MIN_TOKEN_LIFETIME_SECONDS = 30
+MAX_TOKEN_LIFETIME_SECONDS = 65 * 60
 FULL_NAME_PATTERN = re.compile(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}")
+INSTALLATION_TOKEN_PATTERN = re.compile(r"ghs_[A-Za-z0-9_]{20,251}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +47,20 @@ class GitHubAppCredentials:
     private_key_path: Path
     api_base_url: str = "https://api.github.com"
     timeout_seconds: int = 15
+
+
+class _RejectRedirects(HTTPRedirectHandler):
+    """Fail every redirect so a bearer credential is never replayed to another hop."""
+
+    def redirect_request(self, *args: object, **kwargs: object) -> None:
+        del args, kwargs
+        return None
+
+
+def _open_url(request: Request, *, timeout: int) -> HTTPResponse:
+    """Open one exact-origin request without following same- or cross-origin redirects."""
+    opener = build_opener(_RejectRedirects())
+    return cast(HTTPResponse, opener.open(request, timeout=timeout))
 
 
 class LiveGitHubClient:
@@ -306,8 +324,8 @@ class LiveGitHubClient:
             },
         )
         try:
-            with urlopen(request, timeout=self._credentials.timeout_seconds) as response:  # noqa: S310
-                raw = cast(bytes, response.read(max_bytes + 1))
+            with _open_url(request, timeout=self._credentials.timeout_seconds) as response:
+                raw = response.read(max_bytes + 1)
         except HTTPError as error:
             self._raise_http(error)
         except (TimeoutError, URLError):
@@ -355,7 +373,7 @@ class LiveGitHubClient:
             },
         )
         try:
-            with urlopen(request, timeout=self._credentials.timeout_seconds) as response:  # noqa: S310
+            with _open_url(request, timeout=self._credentials.timeout_seconds) as response:
                 raw = response.read(64 * 1024 + 1)
         except HTTPError as error:
             self._raise_http(error)
@@ -371,13 +389,20 @@ class LiveGitHubClient:
             raise GitHubClientError("github_token_response_invalid", transient=False)
         token = response_payload.get("token")
         expires_at = response_payload.get("expires_at")
-        if not isinstance(token, str) or not token or not isinstance(expires_at, str):
+        if (
+            not isinstance(token, str)
+            or INSTALLATION_TOKEN_PATTERN.fullmatch(token) is None
+            or not isinstance(expires_at, str)
+        ):
             raise GitHubClientError("github_token_response_invalid", transient=False)
         try:
             expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
         except ValueError:
             raise GitHubClientError("github_token_response_invalid", transient=False) from None
-        if expiry.tzinfo is None or expiry <= datetime.now(UTC):
+        if expiry.tzinfo is None:
+            raise GitHubClientError("github_token_response_invalid", transient=False)
+        lifetime_seconds = (expiry - datetime.now(UTC)).total_seconds()
+        if not MIN_TOKEN_LIFETIME_SECONDS <= lifetime_seconds <= MAX_TOKEN_LIFETIME_SECONDS:
             raise GitHubClientError("github_token_response_invalid", transient=False)
         return token
 

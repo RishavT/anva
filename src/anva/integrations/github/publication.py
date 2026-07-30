@@ -10,13 +10,14 @@ from typing import cast
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import F, Q
+from django.db.models import F, OuterRef, Q, Subquery
 from django.utils import timezone
 
 from anva.core.logging import redact_text
 from anva.core.models import (
     AssuranceReport,
     AssuranceRun,
+    AuditEvent,
     Finding,
     GitHubInstallation,
     GitHubPublication,
@@ -62,6 +63,22 @@ class PublicationQueueResult:
     publications: tuple[GitHubPublication, ...]
     intents: tuple[GitHubWriteIntent, ...]
     created_count: int
+
+
+def _latest_installation_suspension(
+    binding: GitHubRepositoryBinding,
+) -> datetime | None:
+    return (
+        AuditEvent.objects.filter(
+            organization=binding.organization,
+            target_type="githubinstallation",
+            target_id=binding.installation_id,
+            to_state=GitHubInstallation.State.SUSPENDED,
+        )
+        .order_by("-created_at", "-id")
+        .values_list("created_at", flat=True)
+        .first()
+    )
 
 
 def _report_url(run: AssuranceRun) -> str:
@@ -240,6 +257,11 @@ def queue_assurance_publications(*, run_id: uuid.UUID) -> PublicationQueueResult
         or run.report_commit != run.head_commit
     ):
         return PublicationQueueResult((), (), 0)
+    latest_suspension = _latest_installation_suspension(binding)
+    if latest_suspension is not None and (
+        run.completed_at is None or run.completed_at <= latest_suspension
+    ):
+        return PublicationQueueResult((), (), 0)
     newer_current = (
         AssuranceRun.objects.filter(
             organization=run.organization,
@@ -398,12 +420,27 @@ def queue_completed_assurance_publications(*, limit: int = 100) -> int:
     """Materialize missing writes for bounded completed runs."""
     if limit < 1 or limit > 1_000:
         raise ValueError("Publication scan limit is invalid")
+    latest_suspension = (
+        AuditEvent.objects.filter(
+            organization_id=OuterRef("organization_id"),
+            target_type="githubinstallation",
+            target_id=OuterRef("repository__github_binding__installation_id"),
+            to_state=GitHubInstallation.State.SUSPENDED,
+        )
+        .order_by("-created_at", "-id")
+        .values("created_at")[:1]
+    )
     run_ids = list(
         AssuranceRun.objects.filter(
             state=AssuranceRun.State.COMPLETED,
             assurancereport__isnull=False,
             repository__github_binding__is_active=True,
             repository__github_binding__installation__state=GitHubInstallation.State.ACTIVE,
+        )
+        .annotate(github_latest_suspension=Subquery(latest_suspension))
+        .filter(
+            Q(github_latest_suspension__isnull=True)
+            | Q(completed_at__gt=F("github_latest_suspension"))
         )
         .order_by("created_at", "id")
         .values_list("id", flat=True)[:limit]
@@ -464,7 +501,20 @@ def dispatch_next_write(
     intent = claim_next_write(worker_id=worker_id, now=dispatch_time)
     if intent is None:
         return None
+    installation_id, binding_id = (
+        GitHubWriteIntent.objects.filter(id=intent.id)
+        .values_list(
+            "publication__repository_binding__installation_id",
+            "publication__repository_binding_id",
+        )
+        .get()
+    )
     with transaction.atomic():
+        # Match the suspension lock order. Holding these authority rows across the
+        # provider call makes suspension a drain point: it either wins before any
+        # outbound effect, or returns only after this already-authorized write ends.
+        GitHubInstallation.objects.select_for_update().get(id=installation_id)
+        GitHubRepositoryBinding.objects.select_for_update().get(id=binding_id)
         current = (
             GitHubWriteIntent.objects.select_for_update()
             .select_related(
