@@ -74,6 +74,11 @@ from anva.core.services.intent import (
     import_work_item,
     revoke_work_item_approval,
 )
+from anva.core.services.mcp_gateway import (
+    MCPGatewayError,
+    diagnostics_payload,
+    dispatch_tool,
+)
 from anva.core.services.policies import (
     create_policy_override,
     evaluate_policy,
@@ -152,6 +157,8 @@ def api_errors[**Parameters](
             return _error(error.code, str(error), correlation_id, 401)
         except ResourceNotFoundError as error:
             return _error(error.code, str(error), correlation_id, 404)
+        except MCPGatewayError as error:
+            return _error(error.code, str(error), correlation_id, error.http_status)
         except DomainOperationError as error:
             return _error(error.code, str(error), correlation_id, 409)
         except (json.JSONDecodeError, TypeError, ValueError):
@@ -947,11 +954,31 @@ def mcp_context(request: HttpRequest) -> JsonResponse:
     )
     return JsonResponse(
         {
-            "code": "mcp_not_implemented",
-            "message": "MCP transport is reserved for issue #9",
-        },
-        status=501,
+            **diagnostics_payload(),
+            "repository_id": str(repository_id),
+            "message": "Use /api/v1/mcp/tools/{tool_name} for HTTP parity calls.",
+        }
     )
+
+
+@api_errors
+@require_http_methods(["POST"])
+def mcp_tool(request: HttpRequest, tool_name: str) -> JsonResponse:
+    """Expose the exact canonical domain facade used by Streamable HTTP MCP."""
+    return JsonResponse(
+        dispatch_tool(
+            actor=_actor(request),
+            tool_name=tool_name,
+            arguments=_json_body(request),
+            transport="HTTP",
+        )
+    )
+
+
+@require_http_methods(["GET"])
+def mcp_diagnostics(_request: HttpRequest) -> JsonResponse:
+    """Return non-secret compatibility and availability diagnostics."""
+    return JsonResponse(diagnostics_payload())
 
 
 @api_errors

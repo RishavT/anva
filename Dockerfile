@@ -6,6 +6,8 @@ FROM python:3.12.11-slim-bookworm AS base
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_COMPILE_BYTECODE=1 \
+    UV_HTTP_RETRIES=10 \
+    UV_HTTP_TIMEOUT=60 \
     UV_LINK_MODE=copy \
     PATH="/app/.venv/bin:${PATH}"
 
@@ -15,10 +17,12 @@ RUN groupadd --gid 10001 anva \
 WORKDIR /app
 COPY --from=uv /uv /uvx /bin/
 COPY pyproject.toml uv.lock README.md ./
-RUN uv sync --frozen --no-install-project --no-dev
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-install-project --no-dev
 
 COPY src ./src
-RUN uv sync --frozen --no-dev \
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev \
     && python -m anva.manage collectstatic --noinput \
     && chown -R anva:anva /app
 
@@ -28,7 +32,7 @@ FROM base AS runtime
 CMD ["gunicorn", "anva.config.wsgi:application", "--bind=0.0.0.0:8000", "--access-logfile=-", "--error-logfile=-"]
 
 FROM base AS test
-RUN uv sync --frozen
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen
 COPY tests ./tests
 USER anva
 CMD ["pytest"]

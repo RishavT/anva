@@ -92,6 +92,16 @@ urlpatterns = [
     ),
     path("api/v1/mcp/context", core_views.mcp_context, name="api-v1-mcp-context"),
     path(
+        "api/v1/mcp/tools/<str:tool_name>",
+        core_views.mcp_tool,
+        name="api-v1-mcp-tool",
+    ),
+    path(
+        "api/v1/mcp/diagnostics",
+        core_views.mcp_diagnostics,
+        name="api-v1-mcp-diagnostics",
+    ),
+    path(
         "api/v1/artifacts/<uuid:artifact_id>",
         core_views.artifact_detail,
         name="api-v1-artifact",

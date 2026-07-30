@@ -304,6 +304,32 @@ def _citation_from_provenance(
     )
 
 
+def authorized_assertion_citations(
+    *,
+    actor: ActorContext,
+    repository_id: uuid.UUID,
+    assertion_id: uuid.UUID,
+) -> tuple[dict[str, object], ...]:
+    """Expose current normalized assertion lineage for API/MCP explanations."""
+    provenance_rows = _authorized_provenance(
+        actor=actor,
+        repository_id=repository_id,
+        assertion_ids=[assertion_id],
+    )
+    return tuple(
+        {
+            "source_location_id": str(candidate.source_location_id),
+            "source_observation_id": str(candidate.source_observation_id),
+            "access_snapshot_id": str(candidate.access_snapshot_id),
+            "canonical_url": candidate.canonical_url,
+            "locator": candidate.locator,
+            "source_content_hash": candidate.source_content_hash,
+            "observed_at": candidate.observed_at.isoformat(),
+        }
+        for candidate in (_citation_from_provenance(row) for row in provenance_rows)
+    )
+
+
 def _assertion_candidates(
     *,
     actor: ActorContext,

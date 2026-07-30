@@ -17,6 +17,8 @@ x-app-environment: &app-environment
   ANVA_FILESYSTEM_ALLOWED_ROOTS: ${ANVA_FILESYSTEM_ALLOWED_ROOTS:-/fixtures}
   ANVA_API_URL: ${ANVA_API_URL:-http://api:8000/api/v1}
   ANVA_PUBLIC_BASE_URL: ${ANVA_PUBLIC_BASE_URL:-http://api:8000}
+  ANVA_MCP_READ_ONLY: ${ANVA_MCP_READ_ONLY:-false}
+  ANVA_MCP_PUBLIC_BASE_URL: ${ANVA_MCP_PUBLIC_BASE_URL:-http://mcp:8001}
   ANVA_LOG_LEVEL: ${ANVA_LOG_LEVEL:-INFO}
 
 x-app-dependencies: &app-dependencies
@@ -151,11 +153,11 @@ services:
       target: runtime
     command:
       [
-        "gunicorn",
+        "uvicorn",
         "anva.entrypoints.mcp:application",
-        "--bind=0.0.0.0:8001",
-        "--access-logfile=-",
-        "--error-logfile=-",
+        "--host=0.0.0.0",
+        "--port=8001",
+        "--no-server-header",
       ]
     environment: *app-environment
     depends_on: *app-dependencies
@@ -166,6 +168,37 @@ services:
           "python",
           "-c",
           "import urllib.request; urllib.request.urlopen('http://localhost:8001/health/ready', timeout=2)",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  mcp-read-only:
+    build:
+      context: .
+      target: runtime
+    profiles: ["mcp-test"]
+    command:
+      [
+        "uvicorn",
+        "anva.entrypoints.mcp:application",
+        "--host=0.0.0.0",
+        "--port=8002",
+        "--no-server-header",
+      ]
+    environment:
+      <<: *app-environment
+      ANVA_MCP_READ_ONLY: "true"
+      ANVA_MCP_PUBLIC_BASE_URL: http://mcp-read-only:8002
+    depends_on: *app-dependencies
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8002/health/ready', timeout=2)",
         ]
       interval: 5s
       timeout: 3s
@@ -239,6 +272,8 @@ services:
       ANVA_OBJECT_STORAGE_ACCESS_KEY: anva-test
       ANVA_OBJECT_STORAGE_SECRET_KEY: anva-test-only
       ANVA_PUBLIC_BASE_URL: http://testserver
+      ANVA_MCP_PUBLIC_BASE_URL: http://mcp:8001
+      ANVA_MCP_READ_ONLY: "false"
       ANVA_GITHUB_WEBHOOK_SECRETS: test-github-webhook-secret
       COVERAGE_FILE: /tmp/anva-coverage
       MYPY_CACHE_DIR: /tmp/anva-mypy-cache
@@ -248,6 +283,29 @@ services:
       test-postgres:
         condition: service_healthy
       test-minio:
+        condition: service_healthy
+
+  mcp-client-test:
+    build:
+      context: .
+      target: test
+    profiles: ["mcp-test"]
+    working_dir: /workspace
+    user: "${ANVA_HOST_UID:-1000}:${ANVA_HOST_GID:-1000}"
+    volumes:
+      - .:/workspace
+    command: ["pytest", "tests/smoke/test_mcp_compose_client.py", "-vv"]
+    environment:
+      ANVA_API_TEST_URL: http://api:8000
+      ANVA_MCP_TEST_URL: http://mcp:8001/mcp
+      ANVA_MCP_READ_ONLY_TEST_URL: http://mcp-read-only:8002/mcp
+      ANVA_BOOTSTRAP_SECRET: ${ANVA_BOOTSTRAP_SECRET:-anva-local-bootstrap}
+    depends_on:
+      api:
+        condition: service_healthy
+      mcp:
+        condition: service_healthy
+      mcp-read-only:
         condition: service_healthy
 
 volumes:

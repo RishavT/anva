@@ -47,8 +47,22 @@ def test_openapi_and_mcp_share_the_canonical_schemas() -> None:
     }
     assert mcp["contract_version"] == "1"
     assert [tool["name"] for tool in tools] == [
-        "anva.evaluate_change",
-        "anva.submit_knowledge_proposal",
+        "anva.resolve_repository",
+        "anva.resolve_work_item",
+        "anva.get_context_packet",
+        "anva.search",
+        "anva.get_entity",
+        "anva.get_relationships",
+        "anva.get_repository_profile",
+        "anva.get_policy_bundle",
+        "anva.get_requirements",
+        "anva.explain_assertion",
+        "anva.get_source_excerpt",
+        "anva.propose_correction",
+        "anva.propose_relationship",
+        "anva.propose_decision",
+        "anva.submit_work_summary",
+        "anva.submit_preflight_summary",
     ]
 
 
@@ -91,6 +105,8 @@ def test_openapi_exposes_versioned_tenancy_and_authorization_boundaries() -> Non
         "/assertions/{resource_id}/explanation",
         "/canvas/assertions/{resource_id}",
         "/mcp/context",
+        "/mcp/diagnostics",
+        "/mcp/tools/{tool_name}",
         "/artifacts/{resource_id}",
         "/work-items",
         "/work-items/import",
