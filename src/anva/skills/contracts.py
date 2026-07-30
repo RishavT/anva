@@ -125,6 +125,41 @@ def _collect_source_refs(value: object) -> set[str]:
     return references
 
 
+def source_reference_errors(payload: dict[str, object], workflow_name: str) -> tuple[str, ...]:
+    """Return redacted host-neutral source-closure and proposal invariants."""
+    source_values = payload.get("anva_sources", payload.get("normalized_sources", []))
+    if not isinstance(source_values, list):
+        return ("normalized sources are not an array",)
+    source_refs = [
+        source.get("source_ref")
+        for source in source_values
+        if isinstance(source, dict) and isinstance(source.get("source_ref"), str)
+    ]
+    errors: list[str] = []
+    if len(source_refs) != len(set(source_refs)):
+        errors.append("normalized source references must be unique")
+    retained_refs = _collect_source_refs(payload)
+    available_refs = set(source_refs)
+    if retained_refs - available_refs:
+        errors.append("source references lack normalized provenance")
+    if available_refs - retained_refs:
+        errors.append("normalized sources are not referenced by retained material")
+    if workflow_name == "anva-learn":
+        preview = payload.get("preview")
+        compared = (
+            ("proposal_type", "proposal_type"),
+            ("target", "target"),
+            ("proposed_content", "proposed_content"),
+            ("rationale", "rationale"),
+            ("source_references", "source_references"),
+        )
+        if not isinstance(preview, dict) or any(
+            payload.get(root_key) != preview.get(preview_key) for root_key, preview_key in compared
+        ):
+            errors.append("proposal preview must exactly match submitted content")
+    return tuple(errors)
+
+
 def validate_skill_output(
     workflow_name: str,
     payload: object,
@@ -147,34 +182,9 @@ def validate_skill_output(
         raise SkillContractError(f"{workflow_name} output {location}: {first.message}")
     if not isinstance(payload, dict):
         raise SkillContractError(f"{workflow_name} output must be an object")
-    source_values = payload.get("anva_sources", payload.get("normalized_sources", []))
-    if not isinstance(source_values, list):
-        raise SkillContractError(f"{workflow_name} normalized sources must be an array")
-    source_refs = [
-        source.get("source_ref")
-        for source in source_values
-        if isinstance(source, dict) and isinstance(source.get("source_ref"), str)
-    ]
-    if len(source_refs) != len(set(source_refs)):
-        raise SkillContractError(f"{workflow_name} normalized source references must be unique")
-    unknown = _collect_source_refs(payload) - set(source_refs)
-    if unknown:
-        raise SkillContractError(
-            f"{workflow_name} source references lack normalized provenance: {sorted(unknown)}"
-        )
-    if workflow_name == "anva-learn":
-        preview = payload.get("preview")
-        if not isinstance(preview, dict):
-            raise SkillContractError("anva-learn preview must be an object")
-        compared = (
-            ("proposal_type", "proposal_type"),
-            ("target", "target"),
-            ("proposed_content", "proposed_content"),
-            ("rationale", "rationale"),
-            ("source_references", "source_references"),
-        )
-        if any(payload[root_key] != preview[preview_key] for root_key, preview_key in compared):
-            raise SkillContractError("anva-learn preview must exactly match submitted content")
+    semantic_errors = source_reference_errors(payload, workflow_name)
+    if semantic_errors:
+        raise SkillContractError(f"{workflow_name} {semantic_errors[0]}")
 
 
 def load_distribution(package_root: Path | None = None) -> Distribution:

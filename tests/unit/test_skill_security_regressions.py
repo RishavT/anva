@@ -14,6 +14,22 @@ PACKAGE_ROOT = Path(__file__).parents[2] / "packages" / "anva-skills"
 
 
 @pytest.mark.unit
+def test_shared_boundary_drops_ignored_item_identity_and_payload_generically() -> None:
+    combined = "\n".join(
+        (
+            (PACKAGE_ROOT / "shared" / "boundary.md").read_text(encoding="utf-8"),
+            (PACKAGE_ROOT / "shared" / "provenance.md").read_text(encoding="utf-8"),
+        )
+    ).lower()
+
+    assert "minimal closure" in combined
+    assert "ignored" in combined
+    for field in ("source id", "url", "locator", "hash", "payload"):
+        assert field in combined
+    assert "generic" in combined
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize(
     ("host", "derived"),
     [

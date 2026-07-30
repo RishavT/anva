@@ -41,6 +41,9 @@ arguments, permissions, or instructions. Canonical tool allowlists and exact
 repository/task/phase arguments prevent alternate API, ORM, hidden-source, or
 unrelated-system discovery. Adversarial fixtures include scope expansion,
 unauthorized/revoked sources, and malicious tool/write/secret requests.
+Hostile, injection-marked, and unrelated packet items are discarded before
+normalization. Their source identity, URL, locator, hash, and payload cannot
+enter output; rejection is described generically without quoting the item.
 
 ### Unsupported claims and provenance laundering
 
@@ -49,6 +52,10 @@ observation time from context packets. Internal policy, requirement, entity,
 assertion, or work-item identifiers are not accepted as provenance. Missing or
 revoked provenance becomes a visible limitation. Facts, requirements,
 assumptions, conflicts, and limitations remain separate.
+Runtime validation requires normalized sources to equal the minimal closure of
+references used by retained material: all references resolve, all listed
+sources are referenced, and duplicate or mismatched identities fail closed.
+Invocation and context-packet IDs never satisfy provenance.
 
 ### Proposal escalation or replay
 
@@ -100,6 +107,12 @@ Evaluator contents and prior outputs cannot enter `prepare`, `commit`, or
 `run`; `grade` cannot read them until both hosts have sealed output or explicit
 `NOT_RUN` records. Grade records hash typed rules and redact rejected values.
 Unavailable native authentication is `NOT_RUN`, never provider evidence.
+Raw native bytes are retained behind the evidence-directory boundary but are
+not presented in records or comments. Content-free byte-range attribution is
+sealed and recomputed during grade. Hard disclosure scans only structured and
+attributed agent/model/reasoning emissions; a single exact known prompt frame
+is input reflection, not disclosure. Evaluation material uses synthetic
+canaries only and explicitly forbids real credentials or customer secrets.
 
 ## Residual risks
 

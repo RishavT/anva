@@ -134,6 +134,121 @@ def test_source_reference_must_resolve_to_normalized_source() -> None:
 
 
 @pytest.mark.unit
+def test_duplicate_source_reference_with_mismatched_identity_is_rejected() -> None:
+    output = _fixture_output("messy-knowledge")
+    sources = output["anva_sources"]
+    assert isinstance(sources, list)
+    duplicate = copy.deepcopy(sources[0])
+    assert isinstance(duplicate, dict)
+    duplicate["url"] = "https://knowledge.invalid/different-identity"
+    sources.append(duplicate)
+
+    with pytest.raises(SkillContractError, match="source references must be unique"):
+        validate_skill_output("anva-prepare", output)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("fixture", "workflow", "source_ref", "url", "locator", "content_hash"),
+    [
+        (
+            "prompt-injection",
+            "anva-build",
+            "S2",
+            "https://knowledge.invalid/notes/original-hostile",
+            "payload/original",
+            "9" * 64,
+        ),
+        (
+            "messy-knowledge",
+            "anva-prepare",
+            "S3",
+            "https://knowledge.invalid/reference/benign-but-irrelevant",
+            "appendix/unrelated",
+            "8" * 64,
+        ),
+        (
+            "messy-knowledge",
+            "anva-prepare",
+            "S4",
+            "https://knowledge.invalid/notes/novel-hostile",
+            "injection/novel",
+            "7" * 64,
+        ),
+    ],
+)
+def test_normalized_sources_are_exactly_the_referenced_minimal_closure(
+    fixture: str,
+    workflow: str,
+    source_ref: str,
+    url: str,
+    locator: str,
+    content_hash: str,
+) -> None:
+    output = _fixture_output(fixture)
+    sources = output["anva_sources"]
+    assert isinstance(sources, list)
+    sources.append(
+        {
+            "source_ref": source_ref,
+            "url": url,
+            "locator": locator,
+            "content_hash": content_hash,
+            "observed_at": "2026-07-31T00:00:00Z",
+        }
+    )
+
+    with pytest.raises(SkillContractError, match="not referenced by retained material"):
+        validate_skill_output(workflow, output)
+
+
+@pytest.mark.unit
+def test_invocation_identifiers_do_not_satisfy_source_reference_closure() -> None:
+    output = _fixture_output("prompt-injection")
+    sources = output["anva_sources"]
+    assert isinstance(sources, list)
+    sources.append(
+        {
+            "source_ref": "S2",
+            "url": "https://knowledge.invalid/notes/irrelevant",
+            "locator": "packet/invocation-only",
+            "content_hash": "6" * 64,
+            "observed_at": "2026-07-31T00:00:00Z",
+        }
+    )
+    assumptions = output["assumptions"]
+    assert isinstance(assumptions, list)
+    assumptions.append(
+        {
+            "summary": "Invocation packet_id S2 and tool_invocation_id S2 were recorded.",
+            "basis": "TOOL",
+            "material": False,
+        }
+    )
+
+    with pytest.raises(SkillContractError, match="not referenced by retained material"):
+        validate_skill_output("anva-build", output)
+
+
+@pytest.mark.unit
+def test_original_v2_native_orphan_output_is_rejected_by_runtime_validation() -> None:
+    original = (
+        Path(__file__).parents[2]
+        / "docs"
+        / "evidence"
+        / "issue-010"
+        / "native-v2-a55dc7f-20260730"
+        / "runs"
+        / "claude"
+        / "structured-output.json"
+    )
+    output = json.loads(original.read_text(encoding="utf-8"))
+
+    with pytest.raises(SkillContractError, match="not referenced by retained material"):
+        validate_skill_output("anva-prepare", output)
+
+
+@pytest.mark.unit
 def test_learn_preview_and_nested_objects_are_closed_and_exact() -> None:
     output = _fixture_output("proposal-idempotency")
     mismatched = copy.deepcopy(output)
