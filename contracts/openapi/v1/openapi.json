@@ -3788,6 +3788,7 @@
                         ]
                       }
                     },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.resolve_repository/input.schema.json",
                     "additionalProperties": false,
                     "properties": {
                       "contract_version": {
@@ -3839,6 +3840,7 @@
                         ]
                       }
                     },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.resolve_work_item/input.schema.json",
                     "additionalProperties": false,
                     "oneOf": [
                       {
@@ -3921,6 +3923,7 @@
                         ]
                       }
                     },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.get_context_packet/input.schema.json",
                     "additionalProperties": false,
                     "oneOf": [
                       {
@@ -4049,6 +4052,7 @@
                         ]
                       }
                     },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.search/input.schema.json",
                     "additionalProperties": false,
                     "properties": {
                       "contract_version": {
@@ -4140,6 +4144,7 @@
                         ]
                       }
                     },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.get_entity/input.schema.json",
                     "additionalProperties": false,
                     "properties": {
                       "contract_version": {
@@ -4196,6 +4201,7 @@
                         ]
                       }
                     },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.get_relationships/input.schema.json",
                     "additionalProperties": false,
                     "properties": {
                       "contract_version": {
@@ -4270,6 +4276,7 @@
                         ]
                       }
                     },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.get_repository_profile/input.schema.json",
                     "additionalProperties": false,
                     "properties": {
                       "contract_version": {
@@ -4321,6 +4328,7 @@
                         ]
                       }
                     },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.get_policy_bundle/input.schema.json",
                     "additionalProperties": false,
                     "properties": {
                       "contract_version": {
@@ -4390,6 +4398,7 @@
                         ]
                       }
                     },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.get_requirements/input.schema.json",
                     "additionalProperties": false,
                     "properties": {
                       "contract_version": {
@@ -4464,6 +4473,7 @@
                         ]
                       }
                     },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.explain_assertion/input.schema.json",
                     "additionalProperties": false,
                     "properties": {
                       "assertion_id": {
@@ -4520,6 +4530,7 @@
                         ]
                       }
                     },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.get_source_excerpt/input.schema.json",
                     "additionalProperties": false,
                     "properties": {
                       "chunk_id": {
@@ -4587,6 +4598,7 @@
                         ]
                       }
                     },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.propose_correction/input.schema.json",
                     "additionalProperties": false,
                     "properties": {
                       "access_scope_id": {
@@ -4700,6 +4712,7 @@
                         ]
                       }
                     },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.propose_relationship/input.schema.json",
                     "additionalProperties": false,
                     "properties": {
                       "access_scope_id": {
@@ -4821,6 +4834,7 @@
                         ]
                       }
                     },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.propose_decision/input.schema.json",
                     "additionalProperties": false,
                     "properties": {
                       "access_scope_id": {
@@ -4943,6 +4957,7 @@
                         ]
                       }
                     },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.submit_work_summary/input.schema.json",
                     "additionalProperties": false,
                     "properties": {
                       "access_scope_id": {
@@ -5056,6 +5071,7 @@
                         ]
                       }
                     },
+                    "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.submit_preflight_summary/input.schema.json",
                     "additionalProperties": false,
                     "properties": {
                       "access_scope_id": {

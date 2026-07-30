@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -58,6 +59,29 @@ from anva.mcp.contracts import (  # noqa: E402
     TOOL_CONTRACTS,
     ToolContract,
 )
+
+_SDK_LOGGER_NAME = "mcp.server.lowlevel.server"
+_SDK_UNLISTED_TOOL_MESSAGE = "Tool '%s' not listed, no validation will be performed"
+_SAFE_UNLISTED_TOOL_MESSAGE = "Unlisted tool requested; SDK schema validation skipped"
+
+
+class _UnlistedToolWarningFilter(logging.Filter):
+    """Remove attacker-controlled tool names from one known SDK warning."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.name == _SDK_LOGGER_NAME and record.msg == _SDK_UNLISTED_TOOL_MESSAGE:
+            record.msg = _SAFE_UNLISTED_TOOL_MESSAGE
+            record.args = ()
+        return True
+
+
+_unlisted_tool_warning_filter = _UnlistedToolWarningFilter()
+
+
+def _install_sdk_log_sanitizer() -> None:
+    sdk_logger = logging.getLogger(_SDK_LOGGER_NAME)
+    if _unlisted_tool_warning_filter not in sdk_logger.filters:
+        sdk_logger.addFilter(_unlisted_tool_warning_filter)
 
 
 class RepositoryTokenVerifier(TokenVerifier):
@@ -213,8 +237,9 @@ async def _diagnostics(_request: Request) -> JSONResponse:
     return JSONResponse(diagnostics_payload())
 
 
-def create_application() -> Starlette:
-    """Build a fresh official-SDK MCP application for runtime and tests."""
+def _create_server() -> Server[Any]:
+    """Build the official SDK server and its canonical handlers."""
+    _install_sdk_log_sanitizer()
     server: Server[Any] = Server(
         name="anva",
         version=__version__,
@@ -288,6 +313,12 @@ def create_application() -> Starlette:
             raise ValueError(safe_content.text) from None
         return json.dumps(result, ensure_ascii=False, sort_keys=True)
 
+    return server
+
+
+def create_application() -> Starlette:
+    """Build a fresh official-SDK MCP application for runtime and tests."""
+    server = _create_server()
     public_url = urlparse(settings.ANVA_MCP_PUBLIC_BASE_URL)
     allowed_hosts = [host if ":" in host else f"{host}:*" for host in settings.ALLOWED_HOSTS]
     if public_url.hostname:

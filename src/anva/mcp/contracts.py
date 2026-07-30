@@ -191,6 +191,9 @@ def _tool(
     *,
     read_only: bool = True,
 ) -> ToolContract:
+    schema_resource_base = f"https://schemas.anva.dev/mcp/v1/tools/{name}"
+    input_schema["$id"] = f"{schema_resource_base}/input.schema.json"
+    output_schema["$id"] = f"{schema_resource_base}/output.schema.json"
     return {
         "name": name,
         "description": description,

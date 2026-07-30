@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from mcp.shared.memory import create_connected_server_and_client_session
+from mcp.types import TextContent
 from pydantic import AnyUrl
 
 from anva.core.models import (
@@ -454,3 +458,43 @@ def test_resource_mapping_tool_metadata_and_safe_errors() -> None:
     assert "invalid_request" in cast(Any, unknown_error.content[0]).text
     with pytest.raises(TypeError, match="schema"):
         mcp_entrypoint.cast_schema("not-an-object")
+
+
+@pytest.mark.unit
+def test_official_sdk_unknown_tool_warning_is_sanitized_without_hiding_logs(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    actor = _actor()
+    canary = "anva.CANARY_SUBMITTED_TOOL_NAME_MUST_NOT_ECHO"
+    sdk_logger_name = "mcp.server.lowlevel.server"
+    caplog.set_level(logging.WARNING, logger=sdk_logger_name)
+    monkeypatch.setattr(mcp_entrypoint, "_actor", lambda: actor)
+
+    def rejected_dispatch(**_kwargs: object) -> dict[str, object]:
+        raise mcp_gateway.MCPGatewayError(
+            "capability_unavailable",
+            "Requested capability is unavailable; refresh MCP capability discovery",
+            http_status=404,
+            reason="unknown_capability",
+        )
+
+    monkeypatch.setattr(mcp_entrypoint, "dispatch_tool", rejected_dispatch)
+
+    async def call_unknown_tool() -> None:
+        async with create_connected_server_and_client_session(
+            mcp_entrypoint._create_server()
+        ) as session:
+            result = await session.call_tool(canary, arguments={"opaque": "argument-canary"})
+            assert result.isError
+            content = result.content[0]
+            assert isinstance(content, TextContent)
+            assert "capability_unavailable" in content.text
+            assert canary not in content.text
+
+    asyncio.run(call_unknown_tool())
+    logging.getLogger(sdk_logger_name).warning("unrelated MCP SDK warning remains visible")
+
+    assert canary not in caplog.text
+    assert "Unlisted tool requested; SDK schema validation skipped" in caplog.text
+    assert "unrelated MCP SDK warning remains visible" in caplog.text

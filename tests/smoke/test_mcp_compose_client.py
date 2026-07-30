@@ -180,6 +180,17 @@ def test_real_mcp_client_contract_auth_read_only_revocation_and_http_parity() ->
                     assert invalid_http.json()["reason"] == "allowed_value"
                     assert canary not in invalid_http.text
 
+                    unknown_tool = "anva.CANARY_SUBMITTED_TOOL_NAME_MUST_NOT_ECHO"
+                    unknown = await session.call_tool(
+                        unknown_tool,
+                        arguments={"opaque": "unknown-tool-argument-canary"},
+                    )
+                    assert unknown.isError
+                    unknown_content = unknown.content[0]
+                    assert isinstance(unknown_content, TextContent)
+                    assert "capability_unavailable" in unknown_content.text
+                    assert unknown_tool not in unknown_content.text
+
                     hidden = await session.call_tool(
                         "anva.resolve_repository",
                         arguments={

@@ -280,14 +280,37 @@ def test_secret_bearing_proposal_is_rejected_before_any_persistence() -> None:
             transport="MCP",
         )
     assert rejected.value.code == "secret_material_rejected"
-    assert secret not in str(rejected.value)
-    assert before == {
-        "proposals": KnowledgeProposal.objects.count(),
-        "submissions": MCPProposalSubmission.objects.count(),
-        "invocations": MCPToolInvocation.objects.count(),
-        "audits": AuditEvent.objects.count(),
-        "outbox": OutboxEvent.objects.count(),
-    }
+    rendered_error = str(rejected.value)
+    assert KnowledgeProposal.objects.count() == before["proposals"]
+    assert MCPProposalSubmission.objects.count() == before["submissions"]
+    assert AuditEvent.objects.count() == before["audits"]
+    assert OutboxEvent.objects.count() == before["outbox"]
+    assert MCPToolInvocation.objects.count() == before["invocations"] + 1
+
+    invocations = MCPToolInvocation.objects.filter(request_id=actor.request_id)
+    assert invocations.count() == 1
+    invocation = invocations.get()
+    assert invocation.tool_name == "anva.propose_correction"
+    assert invocation.required_action == Action.KNOWLEDGE_PROPOSE.value
+    assert invocation.outcome == MCPToolInvocation.Outcome.FAILED
+    assert invocation.error_code == "secret_material_rejected"
+    assert len(invocation.arguments_hash) == 64
+    persisted_audit = json.dumps(
+        MCPToolInvocation.objects.values().get(id=invocation.id),
+        default=str,
+        sort_keys=True,
+    )
+    for prohibited in (
+        secret,
+        plaintext,
+        "Must never persist credential material.",
+        "secret-rejection-idempotency",
+        str(assertion.id),
+        '"correction"',
+        '"nested"',
+    ):
+        assert prohibited not in rendered_error
+        assert prohibited not in persisted_audit
 
 
 @pytest.mark.integration

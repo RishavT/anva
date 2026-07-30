@@ -1380,19 +1380,19 @@ def dispatch_tool(
     transport: str,
 ) -> dict[str, object]:
     """Validate, authorize, execute, bound, validate, and audit one tool call."""
-    try:
-        reject_secrets({"tool": tool_name, "arguments": arguments})
-    except ValueError:
-        raise MCPGatewayError(
-            "secret_material_rejected",
-            "Tool input contains prohibited credential material",
-            path="$",
-            reason="secret_material",
-        ) from None
     contract = TOOL_BY_NAME.get(tool_name)
     audit_tool_name = tool_name if contract is not None else "unrecognized"
     audit_action = contract["required_action"] if contract is not None else "unrecognized"
     try:
+        try:
+            reject_secrets({"tool": tool_name, "arguments": arguments})
+        except ValueError:
+            raise MCPGatewayError(
+                "secret_material_rejected",
+                "Tool input contains prohibited credential material",
+                path="$",
+                reason="secret_material",
+            ) from None
         if contract is None:
             raise MCPGatewayError(
                 "capability_unavailable",
