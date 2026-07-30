@@ -49,6 +49,10 @@ def process_one_github_event(*, worker_id: str, lease_seconds: int) -> bool:
         client = (
             live_client_for_installation(delivery.installation.external_id)
             if delivery.event_type == "pull_request"
+            or (
+                delivery.event_type == "installation"
+                and delivery.action in {"suspend", "unsuspend"}
+            )
             else None
         )
         process_delivery(delivery_id=delivery.id, client=client)

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import signal
+import uuid
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 from pytest_django.fixtures import SettingsWrapper
@@ -27,6 +29,55 @@ def test_github_event_worker_claims_only_github_event_jobs() -> None:
         worker_id="github-worker",
         lease_seconds=300,
         allowed_kinds=frozenset({GITHUB_EVENT_JOB_KIND}),
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("action", ["suspend", "unsuspend"])
+def test_github_event_worker_builds_app_client_for_lifecycle_state_read(action: str) -> None:
+    organization_id = uuid.uuid4()
+    job_id = uuid.uuid4()
+    delivery_id = uuid.uuid4()
+    job = SimpleNamespace(
+        id=job_id,
+        organization_id=organization_id,
+        payload={"delivery_id": str(delivery_id)},
+    )
+    delivery = SimpleNamespace(
+        id=delivery_id,
+        organization_id=organization_id,
+        event_type="installation",
+        action=action,
+        installation=SimpleNamespace(external_id=67890),
+    )
+    delivery_query = MagicMock()
+    delivery_query.get.return_value = delivery
+    provider_client = MagicMock()
+
+    with (
+        patch("anva.core.services.jobs.claim_next_job", return_value=job),
+        patch(
+            "anva.core.models.GitHubWebhookDelivery.objects.select_related",
+            return_value=delivery_query,
+        ),
+        patch(
+            "anva.integrations.github.factory.live_client_for_installation",
+            return_value=provider_client,
+        ) as client_factory,
+        patch("anva.integrations.github.service.process_delivery") as process_delivery,
+        patch("anva.core.services.jobs.complete_job") as complete_job,
+    ):
+        assert process_one_github_event(worker_id="github-worker", lease_seconds=300) is True
+
+    client_factory.assert_called_once_with(67890)
+    process_delivery.assert_called_once_with(
+        delivery_id=delivery_id,
+        client=provider_client,
+    )
+    complete_job.assert_called_once_with(
+        actor=ANY,
+        job_id=job_id,
+        worker_id="github-worker",
     )
 
 

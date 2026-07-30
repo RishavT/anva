@@ -99,6 +99,14 @@ suspension drain boundary and the current projection when delivery workers obser
   App-authored marker and adopts it; human marker copies are ignored.
 - `github_pull_request_changed_during_sync`: provider truth changed during the bounded refresh or
   final recheck. The local transaction was rolled back; allow the durable job to retry.
+- `superseded_lifecycle_delivery`: a later suspend, unsuspend, or delete delivery was already
+  accepted for this installation. The older processing is durably ignored; do not replay it.
+- `provider_lifecycle_state_mismatch`: the suspend/unsuspend action no longer matches the current
+  GitHub installation record. The delivery is durably ignored without changing authority.
+- `github_installation_unavailable`, `github_installation_response_invalid`, or
+  `github_installation_response_too_large`: lifecycle reconciliation failed before authority
+  mutation. Allow bounded retry, verify current installation state and worker clock/configuration,
+  and do not manually force the local lifecycle state.
 - `github_http_3xx`: the live client deliberately rejects all redirects, including same-origin
   redirects. Verify GitHub/API routing; do not bypass this control or manually replay a bearer
   token.
@@ -121,6 +129,14 @@ work, queued provider jobs and pending writes; retired current publications; rev
 tokens; and marked associated source connections revoked. New non-lifecycle deliveries are stored
 as ignored and are not queued.
 
+The webhook action is a reconciliation trigger, not lifecycle truth by itself. Before applying
+suspend or unsuspend, the isolated GitHub worker holds the installation lock and reads
+`GET /app/installations/<installation-id>`. This request uses only the App JWT and never mints an
+installation token. If a later lifecycle delivery has already been accepted, the older delivery is
+ignored as superseded. If the requested action disagrees with GitHub's current `suspended_at`
+state, it is ignored as a provider-state mismatch. Provider/network errors and malformed responses
+leave authority unchanged and enter durable retry/failure handling.
+
 There are two intentional race outcomes:
 
 - If suspension acquires installation authority first, no later provider read or write begins.
@@ -129,12 +145,13 @@ There are two intentional race outcomes:
   remaining eligible work is then cancelled.
 
 Only a verified `installation/unsuspend` event reactivates a suspended installation. It restores the
-service identity, non-revoked/non-archived bindings and repository context, and exactly the reviewed
-grants. It does not replay cancelled deliveries/jobs/writes, revive publications or assurance,
-publish a completed pre-suspension run that had not yet produced an intent, unrevoke source
-connections, or issue replacement repository tokens. After unsuspension, verify the binding status,
-reconnect required sources, issue fresh credentials through their normal workflow, and deliberately
-redeliver or restart only current work.
+service identity only after GitHub currently reports the installation active, then restores
+non-revoked/non-archived bindings and repository context and exactly the reviewed grants. It does
+not replay cancelled deliveries/jobs/writes, revive publications or assurance, publish a completed
+pre-suspension run that had not yet produced an intent, unrevoke source connections, or issue
+replacement repository tokens. After unsuspension, verify the binding status, reconnect required
+sources, issue fresh credentials through their normal workflow, and deliberately redeliver or
+restart only current work.
 
 ## Revoke
 

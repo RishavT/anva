@@ -794,7 +794,7 @@ def _dispatch_delivery(
 ) -> dict[str, object]:
     event_type = delivery.event_type
     if event_type == "installation":
-        return _process_installation_event(delivery)
+        return _process_installation_event(delivery=delivery, client=client)
     if event_type in {"installation_repositories", "repository"}:
         return _process_repository_event(delivery)
     binding = delivery.repository_binding
@@ -810,12 +810,46 @@ def _dispatch_delivery(
 
 
 @transaction.atomic
-def _process_installation_event(delivery: GitHubWebhookDelivery) -> dict[str, object]:
+def _process_installation_event(
+    *,
+    delivery: GitHubWebhookDelivery,
+    client: GitHubClient | None,
+) -> dict[str, object]:
     installation = GitHubInstallation.objects.select_for_update().get(id=delivery.installation_id)
     details = cast(dict[str, object], delivery.normalized_payload.get("installation", {}))
     if delivery.action == "deleted":
         revoke_installation(installation=installation, request_id=delivery.delivery_id)
         return {"status": "revoked", "installation_id": str(installation.id)}
+    if delivery.action in {"suspend", "unsuspend"}:
+        superseding_delivery = (
+            GitHubWebhookDelivery.objects.filter(
+                installation_id=installation.id,
+                event_type="installation",
+                action__in=["suspend", "unsuspend", "deleted"],
+                received_at__gt=delivery.received_at,
+            )
+            .order_by("received_at")
+            .first()
+        )
+        if superseding_delivery is not None:
+            return {
+                "status": "ignored",
+                "reason": "superseded_lifecycle_delivery",
+                "superseding_delivery_id": str(superseding_delivery.delivery_id),
+            }
+        if client is None:
+            raise GitHubClientError(
+                "github_installation_state_client_required",
+                transient=True,
+            )
+        provider_suspended = client.is_installation_suspended()
+        target_suspended = delivery.action == "suspend"
+        if provider_suspended != target_suspended:
+            return {
+                "status": "ignored",
+                "reason": "provider_lifecycle_state_mismatch",
+                "provider_state": "SUSPENDED" if provider_suspended else "ACTIVE",
+            }
     if delivery.action == "suspend":
         suspend_installation(
             installation=installation,

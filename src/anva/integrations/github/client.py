@@ -93,6 +93,10 @@ class AmbiguousGitHubWriteError(GitHubClientError):
 class GitHubClient(Protocol):
     """Only operations used by the GitHub adapter; no credentials cross this API."""
 
+    def is_installation_suspended(self) -> bool:
+        """Read current installation lifecycle state with GitHub App authority."""
+        ...
+
     def get_pull_request(
         self,
         *,
@@ -147,6 +151,7 @@ class _FakeComment:
 class FakeGitHubClient:
     """Deterministic contract fake with retries and ambiguous-write adoption."""
 
+    installation_suspended: bool = False
     pull_requests: dict[tuple[int, int], PullRequestSnapshot] = field(default_factory=dict)
     diffs: dict[tuple[int, int], str] = field(default_factory=dict)
     calls: list[dict[str, object]] = field(default_factory=list)
@@ -164,6 +169,11 @@ class FakeGitHubClient:
         repr=False,
     )
     _next_external_id: int = 1
+
+    def is_installation_suspended(self) -> bool:
+        self._raise_before("get_installation_state")
+        self.calls.append({"operation": "get_installation_state"})
+        return self.installation_suspended
 
     def add_pull_request(
         self,

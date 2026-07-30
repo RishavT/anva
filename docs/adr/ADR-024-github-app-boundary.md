@@ -29,9 +29,16 @@ GitHub is an adapter around the provider-neutral assurance domain:
 - live clients mint short-lived tokens restricted to one stored numeric repository ID and the
   reviewed permission set, reject every HTTP redirect, and validate the returned token's bounded
   `ghs_` syntax and expiry;
-- suspension atomically disables the installation principal, grants, bindings, repository context,
-  and derived work while preserving an explicit narrow unsuspend path; revocation remains terminal
-  and preserves immutable audit history.
+- before a suspend or unsuspend delivery mutates authority, the worker reconciles current provider
+  state with `GET /app/installations/{installation_id}` using App-JWT authority only; it never mints
+  an installation token for this lifecycle read;
+- suspend/unsuspend processing holds the installation lock and treats a later accepted lifecycle
+  delivery as superseding an older one. A superseded action or one that disagrees with current
+  provider state becomes a durable ignored processing result; provider errors or malformed
+  responses fail without changing authority and follow the bounded job retry path;
+- a reconciled suspension atomically disables the installation principal, grants, bindings,
+  repository context, and derived work while preserving an explicit narrow unsuspend path;
+  revocation remains terminal and preserves immutable audit history.
 
 The ordinary worker claims only core allowlisted jobs. The GitHub worker claims only GitHub event
 jobs and outbound writes. Core assurance and other core services do not import provider clients or
@@ -52,6 +59,11 @@ network libraries.
   provider checks supplies a defined serialization point without trusting delivery order.
 - Treating suspension as a state label was rejected because queued and in-flight effects require an
   atomic drain/cancellation boundary and explicit reauthorization semantics.
+- Treating webhook arrival order or action as current installation truth was rejected because a
+  delayed or retried old unsuspend could otherwise override a newer suspension.
+- Minting an installation token to verify lifecycle state was rejected because the installation may
+  be suspended and the broader credential is unnecessary. The fixed installation endpoint accepts
+  the App JWT already held by the isolated worker.
 
 ## Consequences
 
@@ -65,6 +77,12 @@ source connections, or completed pre-suspension runs that had not yet been publi
 requires PostgreSQL and a separately deployed credential-bearing worker. Initial operation supports
 public GitHub only and bounds adoption searches to the first 100 provider results.
 
+Suspend and unsuspend therefore depend on one additional bounded provider read. If GitHub is
+unavailable or its installation response is malformed, Anva retains the prior local authority
+state, records the processing failure, and retries rather than applying an unverified lifecycle
+mutation. An authenticated lifecycle delivery that no longer matches current provider state is
+retained as an ignored historical delivery.
+
 ## Security impact
 
 The API receives only rotating webhook secrets. The GitHub worker receives only the App ID, slug,
@@ -73,6 +91,8 @@ are held in memory for one request and are not logged or persisted. Token respon
 bounded `ghs_` syntax and an aware expiry 30 seconds to 65 minutes in the future. Credentialed
 requests reject all redirects rather than forwarding authorization to another hop. Human comments
 with a copied Anva marker are never adopted unless the author is the configured App bot.
+Lifecycle reconciliation uses only a short-lived App JWT for the fixed numeric installation path;
+it does not request, expose, or persist an installation token.
 
 ## Privacy impact
 
@@ -86,7 +106,8 @@ Operators must register the reviewed manifest, configure repository mappings, pr
 secret file, run the `github` Compose profile, monitor event/write status, and rotate webhook
 secrets and App keys independently. Operators must treat suspension as a drain point and explicitly
 redeliver/restart desired current work after an installation is unsuspended; unmaterialized
-pre-suspension completed runs remain retired.
+pre-suspension completed runs remain retired. Operators must also monitor failed/ignored lifecycle
+processing reasons rather than manually changing local installation state.
 
 ## Revisit conditions
 

@@ -670,7 +670,8 @@ def test_suspension_atomically_stops_and_explicit_unsuspend_restores_least_privi
         GitHubWebhookDelivery,
         accept_verified_event(_installation_event(action="suspend")).delivery,
     )
-    process_delivery(delivery_id=suspend_delivery.id, client=None)
+    lifecycle_client = FakeGitHubClient(installation_suspended=True)
+    process_delivery(delivery_id=suspend_delivery.id, client=lifecycle_client)
 
     result.installation.refresh_from_db()
     result.installation.service_identity.refresh_from_db()
@@ -711,7 +712,8 @@ def test_suspension_atomically_stops_and_explicit_unsuspend_restores_least_privi
         GitHubWebhookDelivery,
         accept_verified_event(_installation_event(action="unsuspend")).delivery,
     )
-    process_delivery(delivery_id=unsuspend_delivery.id, client=None)
+    lifecycle_client.installation_suspended = False
+    process_delivery(delivery_id=unsuspend_delivery.id, client=lifecycle_client)
 
     result.installation.refresh_from_db()
     result.installation.service_identity.refresh_from_db()
@@ -750,6 +752,150 @@ def test_suspension_atomically_stops_and_explicit_unsuspend_restores_least_privi
     ).exists()
 
 
+class _LifecycleStateClient(FakeGitHubClient):
+    def __init__(self, *, suspended: bool) -> None:
+        super().__init__()
+        self.suspended = suspended
+
+    def is_installation_suspended(self) -> bool:
+        self._raise_before("get_installation_state")
+        self.calls.append({"operation": "get_installation_state"})
+        return self.suspended
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_delayed_old_unsuspend_cannot_override_newer_suspend_delivery() -> None:
+    tenant = _tenant("stale-unsuspend")
+    result = _binding(tenant)
+    github_service.suspend_installation(
+        installation=result.installation,
+        request_id=uuid.uuid4(),
+    )
+    old_unsuspend = cast(
+        GitHubWebhookDelivery,
+        accept_verified_event(_installation_event(action="unsuspend")).delivery,
+    )
+    newer_suspend = cast(
+        GitHubWebhookDelivery,
+        accept_verified_event(_installation_event(action="suspend")).delivery,
+    )
+    client = _LifecycleStateClient(suspended=True)
+
+    newer_result = process_delivery(delivery_id=newer_suspend.id, client=client)
+    old_result = process_delivery(delivery_id=old_unsuspend.id, client=client)
+
+    result.installation.refresh_from_db()
+    assert result.installation.state == GitHubInstallation.State.SUSPENDED
+    assert newer_result.state == GitHubEventProcessing.State.PROCESSED
+    assert old_result.state == GitHubEventProcessing.State.IGNORED
+    assert old_result.result_identifiers["reason"] == "superseded_lifecycle_delivery"
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_failed_old_unsuspend_retry_cannot_override_newer_suspend_delivery() -> None:
+    tenant = _tenant("failed-stale-unsuspend")
+    result = _binding(tenant)
+    github_service.suspend_installation(
+        installation=result.installation,
+        request_id=uuid.uuid4(),
+    )
+    old_unsuspend = cast(
+        GitHubWebhookDelivery,
+        accept_verified_event(_installation_event(action="unsuspend")).delivery,
+    )
+    client = _LifecycleStateClient(suspended=True)
+    with (
+        patch(
+            "anva.integrations.github.service._dispatch_delivery",
+            side_effect=GitHubClientError("github_network_unavailable", transient=True),
+        ),
+        pytest.raises(GitHubClientError, match="github_network_unavailable"),
+    ):
+        process_delivery(delivery_id=old_unsuspend.id, client=client)
+    old_processing = GitHubEventProcessing.objects.get(delivery=old_unsuspend)
+    assert old_processing.state == GitHubEventProcessing.State.FAILED
+
+    newer_suspend = cast(
+        GitHubWebhookDelivery,
+        accept_verified_event(_installation_event(action="suspend")).delivery,
+    )
+    process_delivery(delivery_id=newer_suspend.id, client=client)
+    retried = process_delivery(delivery_id=old_unsuspend.id, client=client)
+
+    result.installation.refresh_from_db()
+    assert result.installation.state == GitHubInstallation.State.SUSPENDED
+    assert retried.state == GitHubEventProcessing.State.IGNORED
+    assert retried.result_identifiers["reason"] == "superseded_lifecycle_delivery"
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_lifecycle_provider_error_fails_closed_without_authority_change() -> None:
+    tenant = _tenant("lifecycle-provider-error")
+    result = _binding(tenant)
+    suspend_delivery = cast(
+        GitHubWebhookDelivery,
+        accept_verified_event(_installation_event(action="suspend")).delivery,
+    )
+    client = _LifecycleStateClient(suspended=True)
+    client.queue_failure(
+        "get_installation_state",
+        GitHubClientError("github_network_unavailable", transient=True),
+    )
+
+    with pytest.raises(GitHubClientError, match="github_network_unavailable"):
+        process_delivery(delivery_id=suspend_delivery.id, client=client)
+
+    result.installation.refresh_from_db()
+    result.installation.service_identity.refresh_from_db()
+    assert result.installation.state == GitHubInstallation.State.ACTIVE
+    assert result.installation.service_identity.is_active is True
+    assert GitHubEventProcessing.objects.get(delivery=suspend_delivery).state == (
+        GitHubEventProcessing.State.FAILED
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("action", "initially_suspended", "provider_suspended", "expected_state"),
+    [
+        ("suspend", False, False, GitHubInstallation.State.ACTIVE),
+        ("unsuspend", True, True, GitHubInstallation.State.SUSPENDED),
+    ],
+)
+def test_lifecycle_event_is_ignored_when_current_provider_state_does_not_match_target(
+    action: str,
+    initially_suspended: bool,
+    provider_suspended: bool,
+    expected_state: str,
+) -> None:
+    tenant = _tenant(f"provider-mismatch-{action}")
+    result = _binding(tenant)
+    if initially_suspended:
+        github_service.suspend_installation(
+            installation=result.installation,
+            request_id=uuid.uuid4(),
+        )
+    delivery = cast(
+        GitHubWebhookDelivery,
+        accept_verified_event(_installation_event(action=action)).delivery,
+    )
+    client = _LifecycleStateClient(suspended=provider_suspended)
+
+    processing = process_delivery(delivery_id=delivery.id, client=client)
+
+    result.installation.refresh_from_db()
+    result.installation.service_identity.refresh_from_db()
+    assert result.installation.state == expected_state
+    assert result.installation.service_identity.is_active is (not initially_suspended)
+    assert processing.state == GitHubEventProcessing.State.IGNORED
+    assert processing.result_identifiers["reason"] == "provider_lifecycle_state_mismatch"
+    assert [call["operation"] for call in client.calls] == ["get_installation_state"]
+
+
 @pytest.mark.integration
 @pytest.mark.django_db(transaction=True)
 def test_suspension_drains_blocked_provider_fetch_then_blocks_later_work() -> None:
@@ -780,7 +926,7 @@ def test_suspension_drains_blocked_provider_fetch_then_blocks_later_work() -> No
                 raise TimeoutError("test did not release provider fetch")
             return snapshot
 
-    client = BlockingGitHubClient()
+    client = BlockingGitHubClient(installation_suspended=True)
     client.add_pull_request(
         repository=repository,
         snapshot=PullRequestSnapshot(
@@ -821,7 +967,7 @@ def test_suspension_drains_blocked_provider_fetch_then_blocks_later_work() -> No
         close_old_connections()
         try:
             suspension_started.set()
-            process_delivery(delivery_id=suspend_delivery.id, client=None)
+            process_delivery(delivery_id=suspend_delivery.id, client=client)
             suspension_finished.set()
         except BaseException as error:
             failures.append(error)
@@ -853,6 +999,7 @@ def test_suspension_drains_blocked_provider_fetch_then_blocks_later_work() -> No
         "get_pull_request_diff",
         "get_pull_request",
         "get_pull_request",
+        "get_installation_state",
     ]
     assert PullRequest.objects.filter(repository=tenant.repository).count() == 1
     assert (
@@ -908,7 +1055,7 @@ def test_suspension_drains_blocked_diff_fetch_then_blocks_later_work() -> None:
                 pull_request_number=pull_request_number,
             )
 
-    client = BlockingDiffClient()
+    client = BlockingDiffClient(installation_suspended=True)
     client.add_pull_request(
         repository=repository,
         snapshot=PullRequestSnapshot(
@@ -949,7 +1096,7 @@ def test_suspension_drains_blocked_diff_fetch_then_blocks_later_work() -> None:
         close_old_connections()
         try:
             suspension_started.set()
-            process_delivery(delivery_id=suspend_delivery.id, client=None)
+            process_delivery(delivery_id=suspend_delivery.id, client=client)
             suspension_finished.set()
         except BaseException as error:
             failures.append(error)
@@ -981,6 +1128,7 @@ def test_suspension_drains_blocked_diff_fetch_then_blocks_later_work() -> None:
         "get_pull_request_diff",
         "get_pull_request",
         "get_pull_request",
+        "get_installation_state",
     ]
     assert PullRequest.objects.filter(repository=tenant.repository).count() == 1
     assert (

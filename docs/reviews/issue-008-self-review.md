@@ -10,7 +10,7 @@
 | PR and Check ingestion | Per-PR PostgreSQL serialization and locked authority before provider I/O, provider snapshots bracketing the diff, final provider recheck with transactional rollback, immutable core revision/observations, exact-commit check observations | Delayed-head concurrency, synchronized duplicate, provider-change, rollback, fork, and check tests |
 | Exact-head Check/report | One current projection per PR/kind, deterministic Check/comment rendering, bounded annotations and marker | Queue/render integration tests |
 | Durable outbound effects | Frozen write intent, explicit outbox event, lease/attempt history, rate-limit backoff and ambiguous-write adoption | Retry, concurrency, ambiguity, spoof, and immutability tests |
-| Suspension and revocation | Suspension drains an already-authorized write, blocks in-flight reads from producing local effects, cancels derived work/access, and requires explicit narrow reactivation; revocation remains terminal | Suspension lifecycle/race/drain and revocation integration tests |
+| Suspension and revocation | Suspend/unsuspend reconciles App-JWT-only provider truth and later accepted lifecycle deliveries under the installation lock before mutation; reconciled suspension drains authorized effects and cancels derived work/access; revocation remains terminal | Lifecycle ordering/mismatch/error, suspension race/drain, and revocation tests |
 | Credential/process isolation | Webhook secret only in API; App key only in dedicated worker; no provider network code in core services; live HTTP rejects every redirect and validates installation-token syntax/lifetime | Compose, source-boundary, redirect, and token-response tests |
 | API/CLI/worker/contracts/docs | Versioned binding/status/revoke routes, bounded CLI file input, dedicated worker, publication schema/OpenAPI, runbook/ADR/threat model | Contract, CLI, worker, and drift tests |
 
@@ -59,6 +59,14 @@
     non-empty installation token with any future expiry. The credential-bearing client now rejects
     all redirects, including same-origin redirects, requires bounded `ghs_` token syntax, and
     accepts only timezone-aware expiries between 30 seconds and 65 minutes from validation time.
+13. Suspend/unsuspend initially trusted the delivery action after signature verification. A delayed
+    or retried old unsuspend could therefore restore authority after a newer suspension. Lifecycle
+    mutation now holds the installation lock, rejects an older delivery when a later lifecycle
+    delivery has already been accepted, and reconciles the target action against GitHub's current
+    numeric installation record. The reconciliation GET uses only an App JWT and never mints an
+    installation token. Superseded or provider-mismatched deliveries become durable ignored
+    history; provider/network errors and malformed responses fail before authority mutation and
+    follow bounded retry handling.
 
 ## Limitations
 
@@ -75,7 +83,8 @@ retried as a transient synchronization failure rather than ingested.
 
 ## Verification
 
-The final independent-review remediation was verified in the isolated task Docker project:
+The preceding independent-review remediation checkpoint was verified in the isolated task Docker
+project:
 
 - The complete focused GitHub boundary passed 84 of 84 tests, including suspension lifecycle and
   drain races, delayed/current provider concurrency, advisory-lock contention, bracket/final
@@ -94,7 +103,36 @@ The final independent-review remediation was verified in the isolated task Docke
 - The task's effective peak Docker footprint was approximately 1.3 GB, below the 5 GB limit. Exact
   task containers, networks, volumes, and temporary files were cleaned after verification.
 
-The local Docker daemon could not resolve package-index hosts while rebuilding the image, so local
-tests used the preserved locked test image with the current source mounted read-only and the newly
-locked PyJWT/cryptography packages in a temporary dependency volume. Clean-image build evidence is
-therefore not part of these local remediation gates and must be provided separately by hosted CI.
+The subsequent lifecycle-order remediation was verified separately:
+
+- Red-before probes reproduced all three PostgreSQL lifecycle failures and all eight missing
+  client-boundary controls: delayed and failed/retried old unsuspend deliveries restored authority
+  after a newer suspension, provider failures did not gate lifecycle mutation, and no App-JWT-only
+  installation-state boundary existed.
+- The final complete GitHub boundary passed 100 of 100 tests. It covers later-delivery
+  supersession, provider-state mismatch in both directions, provider failure without authority
+  mutation, App-JWT-only lifecycle reads with no installation-token mint, and malformed,
+  oversized, wrong-installation, naive-time, and far-future responses.
+- Ruff formatting checked all 122 files and linting passed. Strict mypy passed all 107 source
+  files. Django configuration checks passed, there was no migration drift, and all 24 generated
+  contracts matched their checked-in artifacts.
+- The final repository-wide gate passed 434 tests with one intentional unmounted-corpus skip and
+  86% coverage.
+- A fresh production-settings smoke applied every migration through
+  `core.0012_github_app_adapter`; the deployment check reported zero errors and three existing
+  warnings. The API, core worker, and GitHub worker became healthy, and credential-isolation
+  assertions passed.
+- The exact task image was 569,694,108 bytes (approximately 543 MiB), and the fresh production
+  database volume used approximately 73.5 MiB. The effective task footprint remained well below
+  5 GB. Exact lifecycle containers, networks, volumes, image, and temporary smoke files were
+  removed after verification.
+
+After the full gate, a review-only test strengthening added an explicit timezone-naive timestamp
+case and pinned the oversized-response fixture to the 256 KiB lifecycle boundary. The complete
+live-client file then passed 47 tests; no production code changed after the full and production
+gates.
+
+Normal Compose rebuilds encountered Docker DNS failures, but an exact current-dependency image was
+built successfully with host networking and used for the final focused, full, and production
+gates. Hosted clean-image CI for the eventual pushed lifecycle commit is still recorded separately
+and is not claimed here.

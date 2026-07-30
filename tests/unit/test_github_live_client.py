@@ -25,6 +25,7 @@ from anva.integrations.github.client import (
 from anva.integrations.github.factory import live_client_for_installation
 from anva.integrations.github.live import (
     MAX_DIFF_BYTES,
+    MAX_INSTALLATION_RESPONSE_BYTES,
     MAX_RESPONSE_BYTES,
     GitHubAppCredentials,
     LiveGitHubClient,
@@ -144,6 +145,81 @@ def test_installation_token_rejects_oversized_private_key_before_signing(
         client._installation_token(24680)
 
     encode.assert_not_called()
+
+
+@pytest.mark.unit
+def test_installation_state_uses_only_app_jwt_and_never_mints_installation_token(
+    tmp_path: Path,
+) -> None:
+    key_path = tmp_path / "github-app.pem"
+    key_path.write_text("synthetic-private-key")
+    client = _client(key_path)
+    response = _response(
+        json.dumps(
+            {
+                "id": 67890,
+                "suspended_at": datetime.now(UTC).isoformat(),
+            }
+        ).encode()
+    )
+
+    with (
+        patch("anva.integrations.github.live.jwt.encode", return_value="app-jwt"),
+        patch.object(client, "_installation_token") as installation_token,
+        patch("anva.integrations.github.live._open_url", return_value=response) as open_url,
+    ):
+        assert client.is_installation_suspended() is True
+
+    installation_token.assert_not_called()
+    request = open_url.call_args.args[0]
+    assert request.full_url == "https://api.github.com/app/installations/67890"
+    assert request.method == "GET"
+    assert request.get_header("Authorization") == "Bearer app-jwt"
+    assert request.data is None
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"not-json",
+        b"[]",
+        b"{}",
+        json.dumps({"id": 11111, "suspended_at": None}).encode(),
+        json.dumps({"id": 67890, "suspended_at": 123}).encode(),
+        json.dumps({"id": 67890, "suspended_at": "not-a-date"}).encode(),
+        json.dumps({"id": 67890, "suspended_at": "2026-07-30T12:34:56"}).encode(),
+        json.dumps({"id": 67890, "suspended_at": "2099-01-01T00:00:00Z"}).encode(),
+        b"x" * (MAX_INSTALLATION_RESPONSE_BYTES + 1),
+    ],
+    ids=[
+        "invalid-json",
+        "array",
+        "missing-fields",
+        "wrong-installation",
+        "non-string-timestamp",
+        "invalid-timestamp",
+        "timezone-naive-timestamp",
+        "far-future-timestamp",
+        "oversized",
+    ],
+)
+def test_installation_state_rejects_malformed_or_unsafe_provider_response(
+    payload: bytes,
+    tmp_path: Path,
+) -> None:
+    key_path = tmp_path / "github-app.pem"
+    key_path.write_text("synthetic-private-key")
+    client = _client(key_path)
+    with (
+        patch("anva.integrations.github.live.jwt.encode", return_value="app-jwt"),
+        patch.object(client, "_installation_token") as installation_token,
+        patch("anva.integrations.github.live._open_url", return_value=_response(payload)),
+        pytest.raises(GitHubClientError, match="github_installation_response_(invalid|too_large)"),
+    ):
+        client.is_installation_suspended()
+
+    installation_token.assert_not_called()
 
 
 @pytest.mark.unit

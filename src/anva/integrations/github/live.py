@@ -31,6 +31,8 @@ API_VERSION = "2022-11-28"
 USER_AGENT = "Anva-GitHub-App/0.1"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_DIFF_BYTES = 1_200_000
+MAX_INSTALLATION_RESPONSE_BYTES = 256 * 1024
+MAX_PROVIDER_CLOCK_SKEW_SECONDS = 5 * 60
 MAX_PRIVATE_KEY_BYTES = 64 * 1024
 MIN_TOKEN_LIFETIME_SECONDS = 30
 MAX_TOKEN_LIFETIME_SECONDS = 65 * 60
@@ -75,6 +77,80 @@ class LiveGitHubClient:
             raise ValueError("Only the public GitHub API origin is supported")
         self._credentials = credentials
         self._installation_id = installation_id
+
+    def is_installation_suspended(self) -> bool:
+        """Read lifecycle truth using only App JWT authority, never an installation token."""
+        request = Request(  # noqa: S310 - fixed GitHub API origin and installation identity
+            (
+                f"{self._credentials.api_base_url.rstrip('/')}/app/installations/"
+                f"{self._installation_id}"
+            ),
+            method="GET",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {self._app_jwt()}",
+                "User-Agent": USER_AGENT,
+                "X-GitHub-Api-Version": API_VERSION,
+            },
+        )
+        try:
+            with _open_url(request, timeout=self._credentials.timeout_seconds) as response:
+                raw = response.read(MAX_INSTALLATION_RESPONSE_BYTES + 1)
+        except HTTPError as error:
+            self._raise_http(error)
+        except (TimeoutError, URLError):
+            raise GitHubClientError(
+                "github_installation_unavailable",
+                transient=True,
+            ) from None
+        if len(raw) > MAX_INSTALLATION_RESPONSE_BYTES:
+            raise GitHubClientError(
+                "github_installation_response_too_large",
+                transient=False,
+            )
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            raise GitHubClientError(
+                "github_installation_response_invalid",
+                transient=False,
+            ) from None
+        if (
+            not isinstance(payload, dict)
+            or payload.get("id") != self._installation_id
+            or isinstance(payload.get("id"), bool)
+            or "suspended_at" not in payload
+        ):
+            raise GitHubClientError(
+                "github_installation_response_invalid",
+                transient=False,
+            )
+        suspended_at = payload["suspended_at"]
+        if suspended_at is None:
+            return False
+        if not isinstance(suspended_at, str) or len(suspended_at) > 100:
+            raise GitHubClientError(
+                "github_installation_response_invalid",
+                transient=False,
+            )
+        try:
+            suspended_time = datetime.fromisoformat(suspended_at.replace("Z", "+00:00"))
+        except ValueError:
+            raise GitHubClientError(
+                "github_installation_response_invalid",
+                transient=False,
+            ) from None
+        if suspended_time.tzinfo is None:
+            raise GitHubClientError(
+                "github_installation_response_invalid",
+                transient=False,
+            )
+        if (suspended_time - datetime.now(UTC)).total_seconds() > MAX_PROVIDER_CLOCK_SKEW_SECONDS:
+            raise GitHubClientError(
+                "github_installation_response_invalid",
+                transient=False,
+            )
+        return True
 
     def get_pull_request(
         self,
@@ -337,13 +413,6 @@ class LiveGitHubClient:
         return raw
 
     def _installation_token(self, repository_id: int) -> str:
-        now = int(time.time())
-        private_key = _read_private_key(self._credentials.private_key_path)
-        app_jwt = jwt.encode(
-            {"iat": now - 30, "exp": now + 540, "iss": str(self._credentials.app_id)},
-            private_key,
-            algorithm="RS256",
-        )
         payload = json.dumps(
             {
                 "repository_ids": [repository_id],
@@ -366,7 +435,7 @@ class LiveGitHubClient:
             method="POST",
             headers={
                 "Accept": "application/vnd.github+json",
-                "Authorization": f"Bearer {app_jwt}",
+                "Authorization": f"Bearer {self._app_jwt()}",
                 "Content-Type": "application/json",
                 "User-Agent": USER_AGENT,
                 "X-GitHub-Api-Version": API_VERSION,
@@ -405,6 +474,15 @@ class LiveGitHubClient:
         if not MIN_TOKEN_LIFETIME_SECONDS <= lifetime_seconds <= MAX_TOKEN_LIFETIME_SECONDS:
             raise GitHubClientError("github_token_response_invalid", transient=False)
         return token
+
+    def _app_jwt(self) -> str:
+        now = int(time.time())
+        private_key = _read_private_key(self._credentials.private_key_path)
+        return jwt.encode(
+            {"iat": now - 30, "exp": now + 540, "iss": str(self._credentials.app_id)},
+            private_key,
+            algorithm="RS256",
+        )
 
     def _raise_http(self, error: HTTPError) -> None:
         request_id = str(error.headers.get("X-GitHub-Request-Id", ""))[:100]
