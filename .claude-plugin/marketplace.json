@@ -1,0 +1,15 @@
+{
+  "description": "Portable Anva workflows for supported coding-agent hosts.",
+  "name": "anva",
+  "owner": {
+    "name": "Anva"
+  },
+  "plugins": [
+    {
+      "description": "Ground software work in permission-filtered Anva context.",
+      "name": "anva",
+      "source": "./packages/anva-skills/generated/claude-plugin",
+      "version": "1.0.0"
+    }
+  ]
+}

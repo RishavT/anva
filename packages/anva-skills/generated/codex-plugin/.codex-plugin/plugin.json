@@ -1,0 +1,26 @@
+{
+  "author": {
+    "name": "Anva",
+    "url": "https://github.com/RishavT/anva"
+  },
+  "description": "Ground software work in permission-filtered Anva context.",
+  "interface": {
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "category": "Developer Tools",
+    "defaultPrompt": [
+      "Use Anva to prepare this implementation task.",
+      "Use Anva to review this local change before a pull request."
+    ],
+    "developerName": "Anva",
+    "displayName": "Anva",
+    "longDescription": "Prepare, build, preflight, and propose knowledge updates with permission-filtered Anva context.",
+    "shortDescription": "Grounded context for software work"
+  },
+  "name": "anva",
+  "repository": "https://github.com/RishavT/anva",
+  "skills": "./skills/",
+  "version": "1.0.0"
+}

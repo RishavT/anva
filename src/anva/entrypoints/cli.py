@@ -159,6 +159,36 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mcp_commands = mcp.add_subparsers(dest="mcp_command", required=True)
     mcp_commands.add_parser("diagnose")
+    skills = subparsers.add_parser(
+        "skills",
+        help="Render, package, install, and diagnose portable Anva skills",
+    )
+    skills.add_argument("--package-root", type=Path)
+    skill_commands = skills.add_subparsers(dest="skills_command", required=True)
+    skill_commands.add_parser("render")
+    skill_commands.add_parser("check")
+    package = skill_commands.add_parser("package")
+    package.add_argument("--output", type=Path, required=True)
+    verify = skill_commands.add_parser("verify")
+    verify.add_argument("--output", type=Path, required=True)
+    install = skill_commands.add_parser("install")
+    install.add_argument("--host", choices=("codex", "claude"), required=True)
+    install.add_argument("--scope", choices=("project", "user"), default="project")
+    install.add_argument("--destination", type=Path, required=True)
+    mcp_config = skill_commands.add_parser("mcp-config")
+    mcp_config.add_argument("--host", choices=("codex", "claude"), required=True)
+    mcp_config.add_argument("--destination", type=Path, required=True)
+    mcp_config.add_argument("--token-env", default="ANVA_TOKEN")
+    mcp_config.add_argument("--mcp-url")
+    mcp_config.add_argument("--mcp-url-env", default="ANVA_MCP_URL")
+    diagnose = skill_commands.add_parser("diagnose")
+    diagnose.add_argument("--mcp-url", required=True)
+    diagnose.add_argument("--host", choices=("codex", "claude"), required=True)
+    diagnose.add_argument("--host-version", required=True)
+    diagnose.add_argument("--token-env", default="ANVA_TOKEN")
+    mode = diagnose.add_mutually_exclusive_group()
+    mode.add_argument("--expect-read-only", action="store_true")
+    mode.add_argument("--expect-write-capable", action="store_true")
     return parser
 
 
@@ -501,6 +531,72 @@ def _mcp_diagnose(arguments: argparse.Namespace) -> int:
     return 0
 
 
+def _skills_request(arguments: argparse.Namespace) -> int:
+    from anva.skills.contracts import default_package_root
+    from anva.skills.diagnostics import diagnose_skills
+    from anva.skills.installer import configure_mcp, install_skills
+    from anva.skills.packages import (
+        build_distributions,
+        check_distributions,
+        verify_distributions,
+    )
+    from anva.skills.render import check_rendered, render_distribution
+
+    package_root = arguments.package_root or default_package_root()
+    command = str(arguments.skills_command)
+    if command == "render":
+        render_distribution(package_root)
+        result: dict[str, object] = {
+            "status": "rendered",
+            "drift": check_rendered(package_root),
+        }
+    elif command == "check":
+        drift = [
+            *check_rendered(package_root),
+            *check_distributions(package_root, package_root / "dist"),
+        ]
+        result = {"status": "verified" if not drift else "drifted", "drift": drift}
+    elif command == "package":
+        checksums = build_distributions(package_root, arguments.output)
+        result = {"status": "packaged", "checksums": checksums}
+    elif command == "verify":
+        result = verify_distributions(arguments.output)
+    elif command == "install":
+        result = install_skills(
+            package_root=package_root,
+            destination=arguments.destination,
+            host=str(arguments.host),
+            scope=str(arguments.scope),
+        )
+    elif command == "mcp-config":
+        result = configure_mcp(
+            host=str(arguments.host),
+            destination=arguments.destination,
+            token_env=str(arguments.token_env),
+            mcp_url=arguments.mcp_url,
+            mcp_url_env=str(arguments.mcp_url_env),
+        )
+    elif command == "diagnose":
+        expected_read_only = (
+            True
+            if arguments.expect_read_only
+            else False
+            if arguments.expect_write_capable
+            else None
+        )
+        result = diagnose_skills(
+            mcp_url=str(arguments.mcp_url),
+            host=str(arguments.host),
+            host_version=str(arguments.host_version),
+            token_env=str(arguments.token_env),
+            expected_read_only=expected_read_only,
+        )
+    else:
+        raise ValueError("Unknown skills command")
+    print(json.dumps(result, sort_keys=True))
+    return 0 if result["status"] not in {"unavailable", "unsupported", "drifted"} else 1
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Execute one CLI command and return a process exit code."""
     arguments = build_parser().parse_args(argv)
@@ -533,6 +629,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
     if arguments.command == "mcp":
         return _mcp_diagnose(arguments)
+    if arguments.command == "skills":
+        try:
+            return _skills_request(arguments)
+        except (json.JSONDecodeError, OSError, ValueError) as error:
+            print(
+                json.dumps(
+                    {
+                        "code": "skill_operation_rejected",
+                        "message": str(error),
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 2
 
     configure_django()
     from anva.foundation.services import readiness_status

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.anva.dev/skills/v1/build.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "status", "scope", "requirements", "assumptions", "conflicts", "changes",
+    "verification", "deviations", "limitations", "anva_sources", "proposal"
+  ],
+  "properties": {
+    "status": {"enum": ["GROUNDED", "PAUSED", "UNVERIFIED"]},
+    "scope": {"type": "array"},
+    "requirements": {"type": "array"},
+    "assumptions": {"type": "array"},
+    "conflicts": {"type": "array"},
+    "changes": {"type": "array"},
+    "verification": {"type": "array"},
+    "deviations": {"type": "array"},
+    "limitations": {"type": "array"},
+    "anva_sources": {"type": "array"},
+    "proposal": {"type": ["object", "null"]}
+  }
+}

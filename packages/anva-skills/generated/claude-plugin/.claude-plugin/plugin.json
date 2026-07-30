@@ -1,0 +1,11 @@
+{
+  "author": {
+    "name": "Anva",
+    "url": "https://github.com/RishavT/anva"
+  },
+  "description": "Ground software work in permission-filtered Anva context.",
+  "name": "anva",
+  "repository": "https://github.com/RishavT/anva",
+  "skills": "./skills/",
+  "version": "1.0.0"
+}

@@ -1,0 +1,9 @@
+interface:
+  display_name: "Anva Preflight"
+  short_description: "Review local readiness against Anva context"
+  default_prompt: "Use $anva-preflight to check this change against its grounded Anva context."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "anva"
+      description: "Permission-filtered Anva context and review-only proposals"

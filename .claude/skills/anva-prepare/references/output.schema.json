@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.anva.dev/skills/v1/prepare.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "status", "problem", "facts", "requirements", "out_of_scope", "assumptions",
+    "conflicts", "acceptance_criteria", "affected_systems_and_owners",
+    "decisions_and_policies", "implementation_plan", "verification_plan",
+    "unresolved_questions", "limitations", "anva_sources"
+  ],
+  "properties": {
+    "status": {"enum": ["GROUNDED", "UNVERIFIED"]},
+    "problem": {"type": "string"},
+    "facts": {"type": "array"},
+    "requirements": {"type": "array"},
+    "out_of_scope": {"type": "array"},
+    "assumptions": {"type": "array"},
+    "conflicts": {"type": "array"},
+    "acceptance_criteria": {"type": "array"},
+    "affected_systems_and_owners": {"type": "array"},
+    "decisions_and_policies": {"type": "array"},
+    "implementation_plan": {"type": "array"},
+    "verification_plan": {"type": "array"},
+    "unresolved_questions": {"type": "array"},
+    "limitations": {"type": "array"},
+    "anva_sources": {"type": "array"}
+  }
+}

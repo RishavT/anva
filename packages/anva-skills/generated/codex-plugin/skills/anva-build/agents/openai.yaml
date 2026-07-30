@@ -1,0 +1,9 @@
+interface:
+  display_name: "Anva Build"
+  short_description: "Build within grounded Anva scope and policy"
+  default_prompt: "Use $anva-build to implement this task within grounded Anva scope."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "anva"
+      description: "Permission-filtered Anva context and review-only proposals"

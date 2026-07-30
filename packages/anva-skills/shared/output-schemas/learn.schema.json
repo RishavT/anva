@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.anva.dev/skills/v1/learn.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "proposal_type", "target", "proposed_content", "rationale",
+    "source_references", "explicit_approval", "submission_status",
+    "review_state", "approved", "review_required", "limitations"
+  ],
+  "properties": {
+    "proposal_type": {"type": "string"},
+    "target": {"type": "object"},
+    "proposed_content": {"type": "object"},
+    "rationale": {"type": "string"},
+    "source_references": {"type": "array"},
+    "explicit_approval": {"type": "boolean"},
+    "submission_status": {"enum": ["NOT_SUBMITTED", "PROPOSED"]},
+    "review_state": {"enum": ["DRAFT", "PROPOSED"]},
+    "approved": {"const": false},
+    "review_required": {"type": "boolean"},
+    "limitations": {"type": "array"}
+  }
+}

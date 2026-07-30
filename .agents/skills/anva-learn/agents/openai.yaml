@@ -1,0 +1,11 @@
+interface:
+  display_name: "Anva Learn"
+  short_description: "Propose reviewable Anva knowledge updates"
+  default_prompt: "Use $anva-learn to propose a reviewable Anva knowledge update."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "anva"
+      description: "Permission-filtered Anva context and review-only proposals"
+policy:
+  allow_implicit_invocation: false

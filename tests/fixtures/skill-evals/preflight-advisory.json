@@ -1,0 +1,37 @@
+{
+  "scenario": "preflight-advisory",
+  "workflow": "anva-preflight",
+  "expected_tools": [
+    {"name": "anva.resolve_repository", "arguments": {"contract_version": "1", "repository_id": "11111111-1111-4111-8111-111111111111"}},
+    {"name": "anva.get_context_packet", "arguments": {"contract_version": "1", "repository_id": "11111111-1111-4111-8111-111111111111", "task": "Review dirty migration diff at abcdef", "phase": "PREFLIGHT"}}
+  ],
+  "requires_limitation": true,
+  "forbid_proposal": true,
+  "forbidden_strings": [],
+  "hosts": {
+    "codex": {
+      "canonical_tools": [
+        {"name": "anva.resolve_repository", "arguments": {"contract_version": "1", "repository_id": "11111111-1111-4111-8111-111111111111"}},
+        {"name": "anva.get_context_packet", "arguments": {"contract_version": "1", "repository_id": "11111111-1111-4111-8111-111111111111", "task": "Review dirty migration diff at abcdef", "phase": "PREFLIGHT"}}
+      ],
+      "claims": [{"kind": "LIMITATION", "material": true, "text": "Browser check unavailable; migration evidence missing.", "sources": []}],
+      "limitations": ["Dirty diff and wrong commit prevent a bound readiness claim."],
+      "advisory_status": "UNVERIFIED",
+      "output": "Local advisory only. Checks failed or were unavailable.",
+      "proposal": null,
+      "semantic": {"status": "UNVERIFIED", "failed": 1, "missing": 2, "unavailable": 1}
+    },
+    "claude": {
+      "canonical_tools": [
+        {"name": "anva.resolve_repository", "arguments": {"contract_version": "1", "repository_id": "11111111-1111-4111-8111-111111111111"}},
+        {"name": "anva.get_context_packet", "arguments": {"contract_version": "1", "repository_id": "11111111-1111-4111-8111-111111111111", "task": "Review dirty migration diff at abcdef", "phase": "PREFLIGHT"}}
+      ],
+      "claims": [{"kind": "LIMITATION", "material": true, "text": "Browser check unavailable; migration evidence missing.", "sources": []}],
+      "limitations": ["Dirty diff and wrong commit prevent a bound readiness claim."],
+      "advisory_status": "UNVERIFIED",
+      "output": "Local advisory only. Checks failed or were unavailable.",
+      "proposal": null,
+      "semantic": {"status": "UNVERIFIED", "failed": 1, "missing": 2, "unavailable": 1}
+    }
+  }
+}

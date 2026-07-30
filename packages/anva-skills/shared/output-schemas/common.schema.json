@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.anva.dev/skills/v1/common.schema.json",
+  "$defs": {
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "locator", "content_hash", "observed_at"],
+      "properties": {
+        "url": {"type": "string", "format": "uri"},
+        "locator": {"type": "string", "minLength": 1},
+        "content_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "observed_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "kind", "sources"],
+      "properties": {
+        "text": {"type": "string", "minLength": 1},
+        "kind": {
+          "enum": ["FACT", "REQUIREMENT", "ASSUMPTION", "CONFLICT", "LIMITATION"]
+        },
+        "sources": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/source"}
+        },
+        "freshness": {"type": "string"},
+        "inferred": {"type": "boolean"}
+      }
+    }
+  }
+}

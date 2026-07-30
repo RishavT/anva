@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.anva.dev/skills/v1/preflight.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "review_target", "advisory_status", "requirements_coverage", "policy_findings",
+    "checks", "missing_evidence", "conflicts", "assumptions", "limitations",
+    "anva_sources", "proposal"
+  ],
+  "properties": {
+    "review_target": {"type": "object"},
+    "advisory_status": {
+      "enum": ["LOCAL_ADVISORY", "UNVERIFIED"]
+    },
+    "requirements_coverage": {"type": "array"},
+    "policy_findings": {"type": "array"},
+    "checks": {"type": "array"},
+    "missing_evidence": {"type": "array"},
+    "conflicts": {"type": "array"},
+    "assumptions": {"type": "array"},
+    "limitations": {"type": "array"},
+    "anva_sources": {"type": "array"},
+    "proposal": {"type": ["object", "null"]}
+  }
+}

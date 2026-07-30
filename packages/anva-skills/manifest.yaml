@@ -1,0 +1,14 @@
+format_version: 1
+skill_version: "1.0.0"
+mcp_contract_versions:
+  - "1"
+context_packet_schema_versions:
+  - 1
+tested_hosts:
+  codex: "0.145.0"
+  claude: "2.1.220"
+workflows:
+  - "anva-prepare"
+  - "anva-build"
+  - "anva-preflight"
+  - "anva-learn"
