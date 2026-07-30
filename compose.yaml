@@ -16,6 +16,7 @@ x-app-environment: &app-environment
   ANVA_OBJECT_STORAGE_SECRET_KEY: ${ANVA_OBJECT_STORAGE_SECRET_KEY:-anva-local-only}
   ANVA_FILESYSTEM_ALLOWED_ROOTS: ${ANVA_FILESYSTEM_ALLOWED_ROOTS:-/fixtures}
   ANVA_API_URL: ${ANVA_API_URL:-http://api:8000/api/v1}
+  ANVA_PUBLIC_BASE_URL: ${ANVA_PUBLIC_BASE_URL:-http://api:8000}
   ANVA_LOG_LEVEL: ${ANVA_LOG_LEVEL:-INFO}
 
 x-app-dependencies: &app-dependencies
@@ -88,7 +89,9 @@ services:
     build:
       context: .
       target: runtime
-    environment: *app-environment
+    environment:
+      <<: *app-environment
+      ANVA_GITHUB_WEBHOOK_SECRETS: ${ANVA_GITHUB_WEBHOOK_SECRETS:-local-only-github-webhook-secret}
     depends_on: *app-dependencies
     healthcheck:
       test:
@@ -115,6 +118,29 @@ services:
     depends_on: *app-dependencies
     healthcheck:
       test: ["CMD", "test", "-f", "/app/run/worker-ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  github-worker:
+    build:
+      context: .
+      target: runtime
+    profiles: ["github"]
+    command: ["python", "-m", "anva.entrypoints.github_worker"]
+    environment:
+      <<: *app-environment
+      ANVA_GITHUB_ENABLED: "true"
+      ANVA_GITHUB_APP_ID: ${ANVA_GITHUB_APP_ID:-0}
+      ANVA_GITHUB_APP_SLUG: ${ANVA_GITHUB_APP_SLUG:-}
+      ANVA_GITHUB_APP_PRIVATE_KEY_FILE: /run/secrets/github_app_private_key
+      ANVA_GITHUB_WORKER_POLL_SECONDS: ${ANVA_GITHUB_WORKER_POLL_SECONDS:-5}
+      ANVA_GITHUB_WORKER_LEASE_SECONDS: ${ANVA_GITHUB_WORKER_LEASE_SECONDS:-300}
+    secrets:
+      - github_app_private_key
+    depends_on: *app-dependencies
+    healthcheck:
+      test: ["CMD", "test", "-f", "/app/run/github-worker-ready"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -212,6 +238,8 @@ services:
       ANVA_OBJECT_STORAGE_BUCKET: anva-test
       ANVA_OBJECT_STORAGE_ACCESS_KEY: anva-test
       ANVA_OBJECT_STORAGE_SECRET_KEY: anva-test-only
+      ANVA_PUBLIC_BASE_URL: http://testserver
+      ANVA_GITHUB_WEBHOOK_SECRETS: test-github-webhook-secret
       COVERAGE_FILE: /tmp/anva-coverage
       MYPY_CACHE_DIR: /tmp/anva-mypy-cache
       PYTEST_ADDOPTS: "-o cache_dir=/tmp/anva-pytest-cache"
@@ -225,3 +253,7 @@ services:
 volumes:
   postgres-data:
   minio-data:
+
+secrets:
+  github_app_private_key:
+    file: ${ANVA_GITHUB_APP_PRIVATE_KEY_FILE_HOST:-./secrets/github-app-private-key.pem}

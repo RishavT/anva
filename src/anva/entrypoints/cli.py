@@ -139,6 +139,19 @@ def build_parser() -> argparse.ArgumentParser:
     evaluator_submit.add_argument("task_id", type=uuid.UUID)
     evaluator_submit.add_argument("--claimant", required=True)
     evaluator_submit.add_argument("--result", required=True, type=Path)
+    github = subparsers.add_parser("github", help="Configure or diagnose a GitHub App binding")
+    github.add_argument(
+        "--api-url",
+        default=os.getenv("ANVA_API_URL", "http://localhost:8000/api/v1"),
+    )
+    github_commands = github.add_subparsers(dest="github_command", required=True)
+    github_configure = github_commands.add_parser("configure")
+    github_configure.add_argument("--repository-id", required=True, type=uuid.UUID)
+    github_configure.add_argument("--config", required=True, type=Path)
+    github_status = github_commands.add_parser("status")
+    github_status.add_argument("--repository-id", required=True, type=uuid.UUID)
+    github_revoke = github_commands.add_parser("revoke")
+    github_revoke.add_argument("--repository-id", required=True, type=uuid.UUID)
     return parser
 
 
@@ -426,6 +439,31 @@ def _governance_request(arguments: argparse.Namespace) -> int:
     return 0
 
 
+def _github_request(arguments: argparse.Namespace) -> int:
+    command = str(arguments.github_command)
+    base_path = f"/repositories/{arguments.repository_id}/github-binding"
+    if command == "configure":
+        method = "POST"
+        path = base_path
+        payload: dict[str, object] | None = _bounded_json_file(arguments.config)
+    elif command == "status":
+        method = "GET"
+        path = base_path
+        payload = None
+    elif command == "revoke":
+        method = "POST"
+        path = f"{base_path}/revoke"
+        payload = {}
+    else:
+        raise ValueError("Unknown GitHub command")
+    return _api_request(
+        api_url=str(arguments.api_url),
+        path=path,
+        method=method,
+        payload=payload,
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Execute one CLI command and return a process exit code."""
     arguments = build_parser().parse_args(argv)
@@ -448,6 +486,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return _assurance_request(arguments)
             return _evaluator_request(arguments)
         except (json.JSONDecodeError, OSError, UnicodeDecodeError, ValueError):
+            print(json.dumps({"code": "invalid_input", "message": "Input file is invalid"}))
+            return 2
+    if arguments.command == "github":
+        try:
+            return _github_request(arguments)
+        except (json.JSONDecodeError, OSError, ValueError):
             print(json.dumps({"code": "invalid_input", "message": "Input file is invalid"}))
             return 2
 

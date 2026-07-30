@@ -62,6 +62,42 @@ if ENVIRONMENT == "production" and TOKEN_PEPPER == SECRET_KEY:
 if ENVIRONMENT == "production" and BOOTSTRAP_SECRET == "anva-local-bootstrap":
     raise ImproperlyConfigured("ANVA_BOOTSTRAP_SECRET must be changed in production")
 
+ANVA_PUBLIC_BASE_URL = os.getenv("ANVA_PUBLIC_BASE_URL", "http://localhost:8000")
+if not ANVA_PUBLIC_BASE_URL.startswith(("http://", "https://")):
+    raise ImproperlyConfigured("ANVA_PUBLIC_BASE_URL must be an HTTP(S) URL")
+ANVA_GITHUB_WEBHOOK_SECRETS = tuple(
+    value
+    for value in os.getenv(
+        "ANVA_GITHUB_WEBHOOK_SECRETS",
+        "test-github-webhook-secret"
+        if ENVIRONMENT == "test"
+        else "local-only-github-webhook-secret",
+    ).split(",")
+    if value
+)
+if not ANVA_GITHUB_WEBHOOK_SECRETS:
+    raise ImproperlyConfigured("ANVA_GITHUB_WEBHOOK_SECRETS must not be empty")
+ANVA_GITHUB_WEBHOOK_CONFIGURED = not (
+    ENVIRONMENT == "production"
+    and ANVA_GITHUB_WEBHOOK_SECRETS == ("local-only-github-webhook-secret",)
+)
+ANVA_GITHUB_ENABLED = env_bool("ANVA_GITHUB_ENABLED", default=False)
+try:
+    ANVA_GITHUB_APP_ID = int(os.getenv("ANVA_GITHUB_APP_ID", "0"))
+except ValueError as error:
+    raise ImproperlyConfigured("ANVA_GITHUB_APP_ID must be an integer") from error
+ANVA_GITHUB_APP_SLUG = os.getenv("ANVA_GITHUB_APP_SLUG", "")
+ANVA_GITHUB_APP_PRIVATE_KEY_FILE = os.getenv(
+    "ANVA_GITHUB_APP_PRIVATE_KEY_FILE",
+    "/run/secrets/github_app_private_key",
+)
+if ANVA_GITHUB_ENABLED and (
+    ANVA_GITHUB_APP_ID < 1
+    or not ANVA_GITHUB_APP_SLUG
+    or not Path(ANVA_GITHUB_APP_PRIVATE_KEY_FILE).is_absolute()
+):
+    raise ImproperlyConfigured("Enabled GitHub integration requires App ID, slug, and key path")
+
 ALLOWED_HOSTS = [
     host.strip()
     for host in os.getenv("ANVA_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
@@ -126,6 +162,7 @@ STORAGES = {
     }
 }
 WHITENOISE_USE_FINDERS = ENVIRONMENT == "test"
+DATA_UPLOAD_MAX_MEMORY_SIZE = 1_100_000
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 

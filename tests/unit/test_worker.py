@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from anva.entrypoints.worker import Worker, main
+from anva.entrypoints.worker import Worker, main, process_one_job
 from anva.foundation.services import DependencyStatus, ReadinessStatus
 
 
@@ -82,3 +82,17 @@ def test_worker_main_registers_signals_and_delegates(
 
     assert register_signal.call_count == 2
     run.assert_called_once_with()
+
+
+@pytest.mark.unit
+def test_core_worker_claims_only_registered_core_job_kinds() -> None:
+    from anva.core.services.job_handlers import HANDLERS
+
+    with patch("anva.core.services.jobs.claim_next_job", return_value=None) as claim:
+        assert process_one_job(worker_id="core-worker", lease_seconds=300) is False
+
+    claim.assert_called_once_with(
+        worker_id="core-worker",
+        lease_seconds=300,
+        allowed_kinds=frozenset(HANDLERS),
+    )

@@ -12,7 +12,10 @@ intent, deterministic additive policy calculation, authority-pinned overrides, a
 commit-bound evidence manifests with criterion evidence/gaps. Independent assurance can ingest a
 bounded manual PR diff without executing it, pin exact policy/context/evidence/evaluator versions,
 run a context-limited manual evaluator queue, validate cited findings, compute server-owned
-readiness, and render immutable Markdown/HTML review reports. It intentionally
+readiness, and render immutable Markdown/HTML review reports. It also includes an isolated,
+least-privilege GitHub App adapter: verified idempotent webhooks,
+current provider PR/Check observations, exact-head Check/comment publication, and durable
+revocation-aware retries. It intentionally
 does **not** contain a coding-agent runtime, workflow engine, graph database, or customer-code
 sandbox.
 
@@ -145,6 +148,12 @@ limitations are documented in
 Manual diff ingestion, exact assurance starts, fresh evaluator claim/submit, reports, staleness,
 and post-merge proposal safety are documented in
 [the manual-diff assurance runbook](docs/runbooks/manual-diff-assurance.md).
+
+GitHub App registration, repository binding, the isolated credential-bearing worker, status,
+retry recovery, and revocation are documented in
+[the GitHub App runbook](docs/runbooks/github-app.md). The normal stack does not start the
+credential-bearing process; enable it explicitly with `docker compose --profile github up -d
+github-worker`.
 
 Permission-safe search, graph, context packet, CLI, evaluation, cache, and limitation details
 are documented in

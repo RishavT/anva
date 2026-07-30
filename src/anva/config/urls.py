@@ -11,6 +11,7 @@ urlpatterns = [
     path("", views.home, name="home"),
     path("health/live", views.liveness, name="liveness"),
     path("health/ready", views.readiness, name="readiness"),
+    path("webhooks/github", core_views.github_webhook, name="github-webhook"),
     path("api/v1/bootstrap", core_views.bootstrap, name="api-v1-bootstrap"),
     path(
         "api/v1/organizations/<uuid:organization_id>",
@@ -31,6 +32,16 @@ urlpatterns = [
         "api/v1/repositories/<uuid:repository_id>/tokens",
         core_views.repository_tokens,
         name="api-v1-repository-tokens",
+    ),
+    path(
+        "api/v1/repositories/<uuid:repository_id>/github-binding",
+        core_views.github_repository_binding,
+        name="api-v1-github-binding",
+    ),
+    path(
+        "api/v1/repositories/<uuid:repository_id>/github-binding/revoke",
+        core_views.github_repository_binding_revoke,
+        name="api-v1-github-binding-revoke",
     ),
     path(
         "api/v1/tokens/<uuid:token_id>/rotate",

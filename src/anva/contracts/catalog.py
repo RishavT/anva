@@ -1251,6 +1251,76 @@ KNOWLEDGE_PROPOSAL_SCHEMA = versioned_schema(
     definitions={"source_reference": SOURCE_REFERENCE},
 )
 
+GITHUB_PUBLICATION_SCHEMA = versioned_schema(
+    "github-publication",
+    "Anva GitHub Publication",
+    {
+        "publication_id": UUID_FIELD,
+        "organization_id": UUID_FIELD,
+        "repository_id": UUID_FIELD,
+        "pull_request_number": {"type": "integer", "minimum": 1},
+        "assurance_run_id": UUID_FIELD,
+        "kind": {"type": "string", "enum": ["CHECK", "COMMENT"]},
+        "head_commit": COMMIT_FIELD,
+        "payload_hash": SHA256_FIELD,
+        "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200},
+        "rendered_payload": {"type": "object"},
+        "state": {
+            "type": "string",
+            "enum": [
+                "PENDING",
+                "RUNNING",
+                "RETRY",
+                "SUCCEEDED",
+                "FAILED",
+                "CANCELLED",
+            ],
+        },
+        "attempt_count": {"type": "integer", "minimum": 0},
+        "max_attempts": {"type": "integer", "minimum": 1},
+        "is_current": {"type": "boolean"},
+        "external_id": {
+            "oneOf": [
+                {"type": "string", "minLength": 1, "maxLength": 100},
+                {"type": "null"},
+            ]
+        },
+        "external_url": {
+            "oneOf": [
+                {"type": "string", "format": "uri", "maxLength": 2_000},
+                {"type": "null"},
+            ]
+        },
+        "created_at": DATE_TIME_FIELD,
+        "completed_at": {
+            "oneOf": [
+                DATE_TIME_FIELD,
+                {"type": "null"},
+            ]
+        },
+    },
+    [
+        "publication_id",
+        "organization_id",
+        "repository_id",
+        "pull_request_number",
+        "assurance_run_id",
+        "kind",
+        "head_commit",
+        "payload_hash",
+        "idempotency_key",
+        "rendered_payload",
+        "state",
+        "attempt_count",
+        "max_attempts",
+        "is_current",
+        "external_id",
+        "external_url",
+        "created_at",
+        "completed_at",
+    ],
+)
+
 SCHEMAS: Final[dict[str, dict[str, object]]] = {
     "context-packet": CONTEXT_PACKET_SCHEMA,
     "assurance-report": ASSURANCE_REPORT_SCHEMA,
@@ -1259,6 +1329,7 @@ SCHEMAS: Final[dict[str, dict[str, object]]] = {
     "evaluator-request": EVALUATOR_REQUEST_SCHEMA,
     "evaluator-result": EVALUATOR_RESULT_SCHEMA,
     "finding": FINDING_SCHEMA,
+    "github-publication": GITHUB_PUBLICATION_SCHEMA,
     "knowledge-proposal": KNOWLEDGE_PROPOSAL_SCHEMA,
     "policy": POLICY_SCHEMA,
     "work-item-import": WORK_ITEM_IMPORT_SCHEMA,
@@ -1358,6 +1429,39 @@ EXAMPLES: Final[dict[str, dict[str, object]]] = {
         "limitations": ["No code was executed."],
         "markdown": "# Anva assurance\n\nReadiness: READY_WITH_WARNINGS\n",
         "html": "<h1>Anva assurance</h1><p>Readiness: READY_WITH_WARNINGS</p>",
+    },
+    "github-publication": {
+        "schema_version": SCHEMA_VERSION,
+        "publication_id": "00000000-0000-4000-8000-000000000801",
+        "organization_id": "00000000-0000-4000-8000-000000000001",
+        "repository_id": "00000000-0000-4000-8000-000000000304",
+        "pull_request_number": 17,
+        "assurance_run_id": "00000000-0000-4000-8000-000000000601",
+        "kind": "CHECK",
+        "head_commit": "d" * 40,
+        "payload_hash": "e" * 64,
+        "idempotency_key": ("github-write:00000000-0000-4000-8000-000000000801:" + ("e" * 64)),
+        "rendered_payload": {
+            "status": "completed",
+            "conclusion": "neutral",
+            "details_url": (
+                "https://anva.example.test/api/v1/assurance-runs/"
+                "00000000-0000-4000-8000-000000000601/report"
+            ),
+            "output": {
+                "title": "Anva: Ready With Warnings",
+                "summary": "Evaluated commit: dddddddddddddddddddddddddddddddddddddddd",
+                "annotations": [],
+            },
+        },
+        "state": "PENDING",
+        "attempt_count": 0,
+        "max_attempts": 8,
+        "is_current": True,
+        "external_id": None,
+        "external_url": None,
+        "created_at": "2026-07-30T10:00:00Z",
+        "completed_at": None,
     },
     "manual-diff-artifact": {
         "schema_version": SCHEMA_VERSION,

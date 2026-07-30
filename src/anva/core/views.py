@@ -10,6 +10,8 @@ from datetime import datetime, timedelta
 from functools import wraps
 from typing import Any, cast
 
+from django.conf import settings
+from django.core.exceptions import RequestDataTooBig
 from django.http import HttpRequest, JsonResponse
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
@@ -26,6 +28,10 @@ from anva.core.models import (
     EvaluatorTask,
     EvidenceManifest,
     Finding,
+    GitHubEventProcessing,
+    GitHubRepositoryBinding,
+    GitHubWebhookDelivery,
+    GitHubWriteIntent,
     Organization,
     Policy,
     WorkItem,
@@ -96,6 +102,16 @@ from anva.core.services.tokens import (
     issue_repository_token,
     revoke_repository_token,
     rotate_repository_token,
+)
+from anva.integrations.github.service import (
+    accept_verified_event,
+    configure_repository_binding,
+    revoke_repository_binding,
+)
+from anva.integrations.github.webhooks import (
+    MAX_WEBHOOK_BYTES,
+    parse_verified_event,
+    verify_signature,
 )
 
 MAX_JSON_BODY_BYTES = 64 * 1024
@@ -243,6 +259,274 @@ def _object_list(payload: dict[str, object], name: str) -> list[dict[str, str]]:
 def _actor(request: HttpRequest) -> ActorContext:
     actor = authenticate_bearer(request.headers.get("Authorization", ""))
     return replace(actor, request_id=_correlation_id(request))
+
+
+@require_http_methods(["POST"])
+def github_webhook(request: HttpRequest) -> JsonResponse:
+    """Verify the exact raw request before parsing or resolving tenant state."""
+    correlation_id = _correlation_id(request)
+    if not settings.ANVA_GITHUB_WEBHOOK_CONFIGURED:
+        return _error(
+            "github_webhook_unconfigured",
+            "GitHub webhook handling is not configured",
+            correlation_id,
+            503,
+        )
+    content_length = request.headers.get("Content-Length")
+    if content_length is not None:
+        try:
+            if int(content_length) > MAX_WEBHOOK_BYTES:
+                return _error(
+                    "payload_too_large",
+                    "Webhook payload exceeds the limit",
+                    correlation_id,
+                    413,
+                )
+        except ValueError:
+            return _error("invalid_request", "Request is invalid", correlation_id, 400)
+    try:
+        raw_body = request.body
+        verify_signature(
+            raw_body=raw_body,
+            signature=request.headers.get("X-Hub-Signature-256", ""),
+            secrets=settings.ANVA_GITHUB_WEBHOOK_SECRETS,
+        )
+        event = parse_verified_event(
+            raw_body=raw_body,
+            delivery_header=request.headers.get("X-GitHub-Delivery", ""),
+            event_header=request.headers.get("X-GitHub-Event", ""),
+        )
+        accepted = accept_verified_event(event)
+    except PermissionError:
+        return _error(
+            "invalid_github_signature",
+            "GitHub webhook signature is invalid",
+            correlation_id,
+            401,
+        )
+    except RequestDataTooBig:
+        return _error(
+            "payload_too_large",
+            "Webhook payload exceeds the limit",
+            correlation_id,
+            413,
+        )
+    except DomainOperationError as error:
+        return _error(error.code, str(error), correlation_id, 409)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return _error("invalid_request", "Request is invalid", correlation_id, 400)
+    return JsonResponse(
+        {
+            "status": accepted.status,
+            "delivery_id": str(accepted.delivery_id),
+            "deduplicated": not accepted.created and accepted.status == "duplicate",
+            "correlation_id": str(correlation_id),
+        },
+        status=202,
+    )
+
+
+@api_errors
+@require_http_methods(["GET", "POST"])
+def github_repository_binding(
+    request: HttpRequest,
+    repository_id: uuid.UUID,
+) -> JsonResponse:
+    """Configure or diagnose a tenant-scoped GitHub repository binding."""
+    actor = _actor(request)
+    if request.method == "GET":
+        authorize_action(
+            actor=actor,
+            action=Action.GITHUB_MANAGE,
+            repository_id=repository_id,
+        )
+        binding = get_tenant_record(
+            queryset=GitHubRepositoryBinding.objects.select_related("installation"),
+            record_id=GitHubRepositoryBinding.objects.filter(
+                organization_id=actor.organization_id,
+                repository_id=repository_id,
+            )
+            .values_list("id", flat=True)
+            .first()
+            or uuid.uuid4(),
+            organization_id=actor.organization_id,
+        )
+        deliveries = GitHubWebhookDelivery.objects.filter(
+            organization_id=actor.organization_id,
+            repository_binding=binding,
+        ).order_by("-received_at")
+        last_delivery = deliveries.first()
+        last_processing = (
+            GitHubEventProcessing.objects.filter(
+                organization_id=actor.organization_id,
+                delivery=last_delivery,
+            ).first()
+            if last_delivery is not None
+            else None
+        )
+        last_write = (
+            GitHubWriteIntent.objects.filter(
+                organization_id=actor.organization_id,
+                publication__repository_binding=binding,
+            )
+            .order_by("-created_at")
+            .first()
+        )
+        return JsonResponse(
+            {
+                "id": str(binding.id),
+                "installation_id": binding.installation.external_id,
+                "external_repository_id": binding.external_repository_id,
+                "full_name": binding.full_name,
+                "state": (
+                    "ACTIVE"
+                    if binding.is_active
+                    and binding.installation.state == binding.installation.State.ACTIVE
+                    else "INACTIVE"
+                ),
+                "permissions": binding.installation.permissions,
+                "auto_assurance": binding.auto_assurance,
+                "policy_version_ids": binding.policy_version_ids,
+                "last_delivery": (
+                    {
+                        "event": last_delivery.event_type,
+                        "action": last_delivery.action,
+                        "received_at": last_delivery.received_at.isoformat(),
+                        "processing_state": (
+                            last_processing.state if last_processing is not None else "MISSING"
+                        ),
+                    }
+                    if last_delivery is not None
+                    else None
+                ),
+                "last_write": (
+                    {
+                        "state": last_write.state,
+                        "attempt_count": last_write.attempt_count,
+                        "last_error_code": last_write.last_error_code,
+                    }
+                    if last_write is not None
+                    else None
+                ),
+            }
+        )
+    payload = _closed_payload(
+        _json_body(request),
+        allowed=frozenset(
+            {
+                "access_scope_id",
+                "installation_id",
+                "account_id",
+                "account_login",
+                "account_type",
+                "repository_selection",
+                "permissions",
+                "external_repository_id",
+                "full_name",
+                "default_branch",
+                "private",
+                "archived",
+                "auto_assurance",
+                "policy_version_ids",
+                "work_item_revision_id",
+            }
+        ),
+        required=frozenset(
+            {
+                "access_scope_id",
+                "installation_id",
+                "account_id",
+                "account_login",
+                "account_type",
+                "repository_selection",
+                "permissions",
+                "external_repository_id",
+                "full_name",
+                "default_branch",
+                "private",
+                "archived",
+                "auto_assurance",
+                "policy_version_ids",
+            }
+        ),
+    )
+    raw_permissions = payload["permissions"]
+    if not isinstance(raw_permissions, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in raw_permissions.items()
+    ):
+        raise ValueError("permissions must be a string map")
+    result = configure_repository_binding(
+        actor=actor,
+        repository_id=repository_id,
+        access_scope_id=uuid.UUID(_string(payload, "access_scope_id")),
+        installation_external_id=_integer(payload, "installation_id"),
+        account_id=_integer(payload, "account_id"),
+        account_login=_string(payload, "account_login"),
+        account_type=_string(payload, "account_type"),
+        repository_selection=_string(payload, "repository_selection"),
+        permissions=cast(dict[str, str], raw_permissions),
+        external_repository_id=_integer(payload, "external_repository_id"),
+        full_name=_string(payload, "full_name"),
+        default_branch=_string(payload, "default_branch"),
+        is_private=cast(bool, payload["private"]),
+        is_archived=cast(bool, payload["archived"]),
+        auto_assurance=cast(bool, payload["auto_assurance"]),
+        policy_version_ids=[
+            uuid.UUID(value) for value in _string_list(payload, "policy_version_ids")
+        ],
+        work_item_revision_id=(
+            uuid.UUID(value)
+            if (value := _optional_string(payload, "work_item_revision_id")) is not None
+            else None
+        ),
+    )
+    return JsonResponse(
+        {
+            "id": str(result.binding.id),
+            "installation_id": result.installation.external_id,
+            "external_repository_id": result.binding.external_repository_id,
+            "state": "ACTIVE",
+            "created": result.created,
+        },
+        status=201 if result.created else 200,
+    )
+
+
+@api_errors
+@require_http_methods(["POST"])
+def github_repository_binding_revoke(
+    request: HttpRequest,
+    repository_id: uuid.UUID,
+) -> JsonResponse:
+    """Revoke a bound repository through an explicit admin operation."""
+    actor = _actor(request)
+    _closed_payload(
+        _json_body(request),
+        allowed=frozenset(),
+        required=frozenset(),
+    )
+    authorize_action(
+        actor=actor,
+        action=Action.GITHUB_MANAGE,
+        repository_id=repository_id,
+    )
+    binding_id = (
+        GitHubRepositoryBinding.objects.filter(
+            organization_id=actor.organization_id,
+            repository_id=repository_id,
+        )
+        .values_list("id", flat=True)
+        .first()
+    )
+    if binding_id is None:
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    binding = get_tenant_record(
+        queryset=GitHubRepositoryBinding.objects.select_related("installation"),
+        record_id=binding_id,
+        organization_id=actor.organization_id,
+    )
+    revoke_repository_binding(binding=binding, request_id=actor.request_id)
+    return JsonResponse({"id": str(binding.id), "state": "REVOKED"})
 
 
 @api_errors

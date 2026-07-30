@@ -2262,6 +2262,413 @@ class KnowledgeProposal(RevisionedTenantModel):
         ]
 
 
+class GitHubInstallation(RevisionedTenantModel):
+    """Tenant mapping for one GitHub App installation; credentials are never stored."""
+
+    class State(models.TextChoices):
+        ACTIVE = "ACTIVE"
+        SUSPENDED = "SUSPENDED"
+        REVOKED = "REVOKED"
+
+    external_id = models.PositiveBigIntegerField()
+    account_id = models.PositiveBigIntegerField()
+    account_login = models.CharField(max_length=300)
+    account_type = models.CharField(max_length=32)
+    repository_selection = models.CharField(max_length=16)
+    permissions = models.JSONField(default=dict)
+    service_identity = models.OneToOneField(
+        "ServiceIdentity",
+        on_delete=models.PROTECT,
+        related_name="github_installation",
+    )
+    state = models.CharField(max_length=16, choices=State, default=State.ACTIVE)
+    suspended_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta(RevisionedTenantModel.Meta):
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(fields=["external_id", "state"], name="core_gh_install_ext_state_idx")
+        ]
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            *RevisionedTenantModel.Meta.constraints,
+            models.UniqueConstraint(
+                fields=["external_id"],
+                name="core_gh_install_external_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_gh_install_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(state="REVOKED", revoked_at__isnull=False)
+                    | Q(
+                        state__in=["ACTIVE", "SUSPENDED"],
+                        revoked_at__isnull=True,
+                    )
+                ),
+                name="core_gh_install_revoked_time",
+            ),
+        ]
+
+
+class GitHubRepositoryBinding(RevisionedTenantModel):
+    """Explicit installation-to-Anva repository and assurance configuration."""
+
+    installation = models.ForeignKey(GitHubInstallation, on_delete=models.PROTECT)
+    repository = models.OneToOneField(
+        "Repository",
+        on_delete=models.PROTECT,
+        related_name="github_binding",
+    )
+    access_scope = models.ForeignKey("AccessScope", on_delete=models.PROTECT)
+    external_repository_id = models.PositiveBigIntegerField()
+    full_name = models.CharField(max_length=600)
+    default_branch = models.CharField(max_length=300)
+    is_private = models.BooleanField(default=True)
+    is_archived = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+    auto_assurance = models.BooleanField(default=True)
+    policy_version_ids = models.JSONField(default=list)
+    work_item_revision = models.ForeignKey(
+        "WorkItemRevision",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    revoked_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta(RevisionedTenantModel.Meta):
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(
+                fields=["installation", "external_repository_id", "is_active"],
+                name="core_gh_repo_install_state_idx",
+            )
+        ]
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            *RevisionedTenantModel.Meta.constraints,
+            models.UniqueConstraint(
+                fields=["installation", "external_repository_id"],
+                name="core_gh_repo_install_external_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_gh_repo_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=(Q(is_active=True, revoked_at__isnull=True) | Q(is_active=False)),
+                name="core_gh_repo_active_not_revoked",
+            ),
+        ]
+
+
+class GitHubWebhookDelivery(UUIDModel):
+    """Immutable, verified, bounded event envelope keyed by GitHub delivery ID."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    installation = models.ForeignKey(GitHubInstallation, on_delete=models.PROTECT)
+    repository_binding = models.ForeignKey(
+        GitHubRepositoryBinding,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    delivery_id = models.UUIDField()
+    event_type = models.CharField(max_length=64)
+    action = models.CharField(max_length=64)
+    payload_checksum = models.CharField(max_length=64)
+    normalized_payload = models.JSONField()
+    received_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(
+                fields=["organization", "installation", "received_at"],
+                name="core_gh_delivery_install_idx",
+            )
+        ]
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["delivery_id"],
+                name="core_gh_delivery_external_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_gh_delivery_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(payload_checksum__regex=r"^[a-f0-9]{64}$"),
+                name="core_gh_delivery_sha256",
+            ),
+        ]
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        if not self._state.adding:
+            raise ArtifactImmutableError("GitHub webhook deliveries cannot be updated")
+        super().save(*args, **kwargs)
+
+
+class GitHubEventProcessing(RevisionedTenantModel):
+    """Mutable processing projection separated from the immutable delivery."""
+
+    class State(models.TextChoices):
+        PENDING = "PENDING"
+        PROCESSING = "PROCESSING"
+        PROCESSED = "PROCESSED"
+        IGNORED = "IGNORED"
+        FAILED = "FAILED"
+
+    delivery = models.OneToOneField(GitHubWebhookDelivery, on_delete=models.PROTECT)
+    state = models.CharField(max_length=16, choices=State, default=State.PENDING)
+    attempt_count = models.PositiveIntegerField(default=0)
+    result_identifiers = models.JSONField(default=dict)
+    last_error_code = models.CharField(max_length=100, blank=True)
+    processed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta(RevisionedTenantModel.Meta):
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            *RevisionedTenantModel.Meta.constraints,
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_gh_processing_org_id_unique",
+            ),
+        ]
+
+
+class GitHubCheckObservation(UUIDModel):
+    """Immutable exact-commit observation of a Check, suite, or workflow."""
+
+    class Kind(models.TextChoices):
+        CHECK_RUN = "CHECK_RUN"
+        CHECK_SUITE = "CHECK_SUITE"
+        WORKFLOW_RUN = "WORKFLOW_RUN"
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    repository_binding = models.ForeignKey(GitHubRepositoryBinding, on_delete=models.PROTECT)
+    delivery = models.ForeignKey(GitHubWebhookDelivery, on_delete=models.PROTECT)
+    kind = models.CharField(max_length=20, choices=Kind)
+    external_id = models.PositiveBigIntegerField()
+    name = models.CharField(max_length=300)
+    head_commit = models.CharField(max_length=40)
+    status = models.CharField(max_length=32)
+    conclusion = models.CharField(max_length=32, blank=True)
+    details_url = models.URLField(max_length=2_000, blank=True)
+    pull_request_numbers = models.JSONField(default=list)
+    payload_hash = models.CharField(max_length=64)
+    observed_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(
+                fields=["repository_binding", "head_commit", "observed_at"],
+                name="core_gh_check_head_idx",
+            )
+        ]
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=[
+                    "organization",
+                    "repository_binding",
+                    "kind",
+                    "external_id",
+                    "payload_hash",
+                ],
+                name="core_gh_check_observation_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_gh_check_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(head_commit__regex=r"^[a-f0-9]{40}$"),
+                name="core_gh_check_head_sha",
+            ),
+            models.CheckConstraint(
+                condition=Q(payload_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_gh_check_payload_sha",
+            ),
+        ]
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        if not self._state.adding:
+            raise ArtifactImmutableError("GitHub Check observations cannot be updated")
+        super().save(*args, **kwargs)
+
+
+class GitHubPullRequestObservation(UUIDModel):
+    """Provider metadata for one immutable core pull-request revision."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    repository_binding = models.ForeignKey(GitHubRepositoryBinding, on_delete=models.PROTECT)
+    delivery = models.ForeignKey(GitHubWebhookDelivery, on_delete=models.PROTECT)
+    pull_request_revision = models.OneToOneField(PullRequestRevision, on_delete=models.PROTECT)
+    external_pull_request_id = models.PositiveBigIntegerField()
+    head_repository_id = models.PositiveBigIntegerField()
+    head_ref = models.CharField(max_length=300)
+    is_fork = models.BooleanField(default=False)
+    payload_hash = models.CharField(max_length=64)
+    observed_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_gh_pr_observation_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(payload_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_gh_pr_observation_sha",
+            ),
+        ]
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        if not self._state.adding:
+            raise ArtifactImmutableError("GitHub pull-request observations cannot be updated")
+        super().save(*args, **kwargs)
+
+
+class GitHubPublication(RevisionedTenantModel):
+    """Single current external projection for one PR and publication kind."""
+
+    class Kind(models.TextChoices):
+        CHECK = "CHECK"
+        COMMENT = "COMMENT"
+
+    repository_binding = models.ForeignKey(GitHubRepositoryBinding, on_delete=models.PROTECT)
+    pull_request = models.ForeignKey(PullRequest, on_delete=models.PROTECT)
+    assurance_run = models.ForeignKey(AssuranceRun, on_delete=models.PROTECT)
+    kind = models.CharField(max_length=16, choices=Kind)
+    head_commit = models.CharField(max_length=40)
+    is_current = models.BooleanField(default=True)
+    external_id = models.CharField(max_length=100, blank=True)
+    external_url = models.URLField(max_length=2_000, blank=True)
+    last_payload_hash = models.CharField(max_length=64, blank=True)
+
+    class Meta(RevisionedTenantModel.Meta):
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(
+                fields=["repository_binding", "pull_request", "kind", "head_commit"],
+                name="core_gh_publication_head_idx",
+            )
+        ]
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            *RevisionedTenantModel.Meta.constraints,
+            models.UniqueConstraint(
+                fields=["organization", "repository_binding", "pull_request", "kind"],
+                condition=Q(is_current=True),
+                name="core_gh_publication_one_current",
+            ),
+            models.UniqueConstraint(
+                fields=[
+                    "organization",
+                    "repository_binding",
+                    "pull_request",
+                    "kind",
+                    "head_commit",
+                ],
+                name="core_gh_publication_head_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_gh_publication_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(head_commit__regex=r"^[a-f0-9]{40}$"),
+                name="core_gh_publication_head_sha",
+            ),
+            models.CheckConstraint(
+                condition=Q(last_payload_hash="") | Q(last_payload_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_gh_publication_payload_sha",
+            ),
+        ]
+
+
+class GitHubWriteIntent(UUIDModel):
+    """Immutable rendered write plus mutable retry state, backed by the outbox."""
+
+    class State(models.TextChoices):
+        PENDING = "PENDING"
+        RUNNING = "RUNNING"
+        RETRY = "RETRY"
+        SUCCEEDED = "SUCCEEDED"
+        FAILED = "FAILED"
+        CANCELLED = "CANCELLED"
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    publication = models.ForeignKey(GitHubPublication, on_delete=models.PROTECT)
+    assurance_run = models.ForeignKey(AssuranceRun, on_delete=models.PROTECT)
+    head_commit = models.CharField(max_length=40)
+    rendered_payload = models.JSONField()
+    payload_hash = models.CharField(max_length=64)
+    idempotency_key = models.CharField(max_length=200)
+    state = models.CharField(max_length=16, choices=State, default=State.PENDING)
+    attempt_count = models.PositiveIntegerField(default=0)
+    max_attempts = models.PositiveIntegerField(default=8)
+    available_at = models.DateTimeField(default=timezone.now)
+    lease_owner = models.CharField(max_length=200, blank=True)
+    lease_expires_at = models.DateTimeField(null=True, blank=True)
+    last_error_code = models.CharField(max_length=100, blank=True)
+    external_id = models.CharField(max_length=100, blank=True)
+    external_url = models.URLField(max_length=2_000, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(
+                fields=["state", "available_at", "created_at"],
+                name="core_gh_write_dispatch_idx",
+            )
+        ]
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_gh_write_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "idempotency_key"],
+                name="core_gh_write_idempotency_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(head_commit__regex=r"^[a-f0-9]{40}$"),
+                name="core_gh_write_head_sha",
+            ),
+            models.CheckConstraint(
+                condition=Q(payload_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_gh_write_payload_sha",
+            ),
+            models.CheckConstraint(
+                condition=Q(attempt_count__lte=F("max_attempts")),
+                name="core_gh_write_attempt_bound",
+            ),
+        ]
+
+
+class GitHubWriteAttempt(UUIDModel):
+    """Append-only, secret-free history for one outbound GitHub attempt."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    write_intent = models.ForeignKey(GitHubWriteIntent, on_delete=models.PROTECT)
+    attempt = models.PositiveIntegerField()
+    outcome = models.CharField(max_length=24)
+    safe_error_code = models.CharField(max_length=100, blank=True)
+    external_id = models.CharField(max_length=100, blank=True)
+    response_metadata = models.JSONField(default=dict)
+    occurred_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "write_intent", "attempt"],
+                name="core_gh_write_attempt_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_gh_write_attempt_org_id_unique",
+            ),
+        ]
+
+
 class BackgroundJob(TenantOwnedModel):
     """PostgreSQL job row claimed using row locks and expiring leases."""
 
@@ -2715,23 +3122,13 @@ class AccessGrant(TenantOwnedModel):
                 fields=[
                     "organization",
                     "membership",
-                    "repository",
-                    "source_connection",
-                    "action",
-                ],
-                nulls_distinct=False,
-                name="core_access_grant_membership_unique",
-            ),
-            models.UniqueConstraint(
-                fields=[
-                    "organization",
                     "service_identity",
                     "repository",
                     "source_connection",
                     "action",
                 ],
                 nulls_distinct=False,
-                name="core_access_grant_service_unique",
+                name="core_access_grant_principal_unique",
             ),
         ]
 

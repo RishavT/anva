@@ -1,0 +1,23 @@
+# Replace the example URLs before registering the manifest with GitHub.
+name: Anva
+url: https://anva.example.com
+description: Exact-head engineering assurance from the context and policy held in Anva.
+public: false
+hook_attributes:
+  url: https://anva.example.com/webhooks/github
+  active: true
+default_permissions:
+  actions: read
+  checks: write
+  contents: read
+  issues: write
+  metadata: read
+  pull_requests: read
+default_events:
+  - check_run
+  - check_suite
+  - installation
+  - installation_repositories
+  - pull_request
+  - repository
+  - workflow_run

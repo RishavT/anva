@@ -60,6 +60,7 @@ class Action(StrEnum):
     ARTIFACT_VIEW = "artifact.view"
     ARTIFACT_CREATE = "artifact.create"
     SCOPE_MANAGE = "scope.manage"
+    GITHUB_MANAGE = "github.manage"
 
 
 VIEW_ACTIONS = frozenset(
