@@ -167,7 +167,14 @@
   }
 
   const layoutGraph = new window.dagre.graphlib.Graph({ multigraph: true });
-  layoutGraph.setGraph({ rankdir: "LR", nodesep: 34, ranksep: 92, marginx: 80, marginy: 80 });
+  layoutGraph.setGraph({
+    rankdir: "LR",
+    ranker: "tight-tree",
+    nodesep: 34,
+    ranksep: 92,
+    marginx: 80,
+    marginy: 80,
+  });
   layoutGraph.setDefaultEdgeLabel(() => ({}));
   [...nodes]
     .sort((left, right) => `${left.type}:${left.id}`.localeCompare(`${right.type}:${right.id}`))

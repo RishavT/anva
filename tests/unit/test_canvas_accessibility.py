@@ -42,6 +42,7 @@ def test_canvas_script_has_keyboard_minimap_and_no_browser_secret_storage() -> N
         "chooseProposalEndpoint",
         "drawProposalPath",
         "requestSubmit",
+        'ranker: "tight-tree"',
     ):
         assert required in script
     for forbidden in ("innerHTML", "localStorage", "sessionStorage", "Authorization", "eval("):

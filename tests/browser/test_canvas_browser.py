@@ -72,7 +72,14 @@ def _cpu_model() -> str:
 
 def _capture(driver: webdriver.Chrome, name: str) -> None:
     SCREENSHOTS.mkdir(parents=True, exist_ok=True)
-    driver.execute_script("window.scrollTo(0, window.scrollY)")
+    scroll_left = driver.execute_script(
+        "if (document.activeElement instanceof HTMLElement) document.activeElement.blur();"
+        "const scroller = document.scrollingElement;"
+        "scroller.scrollTo({left: 0, top: scroller.scrollTop, behavior: 'instant'});"
+        "document.documentElement.scrollLeft = 0; document.body.scrollLeft = 0;"
+        "return scroller.scrollLeft;"
+    )
+    assert scroll_left == 0
     driver.save_screenshot(str(SCREENSHOTS / name))
 
 
