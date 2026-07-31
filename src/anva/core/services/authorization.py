@@ -239,13 +239,18 @@ def _scope_allows(
     principal: Principal,
     access_scope: AccessScope,
     repository_id: uuid.UUID | None,
+    include_inactive: bool = False,
+    include_revoked_sources: bool = False,
 ) -> bool:
-    if not access_scope.is_active:
+    if not include_inactive and not access_scope.is_active:
         return False
-    if AccessScopeSource.objects.filter(
-        access_scope=access_scope,
-        source_connection__state=SourceConnection.State.REVOKED,
-    ).exists():
+    if (
+        not include_revoked_sources
+        and AccessScopeSource.objects.filter(
+            access_scope=access_scope,
+            source_connection__state=SourceConnection.State.REVOKED,
+        ).exists()
+    ):
         return False
     if not access_scope.all_repositories:
         if (
@@ -385,3 +390,40 @@ def authorize_action(
     if source_connection_id is not None:
         path_parts.append(f"source:{source_connection_id}")
     return AuthorizationDecision(action, ">".join(path_parts))
+
+
+def authorized_access_scope_ids(
+    *,
+    actor: ActorContext,
+    action: Action,
+    repository_id: uuid.UUID,
+    include_inactive: bool = False,
+    include_revoked_sources: bool = False,
+) -> set[uuid.UUID]:
+    """Resolve current principal and scope boundaries before querying scoped records."""
+    try:
+        authorize_action(
+            actor=actor,
+            action=action,
+            repository_id=repository_id,
+        )
+    except ResourceNotFoundError:
+        return set()
+
+    principal = resolve_principal(actor)
+    candidates = AccessScope.objects.filter(
+        organization_id=actor.organization_id,
+    )
+    if not include_inactive:
+        candidates = candidates.filter(is_active=True)
+    return {
+        scope.id
+        for scope in candidates
+        if _scope_allows(
+            principal=principal,
+            access_scope=scope,
+            repository_id=repository_id,
+            include_inactive=include_inactive,
+            include_revoked_sources=include_revoked_sources,
+        )
+    }

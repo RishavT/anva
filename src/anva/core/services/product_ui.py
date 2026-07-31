@@ -15,13 +15,12 @@ from typing import cast
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Q, QuerySet
+from django.db.models import Count, Q, QuerySet
 from django.utils import timezone
 
 from anva.core.exceptions import DomainOperationError, ResourceNotFoundError
 from anva.core.models import (
     AcceptanceCriterion,
-    AccessScope,
     AssertionConflict,
     AssertionRevision,
     AssuranceCheck,
@@ -34,8 +33,6 @@ from anva.core.models import (
     Evidence,
     EvidenceManifest,
     Finding,
-    GitHubInstallation,
-    GitHubRepositoryBinding,
     ImmutableArtifact,
     KnowledgeAssertion,
     KnowledgeEntity,
@@ -63,6 +60,7 @@ from anva.core.models import (
 from anva.core.services.authorization import (
     Action,
     authorize_action,
+    authorized_access_scope_ids,
     get_tenant_record,
     get_tenant_record_for_update,
 )
@@ -71,6 +69,7 @@ from anva.core.services.context import ActorContext
 from anva.core.services.context_packets import authorized_assertion_citations
 from anva.core.services.creation import submit_knowledge_proposal
 from anva.core.services.events import record_transition
+from anva.core.services.github_bindings import authorized_active_github_bindings
 from anva.core.services.graph import traverse_graph
 from anva.core.services.ingestion import request_ingestion_sync
 from anva.core.services.retrieval import (
@@ -171,6 +170,15 @@ class SetupInput:
     assurance_mode: str
 
 
+@dataclass(frozen=True, slots=True)
+class SourceHealthAggregate:
+    """Identity-free source health totals for onboarding."""
+
+    visible_count: int
+    successfully_indexed_count: int
+    revoked_count: int
+
+
 def _validate_setup(data: SetupInput) -> None:
     if not 1 <= data.retention_days <= 3650:
         raise ValueError("Retention must be between 1 and 3650 days")
@@ -252,17 +260,22 @@ class ProductUIFacade:
         authorize_action(actor=self.actor, action=action, repository_id=repository.id)
         return repository
 
-    def _visible_scope_ids(self, *, repository_id: uuid.UUID, action: Action) -> set[uuid.UUID]:
+    def _visible_scope_ids(
+        self,
+        *,
+        repository_id: uuid.UUID,
+        action: Action,
+        include_inactive: bool = False,
+        include_revoked_sources: bool = False,
+    ) -> set[uuid.UUID]:
         """Resolve scope visibility before any scoped product records are queried."""
-        candidates = AccessScope.objects.filter(
-            organization_id=self.actor.organization_id,
-            is_active=True,
-        ).values_list("id", flat=True)
-        return {
-            scope_id
-            for scope_id in candidates
-            if _authorized(self.actor, action, repository_id, scope_id)
-        }
+        return authorized_access_scope_ids(
+            actor=self.actor,
+            action=action,
+            repository_id=repository_id,
+            include_inactive=include_inactive,
+            include_revoked_sources=include_revoked_sources,
+        )
 
     def _scoped_repository_boundary(
         self,
@@ -271,30 +284,70 @@ class ProductUIFacade:
         action: Action,
         repository_field: str = "repository_id",
         scope_field: str = "access_scope_id",
+        include_inactive_scopes: bool = False,
+        include_revoked_scope_sources: bool = False,
     ) -> Q:
         boundary = Q(pk__in=[])
         for repository in repositories:
-            scope_ids = self._visible_scope_ids(repository_id=repository.id, action=action)
+            scope_ids = self._visible_scope_ids(
+                repository_id=repository.id,
+                action=action,
+                include_inactive=include_inactive_scopes,
+                include_revoked_sources=include_revoked_scope_sources,
+            )
             scope_boundary = Q(**{f"{scope_field}__in": scope_ids})
             if _authorized(self.actor, action, repository.id, None):
                 scope_boundary |= Q(**{f"{scope_field}__isnull": True})
             boundary |= Q(**{repository_field: repository.id}) & scope_boundary
         return boundary
 
-    def _visible_sources(
+    def _scope_authorized_sources(
         self,
         repositories: list[Repository],
+        *,
+        include_revoked_scope_history: bool = False,
     ) -> QuerySet[SourceConnection]:
         boundary = self._scoped_repository_boundary(
             repositories=repositories,
             action=Action.SOURCE_VIEW,
+            include_inactive_scopes=include_revoked_scope_history,
+            include_revoked_scope_sources=include_revoked_scope_history,
         )
-        return (
-            SourceConnection.objects.filter(
-                organization_id=self.actor.organization_id,
+        return SourceConnection.objects.filter(
+            organization_id=self.actor.organization_id,
+        ).filter(boundary)
+
+    def _visible_sources(
+        self,
+        repositories: list[Repository],
+    ) -> QuerySet[SourceConnection]:
+        return self._scope_authorized_sources(repositories).exclude(
+            state=SourceConnection.State.REVOKED
+        )
+
+    def _source_health_aggregate(
+        self,
+        repositories: list[Repository],
+    ) -> SourceHealthAggregate:
+        visible = self._visible_sources(repositories).aggregate(
+            visible_count=Count("id"),
+            successfully_indexed_count=Count(
+                "id",
+                filter=Q(last_successful_sync_at__isnull=False),
+            ),
+        )
+        revoked_count = (
+            self._scope_authorized_sources(
+                repositories,
+                include_revoked_scope_history=True,
             )
-            .filter(boundary)
-            .exclude(state=SourceConnection.State.REVOKED)
+            .filter(state=SourceConnection.State.REVOKED)
+            .count()
+        )
+        return SourceHealthAggregate(
+            visible_count=cast(int, visible["visible_count"]),
+            successfully_indexed_count=cast(int, visible["successfully_indexed_count"]),
+            revoked_count=revoked_count,
         )
 
     def _visible_packets(
@@ -454,9 +507,7 @@ class ProductUIFacade:
     def onboarding(self) -> dict[str, object]:
         repositories = self._repositories()
         repository_ids = [item.id for item in repositories]
-        sources = list(
-            self._visible_sources(repositories).order_by("display_name", "id")[:PAGE_LIMIT]
-        )
+        source_health = self._source_health_aggregate(repositories)
         profiles = {
             profile.repository_id: profile
             for profile in RepositoryProfile.objects.filter(
@@ -475,12 +526,9 @@ class ProductUIFacade:
         )
         latest_packet = self._visible_packets(repositories).order_by("-generated_at").first()
         latest_run = self._visible_assurance_runs(repositories).order_by("-created_at").first()
-        binding_count = GitHubRepositoryBinding.objects.filter(
-            organization_id=self.actor.organization_id,
-            repository_id__in=repository_ids,
-            is_active=True,
-            revoked_at__isnull=True,
-            installation__state=GitHubInstallation.State.ACTIVE,
+        binding_count = authorized_active_github_bindings(
+            actor=self.actor,
+            repository_ids=repository_ids,
         ).count()
         checks: list[dict[str, object]] = [
             {
@@ -532,11 +580,12 @@ class ProductUIFacade:
             {
                 "name": "Sources indexed with provenance",
                 "state": (
-                    "DONE"
-                    if any(item.last_successful_sync_at for item in sources)
-                    else "NEEDS_ATTENTION"
+                    "DONE" if source_health.successfully_indexed_count else "NEEDS_ATTENTION"
                 ),
-                "detail": f"{len(sources)} source connection{'s' if len(sources) != 1 else ''}",
+                "detail": (
+                    f"{source_health.visible_count} source "
+                    f"connection{'s' if source_health.visible_count != 1 else ''}"
+                ),
                 "href": "/app/sources",
             },
             {
@@ -561,12 +610,20 @@ class ProductUIFacade:
             },
             {
                 "name": "Source revocation exercise",
-                "state": (
-                    "DONE"
-                    if any(item.state == SourceConnection.State.REVOKED for item in sources)
-                    else "NEEDS_ATTENTION"
+                "state": "DONE" if source_health.revoked_count else "NEEDS_ATTENTION",
+                "detail": (
+                    (
+                        f"Revocation verified for {source_health.revoked_count} authorized "
+                        f"source{'s' if source_health.revoked_count != 1 else ''}; reconnect or "
+                        f"replace {'them' if source_health.revoked_count != 1 else 'it'} before "
+                        "ingestion resumes."
+                    )
+                    if source_health.revoked_count
+                    else (
+                        "No authorized source revocation has been observed. "
+                        "Revoke a test source to verify future retrieval is denied."
+                    )
                 ),
-                "detail": "Verify future retrieval no longer returns revoked content.",
                 "href": "/app/sources",
             },
         ]
@@ -1107,10 +1164,10 @@ class ProductUIFacade:
             )
             .order_by("-updated_at")[:12]
         )
-        binding = GitHubRepositoryBinding.objects.filter(
-            organization_id=self.actor.organization_id,
-            repository=repository,
-        ).first()
+        github_bound = authorized_active_github_bindings(
+            actor=self.actor,
+            repository_ids=[repository.id],
+        ).exists()
         return {
             "repository": repository,
             "profile": profile,
@@ -1118,7 +1175,7 @@ class ProductUIFacade:
             "policies": policies,
             "runs": runs,
             "unresolved": unresolved,
-            "github_binding": binding,
+            "github_bound": github_bound,
             "can_manage_profile": _authorized(
                 self.actor,
                 Action.WORK_MANAGE,

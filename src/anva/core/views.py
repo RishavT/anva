@@ -29,7 +29,6 @@ from anva.core.models import (
     EvidenceManifest,
     Finding,
     GitHubEventProcessing,
-    GitHubRepositoryBinding,
     GitHubWebhookDelivery,
     GitHubWriteIntent,
     Organization,
@@ -62,6 +61,7 @@ from anva.core.services.evidence import (
     map_criterion_evidence,
     submit_evidence_manifest,
 )
+from anva.core.services.github_bindings import authorized_active_github_bindings
 from anva.core.services.graph import traverse_graph
 from anva.core.services.ingestion import (
     connect_filesystem_source,
@@ -363,17 +363,16 @@ def github_repository_binding(
             action=Action.GITHUB_MANAGE,
             repository_id=repository_id,
         )
-        binding = get_tenant_record(
-            queryset=GitHubRepositoryBinding.objects.select_related("installation"),
-            record_id=GitHubRepositoryBinding.objects.filter(
-                organization_id=actor.organization_id,
-                repository_id=repository_id,
+        binding = (
+            authorized_active_github_bindings(
+                actor=actor,
+                repository_ids=[repository_id],
             )
-            .values_list("id", flat=True)
+            .select_related("installation")
             .first()
-            or uuid.uuid4(),
-            organization_id=actor.organization_id,
         )
+        if binding is None:
+            raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
         deliveries = GitHubWebhookDelivery.objects.filter(
             organization_id=actor.organization_id,
             repository_binding=binding,
@@ -533,21 +532,16 @@ def github_repository_binding_revoke(
         action=Action.GITHUB_MANAGE,
         repository_id=repository_id,
     )
-    binding_id = (
-        GitHubRepositoryBinding.objects.filter(
-            organization_id=actor.organization_id,
-            repository_id=repository_id,
+    binding = (
+        authorized_active_github_bindings(
+            actor=actor,
+            repository_ids=[repository_id],
         )
-        .values_list("id", flat=True)
+        .select_related("installation")
         .first()
     )
-    if binding_id is None:
+    if binding is None:
         raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
-    binding = get_tenant_record(
-        queryset=GitHubRepositoryBinding.objects.select_related("installation"),
-        record_id=binding_id,
-        organization_id=actor.organization_id,
-    )
     revoke_repository_binding(binding=binding, request_id=actor.request_id)
     return JsonResponse({"id": str(binding.id), "state": "REVOKED"})
 

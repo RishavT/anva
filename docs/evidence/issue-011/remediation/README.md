@@ -34,3 +34,26 @@ implementation:
 
 `SHA256SUMS` records the remediation screenshots. The CI result is recorded in the PR discussion
 after the pushed commit is available.
+
+## Final re-review follow-up
+
+The final review at commit `54d7c0b4f893640d62a0a0f7cad310fbb187a39f` identified two
+additional authorization-state gaps. The isolated Compose project `anva-i11-finalfix` captured
+three fail-before regressions: an inaccessible GitHub binding affected product status, the source
+revocation onboarding branch was unreachable, and the binding status API exposed an inaccessible
+same-tenant binding.
+
+The follow-up gates passed after centralizing active GitHub binding reads behind the actor's
+authorized access-scope boundary and adding an identity-free source-health aggregate for authorized
+revoked sources:
+
+- exact fail-before/pass-after regression set: 3 failed, then 3 passed;
+- affected product, GitHub, and architecture suites: 44 passed;
+- database and migration upgrade suites: 2 passed;
+- formatting, Ruff, strict mypy across 142 source files, model drift, 24 generated contracts,
+  skill distribution, and Compose validation: passed;
+- full coverage suite: 626 passed, 3 expected skips, 85% coverage;
+- dedicated Chromium 150 journey: passed at desktop, 320px, and 200% browser zoom.
+
+The eleven remediation screenshot hashes below were regenerated and verified. The original
+`../screenshots` evidence set remains unchanged.

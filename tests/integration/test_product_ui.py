@@ -13,6 +13,7 @@ from django.utils import timezone
 
 from anva.core.models import (
     AccessScope,
+    AccessScopeMembership,
     AssuranceCheck,
     AssuranceRun,
     AuditEvent,
@@ -20,6 +21,8 @@ from anva.core.models import (
     Evidence,
     EvidenceManifest,
     Finding,
+    GitHubInstallation,
+    GitHubRepositoryBinding,
     ImmutableArtifact,
     KnowledgeAssertion,
     KnowledgeEntity,
@@ -33,6 +36,7 @@ from anva.core.models import (
     Repository,
     RepositoryProfile,
     Role,
+    ServiceIdentity,
     SourceConnection,
     SyncRun,
     User,
@@ -60,6 +64,42 @@ def _signed_in_client() -> tuple[Client, Repository]:
     session["anva_web_organization_id"] = str(result.organization.id)
     session.save()
     return client, result.repository
+
+
+def _onboarding_item(rendered: str, name: str) -> str:
+    heading = rendered.index(f"<h3>{name}</h3>")
+    start = rendered.rindex('<li class="progress-item', 0, heading)
+    end = rendered.index("</li>", heading) + len("</li>")
+    return rendered[start:end]
+
+
+def _create_github_binding(
+    *,
+    repository: Repository,
+    access_scope: AccessScope,
+    full_name: str,
+) -> GitHubRepositoryBinding:
+    organization = repository.organization
+    service_identity = ServiceIdentity.objects.get(organization=organization)
+    installation = GitHubInstallation.objects.create(
+        organization=organization,
+        external_id=uuid.uuid4().int % 9_000_000_000,
+        account_id=uuid.uuid4().int % 9_000_000_000,
+        account_login="product-ui-test",
+        account_type="Organization",
+        repository_selection="selected",
+        permissions={"metadata": "read"},
+        service_identity=service_identity,
+    )
+    return GitHubRepositoryBinding.objects.create(
+        organization=organization,
+        installation=installation,
+        repository=repository,
+        access_scope=access_scope,
+        external_repository_id=uuid.uuid4().int % 9_000_000_000,
+        full_name=full_name,
+        default_branch="main",
+    )
 
 
 @pytest.mark.integration
@@ -813,6 +853,191 @@ def test_product_pages_filter_hidden_revoked_source_packet_proposal_audit_and_ev
     assert hidden_assurance.status_code == 404
     assert hidden_assurance.content == unavailable[0].content
     assert visible_source.id
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_github_binding_status_is_scope_authorized_and_recomputed_immediately() -> None:
+    client, repository = _signed_in_client()
+    organization = repository.organization
+    membership = Membership.objects.get(
+        organization=organization,
+        user_id=uuid.UUID(client.session["anva_web_user_id"]),
+    )
+    hidden_scope = AccessScope.objects.create(
+        organization=organization,
+        name="CANARY-HIDDEN-GITHUB-SCOPE",
+        all_memberships=False,
+        all_repositories=True,
+    )
+    binding = _create_github_binding(
+        repository=repository,
+        access_scope=hidden_scope,
+        full_name="CANARY-HIDDEN-GITHUB-BINDING",
+    )
+
+    hidden_onboarding = client.get("/app/onboarding").content.decode()
+    hidden_binding_item = _onboarding_item(hidden_onboarding, "GitHub App binding")
+    hidden_repository = client.get(f"/app/repositories/{repository.id}").content.decode()
+
+    assert "progress-item--unavailable" in hidden_binding_item
+    assert "Operator-assisted GitHub App installation is required." in hidden_binding_item
+    assert "active installation binding" not in hidden_binding_item
+    assert "GitHub binding unavailable" in hidden_repository
+    assert "GitHub bound" not in hidden_repository
+    for rendered in (hidden_onboarding, hidden_repository):
+        assert binding.full_name not in rendered
+        assert str(binding.id) not in rendered
+        assert str(binding.installation_id) not in rendered
+
+    scope_membership = AccessScopeMembership.objects.create(
+        organization=organization,
+        access_scope=hidden_scope,
+        membership=membership,
+    )
+    visible_onboarding = client.get("/app/onboarding").content.decode()
+    visible_binding_item = _onboarding_item(visible_onboarding, "GitHub App binding")
+    visible_repository = client.get(f"/app/repositories/{repository.id}").content.decode()
+    assert "progress-item--done" in visible_binding_item
+    assert "1 active installation binding" in visible_binding_item
+    assert "GitHub bound" in visible_repository
+
+    scope_membership.delete()
+    membership.role = Role.objects.get(
+        organization=organization,
+        code=Role.Code.DEVELOPER,
+    )
+    membership.save(update_fields=["role", "updated_at"])
+    AccessScopeMembership.objects.create(
+        organization=organization,
+        access_scope=hidden_scope,
+        membership=membership,
+    )
+    role_changed_onboarding = client.get("/app/onboarding").content.decode()
+    role_changed_repository = client.get(f"/app/repositories/{repository.id}").content.decode()
+    assert "progress-item--unavailable" in _onboarding_item(
+        role_changed_onboarding,
+        "GitHub App binding",
+    )
+    assert "GitHub binding unavailable" in role_changed_repository
+    assert "GitHub bound" not in role_changed_repository
+
+    membership.role = Role.objects.get(
+        organization=organization,
+        code=Role.Code.ORG_ADMIN,
+    )
+    membership.save(update_fields=["role", "updated_at"])
+    binding.is_active = False
+    binding.revoked_at = timezone.now()
+    binding.save(update_fields=["is_active", "revoked_at", "updated_at"])
+    revoked_onboarding = client.get("/app/onboarding").content.decode()
+    revoked_repository = client.get(f"/app/repositories/{repository.id}").content.decode()
+    assert "progress-item--unavailable" in _onboarding_item(
+        revoked_onboarding,
+        "GitHub App binding",
+    )
+    assert "GitHub binding unavailable" in revoked_repository
+    assert "GitHub bound" not in revoked_repository
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_onboarding_revocation_aggregate_is_scope_safe_and_identity_free() -> None:
+    client, repository = _signed_in_client()
+    organization = repository.organization
+    visible_scope = AccessScope.objects.get(organization=organization)
+
+    empty_onboarding = client.get("/app/onboarding").content.decode()
+    empty_indexing = _onboarding_item(empty_onboarding, "Sources indexed with provenance")
+    empty_revocation = _onboarding_item(empty_onboarding, "Source revocation exercise")
+    assert "progress-item--needs_attention" in empty_indexing
+    assert "0 source connections" in empty_indexing
+    assert "progress-item--needs_attention" in empty_revocation
+    assert (
+        "No authorized source revocation has been observed. "
+        "Revoke a test source to verify future retrieval is denied."
+    ) in empty_revocation
+
+    SourceConnection.objects.create(
+        organization=organization,
+        repository=repository,
+        access_scope=visible_scope,
+        external_key="filesystem:active-finalfix",
+        display_name="Active final-fix source",
+        state=SourceConnection.State.ACTIVE,
+        last_successful_sync_at=timezone.now(),
+    )
+    SourceConnection.objects.create(
+        organization=organization,
+        repository=repository,
+        access_scope=visible_scope,
+        external_key="filesystem:failed-finalfix",
+        display_name="Failed final-fix source",
+        state=SourceConnection.State.FAILED,
+    )
+    mixed_onboarding = client.get("/app/onboarding").content.decode()
+    mixed_indexing = _onboarding_item(mixed_onboarding, "Sources indexed with provenance")
+    mixed_revocation = _onboarding_item(mixed_onboarding, "Source revocation exercise")
+    assert "progress-item--done" in mixed_indexing
+    assert "2 source connections" in mixed_indexing
+    assert mixed_revocation == empty_revocation
+
+    hidden_scope = AccessScope.objects.create(
+        organization=organization,
+        name="CANARY-HIDDEN-REVOKED-SCOPE",
+        all_memberships=False,
+        all_repositories=True,
+        is_active=False,
+    )
+    hidden_revoked = SourceConnection.objects.create(
+        organization=organization,
+        repository=repository,
+        access_scope=hidden_scope,
+        external_key="filesystem:hidden-revoked-finalfix",
+        display_name="CANARY-HIDDEN-REVOKED-SOURCE",
+        state=SourceConnection.State.REVOKED,
+    )
+    hidden_onboarding = client.get("/app/onboarding").content.decode()
+    assert _onboarding_item(hidden_onboarding, "Source revocation exercise") == empty_revocation
+    assert "CANARY-HIDDEN-REVOKED" not in hidden_onboarding
+
+    revoked_scope = AccessScope.objects.create(
+        organization=organization,
+        name="Visible revoked source health",
+        all_memberships=True,
+        all_repositories=True,
+        is_active=False,
+    )
+    visible_revoked = SourceConnection.objects.create(
+        organization=organization,
+        repository=repository,
+        access_scope=revoked_scope,
+        external_key="filesystem:visible-revoked-finalfix",
+        display_name="CANARY-VISIBLE-REVOKED-SOURCE",
+        state=SourceConnection.State.REVOKED,
+    )
+    revoked_onboarding = client.get("/app/onboarding").content.decode()
+    revoked_indexing = _onboarding_item(revoked_onboarding, "Sources indexed with provenance")
+    revoked_exercise = _onboarding_item(revoked_onboarding, "Source revocation exercise")
+    assert "progress-item--done" in revoked_indexing
+    assert "2 source connections" in revoked_indexing
+    assert "progress-item--done" in revoked_exercise
+    assert (
+        "Revocation verified for 1 authorized source; reconnect or replace it "
+        "before ingestion resumes."
+    ) in revoked_exercise
+    assert "CANARY-VISIBLE-REVOKED" not in revoked_onboarding
+
+    correlation = str(uuid.uuid4())
+    unavailable = [
+        client.get(
+            f"/app/sources/{source_id}",
+            HTTP_X_CORRELATION_ID=correlation,
+        )
+        for source_id in (hidden_revoked.id, visible_revoked.id, uuid.uuid4())
+    ]
+    assert {response.status_code for response in unavailable} == {404}
+    assert len({response.content for response in unavailable}) == 1
 
 
 @pytest.mark.integration
