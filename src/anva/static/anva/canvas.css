@@ -30,6 +30,42 @@
   border-color: rgba(240, 198, 107, 0.3);
 }
 
+.canvas-share-revoke,
+.canvas-draw-controls,
+.canvas-inspector-actions {
+  display: flex;
+  gap: 0.7rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.canvas-share-revoke,
+.canvas-draw-controls {
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+}
+
+.canvas-draw-controls[hidden] {
+  display: none;
+}
+
+.canvas-draw-controls p {
+  min-width: min(28rem, 100%);
+  margin: 0;
+  flex: 1;
+}
+
+.canvas-draw-controls label {
+  display: grid;
+  gap: 0.25rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
 .canvas-controls {
   padding: 1rem;
   margin-bottom: 1rem;
@@ -298,6 +334,19 @@
   -webkit-line-clamp: 2;
 }
 
+.canvas-proposal-edge {
+  fill: none;
+  stroke: #b9f56a;
+  stroke-width: 5;
+  stroke-dasharray: 10 7;
+  marker-end: url("#canvas-proposal-arrow");
+  filter: drop-shadow(0 0 5px rgba(185, 245, 106, 0.7));
+}
+
+[data-proposal-mode="true"] .canvas-node {
+  cursor: crosshair;
+}
+
 .canvas-minimap {
   position: absolute;
   z-index: 6;
@@ -359,6 +408,19 @@
 
 .canvas-inspector ul {
   padding-inline-start: 1.1rem;
+}
+
+.canvas-inspector label,
+.canvas-inspector form {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.canvas-inspector textarea,
+.canvas-inspector input,
+.canvas-inspector select {
+  width: 100%;
+  min-height: 44px;
 }
 
 .canvas-semantic-grid {

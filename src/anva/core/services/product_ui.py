@@ -81,6 +81,7 @@ from anva.core.services.canvas import (
     list_canvas_views,
     propose_canvas_relationship,
     resolve_canvas_share,
+    revoke_canvas_share,
     save_canvas_revision,
 )
 from anva.core.services.context import ActorContext
@@ -907,6 +908,11 @@ class ProductUIFacade:
             can_propose = False
         return {
             "graph": graph,
+            "resolved_query": cast(dict[str, object], graph["semantic_query"]),
+            "resolved_repository_ids": tuple(
+                uuid.UUID(str(repository["id"]))
+                for repository in cast(list[dict[str, object]], graph["repositories"])
+            ),
             "relationship_rows": relationship_rows,
             "saved_views": list_canvas_views(actor=self.actor),
             "entity_types": KnowledgeEntity.EntityType.choices,
@@ -935,6 +941,53 @@ class ProductUIFacade:
             entity_id=entity_id,
             repository_ids=repository_ids,
         )
+
+    def canvas_question(
+        self,
+        *,
+        entity_id: uuid.UUID,
+        repository_id: uuid.UUID,
+        question: str,
+    ) -> dict[str, object]:
+        """Return cited retrieval scoped to one currently authorized Canvas selection."""
+        question = question.strip()
+        if not question or len(question) > 500:
+            raise ValueError("Canvas question is outside its size budget")
+        detail = canvas_entity_detail(
+            actor=self.actor,
+            entity_id=entity_id,
+            repository_ids=(repository_id,),
+        )
+        response = search_chunks(
+            actor=self.actor,
+            repository_id=repository_id,
+            query=question,
+            limit=10,
+        )
+        selection = canvas_projection(
+            actor=self.actor,
+            query=CanvasQuery(
+                repository_ids=(repository_id,),
+                anchor_id=entity_id,
+                depth=1,
+                node_limit=100,
+                edge_limit=200,
+            ),
+        )
+        return {
+            "entity": {"id": detail["id"], "label": detail["label"]},
+            "selection_context": {
+                "depth": 1,
+                "nodes": selection["nodes"],
+                "edges": selection["edges"],
+            },
+            "results": [result.as_dict() for result in response.results],
+            "limitation": (
+                "No authorized source excerpt matched this selection-scoped question."
+                if not response.results
+                else "Answers are limited to these authorized source excerpts."
+            ),
+        }
 
     def canvas_share_query(self, share_id: uuid.UUID) -> CanvasQuery:
         view, revision = resolve_canvas_share(actor=self.actor, share_id=share_id)
@@ -979,11 +1032,11 @@ class ProductUIFacade:
             view_id=view_id,
             expected_revision=expected_revision,
             semantic_query=semantic_query,
-            placements=presentation.get("placements", []),
-            filters=presentation.get("filters", []),
-            layers=presentation.get("layers", []),
-            groups=presentation.get("groups", []),
-            annotations=presentation.get("annotations", []),
+            placements=presentation["placements"],
+            filters=presentation["filters"],
+            layers=presentation["layers"],
+            groups=presentation["groups"],
+            annotations=presentation["annotations"],
             idempotency_key=idempotency_key,
         )
 
@@ -998,6 +1051,22 @@ class ProductUIFacade:
         return create_canvas_share(
             actor=self.actor,
             view_id=view_id,
+            idempotency_key=idempotency_key,
+        )
+
+    def revoke_canvas_share(
+        self,
+        *,
+        share_id: uuid.UUID,
+        expected_view_revision: int,
+        idempotency_key: str,
+    ) -> tuple[CanvasShare, bool]:
+        if settings.ANVA_WEB_READ_ONLY:
+            raise ResourceNotFoundError("Web mutations are disabled")
+        return revoke_canvas_share(
+            actor=self.actor,
+            share_id=share_id,
+            expected_view_revision=expected_view_revision,
             idempotency_key=idempotency_key,
         )
 

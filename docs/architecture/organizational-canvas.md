@@ -21,7 +21,8 @@ projection and never receives hidden records for client-side filtering.
 - `CanvasNodePlacement`, `CanvasGroup`, `CanvasFilter`, `CanvasLayer`, and
   `CanvasAnnotation` are immutable children of one exact revision.
 - `CanvasShare` names one exact revision. It may be recipient-bound, expired,
-  or revoked, but it never grants knowledge access.
+  or revoked, but it never grants knowledge access. Revocation records the
+  actor, timestamp, idempotency key, and request hash without deleting history.
 - relationship drawing creates a typed `KnowledgeProposal` with source and
   target revisions. It does not insert a canonical relationship.
 
@@ -35,15 +36,24 @@ and their presentation children, including bulk ORM and direct SQL paths.
 For every request the service:
 
 1. authenticates the current user session or service bearer actor;
-2. resolves at most 100 currently visible repositories;
+2. authorizes repository boundaries before applying the 100-repository default
+   cap (and rejects an explicit missing, foreign, or inaccessible identifier);
 3. runs the existing strict repository authorization and provenance CTE for
    each repository independently;
 4. unions only those permitted entity and edge results by canonical UUID;
-5. applies the closed typed semantic query, layer selection, and optional
-   four-hop focus expansion;
+5. applies the closed typed semantic query, observation-time boundary, layer
+   selection, and optional four-hop focus expansion;
 6. computes deterministic semantic-column placement, citations, freshness,
    conflicts, inspector summaries, and a layout checksum;
-7. trims deterministically to the hard response budget before serialization.
+7. serializes compact, unescaped UTF-8 JSON, measures those actual response
+   bytes, and trims deterministically to the hard response budget.
+
+Repository UUIDs embedded in a semantic query are organization-bound and
+authorization-checked at create, save, replay, list, detail, share, and revoke
+boundaries. Persisted references cannot be used to bypass a later permission
+change. Presentation input is recursively validated as closed JSON; unknown
+children, scalar coercions, non-JSON values, non-finite coordinates, and
+secret-shaped text at any supported nesting depth are rejected.
 
 The same strict edge CTE is used by the Canvas projection and path service. A
 path is bounded to six hops and can contain only nodes and edges visible through
@@ -51,7 +61,10 @@ the selected repository set. Missing, foreign, revoked, and inaccessible
 identifiers all use the same unavailable response.
 
 Shares re-run this pipeline against the viewer's current permissions. A share
-can therefore lose nodes or become unavailable as authorization changes.
+can therefore lose nodes or become unavailable as authorization changes. The
+owner or current view manager may revoke an active share with optimistic
+revision checking and request-bound idempotency. Revocation is immediate and
+auditable, and a revoked share retains its immutable history.
 
 ## Determinism and budgets
 
@@ -73,14 +86,24 @@ trimmed by their deterministic order, counts and checksum are recomputed, and
 the response reports truncation and its limitation. Non-finite or unbounded
 coordinates are rejected.
 
+An optional `as_of` value includes only entities created by that instant and
+assertions or relationships observed by that instant. It is an observation-time
+boundary, not a historical identity snapshot: owner, label, and other canonical
+entity identity fields reflect the currently authorized entity row. The
+resolved `as_of`, focus, depth, repositories, filters, and layers are exposed
+back to server-rendered controls, including when they came from a saved view.
+
 ## Browser boundary
 
 The product route server-renders the semantic controls, node and relationship
-tables, path form, proposal form, and all graph data. Browser-native JavaScript
-adds Dagre-assisted layout, pan, zoom, fit, minimap, drag-to-place, spatial
-keyboard navigation, selection, inspector loading, save, and share actions.
-The document remains useful without JavaScript through the canonical tables and
-forms.
+tables, path form, proposal form, scoped-question form, and all graph data.
+Browser-native JavaScript adds Dagre-assisted layout, pan, zoom, fit, minimap,
+drag-to-place, spatial keyboard navigation, selection, inspector loading,
+focus/expand controls, annotations, save, share/revoke, and an actual
+drag-or-keyboard drawn-edge proposal gesture. Drawing never mutates a canonical
+edge: its only result is a governed proposal form with typed endpoints. The
+document remains useful without JavaScript through the canonical tables and
+forms, including a bounded Explorer-backed question fallback.
 
 Dagre 2.0.0 is vendored under `src/anva/static/anva/vendor`, with its license,
 legal notice, and reviewed SHA-256 checksums. There is no Node/npm runtime,
@@ -94,3 +117,10 @@ contradicted, source unavailable, stale, aging, fresh, then unknown when only
 entity identity is permitted. The UI includes text for every state and marks
 inference separately from source-backed provenance. Canvas never claims that a
 layout, annotation, share, or proposal changed canonical knowledge.
+
+Entity detail is a bounded, authorization-filtered view over source citations,
+active relationships, decisions and policies, risks and incidents, active work
+and recent pull requests, and recent history. Each section is independently
+bounded and reports truncation without disclosing hidden totals. A selected
+entity can also drive a bounded, repository-authorized organizational question;
+the answer is scoped to its permitted one-hop context and Explorer results.

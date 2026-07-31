@@ -5,12 +5,15 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Callable
+from dataclasses import replace
 from functools import wraps
 from typing import Any, cast
 
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
+from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
 from anva import __version__
@@ -20,7 +23,7 @@ from anva.core.exceptions import (
     ResourceNotFoundError,
 )
 from anva.core.models import KnowledgeProposal, SyncRun
-from anva.core.services.canvas import CanvasQuery
+from anva.core.services.canvas import CANVAS_PAYLOAD_LIMIT_BYTES, CanvasQuery
 from anva.core.services.product_ui import (
     ProductUIFacade,
     SetupInput,
@@ -153,27 +156,43 @@ def web_json_errors[**Parameters](
             return view(*args, **kwargs)
         except AuthenticationError:
             clear_web_session(request)
-            return JsonResponse(
+            return _canvas_json_response(
                 {"code": "invalid_credential", "correlation_id": correlation_id},
                 status=401,
             )
         except ResourceNotFoundError:
-            return JsonResponse(
+            return _canvas_json_response(
                 {"code": "resource_not_found", "correlation_id": correlation_id},
                 status=404,
             )
         except DomainOperationError as error:
-            return JsonResponse(
+            return _canvas_json_response(
                 {"code": error.code, "correlation_id": correlation_id},
                 status=409,
             )
         except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-            return JsonResponse(
+            return _canvas_json_response(
                 {"code": "invalid_request", "correlation_id": correlation_id},
                 status=400,
             )
 
     return wrapped
+
+
+def _canvas_json_response(payload: dict[str, object], *, status: int = 200) -> JsonResponse:
+    """Serialize exactly like the service budget: compact, sorted, UTF-8 JSON."""
+    response = JsonResponse(
+        payload,
+        status=status,
+        json_dumps_params={
+            "ensure_ascii": False,
+            "separators": (",", ":"),
+            "sort_keys": True,
+        },
+    )
+    if len(response.content) > CANVAS_PAYLOAD_LIMIT_BYTES:
+        raise ValueError("Canvas response exceeds its byte budget")
+    return response
 
 
 @require_GET
@@ -360,6 +379,7 @@ def _canvas_query(payload: dict[str, object]) -> CanvasQuery:
         "status",
         "risk",
         "freshness",
+        "as_of",
         "search",
         "layers",
         "anchor_id",
@@ -374,6 +394,14 @@ def _canvas_query(payload: dict[str, object]) -> CanvasQuery:
     layers = payload.get("layers", [])
     if not all(isinstance(value, list) for value in (repositories, entity_types, layers)):
         raise ValueError("Canvas query list fields are invalid")
+    as_of_value = payload.get("as_of", "")
+    if not isinstance(as_of_value, str):
+        raise ValueError("Canvas as-of time is invalid")
+    parsed_as_of = parse_datetime(as_of_value) if as_of_value else None
+    if parsed_as_of is not None and parsed_as_of.tzinfo is None:
+        parsed_as_of = timezone.make_aware(parsed_as_of)
+    if as_of_value and parsed_as_of is None:
+        raise ValueError("Canvas as-of time is invalid")
     return CanvasQuery(
         view_id=uuid.UUID(str(payload["view_id"])) if payload.get("view_id") else None,
         view_revision=(
@@ -387,22 +415,39 @@ def _canvas_query(payload: dict[str, object]) -> CanvasQuery:
         status=str(payload.get("status", "")),
         risk=str(payload.get("risk", "")),
         freshness=str(payload.get("freshness", "")),
+        as_of=parsed_as_of,
         search=str(payload.get("search", "")),
         layers=_string_tuple(cast(list[object], layers)),
         anchor_id=(uuid.UUID(str(payload["anchor_id"])) if payload.get("anchor_id") else None),
-        depth=int(cast(Any, payload.get("depth", 2))),
+        depth=(
+            int(cast(Any, payload["depth"])) if payload.get("depth") not in (None, "") else None
+        ),
         node_limit=int(cast(Any, payload.get("node_limit", 300))),
         edge_limit=int(cast(Any, payload.get("edge_limit", 600))),
     )
 
 
 def _request_json(request: HttpRequest) -> dict[str, object]:
-    if len(request.body) > 750 * 1024:
+    if len(request.body) > CANVAS_PAYLOAD_LIMIT_BYTES:
         raise ValueError("Canvas request exceeds its byte budget")
     payload = json.loads(request.body or b"{}")
     if not isinstance(payload, dict):
         raise ValueError("Canvas request must be an object")
     return cast(dict[str, object], payload)
+
+
+def _canvas_presentation(payload: object) -> dict[str, list[dict[str, object]]]:
+    if not isinstance(payload, dict):
+        raise ValueError("Canvas presentation must be an object")
+    fields = {"placements", "filters", "layers", "groups", "annotations"}
+    if set(payload) != fields:
+        raise ValueError("Canvas presentation fields are invalid")
+    if not all(
+        isinstance(value, list) and all(isinstance(item, dict) for item in value)
+        for value in payload.values()
+    ):
+        raise ValueError("Canvas presentation entries must be object lists")
+    return cast(dict[str, list[dict[str, object]]], payload)
 
 
 def _canvas_get_query(request: HttpRequest) -> CanvasQuery:
@@ -416,10 +461,11 @@ def _canvas_get_query(request: HttpRequest) -> CanvasQuery:
             "status": request.GET.get("status", ""),
             "risk": request.GET.get("risk", ""),
             "freshness": request.GET.get("freshness", ""),
+            "as_of": request.GET.get("as_of", ""),
             "search": request.GET.get("q", ""),
             "layers": request.GET.getlist("layer"),
             "anchor_id": request.GET.get("focus", ""),
-            "depth": request.GET.get("depth", "2"),
+            "depth": request.GET.get("depth"),
             "node_limit": request.GET.get("node_limit", "300"),
             "edge_limit": request.GET.get("edge_limit", "600"),
         }
@@ -433,17 +479,28 @@ def canvas(request: HttpRequest) -> HttpResponse:
     path_source = _optional_uuid(request.GET.get("path_from"))
     path_target = _optional_uuid(request.GET.get("path_to"))
     share_id = _optional_uuid(request.GET.get("share"))
-    query = facade.canvas_share_query(share_id) if share_id else _canvas_get_query(request)
+    if share_id:
+        shared_query = facade.canvas_share_query(share_id)
+        requested_query = _canvas_get_query(request)
+        query = replace(
+            shared_query,
+            anchor_id=requested_query.anchor_id,
+            depth=requested_query.depth,
+        )
+    else:
+        query = _canvas_get_query(request)
+    page = facade.canvas(
+        query=query,
+        path_source_id=path_source,
+        path_target_id=path_target,
+    )
+    page["active_share_id"] = str(share_id) if share_id else ""
     return _render(
         request,
         "product/canvas.html",
         shell=shell,
         section="canvas",
-        page=facade.canvas(
-            query=query,
-            path_source_id=path_source,
-            path_target_id=path_target,
-        ),
+        page=page,
     )
 
 
@@ -452,7 +509,7 @@ def canvas(request: HttpRequest) -> HttpResponse:
 def canvas_query(request: HttpRequest) -> JsonResponse:
     facade, _shell = _product(request)
     page = facade.canvas(query=_canvas_query(_request_json(request)))
-    return JsonResponse(cast(dict[str, object], page["graph"]))
+    return _canvas_json_response(cast(dict[str, object], page["graph"]))
 
 
 @web_json_errors
@@ -467,7 +524,7 @@ def canvas_path_query(request: HttpRequest) -> JsonResponse:
         raise ValueError("Canvas path repositories are invalid")
     from anva.core.services.canvas import canvas_path
 
-    return JsonResponse(
+    return _canvas_json_response(
         canvas_path(
             actor=facade.actor,
             source_id=uuid.UUID(str(payload["source_id"])),
@@ -482,10 +539,28 @@ def canvas_path_query(request: HttpRequest) -> JsonResponse:
 @require_GET
 def canvas_entity_detail(request: HttpRequest, entity_id: uuid.UUID) -> JsonResponse:
     facade, _shell = _product(request)
-    return JsonResponse(
+    return _canvas_json_response(
         facade.canvas_detail(
             entity_id=entity_id,
             repository_ids=_uuid_tuple(cast(list[object], request.GET.getlist("repository"))),
+        )
+    )
+
+
+@web_json_errors
+@require_POST
+def canvas_question(request: HttpRequest) -> JsonResponse:
+    facade, _shell = _product(request)
+    payload = _request_json(request)
+    if set(payload) != {"entity_id", "repository_id", "question"}:
+        raise ValueError("Canvas question request is invalid")
+    if not all(isinstance(payload[key], str) for key in payload):
+        raise ValueError("Canvas question fields must be strings")
+    return _canvas_json_response(
+        facade.canvas_question(
+            entity_id=uuid.UUID(cast(str, payload["entity_id"])),
+            repository_id=uuid.UUID(cast(str, payload["repository_id"])),
+            question=cast(str, payload["question"]),
         )
     )
 
@@ -520,17 +595,17 @@ def canvas_view_revision(request: HttpRequest, view_id: uuid.UUID) -> JsonRespon
     }:
         raise ValueError("Canvas save contains additional properties")
     semantic = payload.get("semantic_query", {})
-    presentation = payload.get("presentation", {})
-    if not isinstance(semantic, dict) or not isinstance(presentation, dict):
+    if not isinstance(semantic, dict):
         raise ValueError("Canvas save objects are invalid")
+    presentation = _canvas_presentation(payload.get("presentation"))
     revision, created = facade.save_canvas(
         view_id=view_id,
         expected_revision=int(cast(Any, payload["expected_revision"])),
         semantic_query=cast(dict[str, object], semantic),
-        presentation=cast(dict[str, list[dict[str, object]]], presentation),
+        presentation=presentation,
         idempotency_key=str(payload["idempotency_key"]),
     )
-    return JsonResponse(
+    return _canvas_json_response(
         {
             "view_id": str(view_id),
             "revision": revision.revision,
@@ -552,7 +627,7 @@ def canvas_view_share(request: HttpRequest, view_id: uuid.UUID) -> JsonResponse:
         view_id=view_id,
         idempotency_key=str(payload["idempotency_key"]),
     )
-    return JsonResponse(
+    return _canvas_json_response(
         {
             "share_id": str(share.id),
             "deep_link": f"/app/canvas?share={share.id}",
@@ -561,6 +636,18 @@ def canvas_view_share(request: HttpRequest, view_id: uuid.UUID) -> JsonResponse:
         },
         status=201 if created else 200,
     )
+
+
+@web_errors
+@require_POST
+def canvas_share_revoke(request: HttpRequest, share_id: uuid.UUID) -> HttpResponse:
+    facade, _shell = _product(request)
+    facade.revoke_canvas_share(
+        share_id=share_id,
+        expected_view_revision=int(request.POST.get("expected_view_revision", "0")),
+        idempotency_key=request.POST.get("idempotency_key", ""),
+    )
+    return redirect(f"{reverse('product-canvas')}?notice=Share+revoked")
 
 
 @web_errors

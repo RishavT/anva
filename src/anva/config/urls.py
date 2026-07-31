@@ -20,6 +20,11 @@ urlpatterns = [
     path("app/canvas/query", product_views.canvas_query, name="product-canvas-query"),
     path("app/canvas/path", product_views.canvas_path_query, name="product-canvas-path"),
     path(
+        "app/canvas/question",
+        product_views.canvas_question,
+        name="product-canvas-question",
+    ),
+    path(
         "app/canvas/entities/<uuid:entity_id>",
         product_views.canvas_entity_detail,
         name="product-canvas-entity",
@@ -38,6 +43,11 @@ urlpatterns = [
         "app/canvas/views/<uuid:view_id>/shares",
         product_views.canvas_view_share,
         name="product-canvas-view-share",
+    ),
+    path(
+        "app/canvas/shares/<uuid:share_id>/revoke",
+        product_views.canvas_share_revoke,
+        name="product-canvas-share-revoke",
     ),
     path(
         "app/canvas/relationship-proposals",
@@ -164,6 +174,11 @@ urlpatterns = [
         "api/v1/canvas/views/<uuid:view_id>/shares",
         core_views.canvas_view_shares,
         name="api-v1-canvas-view-shares",
+    ),
+    path(
+        "api/v1/canvas/shares/<uuid:share_id>/revoke",
+        core_views.canvas_share_revoke,
+        name="api-v1-canvas-share-revoke",
     ),
     path(
         "api/v1/canvas/relationship-proposals",

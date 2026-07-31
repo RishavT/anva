@@ -3,11 +3,12 @@
 ## Scope and protected assets
 
 This review covers `/app/canvas`, `/api/v1/canvas/*`, saved views and revisions,
-shares, browser graph data, entity detail, path explanations, and relationship
-proposals. Protected assets include tenant knowledge and counts, hidden entity
-identities, source/provenance metadata, access topology, canonical revisions,
-human proposal authority, session and bearer credentials, and saved
-presentation state.
+share creation/resolution/revocation, browser graph data, entity detail,
+observation-time queries, scoped questions, path explanations, annotations, and
+relationship proposals. Protected assets include tenant knowledge and counts,
+hidden entity identities, source/provenance metadata, access topology,
+canonical revisions, human proposal authority, session and bearer credentials,
+and saved presentation state.
 
 ## Trust boundaries
 
@@ -21,6 +22,8 @@ presentation state.
   not authorization boundaries.
 - Saved views and shares are references to questions and revisions; they are
   not grants.
+- Repository UUIDs are semantic identifiers, not trusted routing hints. They
+  are organization-bound and re-authorized before persistence and replay.
 
 ## Threats and controls
 
@@ -33,12 +36,22 @@ test: node/edge payloads, counts, truncation, limitations, and layout are
 byte-equivalent before and after hidden data is added. A path to the canary
 returns the same stable unavailable error as a missing UUID.
 
+The default repository discovery path applies its 100-repository cap only
+after authorization, so a run of inaccessible repositories cannot crowd out a
+later visible repository. Provenance-only mode has no permissive all-edge
+fallthrough. Entity detail and questions use bounded authorized sections and do
+not expose hidden section totals.
+
 ### Share used as an access capability
 
 A share contains no bearer token and names one immutable revision. Resolution
 requires an authenticated active actor, re-authorizes the view and underlying
 repositories/scopes, checks expiry/revocation and optional recipient binding,
 then rebuilds the projection. Deep links cannot preserve withdrawn access.
+Revocation requires current manage authorization and the exact pinned revision,
+retains CSRF/session or bearer authentication boundaries, binds idempotency to
+the request, and transitions active to revoked without deleting the audit row.
+Repeated identical revocation is safe; a stale or repurposed request is not.
 
 ### Cross-tenant or cross-revision grafting
 
@@ -68,8 +81,11 @@ Canonical deletion is not exposed by Canvas.
 API and product JSON objects are closed and typed. Repository, entity type,
 layer, freshness, depth, coordinate, child-count, and text values are bounded.
 Secret-shaped text is rejected from queries, names, descriptions, annotations,
-groups, filters, and rationales. Requests and responses are capped at 750 KiB;
-projection cardinality is capped at 100 repositories, 300 nodes, and 600 edges.
+groups, filters, and rationales, including recursively nested supported JSON.
+Unknown presentation members, scalar coercion, and non-JSON values are rejected.
+Requests and responses are capped at 750 KiB; response enforcement measures the
+actual compact unescaped Unicode wire bytes. Projection cardinality is capped
+at 100 repositories, 300 nodes, and 600 edges.
 
 ### XSS, dependency, or browser credential exposure
 
@@ -85,6 +101,12 @@ Freshness comes from currently authorized assertions and reports unknown when
 only identity is available. Connection explanations use the same bounded
 authorized edge set as projection. Truncated responses say so; the UI does not
 imply absence beyond the displayed authorized and bounded result.
+
+An `as_of` query is explicitly an observation-time boundary. It filters entity
+creation and assertion/relationship observations, while current authorized
+identity metadata remains current; the product states this caveat beside the
+control. Saved controls render the server-resolved query rather than ambiguous
+raw URL input.
 
 ## Residual risks and limitations
 
@@ -109,8 +131,11 @@ imply absence beyond the displayed authorized and bounded result.
 - Integration: real ingestion lineage, multi-repository union, hidden canary
   invariance, inaccessible path denial, 300-node determinism, append-only
   revisions, tenant graft rejection, stale/idempotent writes, proposal-only
-  relationships, CSRF, session HTML, and bearer API boundaries.
+  relationships, share revocation history, observation-time filtering,
+  recursively closed presentation input, adversarial Unicode wire sizing,
+  CSRF, session HTML, and bearer API boundaries.
 - Browser: keyboard selection, inspector, drag/save, exact-revision sharing,
-  relationship proposal, source-backed edge rendering, minimap/zoom, 320-pixel
-  no-JS table, 200% zoom, no document overflow, and no unexpected severe
-  console entry.
+  revocation, actual drag-drawn proposal, annotations, scoped questions,
+  required organizational traces, dense topology/focus, source-backed edge
+  rendering, minimap/zoom, 320-pixel no-JS table, 200% zoom, no document
+  overflow, and no unexpected severe console entry.

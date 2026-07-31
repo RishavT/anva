@@ -21,6 +21,23 @@
   const live = root.querySelector("[data-canvas-live]");
   const zoomOutput = root.querySelector("[data-canvas-zoom]");
   const csrf = document.querySelector("[data-canvas-csrf] input[name='csrfmiddlewaretoken']");
+  const filterForm = document.querySelector(".canvas-filter-form");
+  const focusSelect = filterForm?.querySelector("[data-canvas-focus-select]");
+  const depthSelect = filterForm?.querySelector("[data-canvas-depth-select]");
+  const focusControl = root.querySelector("[data-canvas-focus]");
+  const expandControl = root.querySelector("[data-canvas-expand]");
+  const drawControl = root.querySelector("[data-canvas-draw-relationship]");
+  const drawControls = root.querySelector("[data-canvas-draw-controls]");
+  const drawStatus = root.querySelector("[data-canvas-draw-status]");
+  const proposalType = root.querySelector("[data-canvas-proposal-type]");
+  const proposalSubmit = root.querySelector("[data-canvas-submit-proposal]");
+  const proposalPath = root.querySelector("[data-canvas-proposal-edge]");
+  const proposalForm = document.querySelector("[data-canvas-proposal-form]");
+  const questionForm = root.querySelector("[data-canvas-question]");
+  const questionEntity = questionForm?.querySelector("[data-canvas-question-entity]");
+  const annotationList = root.querySelector("[data-canvas-annotations]");
+  const annotationBody = root.querySelector("[data-canvas-annotation-body]");
+  const annotationControl = root.querySelector("[data-canvas-add-annotation]");
   const graph = JSON.parse(dataElement.textContent || "{}");
   const nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
   const edges = Array.isArray(graph.edges) ? graph.edges : [];
@@ -37,6 +54,12 @@
   let panning = null;
   let dragging = null;
   let dirty = false;
+  let proposalMode = false;
+  let proposalSourceId = null;
+  let proposalTargetId = null;
+  let proposalDrawing = null;
+  let suppressNodeClick = false;
+  const annotations = Array.isArray(graph.annotations) ? [...graph.annotations] : [];
   let saveIdempotencyKey = crypto.randomUUID();
   let shareIdempotencyKey = crypto.randomUUID();
 
@@ -44,10 +67,98 @@
     if (live) live.textContent = message;
   };
 
+  const renderAnnotations = () => {
+    if (!annotationList) return;
+    annotationList.replaceChildren();
+    if (!annotations.length) {
+      const item = document.createElement("li");
+      item.textContent = "No saved presentation annotation is visible.";
+      annotationList.append(item);
+      return;
+    }
+    annotations.forEach((annotation) => {
+      const item = document.createElement("li");
+      const label = nodeById.get(annotation.entity_id)?.label || "View";
+      item.textContent = `${label} · ${annotation.body}`;
+      annotationList.append(item);
+    });
+  };
+
   const setLoading = (message) => {
     if (!loading) return;
     loading.textContent = message;
     loading.hidden = !message;
+  };
+
+  renderAnnotations();
+
+  const proposalPoint = (id) => {
+    const position = positionById.get(id);
+    return position ? { x: position.x + 108, y: position.y + 42.5 } : null;
+  };
+
+  const drawProposalPath = (sourceId, targetPoint) => {
+    const source = proposalPoint(sourceId);
+    if (!source || !proposalPath || !targetPoint) return;
+    const bend = Math.max(45, Math.abs(targetPoint.x - source.x) * 0.42);
+    proposalPath.setAttribute(
+      "d",
+      `M ${source.x} ${source.y} C ${source.x + bend} ${source.y}, ${targetPoint.x - bend} ${targetPoint.y}, ${targetPoint.x} ${targetPoint.y}`,
+    );
+    proposalPath.hidden = false;
+  };
+
+  const syncProposalForm = () => {
+    if (!proposalForm || !proposalSourceId || !proposalTargetId) return;
+    const source = proposalForm.querySelector("select[name='source_id']");
+    const target = proposalForm.querySelector("select[name='target_id']");
+    const relationship = proposalForm.querySelector("select[name='relationship_type']");
+    source.value = proposalSourceId;
+    target.value = proposalTargetId;
+    relationship.value = proposalType?.value || relationship.value;
+    source.dispatchEvent(new Event("change"));
+    target.dispatchEvent(new Event("change"));
+  };
+
+  const chooseProposalEndpoint = (id, { forceTarget = false } = {}) => {
+    if (!proposalMode) return;
+    if (!proposalSourceId || proposalTargetId || (!forceTarget && proposalSourceId === id)) {
+      proposalSourceId = id;
+      proposalTargetId = null;
+      if (proposalSubmit) proposalSubmit.disabled = true;
+      const label = nodeById.get(id)?.label || "source node";
+      if (drawStatus) drawStatus.textContent = `${label} is the source. Select or drag to a different target node.`;
+      drawProposalPath(id, proposalPoint(id));
+      announce(`${label} selected as proposal source. Choose a target.`);
+      return;
+    }
+    if (id === proposalSourceId) {
+      announce("A relationship proposal requires a different target node.");
+      return;
+    }
+    proposalTargetId = id;
+    drawProposalPath(proposalSourceId, proposalPoint(id));
+    syncProposalForm();
+    if (proposalSubmit) proposalSubmit.disabled = false;
+    const sourceLabel = nodeById.get(proposalSourceId)?.label || "Source";
+    const targetLabel = nodeById.get(id)?.label || "target";
+    if (drawStatus) {
+      drawStatus.textContent = `${sourceLabel} → ${targetLabel}. Review the typed, proposal-only change before submitting.`;
+    }
+    announce(`${sourceLabel} to ${targetLabel} drawn as a proposal preview. Canonical knowledge is unchanged.`);
+  };
+
+  const cancelProposal = () => {
+    proposalMode = false;
+    proposalSourceId = null;
+    proposalTargetId = null;
+    proposalDrawing = null;
+    if (proposalPath) proposalPath.hidden = true;
+    if (proposalSubmit) proposalSubmit.disabled = true;
+    if (drawControls) drawControls.hidden = true;
+    drawControl?.setAttribute("aria-pressed", "false");
+    root.dataset.proposalMode = "false";
+    announce("Relationship proposal drawing cancelled. Canonical knowledge was unchanged.");
   };
 
   if (!window.dagre || !window.dagre.graphlib) {
@@ -132,6 +243,7 @@
       edgeLayer.append(path);
       pathById.set(edge.id, path);
     });
+    if (proposalPath) edgeLayer.append(proposalPath);
     updateEdges();
   };
 
@@ -153,6 +265,10 @@
     }
     selectedId = id;
     button.setAttribute("aria-pressed", "true");
+    if (questionEntity) questionEntity.value = id;
+    if (annotationControl) annotationControl.disabled = false;
+    if (focusControl) focusControl.disabled = false;
+    if (expandControl) expandControl.disabled = Number(depthSelect?.value || 2) >= 4;
     if (focus) button.focus();
     announce(`${node.label} selected. Loading current permitted detail.`);
     const title = root.querySelector("#canvas-inspector-title");
@@ -190,8 +306,51 @@
         item.textContent = `${source.predicate} · ${source.freshness} · ${source.review_state}${citation}`;
         sourceList.append(item);
       });
-      root.querySelector("[data-inspector-context]").textContent =
-        "Only currently permitted governed detail is shown. Absent decisions, policies, risks, incidents, work, or pull requests are unavailable—not inferred.";
+      const renderDetailList = (selector, items, emptyText, describe) => {
+        const list = root.querySelector(selector);
+        list.replaceChildren();
+        if (!items.length) {
+          const item = document.createElement("li");
+          item.textContent = emptyText;
+          list.append(item);
+          return;
+        }
+        items.forEach((entry) => {
+          const item = document.createElement("li");
+          item.textContent = describe(entry);
+          list.append(item);
+        });
+      };
+      renderDetailList(
+        "[data-inspector-relationships]",
+        detail.relationships,
+        "No current permitted relationship is connected to this entity.",
+        (entry) => `${entry.direction} · ${entry.type} · ${entry.source_label} → ${entry.target_label}`,
+      );
+      renderDetailList(
+        "[data-inspector-decisions]",
+        detail.decisions_policies,
+        "No connected decision or policy is currently permitted.",
+        (entry) => `${entry.type} · ${entry.label} · ${entry.status}`,
+      );
+      renderDetailList(
+        "[data-inspector-risks]",
+        detail.risks_incidents,
+        "No connected risk or incident is currently permitted.",
+        (entry) => `${entry.type} · ${entry.label} · ${entry.status}`,
+      );
+      renderDetailList(
+        "[data-inspector-work]",
+        [...detail.active_work, ...detail.recent_pull_requests],
+        "No connected active work or recent pull request is currently permitted.",
+        (entry) => `${entry.type} · ${entry.label} · ${entry.status}`,
+      );
+      renderDetailList(
+        "[data-inspector-history]",
+        detail.history,
+        "No authorized assertion revision history is available.",
+        (entry) => `${entry.predicate} · revision ${entry.revision} · ${entry.created_at}`,
+      );
       root.querySelector("[data-inspector-actions]").textContent = detail.permitted_actions.propose_relationship
         ? "View layout may be saved separately. Relationship changes require a review proposal. Canonical deletion is unavailable here."
         : "Current role can inspect this entity. Canonical mutation and deletion are unavailable here.";
@@ -243,7 +402,11 @@
         "canvas-node__meta",
         `${node.freshness} · ${node.owner || "unassigned"}${node.has_conflict ? " · conflict" : ""}`,
       );
-      button.addEventListener("click", () => selectNode(node.id));
+      button.addEventListener("click", () => {
+        if (suppressNodeClick) return;
+        if (proposalMode) chooseProposalEndpoint(node.id);
+        selectNode(node.id);
+      });
       button.addEventListener("focus", () => {
         focusedId = node.id;
         buttonById.forEach((item, candidateId) => {
@@ -260,9 +423,11 @@
           buttonById.get(nodes[0]?.id)?.focus();
         } else if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
+          if (proposalMode) chooseProposalEndpoint(node.id);
           selectNode(node.id);
         } else if (event.key === "Escape") {
           event.preventDefault();
+          if (proposalMode) cancelProposal();
           viewport.focus();
         }
       });
@@ -270,6 +435,13 @@
         if (event.button !== 0) return;
         event.stopPropagation();
         button.setPointerCapture(event.pointerId);
+        if (proposalMode) {
+          proposalSourceId = null;
+          proposalTargetId = null;
+          proposalDrawing = { sourceId: node.id, pointerId: event.pointerId };
+          chooseProposalEndpoint(node.id);
+          return;
+        }
         const position = positionById.get(node.id);
         dragging = {
           id: node.id,
@@ -281,6 +453,14 @@
         };
       });
       button.addEventListener("pointermove", (event) => {
+        if (proposalDrawing?.pointerId === event.pointerId) {
+          const rect = viewport.getBoundingClientRect();
+          drawProposalPath(proposalDrawing.sourceId, {
+            x: (event.clientX - rect.left - panX) / zoom,
+            y: (event.clientY - rect.top - panY) / zoom,
+          });
+          return;
+        }
         if (!dragging || dragging.pointerId !== event.pointerId) return;
         const x = dragging.x + (event.clientX - dragging.startX) / zoom;
         const y = dragging.y + (event.clientY - dragging.startY) / zoom;
@@ -292,6 +472,20 @@
         drawMinimap();
       });
       button.addEventListener("pointerup", (event) => {
+        if (proposalDrawing?.pointerId === event.pointerId) {
+          const target = document.elementFromPoint(event.clientX, event.clientY)?.closest(".canvas-node");
+          proposalDrawing = null;
+          if (target?.dataset.nodeId) {
+            chooseProposalEndpoint(target.dataset.nodeId, { forceTarget: true });
+          } else if (proposalSourceId) {
+            drawProposalPath(proposalSourceId, proposalPoint(proposalSourceId));
+          }
+          suppressNodeClick = true;
+          setTimeout(() => {
+            suppressNodeClick = false;
+          }, 0);
+          return;
+        }
         if (dragging?.pointerId !== event.pointerId) return;
         dragging = null;
         announce(`${node.label} moved in this view only. Save layout to create a new presentation revision.`);
@@ -302,7 +496,6 @@
     });
   };
 
-  const filterForm = document.querySelector(".canvas-filter-form");
   const applyLocalFilters = () => {
     if (!filterForm) return;
     const started = performance.now();
@@ -343,6 +536,35 @@
   filterForm?.querySelectorAll("select[name='freshness'], select[name='type']").forEach((control) =>
     control.addEventListener("change", applyLocalFilters),
   );
+
+  focusControl?.addEventListener("click", () => {
+    if (!selectedId || !focusSelect || !filterForm) return;
+    focusSelect.value = selectedId;
+    filterForm.requestSubmit();
+  });
+
+  expandControl?.addEventListener("click", () => {
+    if (!selectedId || !focusSelect || !depthSelect || !filterForm) return;
+    focusSelect.value = selectedId;
+    depthSelect.value = String(Math.min(4, Number(depthSelect.value || 2) + 1));
+    filterForm.requestSubmit();
+  });
+
+  annotationControl?.addEventListener("click", () => {
+    const body = annotationBody?.value.trim();
+    const position = selectedId ? positionById.get(selectedId) : null;
+    if (!selectedId || !body || !position) return;
+    annotations.push({
+      entity_id: selectedId,
+      body,
+      x: position.x,
+      y: position.y,
+    });
+    annotationBody.value = "";
+    dirty = true;
+    renderAnnotations();
+    announce("Annotation added to this layout. Save layout to create an immutable presentation revision.");
+  });
 
   function drawMinimap() {
     if (!minimap || minimap.hidden) return;
@@ -448,14 +670,90 @@
     event.currentTarget.setAttribute("aria-pressed", String(!minimap.hidden));
     drawMinimap();
   });
+  drawControl?.addEventListener("click", () => {
+    if (proposalMode) {
+      cancelProposal();
+      return;
+    }
+    proposalMode = true;
+    proposalSourceId = null;
+    proposalTargetId = null;
+    root.dataset.proposalMode = "true";
+    drawControl.setAttribute("aria-pressed", "true");
+    if (drawControls) drawControls.hidden = false;
+    if (drawStatus) {
+      drawStatus.textContent = "Select or drag from a source node, then select or drag to a target. No canonical relationship will be changed.";
+    }
+    announce("Relationship proposal drawing enabled. Choose a source node and a target node.");
+    buttonById.get(focusedId || nodes[0]?.id)?.focus();
+  });
+  root.querySelector("[data-canvas-cancel-proposal]")?.addEventListener("click", cancelProposal);
+  proposalType?.addEventListener("change", syncProposalForm);
+  proposalSubmit?.addEventListener("click", () => {
+    if (!proposalSourceId || !proposalTargetId || !proposalForm) return;
+    syncProposalForm();
+    const details = proposalForm.closest("details");
+    if (details) details.open = true;
+    proposalForm.querySelector("textarea[name='rationale']")?.focus();
+    proposalForm.scrollIntoView({ behavior: "smooth", block: "center" });
+    announce("Proposal preview copied to the governed form. Add a rationale and submit for review; canonical knowledge remains unchanged.");
+  });
 
   document.querySelectorAll("[data-table-node]").forEach((button) => {
-    button.addEventListener("click", () => selectNode(button.dataset.tableNode, { focus: true }));
+    button.addEventListener("click", () => {
+      if (proposalMode) chooseProposalEndpoint(button.dataset.tableNode);
+      selectNode(button.dataset.tableNode, { focus: true });
+    });
   });
 
   const requestHeaders = () => ({
     "Content-Type": "application/json",
     "X-CSRFToken": csrf?.value || "",
+  });
+
+  questionForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const results = root.querySelector("[data-canvas-question-results]");
+    const repository = questionForm.querySelector("[data-canvas-question-repository]")?.value;
+    const question = questionForm.querySelector("[data-canvas-question-text]")?.value.trim();
+    const entityId = questionEntity?.value;
+    if (!results || !repository || !question || !entityId) return;
+    results.replaceChildren();
+    const loadingItem = document.createElement("li");
+    loadingItem.textContent = "Retrieving authorized evidence…";
+    results.append(loadingItem);
+    try {
+      const response = await fetch(root.dataset.questionEndpoint, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: requestHeaders(),
+        body: JSON.stringify({
+          entity_id: entityId,
+          repository_id: repository,
+          question,
+        }),
+      });
+      if (!response.ok) throw new Error("question unavailable");
+      const payload = await response.json();
+      results.replaceChildren();
+      if (!payload.results.length) {
+        const item = document.createElement("li");
+        item.textContent = payload.limitation;
+        results.append(item);
+      }
+      payload.results.forEach((result) => {
+        const item = document.createElement("li");
+        item.textContent = `${result.text} · ${result.canonical_url}`;
+        results.append(item);
+      });
+      announce(`Selection-scoped evidence retrieved for ${payload.entity.label}.`);
+    } catch (_error) {
+      results.replaceChildren();
+      const item = document.createElement("li");
+      item.textContent = "Scoped evidence is unavailable. Access may have changed.";
+      results.append(item);
+      announce("Selection-scoped evidence could not be retrieved.");
+    }
   });
 
   root.querySelector("[data-canvas-save]")?.addEventListener("click", async (event) => {
@@ -474,7 +772,12 @@
       filters: [],
       layers: [],
       groups: [],
-      annotations: [],
+      annotations: annotations.map((annotation) => ({
+        entity_id: annotation.entity_id || null,
+        body: annotation.body,
+        x: Number(annotation.x),
+        y: Number(annotation.y),
+      })),
     };
     try {
       const response = await fetch(root.dataset.saveEndpoint, {
@@ -528,16 +831,15 @@
     }
   });
 
-  const proposal = document.querySelector(".canvas-proposal-form");
   const updateProposalRevisions = () => {
-    if (!proposal) return;
-    const source = proposal.querySelector("select[name='source_id']").selectedOptions[0];
-    const target = proposal.querySelector("select[name='target_id']").selectedOptions[0];
-    proposal.querySelector("[data-source-revision]").value = source?.dataset.revision || "1";
-    proposal.querySelector("[data-target-revision]").value = target?.dataset.revision || "1";
+    if (!proposalForm) return;
+    const source = proposalForm.querySelector("select[name='source_id']").selectedOptions[0];
+    const target = proposalForm.querySelector("select[name='target_id']").selectedOptions[0];
+    proposalForm.querySelector("[data-source-revision]").value = source?.dataset.revision || "1";
+    proposalForm.querySelector("[data-target-revision]").value = target?.dataset.revision || "1";
   };
-  proposal?.querySelector("select[name='source_id']")?.addEventListener("change", updateProposalRevisions);
-  proposal?.querySelector("select[name='target_id']")?.addEventListener("change", updateProposalRevisions);
+  proposalForm?.querySelector("select[name='source_id']")?.addEventListener("change", updateProposalRevisions);
+  proposalForm?.querySelector("select[name='target_id']")?.addEventListener("change", updateProposalRevisions);
   updateProposalRevisions();
 
   resizeWorld();

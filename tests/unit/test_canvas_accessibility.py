@@ -16,6 +16,11 @@ def test_canvas_template_keeps_a_complete_no_javascript_relationship_table() -> 
     assert "<caption" in template
     assert "data-canvas-viewport" in template
     assert "data-canvas-inspector" in template
+    assert "data-canvas-focus-select" in template
+    assert "data-canvas-draw-relationship" in template
+    assert "data-canvas-proposal-edge" in template
+    assert "not page.resolved_query.layers or key in page.resolved_query.layers" in template
+    assert "Revoke this share" in template
     assert "Why are these connected?" in template
     assert "{% csrf_token %}" in template
 
@@ -34,6 +39,9 @@ def test_canvas_script_has_keyboard_minimap_and_no_browser_secret_storage() -> N
         "anva-canvas-layout",
         "anva-canvas-gesture-frame",
         "PerformanceObserver",
+        "chooseProposalEndpoint",
+        "drawProposalPath",
+        "requestSubmit",
     ):
         assert required in script
     for forbidden in ("innerHTML", "localStorage", "sessionStorage", "Authorization", "eval("):

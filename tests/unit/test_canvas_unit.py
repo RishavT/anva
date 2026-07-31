@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import patch
@@ -23,6 +24,7 @@ from anva.core.services.canvas import (
     AuthorizedCanvasEdge,
     CanvasQuery,
     _bounded_integer,
+    _canonical_presentation,
     _canvas_payload_size,
     _coordinate,
     _dimension,
@@ -73,6 +75,7 @@ def test_saved_semantic_query_is_typed_closed_and_canonical() -> None:
             "entity_types": ["SERVICE", "GOAL", "SERVICE"],
             "layers": ["ownership", "execution"],
             "freshness": "FRESH",
+            "as_of": "2026-07-31T12:30:00Z",
             "depth": 4,
         }
     )
@@ -82,6 +85,7 @@ def test_saved_semantic_query_is_typed_closed_and_canonical() -> None:
         "entity_types": ["GOAL", "SERVICE"],
         "layers": ["execution", "ownership"],
         "freshness": "FRESH",
+        "as_of": "2026-07-31T12:30:00+00:00",
         "depth": 4,
     }
     with pytest.raises(ValueError, match="unknown value"):
@@ -102,6 +106,11 @@ def test_saved_semantic_query_is_typed_closed_and_canonical() -> None:
         _normalized_semantic_query({"freshness": "SECRET"})
     with pytest.raises(ValueError, match="secret"):
         _normalized_semantic_query({"search": "ghp_abcdefghijklmnopqrstuvwxyz123456"})
+    with pytest.raises(ValueError, match="timezone-aware"):
+        _normalized_semantic_query({"as_of": "2026-07-31T12:30:00"})
+    with pytest.raises(ValueError, match="timezone-aware"):
+        CanvasQuery(as_of=datetime(2026, 7, 31, 12, 30, tzinfo=UTC).replace(tzinfo=None))
+    assert CanvasQuery(as_of=datetime(2026, 7, 31, 12, 30, tzinfo=UTC)).as_of is not None
 
 
 @pytest.mark.unit
@@ -206,6 +215,90 @@ def test_canvas_presentation_scalar_validators_reject_closed_boundaries() -> Non
     with pytest.raises(ValueError, match="layer"):
         _layer_key("private")
     assert _filter_operator(CanvasFilter.Operator.EQUALS) == CanvasFilter.Operator.EQUALS
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"nested": ["safe", {"token": "ghp_abcdefghijklmnopqrstuvwxyz123456"}]},
+        {"Bearer abcdefghijklmnopqrstuvwxyz": "nested key"},
+        ["-----BEGIN PRIVATE KEY-----"],
+        {"cookie": {"value": "sessionid=super-secret-session"}},
+    ],
+)
+def test_canvas_filter_values_recursively_reject_secret_shaped_strings(
+    value: object,
+) -> None:
+    with pytest.raises(ValueError, match="secret"):
+        _canonical_presentation(
+            placements=[],
+            filters=[
+                {
+                    "field": "status",
+                    "operator": CanvasFilter.Operator.EQUALS,
+                    "value": value,
+                }
+            ],
+            layers=[],
+            groups=[],
+            annotations=[],
+        )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("field", "item", "message"),
+    [
+        (
+            "placements",
+            {
+                "entity_id": str(uuid.uuid4()),
+                "x": 0,
+                "y": 0,
+                "is_pinned": "false",
+                "is_hidden": False,
+                "group_index": None,
+            },
+            "boolean",
+        ),
+        (
+            "filters",
+            {"field": "status", "operator": "EQUALS", "value": "ACTIVE", "extra": 1},
+            "fields",
+        ),
+        (
+            "layers",
+            {"key": "execution", "label": 7, "is_visible": True},
+            "text",
+        ),
+        (
+            "groups",
+            {"label": "Group", "x": "0", "y": 0, "width": 10, "height": 10},
+            "coordinate",
+        ),
+        (
+            "annotations",
+            {"entity_id": None, "body": [], "x": 0, "y": 0},
+            "text",
+        ),
+    ],
+)
+def test_canvas_presentation_children_are_closed_and_strictly_typed(
+    field: str,
+    item: dict[str, object],
+    message: str,
+) -> None:
+    presentation: dict[str, list[dict[str, object]]] = {
+        "placements": [],
+        "filters": [],
+        "layers": [],
+        "groups": [],
+        "annotations": [],
+    }
+    presentation[field].append(item)
+    with pytest.raises(ValueError, match=message):
+        _canonical_presentation(**presentation)
 
 
 @pytest.mark.unit

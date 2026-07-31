@@ -19,6 +19,7 @@ def test_canvas_openapi_surfaces_are_authenticated_bounded_and_closed() -> None:
         "/canvas/views",
         "/canvas/views/{resource_id}/revisions",
         "/canvas/views/{resource_id}/shares",
+        "/canvas/shares/{resource_id}/revoke",
         "/canvas/relationship-proposals",
     }
     assert expected <= paths.keys()
@@ -39,6 +40,25 @@ def test_canvas_openapi_surfaces_are_authenticated_bounded_and_closed() -> None:
         "minimum": 1,
         "maximum": 600,
     }
+    assert cast(dict[str, object], query_schema["properties"])["as_of"] == {
+        "type": "string",
+        "format": "date-time",
+    }
+
+    revision = cast(dict[str, object], paths["/canvas/views/{resource_id}/revisions"])["post"]
+    revision_body = cast(dict[str, object], cast(dict[str, object], revision)["requestBody"])
+    revision_content = cast(dict[str, object], revision_body["content"])
+    revision_schema = cast(
+        dict[str, object],
+        cast(dict[str, object], revision_content["application/json"])["schema"],
+    )
+    presentation = cast(dict[str, object], revision_schema["properties"])["presentation"]
+    presentation_properties = cast(
+        dict[str, object], cast(dict[str, object], presentation)["properties"]
+    )
+    for child in ("placements", "filters", "layers", "groups", "annotations"):
+        items = cast(dict[str, object], presentation_properties[child])["items"]
+        assert cast(dict[str, object], items)["additionalProperties"] is False
 
     proposal = cast(dict[str, object], paths["/canvas/relationship-proposals"])["post"]
     proposal_body = cast(dict[str, object], cast(dict[str, object], proposal)["requestBody"])

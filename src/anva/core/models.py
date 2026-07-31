@@ -1620,6 +1620,10 @@ class CanvasShare(UUIDModel):
     created_by_id = models.CharField(max_length=200)
     expires_at = models.DateTimeField(null=True, blank=True)
     revoked_at = models.DateTimeField(null=True, blank=True)
+    revoked_by_type = models.CharField(max_length=20, null=True, blank=True)
+    revoked_by_id = models.CharField(max_length=200, null=True, blank=True)
+    revocation_idempotency_key = models.CharField(max_length=64, null=True, blank=True)
+    revocation_request_hash = models.CharField(max_length=64, null=True, blank=True)
     idempotency_key = models.CharField(max_length=64)
     request_hash = models.CharField(max_length=64)
     created_at = models.DateTimeField(default=timezone.now, editable=False)
@@ -1641,6 +1645,39 @@ class CanvasShare(UUIDModel):
             models.CheckConstraint(
                 condition=Q(request_hash__regex=r"^[a-f0-9]{64}$"),
                 name="core_canvas_share_request_sha256",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        revoked_at__isnull=True,
+                        revoked_by_type__isnull=True,
+                        revoked_by_id__isnull=True,
+                        revocation_idempotency_key__isnull=True,
+                        revocation_request_hash__isnull=True,
+                    )
+                    | Q(
+                        revoked_at__isnull=False,
+                        revoked_by_type__isnull=False,
+                        revoked_by_id__isnull=False,
+                        revocation_idempotency_key__isnull=False,
+                        revocation_request_hash__isnull=False,
+                    )
+                ),
+                name="core_canvas_share_revoke_complete",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(revocation_idempotency_key__isnull=True)
+                    | Q(revocation_idempotency_key__regex=r"^[a-f0-9]{64}$")
+                ),
+                name="core_canvas_share_revoke_idem_sha256",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(revocation_request_hash__isnull=True)
+                    | Q(revocation_request_hash__regex=r"^[a-f0-9]{64}$")
+                ),
+                name="core_canvas_share_revoke_request_sha256",
             ),
         ]
 

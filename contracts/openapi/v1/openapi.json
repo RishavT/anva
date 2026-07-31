@@ -174,6 +174,43 @@
         "title": "Anva Manual Diff Assurance Report",
         "type": "object"
       },
+      "canvas-filter-value": {
+        "oneOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "integer"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "maxLength": 2000,
+            "type": "string"
+          },
+          {
+            "items": {
+              "$ref": "#/components/schemas/canvas-filter-value"
+            },
+            "maxItems": 2000,
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/canvas-filter-value"
+            },
+            "maxProperties": 2000,
+            "propertyNames": {
+              "maxLength": 500
+            },
+            "type": "object"
+          }
+        ]
+      },
       "context-packet": {
         "$defs": {
           "context_item": {
@@ -3303,6 +3340,10 @@
                     "format": "uuid",
                     "type": "string"
                   },
+                  "as_of": {
+                    "format": "date-time",
+                    "type": "string"
+                  },
                   "depth": {
                     "maximum": 4,
                     "minimum": 1,
@@ -3553,6 +3594,69 @@
         }
       }
     },
+    "/canvas/shares/{resource_id}/revoke": {
+      "post": {
+        "description": "Immediately close one sign-in-required link without deleting its pinned immutable view revision.",
+        "operationId": "revokeOrganizationalCanvasShare",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expected_view_revision": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "idempotency_key": {
+                    "maxLength": 500,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "expected_view_revision",
+                  "idempotency_key"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
     "/canvas/views": {
       "get": {
         "operationId": "listOrganizationalCanvasViews",
@@ -3617,6 +3721,10 @@
                   "semantic_query": {
                     "additionalProperties": false,
                     "properties": {
+                      "as_of": {
+                        "format": "date-time",
+                        "type": "string"
+                      },
                       "depth": {
                         "maximum": 4,
                         "minimum": 1,
@@ -3800,6 +3908,36 @@
                     "properties": {
                       "annotations": {
                         "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "body": {
+                              "maxLength": 2000,
+                              "type": "string"
+                            },
+                            "entity_id": {
+                              "format": "uuid",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "x": {
+                              "maximum": 1000000,
+                              "minimum": -1000000,
+                              "type": "number"
+                            },
+                            "y": {
+                              "maximum": 1000000,
+                              "minimum": -1000000,
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "entity_id",
+                            "body",
+                            "x",
+                            "y"
+                          ],
                           "type": "object"
                         },
                         "maxItems": 100,
@@ -3807,6 +3945,37 @@
                       },
                       "filters": {
                         "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "field": {
+                              "enum": [
+                                "entity_type",
+                                "owner",
+                                "status",
+                                "time",
+                                "risk",
+                                "freshness"
+                              ],
+                              "type": "string"
+                            },
+                            "operator": {
+                              "enum": [
+                                "EQUALS",
+                                "CONTAINS",
+                                "IN",
+                                "SINCE"
+                              ],
+                              "type": "string"
+                            },
+                            "value": {
+                              "$ref": "#/components/schemas/canvas-filter-value"
+                            }
+                          },
+                          "required": [
+                            "field",
+                            "operator",
+                            "value"
+                          ],
                           "type": "object"
                         },
                         "maxItems": 20,
@@ -3814,6 +3983,40 @@
                       },
                       "groups": {
                         "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "height": {
+                              "exclusiveMinimum": 0,
+                              "maximum": 1000000,
+                              "type": "number"
+                            },
+                            "label": {
+                              "maxLength": 200,
+                              "type": "string"
+                            },
+                            "width": {
+                              "exclusiveMinimum": 0,
+                              "maximum": 1000000,
+                              "type": "number"
+                            },
+                            "x": {
+                              "maximum": 1000000,
+                              "minimum": -1000000,
+                              "type": "number"
+                            },
+                            "y": {
+                              "maximum": 1000000,
+                              "minimum": -1000000,
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "label",
+                            "x",
+                            "y",
+                            "width",
+                            "height"
+                          ],
                           "type": "object"
                         },
                         "maxItems": 50,
@@ -3821,6 +4024,31 @@
                       },
                       "layers": {
                         "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "is_visible": {
+                              "type": "boolean"
+                            },
+                            "key": {
+                              "enum": [
+                                "execution",
+                                "ownership",
+                                "dependencies",
+                                "governance",
+                                "provenance"
+                              ],
+                              "type": "string"
+                            },
+                            "label": {
+                              "maxLength": 100,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "key",
+                            "label",
+                            "is_visible"
+                          ],
                           "type": "object"
                         },
                         "maxItems": 20,
@@ -3889,6 +4117,10 @@
                   "semantic_query": {
                     "additionalProperties": false,
                     "properties": {
+                      "as_of": {
+                        "format": "date-time",
+                        "type": "string"
+                      },
                       "depth": {
                         "maximum": 4,
                         "minimum": 1,

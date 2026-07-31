@@ -7,11 +7,13 @@ import math
 import os
 import platform
 import uuid
+from datetime import timedelta
 from pathlib import Path
 from shutil import which
 from typing import cast
 
 import pytest
+from django.utils import timezone
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -23,7 +25,10 @@ from selenium.webdriver.support.ui import Select, WebDriverWait
 
 from anva.core.models import (
     AccessScope,
+    AssertionConflict,
+    CanvasAnnotation,
     CanvasView,
+    KnowledgeAssertion,
     KnowledgeEntity,
     KnowledgeProposal,
     KnowledgeRelationship,
@@ -67,6 +72,7 @@ def _cpu_model() -> str:
 
 def _capture(driver: webdriver.Chrome, name: str) -> None:
     SCREENSHOTS.mkdir(parents=True, exist_ok=True)
+    driver.execute_script("window.scrollTo(0, window.scrollY)")
     driver.save_screenshot(str(SCREENSHOTS / name))
 
 
@@ -102,14 +108,112 @@ def _setup(driver: webdriver.Chrome, base_url: str) -> None:
     driver.find_element(By.CSS_SELECTOR, 'button[type="submit"]').click()
 
 
-def _seed_canvas(root: Path) -> tuple[CanvasView, KnowledgeEntity, KnowledgeEntity]:
+def _seed_canvas(root: Path) -> tuple[CanvasView, dict[str, KnowledgeEntity]]:
     repository = Repository.objects.get(external_id="github:northstar/payments")
     organization = repository.organization
-    scope = AccessScope.objects.get(organization=organization)
+    scope = AccessScope.objects.get(organization=organization, is_active=True)
     user = User.objects.get(email="admin@northstar.test")
     Membership.objects.get(organization=organization, user=user)
-    entities = [
-        KnowledgeEntity.objects.create(
+    entities: dict[str, KnowledgeEntity] = {}
+    for key, entity_type, canonical_key, display_name, owner, status, risk in (
+        (
+            "goal",
+            "GOAL",
+            "goal:retention",
+            "Increase customer retention",
+            "Growth",
+            "ACTIVE",
+            "LOW",
+        ),
+        ("metric", "METRIC", "metric:nrr", "Net revenue retention", "Finance", "TRACKED", "LOW"),
+        (
+            "initiative",
+            "INITIATIVE",
+            "initiative:checkout",
+            "Checkout modernization",
+            "Commerce",
+            "ACTIVE",
+            "MEDIUM",
+        ),
+        (
+            "requirement",
+            "REQUIREMENT",
+            "requirement:checkout-slo",
+            "Checkout availability requirement",
+            "Commerce",
+            "ACTIVE",
+            "MEDIUM",
+        ),
+        (
+            "pull_request",
+            "PULL_REQUEST",
+            "pull-request:482",
+            "PR #482 resilient checkout",
+            "Platform",
+            "OPEN",
+            "LOW",
+        ),
+        ("product", "PRODUCT", "product:storefront", "Storefront", "Commerce", "ACTIVE", "MEDIUM"),
+        (
+            "component",
+            "COMPONENT",
+            "component:checkout",
+            "Checkout component",
+            "Commerce",
+            "ACTIVE",
+            "MEDIUM",
+        ),
+        ("api", "API", "api:payments", "Payments API", "Platform", "ACTIVE", "HIGH"),
+        (
+            "repository",
+            "REPOSITORY",
+            "repository:payments",
+            "Payments repository",
+            "Platform",
+            "ACTIVE",
+            "LOW",
+        ),
+        ("service", "SERVICE", "service:payments", "Payments خدمة", "Platform", "HEALTHY", "HIGH"),
+        ("team", "TEAM", "team:platform", "Platform team", "Engineering", "ACTIVE", "LOW"),
+        (
+            "risk",
+            "RISK",
+            "risk:provider",
+            "External provider concentration",
+            "Risk",
+            "OPEN",
+            "HIGH",
+        ),
+        ("policy", "POLICY", "policy:pci", "PCI change policy", "Security", "ACTIVE", "MEDIUM"),
+        (
+            "incident",
+            "INCIDENT",
+            "incident:payments",
+            "Payments provider incident",
+            "SRE",
+            "RESOLVED",
+            "HIGH",
+        ),
+        (
+            "decision",
+            "DECISION",
+            "decision:retry",
+            "Adopt idempotent payment retries",
+            "Architecture",
+            "ACCEPTED",
+            "LOW",
+        ),
+        (
+            "task",
+            "TASK",
+            "task:checkout",
+            "Implement checkout retries",
+            "Platform",
+            "IN_PROGRESS",
+            "MEDIUM",
+        ),
+    ):
+        entities[key] = KnowledgeEntity.objects.create(
             organization=organization,
             access_scope=scope,
             entity_type=entity_type,
@@ -117,31 +221,6 @@ def _seed_canvas(root: Path) -> tuple[CanvasView, KnowledgeEntity, KnowledgeEnti
             display_name=display_name,
             attributes={"owner": owner, "status": status, "risk": risk},
         )
-        for entity_type, canonical_key, display_name, owner, status, risk in (
-            ("GOAL", "goal:retention", "Increase customer retention", "Growth", "ACTIVE", "LOW"),
-            ("METRIC", "metric:nrr", "Net revenue retention", "Finance", "TRACKED", "LOW"),
-            (
-                "INITIATIVE",
-                "initiative:checkout",
-                "Checkout modernization",
-                "Commerce",
-                "ACTIVE",
-                "MEDIUM",
-            ),
-            ("PRODUCT", "product:storefront", "Storefront", "Commerce", "ACTIVE", "MEDIUM"),
-            (
-                "REPOSITORY",
-                "repository:payments",
-                "Payments repository",
-                "Platform",
-                "ACTIVE",
-                "LOW",
-            ),
-            ("SERVICE", "service:payments", "Payments خدمة", "Platform", "HEALTHY", "HIGH"),
-            ("TEAM", "team:platform", "Platform team", "Engineering", "ACTIVE", "LOW"),
-            ("RISK", "risk:provider", "External provider concentration", "Risk", "OPEN", "HIGH"),
-        )
-    ]
     actor = ActorContext(
         organization_id=organization.id,
         actor_type="USER",
@@ -151,7 +230,15 @@ def _seed_canvas(root: Path) -> tuple[CanvasView, KnowledgeEntity, KnowledgeEnti
     )
     root.mkdir()
     (root / "service.json").write_text(
-        json.dumps({"service": "billing-runtime", "owner": "platform"}),
+        json.dumps(
+            {
+                "service": "billing-runtime",
+                "owner": "platform",
+                "system": "checkout",
+                "repository": "payments",
+                "status": "active",
+            }
+        ),
         encoding="utf-8",
     )
     source, created = connect_filesystem_source(
@@ -181,7 +268,170 @@ def _seed_canvas(root: Path) -> tuple[CanvasView, KnowledgeEntity, KnowledgeEnti
         worker_id=worker_id,
     )
     assert completed.state in {completed.State.COMPLETED, completed.State.PARTIALLY_COMPLETED}
-    assert KnowledgeRelationship.objects.filter(organization=organization).exists()
+    seed = KnowledgeRelationship.objects.filter(organization=organization).first()
+    assert seed is not None
+
+    def assertion_for(
+        entity: KnowledgeEntity,
+        predicate: str,
+        *,
+        inferred: bool = False,
+        freshness: str = KnowledgeAssertion.StalenessState.FRESH,
+    ) -> KnowledgeAssertion:
+        observed_at = timezone.now() - (
+            timedelta(days=180)
+            if freshness == KnowledgeAssertion.StalenessState.STALE
+            else timedelta()
+        )
+        return KnowledgeAssertion.objects.create(
+            organization=organization,
+            subject_key=entity.canonical_key,
+            predicate=predicate,
+            value={"fixture": "authorized-ingestion-derived"},
+            is_inferred=inferred,
+            extraction_class=seed.assertion.extraction_class,
+            extraction_method="browser-fixture-from-ingestion",
+            confidence=0.82 if inferred else 0.97,
+            valid_from=observed_at,
+            observed_at=observed_at,
+            staleness_state=freshness,
+            provenance=seed.assertion.provenance,
+            review_state=KnowledgeAssertion.ReviewState.AUTO_ACCEPTED,
+            access_scope=scope,
+        )
+
+    def relationship(
+        relationship_type: str,
+        source_entity: KnowledgeEntity,
+        target_entity: KnowledgeEntity,
+        *,
+        assertion: KnowledgeAssertion | None = None,
+    ) -> KnowledgeRelationship:
+        basis = assertion or seed.assertion
+        return KnowledgeRelationship.objects.create(
+            organization=organization,
+            relationship_type=relationship_type,
+            source_entity=source_entity,
+            target_entity=target_entity,
+            source_entity_type=source_entity.entity_type,
+            target_entity_type=target_entity.entity_type,
+            assertion=basis,
+            source_location=seed.source_location,
+            source_observation=seed.source_observation,
+            access_snapshot=seed.access_snapshot,
+            access_scope=scope,
+            extraction_class=basis.extraction_class,
+            confidence=basis.confidence,
+            observed_at=basis.observed_at,
+            review_state=KnowledgeRelationship.ReviewState.CONFIRMED,
+        )
+
+    for relationship_type, source_key, target_key in (
+        ("GOAL_MEASURED_BY_METRIC", "goal", "metric"),
+        ("INITIATIVE_SUPPORTS_GOAL", "initiative", "goal"),
+        ("REQUIREMENT_SUPPORTS_INITIATIVE", "requirement", "initiative"),
+        ("REQUIREMENT_IMPLEMENTED_BY_PULL_REQUEST", "requirement", "pull_request"),
+        ("INITIATIVE_AFFECTS_PRODUCT", "initiative", "product"),
+        ("PRODUCT_IMPLEMENTED_BY_REPOSITORY", "product", "repository"),
+        ("COMPONENT_BELONGS_TO_PRODUCT", "component", "product"),
+        ("API_CONSUMED_BY_COMPONENT", "api", "component"),
+        ("API_PROVIDED_BY_SERVICE", "api", "service"),
+        ("SERVICE_IMPLEMENTED_BY_REPOSITORY", "service", "repository"),
+        ("REPOSITORY_OWNED_BY_TEAM", "repository", "team"),
+        ("RISK_AFFECTS_ENTITY", "risk", "product"),
+        ("POLICY_APPLIES_TO_ENTITY", "policy", "service"),
+        ("INCIDENT_AFFECTED_ENTITY", "incident", "service"),
+        ("DECISION_APPLIES_TO_ENTITY", "decision", "service"),
+        ("TASK_CHANGES_ENTITY", "task", "product"),
+        ("PULL_REQUEST_CHANGES_ENTITY", "pull_request", "product"),
+    ):
+        relationship(relationship_type, entities[source_key], entities[target_key])
+
+    dense_services = [
+        KnowledgeEntity.objects.create(
+            organization=organization,
+            access_scope=scope,
+            entity_type=KnowledgeEntity.EntityType.SERVICE,
+            canonical_key=f"service:dense:{index:02d}",
+            display_name=f"Dense dependency service {index:02d}",
+            attributes={"owner": "Platform", "status": "ACTIVE", "risk": "MEDIUM"},
+        )
+        for index in range(36)
+    ]
+    for index, dense_service in enumerate(dense_services):
+        relationship("SERVICE_DEPENDS_ON_SERVICE", entities["service"], dense_service)
+        relationship(
+            "SERVICE_DEPENDS_ON_SERVICE",
+            dense_service,
+            dense_services[(index + 1) % len(dense_services)],
+        )
+        relationship(
+            "SERVICE_DEPENDS_ON_SERVICE",
+            dense_service,
+            dense_services[(index + 5) % len(dense_services)],
+        )
+    relationship(
+        "DEPENDS_ON",
+        entities["service"],
+        dense_services[0],
+    )
+    for index in range(20):
+        component = KnowledgeEntity.objects.create(
+            organization=organization,
+            access_scope=scope,
+            entity_type=KnowledgeEntity.EntityType.COMPONENT,
+            canonical_key=f"component:dense:{index:02d}",
+            display_name=f"Dense checkout component {index:02d}",
+            attributes={"owner": "Commerce", "status": "ACTIVE", "risk": "LOW"},
+        )
+        relationship("COMPONENT_BELONGS_TO_PRODUCT", component, entities["product"])
+        relationship("REPOSITORY_CONTAINS_COMPONENT", entities["repository"], component)
+
+    stale_assertion = assertion_for(
+        dense_services[0],
+        "stale owner",
+        freshness=KnowledgeAssertion.StalenessState.STALE,
+    )
+    inferred_assertion = assertion_for(
+        dense_services[1],
+        "inferred dependency",
+        inferred=True,
+    )
+    conflict_left = assertion_for(dense_services[2], "runtime owner")
+    conflict_right = assertion_for(
+        dense_services[2],
+        "runtime owner candidate",
+        freshness=KnowledgeAssertion.StalenessState.CONTRADICTED,
+    )
+    AssertionConflict.objects.create(
+        organization=organization,
+        left_assertion=conflict_left,
+        right_assertion=conflict_right,
+        predicate="owner",
+    )
+    assert stale_assertion.staleness_state == KnowledgeAssertion.StalenessState.STALE
+    assert inferred_assertion.is_inferred is True
+
+    foreign = Repository.objects.create(
+        organization=organization,
+        external_id="github:northstar/hidden",
+        name="hidden",
+        is_active=False,
+    )
+    assert foreign.is_active is False
+    hidden_scope = AccessScope.objects.create(
+        organization=organization,
+        name="inactive hidden scope",
+        all_repositories=False,
+        is_active=False,
+    )
+    KnowledgeEntity.objects.create(
+        organization=organization,
+        access_scope=hidden_scope,
+        entity_type=KnowledgeEntity.EntityType.SERVICE,
+        canonical_key="service:CANARY-HIDDEN-DENSE",
+        display_name="CANARY-HIDDEN-DENSE",
+    )
     view, created = create_canvas_view(
         actor=actor,
         name="Storefront operating map",
@@ -193,16 +443,20 @@ def _seed_canvas(root: Path) -> tuple[CanvasView, KnowledgeEntity, KnowledgeEnti
         idempotency_key="browser-storefront-map",
     )
     assert created
-    product = next(entity for entity in entities if entity.entity_type == "PRODUCT")
-    repository_entity = next(entity for entity in entities if entity.entity_type == "REPOSITORY")
-    return view, product, repository_entity
+    return view, entities
 
 
 def _add_performance_nodes() -> None:
     user = User.objects.get(email="admin@northstar.test")
     organization = Membership.objects.get(user=user).organization
-    scope = AccessScope.objects.get(organization=organization)
-    remaining = 300 - KnowledgeEntity.objects.filter(organization=organization).count()
+    scope = AccessScope.objects.get(organization=organization, is_active=True)
+    remaining = (
+        300
+        - KnowledgeEntity.objects.filter(
+            organization=organization,
+            access_scope=scope,
+        ).count()
+    )
     assert remaining > 0
     KnowledgeEntity.objects.bulk_create(
         [
@@ -217,7 +471,9 @@ def _add_performance_nodes() -> None:
             for index in range(remaining)
         ]
     )
-    assert KnowledgeEntity.objects.filter(organization=organization).count() == 300
+    assert (
+        KnowledgeEntity.objects.filter(organization=organization, access_scope=scope).count() == 300
+    )
 
 
 @pytest.mark.browser
@@ -235,7 +491,9 @@ def test_organizational_canvas_interaction_no_js_and_responsive_evidence(
     try:
         _setup(driver, base_url)
         wait.until(expected_conditions.url_contains("/app/onboarding"))
-        view, product, repository_entity = _seed_canvas(tmp_path / "browser-source")
+        view, entities = _seed_canvas(tmp_path / "browser-source")
+        product = entities["product"]
+        repository_entity = entities["repository"]
 
         driver.get(f"{base_url}/app/canvas?view={view.id}")
         wait.until(lambda current: len(current.find_elements(By.CSS_SELECTOR, ".canvas-node")) >= 8)
@@ -245,6 +503,47 @@ def test_organizational_canvas_interaction_no_js_and_responsive_evidence(
         assert driver.execute_script(
             "return JSON.parse(document.getElementById('canvas-data').textContent).edges.length > 0"
         )
+        graph_shape = driver.execute_script(
+            "const graph = JSON.parse(document.getElementById('canvas-data').textContent);"
+            "const degree = new Map(graph.nodes.map((node) => [node.id, 0]));"
+            "const pairs = new Map();"
+            "for (const edge of graph.edges) {"
+            " degree.set(edge.source, (degree.get(edge.source) || 0) + 1);"
+            " degree.set(edge.target, (degree.get(edge.target) || 0) + 1);"
+            " const pair = `${edge.source}:${edge.target}`;"
+            " pairs.set(pair, (pairs.get(pair) || 0) + 1);"
+            "}"
+            "const adjacency = new Map(graph.nodes.map((node) => [node.id, []]));"
+            "graph.edges.forEach((edge) => adjacency.get(edge.source)?.push(edge.target));"
+            "const visiting = new Set(), visited = new Set();"
+            "const cyclic = (id) => {"
+            " if (visiting.has(id)) return true;"
+            " if (visited.has(id)) return false;"
+            " visiting.add(id);"
+            " for (const next of adjacency.get(id) || []) if (cyclic(next)) return true;"
+            " visiting.delete(id); visited.add(id); return false;"
+            "};"
+            "return {"
+            " nodes: graph.nodes.length, edges: graph.edges.length,"
+            " maxDegree: Math.max(...degree.values()),"
+            " parallel: Math.max(...pairs.values()),"
+            " cycle: graph.nodes.some((node) => cyclic(node.id)),"
+            " stale: graph.nodes.some((node) => node.freshness === 'STALE'),"
+            " inferred: graph.nodes.some((node) => node.is_inferred),"
+            " conflict: graph.nodes.some((node) => node.has_conflict),"
+            " hiddenLeak: document.getElementById('canvas-data').textContent"
+            ".includes('CANARY-HIDDEN')"
+            "};"
+        )
+        assert graph_shape["nodes"] >= 70
+        assert graph_shape["edges"] >= 160
+        assert graph_shape["maxDegree"] >= 35
+        assert graph_shape["parallel"] >= 2
+        assert graph_shape["cycle"] is True
+        assert graph_shape["stale"] is True
+        assert graph_shape["inferred"] is True
+        assert graph_shape["conflict"] is True
+        assert graph_shape["hiddenLeak"] is False
         assert "Payments خدمة" in driver.find_element(By.TAG_NAME, "main").text
         assert (
             len(
@@ -256,11 +555,46 @@ def test_organizational_canvas_interaction_no_js_and_responsive_evidence(
         )
         _capture(driver, "01-canvas-desktop.png")
 
+        for source, target in (
+            (entities["goal"], entities["pull_request"]),
+            (entities["product"], entities["team"]),
+        ):
+            path_form = driver.find_element(By.CSS_SELECTOR, ".canvas-path-form")
+            Select(path_form.find_element(By.NAME, "path_from")).select_by_value(str(source.id))
+            Select(path_form.find_element(By.NAME, "path_to")).select_by_value(str(target.id))
+            path_form.find_element(By.CSS_SELECTOR, 'button[type="submit"]').click()
+            wait.until(
+                expected_conditions.presence_of_element_located(
+                    (By.CSS_SELECTOR, ".canvas-path-result ol")
+                )
+            )
+            assert len(driver.find_elements(By.CSS_SELECTOR, ".canvas-path-result li")) >= 2
+        _capture(driver, "06-canvas-required-traces.png")
+        driver.get(f"{base_url}/app/canvas?view={view.id}")
+        wait.until(
+            lambda current: len(current.find_elements(By.CSS_SELECTOR, ".canvas-node")) >= 70
+        )
+
         first_node = driver.find_element(By.CSS_SELECTOR, ".canvas-node")
         first_node.click()
         wait.until(
             lambda current: current.find_element(By.ID, "canvas-inspector-title").text
             != "Select a node"
+        )
+        question_form = driver.find_element(By.CSS_SELECTOR, "[data-canvas-question]")
+        question_form.find_element(By.NAME, "q").send_keys("billing-runtime")
+        question_form.find_element(By.CSS_SELECTOR, 'button[type="submit"]').click()
+        wait.until(
+            lambda current: "billing-runtime"
+            in current.find_element(By.CSS_SELECTOR, "[data-canvas-question-results]").text
+        )
+        driver.find_element(By.CSS_SELECTOR, "[data-canvas-annotation-body]").send_keys(
+            "Review this dependency before the next release."
+        )
+        driver.find_element(By.CSS_SELECTOR, "[data-canvas-add-annotation]").click()
+        assert (
+            "Review this dependency"
+            in driver.find_element(By.CSS_SELECTOR, "[data-canvas-annotations]").text
         )
         driver.find_element(By.CSS_SELECTOR, "[data-canvas-zoom-in]").click()
         assert driver.find_element(By.CSS_SELECTOR, "[data-canvas-zoom]").text != "100%"
@@ -273,17 +607,37 @@ def test_organizational_canvas_interaction_no_js_and_responsive_evidence(
         )
         view.refresh_from_db()
         assert view.revision == 2
+        assert CanvasAnnotation.objects.filter(view_revision__canvas_view=view).count() == 1
         _capture(driver, "02-canvas-inspector-saved-layout.png")
 
-        proposal = driver.find_element(By.CSS_SELECTOR, ".canvas-proposal")
-        driver.execute_script("arguments[0].open = true", proposal)
-        Select(proposal.find_element(By.NAME, "source_id")).select_by_value(str(product.id))
-        Select(proposal.find_element(By.NAME, "target_id")).select_by_value(
-            str(repository_entity.id)
-        )
-        Select(proposal.find_element(By.NAME, "relationship_type")).select_by_value(
+        driver.find_element(By.CSS_SELECTOR, "[data-canvas-draw-relationship]").click()
+        Select(driver.find_element(By.CSS_SELECTOR, "[data-canvas-proposal-type]")).select_by_value(
             "PRODUCT_IMPLEMENTED_BY_REPOSITORY"
         )
+        proposal_source = driver.find_element(
+            By.CSS_SELECTOR, f'.canvas-node[data-node-id="{product.id}"]'
+        )
+        proposal_target = driver.find_element(
+            By.CSS_SELECTOR, f'.canvas-node[data-node-id="{repository_entity.id}"]'
+        )
+        ActionChains(driver).click_and_hold(proposal_source).move_to_element(
+            proposal_target
+        ).release().perform()
+        wait.until(
+            lambda current: not current.find_element(
+                By.CSS_SELECTOR, "[data-canvas-submit-proposal]"
+            ).get_attribute("disabled")
+        )
+        assert driver.find_element(By.CSS_SELECTOR, "[data-canvas-proposal-edge]").is_displayed()
+        driver.find_element(By.CSS_SELECTOR, "[data-canvas-submit-proposal]").click()
+        proposal = driver.find_element(By.CSS_SELECTOR, ".canvas-proposal")
+        assert proposal.get_attribute("open") is not None
+        assert Select(
+            proposal.find_element(By.NAME, "source_id")
+        ).first_selected_option.get_attribute("value") == str(product.id)
+        assert Select(
+            proposal.find_element(By.NAME, "target_id")
+        ).first_selected_option.get_attribute("value") == str(repository_entity.id)
         proposal.find_element(By.NAME, "rationale").send_keys(
             "The governed Storefront product is implemented in this repository."
         )
@@ -524,9 +878,21 @@ def test_organizational_canvas_interaction_no_js_and_responsive_evidence(
                 "fixture": {
                     "fixture_key": "canvas-browser-performance-v1",
                     "visible_nodes": 300,
-                    "visible_relationships": 1,
+                    "visible_relationships": graph_shape["edges"],
                     "repositories": 1,
-                    "source": "real filesystem ingestion plus bounded synthetic identities",
+                    "source": (
+                        "real filesystem ingestion lineage plus authorized semantic trace and "
+                        "dense dependency fixtures"
+                    ),
+                    "shape": {
+                        "directed_cycle": True,
+                        "maximum_degree": graph_shape["maxDegree"],
+                        "parallel_edge_max": graph_shape["parallel"],
+                        "stale_node": True,
+                        "inferred_node": True,
+                        "conflicted_node": True,
+                        "hidden_canary_absent": True,
+                    },
                 },
             },
             "targets": {
@@ -577,6 +943,27 @@ def test_organizational_canvas_interaction_no_js_and_responsive_evidence(
             encoding="utf-8",
         )
         _capture(driver, "05-canvas-300-node-performance.png")
+
+        focus_form = driver.find_element(By.CSS_SELECTOR, ".canvas-filter-form")
+        Select(focus_form.find_element(By.NAME, "focus")).select_by_value(
+            str(entities["service"].id)
+        )
+        Select(focus_form.find_element(By.NAME, "depth")).select_by_value("1")
+        focus_form.find_element(By.CSS_SELECTOR, 'button[type="submit"]').click()
+        wait.until(
+            lambda current: current.find_element(By.TAG_NAME, "html").get_attribute(
+                "data-canvas-interactive"
+            )
+            == "true"
+        )
+        focused_graph = driver.execute_script(
+            "return JSON.parse(document.getElementById('canvas-data').textContent)"
+        )
+        assert focused_graph["semantic_query"]["root_entity_id"] == str(entities["service"].id)
+        assert focused_graph["semantic_query"]["depth"] == 1
+        assert 1 < focused_graph["counts"]["nodes"] < 100
+        assert focused_graph["counts"]["edges"] < graph_shape["edges"]
+        _capture(driver, "07-canvas-dense-progressive-focus.png")
 
         driver.execute_cdp_cmd("Emulation.setScriptExecutionDisabled", {"value": True})
         driver.set_window_size(320, 760)

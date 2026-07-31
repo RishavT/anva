@@ -61,6 +61,7 @@ from anva.core.services.canvas import (
     create_canvas_view,
     list_canvas_views,
     propose_canvas_relationship,
+    revoke_canvas_share,
     save_canvas_revision,
 )
 from anva.core.services.context import ActorContext
@@ -161,6 +162,22 @@ def _error(
         payload["path"] = path
         payload["reason"] = reason
     return JsonResponse(payload, status=status)
+
+
+def _canvas_json_response(payload: dict[str, object], *, status: int = 200) -> JsonResponse:
+    """Enforce the documented Canvas response budget on exact UTF-8 wire bytes."""
+    response = JsonResponse(
+        payload,
+        status=status,
+        json_dumps_params={
+            "ensure_ascii": False,
+            "separators": (",", ":"),
+            "sort_keys": True,
+        },
+    )
+    if len(response.content) > CANVAS_PAYLOAD_LIMIT_BYTES:
+        raise ValueError("Canvas response exceeds the 750 KiB byte budget")
+    return response
 
 
 def api_errors[**Parameters](
@@ -308,6 +325,7 @@ def _canvas_query_payload(payload: dict[str, object]) -> CanvasQuery:
             "status",
             "risk",
             "freshness",
+            "as_of",
             "search",
             "layers",
             "anchor_id",
@@ -344,6 +362,17 @@ def _canvas_query_payload(payload: dict[str, object]) -> CanvasQuery:
             raise ValueError(f"{name} must be an integer")
         return value
 
+    def optional_as_of() -> datetime | None:
+        value = payload.get("as_of")
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("as_of must be an ISO 8601 string")
+        parsed = parse_datetime(value)
+        if parsed is None or parsed.tzinfo is None:
+            raise ValueError("as_of must be timezone-aware")
+        return parsed
+
     view_revision = payload.get("view_revision")
     if view_revision is not None and (
         not isinstance(view_revision, int) or isinstance(view_revision, bool)
@@ -358,10 +387,11 @@ def _canvas_query_payload(payload: dict[str, object]) -> CanvasQuery:
         status=optional_text("status"),
         risk=optional_text("risk"),
         freshness=optional_text("freshness"),
+        as_of=optional_as_of(),
         search=optional_text("search"),
         layers=optional_strings("layers"),
         anchor_id=optional_uuid("anchor_id"),
-        depth=optional_int("depth", 2),
+        depth=optional_int("depth", 2) if "depth" in payload else None,
         node_limit=optional_int("node_limit", 300),
         edge_limit=optional_int("edge_limit", 600),
     )
@@ -393,9 +423,8 @@ def _canvas_presentation(payload: object) -> dict[str, list[dict[str, object]]]:
 def canvas_query(request: HttpRequest) -> JsonResponse:
     """Return only the deterministic union of strict per-repository authorized projections."""
     actor = _actor(request)
-    return JsonResponse(
-        canvas_projection(actor=actor, query=_canvas_query_payload(_canvas_json_body(request))),
-        json_dumps_params={"ensure_ascii": False, "separators": (",", ":")},
+    return _canvas_json_response(
+        canvas_projection(actor=actor, query=_canvas_query_payload(_canvas_json_body(request)))
     )
 
 
@@ -408,7 +437,7 @@ def canvas_path_query(request: HttpRequest) -> JsonResponse:
         allowed=frozenset({"source_id", "target_id", "repository_ids", "max_depth"}),
         required=frozenset({"source_id", "target_id"}),
     )
-    return JsonResponse(
+    return _canvas_json_response(
         canvas_path(
             actor=actor,
             source_id=uuid.UUID(_string(payload, "source_id")),
@@ -426,7 +455,7 @@ def canvas_path_query(request: HttpRequest) -> JsonResponse:
 def canvas_entity(request: HttpRequest, entity_id: uuid.UUID) -> JsonResponse:
     actor = _actor(request)
     repository_ids = tuple(uuid.UUID(value) for value in request.GET.getlist("repository_id"))
-    return JsonResponse(
+    return _canvas_json_response(
         canvas_entity_detail(
             actor=actor,
             entity_id=entity_id,
@@ -440,7 +469,7 @@ def canvas_entity(request: HttpRequest, entity_id: uuid.UUID) -> JsonResponse:
 def canvas_views(request: HttpRequest) -> JsonResponse:
     actor = _actor(request)
     if request.method == "GET":
-        return JsonResponse(
+        return _canvas_json_response(
             {
                 "views": [
                     {
@@ -490,7 +519,7 @@ def canvas_views(request: HttpRequest) -> JsonResponse:
         access_scope_id=uuid.UUID(scope) if scope else None,
         idempotency_key=_string(payload, "idempotency_key"),
     )
-    return JsonResponse(
+    return _canvas_json_response(
         {"id": str(view.id), "revision": view.revision, "created": created},
         status=201 if created else 200,
     )
@@ -525,7 +554,7 @@ def canvas_view_revisions(request: HttpRequest, view_id: uuid.UUID) -> JsonRespo
         annotations=presentation["annotations"],
         idempotency_key=_string(payload, "idempotency_key"),
     )
-    return JsonResponse(
+    return _canvas_json_response(
         {
             "id": str(revision.id),
             "revision": revision.revision,
@@ -559,7 +588,7 @@ def canvas_view_shares(request: HttpRequest, view_id: uuid.UUID) -> JsonResponse
         expires_at=parsed_expires,
         idempotency_key=_string(payload, "idempotency_key"),
     )
-    return JsonResponse(
+    return _canvas_json_response(
         {
             "id": str(share.id),
             "view_revision": share.view_revision.revision,
@@ -567,6 +596,32 @@ def canvas_view_shares(request: HttpRequest, view_id: uuid.UUID) -> JsonResponse
             "created": created,
         },
         status=201 if created else 200,
+    )
+
+
+@api_errors
+@require_http_methods(["POST"])
+def canvas_share_revoke(request: HttpRequest, share_id: uuid.UUID) -> JsonResponse:
+    actor = _actor(request)
+    payload = _closed_payload(
+        _canvas_json_body(request),
+        allowed=frozenset({"expected_view_revision", "idempotency_key"}),
+        required=frozenset({"expected_view_revision", "idempotency_key"}),
+    )
+    share, revoked = revoke_canvas_share(
+        actor=actor,
+        share_id=share_id,
+        expected_view_revision=_integer(payload, "expected_view_revision"),
+        idempotency_key=_string(payload, "idempotency_key"),
+    )
+    return _canvas_json_response(
+        {
+            "id": str(share.id),
+            "state": "REVOKED",
+            "view_revision": share.view_revision.revision,
+            "revoked": revoked,
+            "revoked_at": share.revoked_at.isoformat() if share.revoked_at else None,
+        }
     )
 
 
@@ -612,7 +667,7 @@ def canvas_relationship_proposals(request: HttpRequest) -> JsonResponse:
         rationale=_string(payload, "rationale"),
         idempotency_key=_string(payload, "idempotency_key"),
     )
-    return JsonResponse(
+    return _canvas_json_response(
         {"id": str(proposal.id), "state": proposal.state, "created": created},
         status=201 if created else 200,
     )

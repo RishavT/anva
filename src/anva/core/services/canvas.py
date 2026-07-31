@@ -7,6 +7,7 @@ import math
 import re
 import uuid
 from collections import defaultdict, deque
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, cast
@@ -22,6 +23,7 @@ from anva.core.exceptions import (
 )
 from anva.core.models import (
     AssertionConflict,
+    AssertionRevision,
     CanvasAnnotation,
     CanvasFilter,
     CanvasGroup,
@@ -63,6 +65,8 @@ CANVAS_PAYLOAD_LIMIT_BYTES = 750 * 1024
 CANVAS_LAYOUT_VERSION = "anva-layered-v1"
 CANVAS_LAYOUT_ALGORITHM = "deterministic-semantic-columns"
 CANVAS_FRESHNESS_STATES = (*KnowledgeAssertion.StalenessState.values, "UNKNOWN")
+CANVAS_DETAIL_RELATIONSHIP_LIMIT = 50
+CANVAS_DETAIL_SECTION_LIMIT = 20
 SECRET_PATTERN = re.compile(
     r"(?i)(?:gh[pousr]_[a-z0-9]{20,}|bearer\s+[a-z0-9._-]{12,}|"
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----|sessionid\s*=)"
@@ -313,10 +317,11 @@ class CanvasQuery:
     status: str = ""
     risk: str = ""
     freshness: str = ""
+    as_of: datetime | None = None
     search: str = ""
     layers: tuple[str, ...] = ()
     anchor_id: uuid.UUID | None = None
-    depth: int = 2
+    depth: int | None = None
     node_limit: int = CANVAS_NODE_LIMIT
     edge_limit: int = CANVAS_EDGE_LIMIT
 
@@ -329,7 +334,9 @@ class CanvasQuery:
             raise ValueError("Unknown Canvas layer")
         if self.freshness and self.freshness not in CANVAS_FRESHNESS_STATES:
             raise ValueError("Unknown freshness state")
-        if not 1 <= self.depth <= 4:
+        if self.as_of is not None and self.as_of.tzinfo is None:
+            raise ValueError("Canvas as-of time must be timezone-aware")
+        if self.depth is not None and not 1 <= self.depth <= 4:
             raise ValueError("Canvas depth must be between 1 and 4")
         if not 1 <= self.node_limit <= CANVAS_NODE_LIMIT:
             raise ValueError("Canvas node limit must be between 1 and 300")
@@ -354,16 +361,20 @@ def _visible_repositories(
 ) -> tuple[Repository, ...]:
     """Resolve a deterministic union of only repositories visible for Canvas."""
     requested = set(requested_ids)
-    candidates = list(
-        Repository.objects.filter(
-            organization_id=actor.organization_id,
-            is_active=True,
-        )
-        .filter(Q(id__in=requested) if requested else Q())
-        .order_by("id")[: CANVAS_REPOSITORY_LIMIT + 1]
-    )
-    if len(candidates) > CANVAS_REPOSITORY_LIMIT:
+    if len(requested) > CANVAS_REPOSITORY_LIMIT:
         raise ValueError("Canvas repository budget exceeded")
+    queryset = Repository.objects.filter(
+        organization_id=actor.organization_id,
+        is_active=True,
+    ).order_by("id")
+    candidates: Iterable[Repository]
+    if requested:
+        candidates = list(queryset.filter(id__in=requested))
+        if {repository.id for repository in candidates} != requested:
+            raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    else:
+        candidates = queryset.iterator(chunk_size=CANVAS_REPOSITORY_LIMIT)
+
     visible: list[Repository] = []
     for repository in candidates:
         try:
@@ -377,9 +388,27 @@ def _visible_repositories(
                 raise ResourceNotFoundError(NOT_FOUND_MESSAGE) from None
             continue
         visible.append(repository)
-    if requested and {repository.id for repository in visible} != requested:
-        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+        # Cap the authorized sequence, never the tenant's pre-authorization rows.
+        if not requested and len(visible) == CANVAS_REPOSITORY_LIMIT:
+            break
     return tuple(visible)
+
+
+def _semantic_repository_ids(semantic: dict[str, object]) -> tuple[uuid.UUID, ...]:
+    values = semantic.get("repository_ids", [])
+    if not isinstance(values, list):
+        raise ValueError("Canvas repositories must be a list of UUID strings")
+    return tuple(uuid.UUID(str(value)) for value in values)
+
+
+def _reauthorize_semantic_repositories(
+    *,
+    actor: ActorContext,
+    semantic: dict[str, object],
+) -> None:
+    repository_ids = _semantic_repository_ids(semantic)
+    if repository_ids:
+        _visible_repositories(actor=actor, requested_ids=repository_ids)
 
 
 def _scope_visible_in_repositories(
@@ -448,6 +477,10 @@ def get_authorized_canvas_view(
     ).first()
     if revision is None:
         raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    _reauthorize_semantic_repositories(
+        actor=actor,
+        semantic=cast(dict[str, object], revision.semantic_query),
+    )
     root_id = revision.semantic_query.get("root_entity_id")
     if root_id:
         _authorized_entity_union(
@@ -514,11 +547,16 @@ def _semantic_query(
     ):
         if value:
             saved[key] = value
+    if query.as_of is not None:
+        saved["as_of"] = query.as_of.isoformat()
     if query.layers:
         saved["layers"] = list(query.layers)
     if query.anchor_id:
         saved["root_entity_id"] = str(query.anchor_id)
-    saved["depth"] = query.depth
+    if query.depth is not None:
+        saved["depth"] = query.depth
+    else:
+        saved.setdefault("depth", 2)
     return saved
 
 
@@ -528,6 +566,7 @@ def _candidate_entities(
     repositories: tuple[Repository, ...],
     semantic: dict[str, object],
     access_scope_id: uuid.UUID | None,
+    as_of: datetime | None = None,
 ) -> tuple[dict[uuid.UUID, KnowledgeEntity], dict[uuid.UUID, set[uuid.UUID]]]:
     entities: dict[uuid.UUID, KnowledgeEntity] = {}
     entity_repositories: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)
@@ -540,6 +579,8 @@ def _candidate_entities(
         )
         if access_scope_id:
             queryset = queryset.filter(access_scope_id=access_scope_id)
+        if as_of is not None:
+            queryset = queryset.filter(created_at__lte=as_of)
         if isinstance(entity_types, list) and entity_types:
             safe_types = [
                 value for value in entity_types if value in KnowledgeEntity.EntityType.values
@@ -565,6 +606,7 @@ def _authorized_assertion_union(
     actor: ActorContext,
     repositories: tuple[Repository, ...],
     subject_keys: set[str],
+    as_of: datetime | None = None,
 ) -> dict[str, list[KnowledgeAssertion]]:
     assertions: dict[str, dict[uuid.UUID, KnowledgeAssertion]] = defaultdict(dict)
     for repository in repositories:
@@ -573,6 +615,8 @@ def _authorized_assertion_union(
             repository_id=repository.id,
             action=Action.CANVAS_VIEW,
         ).filter(subject_key__in=subject_keys)
+        if as_of is not None:
+            queryset = queryset.filter(observed_at__lte=as_of)
         for assertion in queryset.order_by("id"):
             assertions[assertion.subject_key][assertion.id] = assertion
     return {key: list(values.values()) for key, values in assertions.items()}
@@ -582,6 +626,7 @@ def _authorized_edge_union(
     *,
     actor: ActorContext,
     repositories: tuple[Repository, ...],
+    as_of: datetime | None = None,
 ) -> tuple[list[AuthorizedCanvasEdge], bool]:
     edges: dict[uuid.UUID, AuthorizedCanvasEdge] = {}
     repository_truncated = False
@@ -593,6 +638,8 @@ def _authorized_edge_union(
         )
         repository_truncated = repository_truncated or truncated
         for edge in records:
+            if as_of is not None and edge.observed_at > as_of:
+                continue
             edges.setdefault(
                 edge.relationship_id,
                 AuthorizedCanvasEdge(repository_id=repository.id, edge=edge),
@@ -690,6 +737,18 @@ def _canvas_layout_checksum(
     )
 
 
+def _as_of_datetime(value: object) -> datetime:
+    if not isinstance(value, str):
+        raise ValueError("Canvas as-of time must be an ISO 8601 string")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError("Canvas as-of time must be an ISO 8601 string") from None
+    if parsed.tzinfo is None:
+        raise ValueError("Canvas as-of time must be timezone-aware")
+    return parsed
+
+
 def _canvas_payload_size(payload: dict[str, object]) -> int:
     return len(
         json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
@@ -781,16 +840,20 @@ def canvas_projection(*, actor: ActorContext, query: CanvasQuery) -> dict[str, o
         requested_ids=requested_repositories,
     )
     semantic = _semantic_query(query=query, view=view, revision=revision)
+    as_of_value = semantic.get("as_of")
+    as_of = _as_of_datetime(as_of_value) if as_of_value is not None else None
     candidates, entity_repositories = _candidate_entities(
         actor=actor,
         repositories=repositories,
         semantic=semantic,
         access_scope_id=view.access_scope_id if view else None,
+        as_of=as_of,
     )
     assertions = _authorized_assertion_union(
         actor=actor,
         repositories=repositories,
         subject_keys={entity.canonical_key for entity in candidates.values()},
+        as_of=as_of,
     )
     freshness_filter = semantic.get("freshness")
     if isinstance(freshness_filter, str) and freshness_filter:
@@ -803,6 +866,7 @@ def canvas_projection(*, actor: ActorContext, query: CanvasQuery) -> dict[str, o
     union_edges, repository_edge_truncated = _authorized_edge_union(
         actor=actor,
         repositories=repositories,
+        as_of=as_of,
     )
     allowed_layers = semantic.get("layers", [])
     if isinstance(allowed_layers, list) and allowed_layers:
@@ -813,10 +877,9 @@ def canvas_projection(*, actor: ActorContext, query: CanvasQuery) -> dict[str, o
                 if layer in LAYER_RELATIONSHIPS
             )
         )
-        if allowed_relationships:
-            union_edges = [
-                item for item in union_edges if item.edge.relationship_type in allowed_relationships
-            ]
+        union_edges = [
+            item for item in union_edges if item.edge.relationship_type in allowed_relationships
+        ]
     union_edges = [
         item
         for item in union_edges
@@ -837,7 +900,7 @@ def canvas_projection(*, actor: ActorContext, query: CanvasQuery) -> dict[str, o
             root_id=root_id,
             edges=union_edges,
             depth=_bounded_integer(
-                semantic.get("depth", query.depth),
+                semantic.get("depth", 2),
                 name="Canvas depth",
                 minimum=1,
                 maximum=4,
@@ -985,6 +1048,24 @@ def canvas_projection(*, actor: ActorContext, query: CanvasQuery) -> dict[str, o
         }
         for item in selected_edges
     ]
+    annotations = (
+        [
+            {
+                "id": str(annotation.id),
+                "entity_id": str(annotation.entity_id) if annotation.entity_id else None,
+                "body": annotation.body,
+                "x": annotation.x,
+                "y": annotation.y,
+            }
+            for annotation in CanvasAnnotation.objects.filter(
+                Q(entity_id__in=selected_ids) | Q(entity_id__isnull=True),
+                organization_id=actor.organization_id,
+                view_revision=revision,
+            ).order_by("id")[:100]
+        ]
+        if revision
+        else []
+    )
     limitations: list[str] = []
     if node_truncated:
         limitations.append(
@@ -1007,7 +1088,7 @@ def canvas_projection(*, actor: ActorContext, query: CanvasQuery) -> dict[str, o
                 "id": str(view.id),
                 "name": view.name,
                 "type": view.view_type,
-                "revision": view.revision,
+                "revision": revision.revision if revision else view.revision,
                 "content_hash": revision.content_hash if revision else "",
             }
             if view
@@ -1024,11 +1105,12 @@ def canvas_projection(*, actor: ActorContext, query: CanvasQuery) -> dict[str, o
         ],
         "nodes": nodes,
         "edges": edges,
+        "annotations": annotations,
         "counts": {"nodes": len(nodes), "edges": len(edges)},
         "limits": {
             "nodes": query.node_limit,
             "edges": query.edge_limit,
-            "depth": query.depth,
+            "depth": semantic.get("depth", 2),
             "repositories": CANVAS_REPOSITORY_LIMIT,
             "payload_bytes": CANVAS_PAYLOAD_LIMIT_BYTES,
         },
@@ -1040,6 +1122,7 @@ def canvas_projection(*, actor: ActorContext, query: CanvasQuery) -> dict[str, o
             "checksum": layout_checksum,
         },
         "generated_at": timezone.now().isoformat(),
+        "as_of": as_of.isoformat() if as_of else None,
     }
     return _enforce_canvas_payload_budget(payload)
 
@@ -1130,18 +1213,24 @@ def canvas_entity_detail(
     entity_id: uuid.UUID,
     repository_ids: tuple[uuid.UUID, ...] = (),
 ) -> dict[str, object]:
-    """Return inspector detail after reauthorizing the entity and its assertions."""
+    """Return bounded inspector context from only the current authorized graph."""
     repositories = _visible_repositories(actor=actor, requested_ids=repository_ids)
     entity = _authorized_entity_union(
         actor=actor,
         entity_id=entity_id,
         repositories=repositories,
     )
-    assertions = _authorized_assertion_union(
-        actor=actor,
-        repositories=repositories,
-        subject_keys={entity.canonical_key},
-    ).get(entity.canonical_key, [])
+    authorized_subject_assertions = sorted(
+        _authorized_assertion_union(
+            actor=actor,
+            repositories=repositories,
+            subject_keys={entity.canonical_key},
+        ).get(entity.canonical_key, []),
+        key=lambda item: (item.observed_at, str(item.id)),
+        reverse=True,
+    )
+    assertions_truncated = len(authorized_subject_assertions) > CANVAS_DETAIL_SECTION_LIMIT
+    assertions = authorized_subject_assertions[:CANVAS_DETAIL_SECTION_LIMIT]
     assertion_ids = [assertion.id for assertion in assertions]
     conflicts = AssertionConflict.objects.filter(
         organization_id=actor.organization_id,
@@ -1150,11 +1239,7 @@ def canvas_entity_detail(
         right_assertion_id__in=assertion_ids,
     )
     source_details: list[dict[str, object]] = []
-    for assertion in sorted(
-        assertions,
-        key=lambda item: (item.observed_at, str(item.id)),
-        reverse=True,
-    )[:20]:
+    for assertion in assertions:
         citations: dict[tuple[str, str], dict[str, object]] = {}
         for repository in repositories:
             for citation in authorized_assertion_citations(
@@ -1179,6 +1264,135 @@ def canvas_entity_detail(
                 "citations": list(citations.values())[:20],
             }
         )
+
+    union_edges, repository_edge_truncated = _authorized_edge_union(
+        actor=actor,
+        repositories=repositories,
+    )
+    incident_edges = [
+        item
+        for item in union_edges
+        if entity.id in {item.edge.source_entity_id, item.edge.target_entity_id}
+    ]
+    relationship_truncated = (
+        repository_edge_truncated or len(incident_edges) > CANVAS_DETAIL_RELATIONSHIP_LIMIT
+    )
+    incident_edges = incident_edges[:CANVAS_DETAIL_RELATIONSHIP_LIMIT]
+    related_ids = {
+        item.edge.target_entity_id
+        if item.edge.source_entity_id == entity.id
+        else item.edge.source_entity_id
+        for item in incident_edges
+    }
+    related_entities: dict[uuid.UUID, KnowledgeEntity] = {}
+    for repository in repositories:
+        for related in (
+            authorized_entities(
+                actor=actor,
+                repository_id=repository.id,
+                action=Action.CANVAS_VIEW,
+            )
+            .filter(id__in=related_ids)
+            .order_by("id")
+        ):
+            related_entities.setdefault(related.id, related)
+
+    relationships: list[dict[str, object]] = []
+    context: list[dict[str, object]] = []
+    for item in incident_edges:
+        outgoing = item.edge.source_entity_id == entity.id
+        related_id = item.edge.target_entity_id if outgoing else item.edge.source_entity_id
+        found_related = related_entities.get(related_id)
+        if found_related is None:
+            # The edge CTE and entity query are both strict. Fail closed if they diverge.
+            continue
+        relationship: dict[str, object] = {
+            "id": str(item.edge.relationship_id),
+            "type": item.edge.relationship_type,
+            "direction": "OUTGOING" if outgoing else "INCOMING",
+            "source_id": str(item.edge.source_entity_id),
+            "source_label": item.edge.source_name,
+            "target_id": str(item.edge.target_entity_id),
+            "target_label": item.edge.target_name,
+            "repository_id": str(item.repository_id),
+            "confidence": item.edge.confidence,
+            "observed_at": item.edge.observed_at.isoformat(),
+        }
+        relationships.append(relationship)
+        context.append(
+            {
+                "entity_id": str(found_related.id),
+                "label": found_related.display_name,
+                "type": found_related.entity_type,
+                "revision": found_related.revision,
+                "status": str(found_related.attributes.get("status", "UNKNOWN"))[:100],
+                "relationship_id": relationship["id"],
+                "relationship_type": relationship["type"],
+                "direction": relationship["direction"],
+                "observed_at": relationship["observed_at"],
+            }
+        )
+
+    section_truncated = False
+
+    def section(
+        *entity_types: str,
+        active_only: bool = False,
+        recent_first: bool = False,
+    ) -> list[dict[str, object]]:
+        nonlocal section_truncated
+        matching = [item for item in context if item["type"] in entity_types]
+        if active_only:
+            matching = [
+                item
+                for item in matching
+                if str(item["status"]).upper()
+                not in {"CANCELLED", "CLOSED", "COMPLETED", "DONE", "REJECTED"}
+            ]
+        if recent_first:
+            section_truncated = section_truncated or len(matching) > CANVAS_DETAIL_SECTION_LIMIT
+            return sorted(
+                matching,
+                key=lambda item: (str(item["observed_at"]), str(item["relationship_id"])),
+                reverse=True,
+            )[:CANVAS_DETAIL_SECTION_LIMIT]
+        section_truncated = section_truncated or len(matching) > CANVAS_DETAIL_SECTION_LIMIT
+        return sorted(
+            matching,
+            key=lambda item: (
+                str(item["type"]),
+                str(item["label"]).casefold(),
+                str(item["entity_id"]),
+                str(item["relationship_id"]),
+            ),
+        )[:CANVAS_DETAIL_SECTION_LIMIT]
+
+    active_work = section(
+        KnowledgeEntity.EntityType.WORK_ITEM,
+        KnowledgeEntity.EntityType.TASK,
+        active_only=True,
+    )
+    recent_pull_requests = section(
+        KnowledgeEntity.EntityType.PULL_REQUEST,
+        recent_first=True,
+    )
+    predicate_by_assertion = {assertion.id: assertion.predicate for assertion in assertions}
+    history_records = list(
+        AssertionRevision.objects.filter(
+            organization_id=actor.organization_id,
+            assertion_id__in=assertion_ids,
+        ).order_by("-created_at", "-revision", "id")[: CANVAS_DETAIL_SECTION_LIMIT + 1]
+    )
+    history_truncated = len(history_records) > CANVAS_DETAIL_SECTION_LIMIT
+    history = [
+        {
+            "assertion_id": str(item.assertion_id),
+            "predicate": predicate_by_assertion[item.assertion_id],
+            "revision": item.revision,
+            "created_at": item.created_at.isoformat(),
+        }
+        for item in history_records[:CANVAS_DETAIL_SECTION_LIMIT]
+    ]
     return {
         "id": str(entity.id),
         "label": entity.display_name,
@@ -1194,6 +1408,26 @@ def canvas_entity_detail(
         "freshness": _freshness(assertions),
         "sources": source_details,
         "conflict_count": conflicts.count(),
+        "relationships": relationships,
+        "decisions_policies": section(
+            KnowledgeEntity.EntityType.DECISION,
+            KnowledgeEntity.EntityType.ARCHITECTURAL_DECISION,
+            KnowledgeEntity.EntityType.POLICY,
+        ),
+        "risks_incidents": section(
+            KnowledgeEntity.EntityType.RISK,
+            KnowledgeEntity.EntityType.INCIDENT,
+        ),
+        "active_work": active_work,
+        "recent_pull_requests": recent_pull_requests,
+        "history": history,
+        "context_limits": {
+            "relationships": CANVAS_DETAIL_RELATIONSHIP_LIMIT,
+            "section_items": CANVAS_DETAIL_SECTION_LIMIT,
+        },
+        "context_truncated": bool(
+            relationship_truncated or assertions_truncated or section_truncated or history_truncated
+        ),
         "permitted_actions": {
             "view": True,
             "move_in_view": _can(actor, Action.CANVAS_MANAGE),
@@ -1220,6 +1454,7 @@ def _normalized_semantic_query(value: dict[str, object]) -> dict[str, object]:
         "status",
         "risk",
         "freshness",
+        "as_of",
         "search",
         "layers",
         "depth",
@@ -1262,6 +1497,8 @@ def _normalized_semantic_query(value: dict[str, object]) -> dict[str, object]:
         if field == "freshness" and item and item not in CANVAS_FRESHNESS_STATES:
             raise ValueError("Unknown freshness state")
         rendered[field] = _safe_text(item, maximum=500)
+    if "as_of" in value:
+        rendered["as_of"] = _as_of_datetime(value["as_of"]).isoformat()
     if "depth" in value:
         rendered["depth"] = _bounded_integer(
             value["depth"], name="Canvas depth", minimum=1, maximum=4
@@ -1294,6 +1531,7 @@ def create_canvas_view(
         actor=actor,
         requested_ids=(repository_id,) if repository_id else (),
     )
+    _reauthorize_semantic_repositories(actor=actor, semantic=normalized)
     decision = authorize_action(
         actor=actor,
         action=Action.CANVAS_MANAGE,
@@ -1423,25 +1661,36 @@ def _canonical_presentation(
     annotations: list[dict[str, object]],
 ) -> dict[str, object]:
     """Validate and normalize every byte covered by a sealed revision hash."""
-    canonical_groups = [
-        {
-            "label": _safe_text(item.get("label"), maximum=200),
-            "x": _coordinate(item.get("x")),
-            "y": _coordinate(item.get("y")),
-            "width": _dimension(item.get("width")),
-            "height": _dimension(item.get("height")),
-            "position": position,
-        }
-        for position, item in enumerate(groups)
-    ]
+    canonical_groups: list[dict[str, object]] = []
+    for position, item in enumerate(groups):
+        _closed_presentation_item(
+            item,
+            name="Canvas group",
+            fields={"label", "x", "y", "width", "height"},
+        )
+        canonical_groups.append(
+            {
+                "label": _safe_text(_string_value(item["label"]), maximum=200),
+                "x": _coordinate(item["x"]),
+                "y": _coordinate(item["y"]),
+                "width": _dimension(item["width"]),
+                "height": _dimension(item["height"]),
+                "position": position,
+            }
+        )
     canonical_placements: list[dict[str, object]] = []
     placement_ids: set[uuid.UUID] = set()
     for position, item in enumerate(placements):
-        entity_id = uuid.UUID(str(item["entity_id"]))
+        _closed_presentation_item(
+            item,
+            name="Canvas placement",
+            fields={"entity_id", "x", "y", "is_pinned", "is_hidden", "group_index"},
+        )
+        entity_id = uuid.UUID(_string_value(item["entity_id"]))
         if entity_id in placement_ids:
             raise ValueError("Canvas placements repeat a canonical entity")
         placement_ids.add(entity_id)
-        group_index = item.get("group_index")
+        group_index = item["group_index"]
         canonical_group_index: int | None = None
         if group_index is not None:
             canonical_group_index = _bounded_integer(
@@ -1455,54 +1704,71 @@ def _canonical_presentation(
         canonical_placements.append(
             {
                 "entity_id": str(entity_id),
-                "x": _coordinate(item.get("x")),
-                "y": _coordinate(item.get("y")),
-                "is_pinned": bool(item.get("is_pinned", False)),
-                "is_hidden": bool(item.get("is_hidden", False)),
+                "x": _coordinate(item["x"]),
+                "y": _coordinate(item["y"]),
+                "is_pinned": _boolean_value(item["is_pinned"]),
+                "is_hidden": _boolean_value(item["is_hidden"]),
                 "group_index": canonical_group_index,
                 "position": position,
             }
         )
     canonical_filters: list[dict[str, object]] = []
     for position, item in enumerate(filters):
-        value = item.get("value")
+        _closed_presentation_item(
+            item,
+            name="Canvas filter",
+            fields={"field", "operator", "value"},
+        )
+        value = item["value"]
         if len(str(value)) > 2_000:
             raise ValueError("Canvas filter value exceeds its size budget")
         canonical_filters.append(
             {
-                "field": _filter_field(item.get("field")),
-                "operator": _filter_operator(item.get("operator")),
-                "value": value,
+                "field": _filter_field(item["field"]),
+                "operator": _filter_operator(item["operator"]),
+                "value": _canonical_filter_value(value),
                 "position": position,
             }
         )
     canonical_layers: list[dict[str, object]] = []
     layer_keys: set[str] = set()
     for position, item in enumerate(layers):
-        key = _layer_key(item.get("key"))
+        _closed_presentation_item(
+            item,
+            name="Canvas layer",
+            fields={"key", "label", "is_visible"},
+        )
+        key = _layer_key(item["key"])
         if key in layer_keys:
             raise ValueError("Canvas layers repeat a semantic key")
         layer_keys.add(key)
         canonical_layers.append(
             {
                 "key": key,
-                "label": _safe_text(item.get("label"), maximum=100),
-                "is_visible": bool(item.get("is_visible", True)),
+                "label": _safe_text(_string_value(item["label"]), maximum=100),
+                "is_visible": _boolean_value(item["is_visible"]),
                 "position": position,
             }
         )
-    canonical_annotations = [
-        {
-            "entity_id": (
-                str(uuid.UUID(str(item["entity_id"]))) if item.get("entity_id") else None
-            ),
-            "body": _safe_text(item.get("body"), maximum=2_000),
-            "x": _coordinate(item.get("x")),
-            "y": _coordinate(item.get("y")),
-            "position": position,
-        }
-        for position, item in enumerate(annotations)
-    ]
+    canonical_annotations: list[dict[str, object]] = []
+    for position, item in enumerate(annotations):
+        _closed_presentation_item(
+            item,
+            name="Canvas annotation",
+            fields={"entity_id", "body", "x", "y"},
+        )
+        annotation_entity = item["entity_id"]
+        if annotation_entity is not None:
+            annotation_entity = str(uuid.UUID(_string_value(annotation_entity)))
+        canonical_annotations.append(
+            {
+                "entity_id": annotation_entity,
+                "body": _safe_text(_string_value(item["body"]), maximum=2_000),
+                "x": _coordinate(item["x"]),
+                "y": _coordinate(item["y"]),
+                "position": position,
+            }
+        )
     return {
         "placements": canonical_placements,
         "filters": canonical_filters,
@@ -1510,6 +1776,48 @@ def _canonical_presentation(
         "groups": canonical_groups,
         "annotations": canonical_annotations,
     }
+
+
+def _closed_presentation_item(item: dict[str, object], *, name: str, fields: set[str]) -> None:
+    if set(item) != fields:
+        raise ValueError(f"{name} fields are invalid")
+
+
+def _string_value(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError("Canvas presentation text must be a string")
+    return value
+
+
+def _boolean_value(value: object) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError("Canvas presentation boolean must be true or false")
+    return value
+
+
+def _canonical_filter_value(value: object, *, depth: int = 0) -> object:
+    """Copy bounded JSON while rejecting secret-shaped strings at every nesting level."""
+    if depth > 10:
+        raise ValueError("Canvas filter value exceeds its nesting budget")
+    if isinstance(value, str):
+        return _safe_text(value, maximum=2_000)
+    if value is None or isinstance(value, bool | int):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("Canvas filter value contains a non-finite number")
+        return value
+    if isinstance(value, list):
+        return [_canonical_filter_value(item, depth=depth + 1) for item in value]
+    if isinstance(value, dict):
+        canonical: dict[str, object] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise ValueError("Canvas filter object keys must be strings")
+            safe_key = _safe_text(key, maximum=500)
+            canonical[safe_key] = _canonical_filter_value(item, depth=depth + 1)
+        return canonical
+    raise ValueError("Canvas filter value must be JSON-compatible")
 
 
 def save_canvas_revision(
@@ -1561,6 +1869,7 @@ def save_canvas_revision(
             actor=actor,
             requested_ids=(view.repository_id,) if view.repository_id else (),
         )
+        _reauthorize_semantic_repositories(actor=actor, semantic=normalized)
         entity_ids: set[uuid.UUID] = set()
         for placement in placements:
             entity_ids.add(uuid.UUID(str(placement["entity_id"])))
@@ -1697,6 +2006,8 @@ def save_canvas_revision(
 
 
 def _coordinate(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError("Canvas coordinate must be a number")
     number = float(cast(Any, value))
     if not math.isfinite(number) or not -1_000_000 <= number <= 1_000_000:
         raise ValueError("Canvas coordinate is outside its bounded range")
@@ -1713,6 +2024,8 @@ def _safe_text(value: object, *, maximum: int) -> str:
 
 
 def _dimension(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError("Canvas dimension must be a number")
     number = float(cast(Any, value))
     if not math.isfinite(number) or not 0 < number <= 1_000_000:
         raise ValueError("Canvas dimension is outside its bounded range")
@@ -1720,21 +2033,21 @@ def _dimension(value: object) -> float:
 
 
 def _filter_field(value: object) -> str:
-    rendered = str(value)
+    rendered = _string_value(value)
     if rendered not in {"entity_type", "owner", "status", "time", "risk", "freshness"}:
         raise ValueError("Unknown Canvas filter field")
     return rendered
 
 
 def _filter_operator(value: object) -> str:
-    rendered = str(value)
+    rendered = _string_value(value)
     if rendered not in CanvasFilter.Operator.values:
         raise ValueError("Unknown Canvas filter operator")
     return rendered
 
 
 def _layer_key(value: object) -> str:
-    rendered = str(value)
+    rendered = _string_value(value)
     if rendered not in LAYER_RELATIONSHIPS:
         raise ValueError("Unknown Canvas layer")
     return rendered
@@ -1852,6 +2165,10 @@ def resolve_canvas_share(
         record_id=share.view_revision_id,
         organization_id=actor.organization_id,
     )
+    _reauthorize_semantic_repositories(
+        actor=actor,
+        semantic=cast(dict[str, object], revision.semantic_query),
+    )
     repositories = _visible_repositories(
         actor=actor,
         requested_ids=(view.repository_id,) if view.repository_id else (),
@@ -1864,6 +2181,82 @@ def resolve_canvas_share(
             repositories=repositories,
         )
     return view, revision
+
+
+def revoke_canvas_share(
+    *,
+    actor: ActorContext,
+    share_id: uuid.UUID,
+    expected_view_revision: int,
+    idempotency_key: str,
+) -> tuple[CanvasShare, bool]:
+    """Revoke one exact share while preserving its immutable view history."""
+    expected_view_revision = _bounded_integer(
+        expected_view_revision,
+        name="Expected Canvas share revision",
+        minimum=1,
+        maximum=2_147_483_647,
+    )
+    idem_hash = content_hash({"canvas_share_revocation_idempotency": idempotency_key})
+    request_hash = content_hash(
+        {
+            "share_id": str(share_id),
+            "expected_view_revision": expected_view_revision,
+        }
+    )
+    with transaction.atomic():
+        share = get_tenant_record_for_update(
+            queryset=CanvasShare.objects.select_related("view_revision"),
+            record_id=share_id,
+            organization_id=actor.organization_id,
+        )
+        view = get_authorized_canvas_view(
+            actor=actor,
+            view_id=share.canvas_view_id,
+            action=Action.CANVAS_MANAGE,
+            for_update=True,
+        )
+        decision = authorize_action(
+            actor=actor,
+            action=Action.CANVAS_MANAGE,
+            repository_id=view.repository_id,
+        )
+        if share.revoked_at is not None:
+            if (
+                share.revocation_idempotency_key == idem_hash
+                and share.revocation_request_hash == request_hash
+            ):
+                return share, False
+            raise IdempotencyConflictError(
+                "Canvas share was already revoked by a different request"
+            )
+        if share.view_revision.revision != expected_view_revision:
+            raise OptimisticConcurrencyError(
+                "Canvas share view revision no longer matches the expected revision"
+            )
+        revoked_at = timezone.now()
+        CanvasShare.objects.filter(id=share.id, revoked_at__isnull=True).update(
+            revoked_at=revoked_at,
+            revoked_by_type=actor.actor_type,
+            revoked_by_id=actor.actor_id,
+            revocation_idempotency_key=idem_hash,
+            revocation_request_hash=request_hash,
+        )
+        share.refresh_from_db()
+        record_transition(
+            organization=view.organization,
+            actor=replace(actor, authorization_path=decision.authorization_path),
+            target_type="canvasshare",
+            target_id=share.id,
+            from_state="ACTIVE",
+            to_state="REVOKED",
+            revision=share.view_revision.revision,
+            metadata={
+                "canvas_view_id": str(view.id),
+                "canvas_view_revision_id": str(share.view_revision_id),
+            },
+        )
+        return share, True
 
 
 def propose_canvas_relationship(

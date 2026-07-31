@@ -12,19 +12,31 @@ product navigation or visit `/app/canvas`.
   Change-history, or Custom view. A saved view is re-evaluated against current
   permissions and source state.
 - Select a node to inspect ownership, provenance, freshness, conflicts, and
-  permitted contextual actions.
+  bounded permitted relationships, decisions/policies, risks/incidents, active
+  work/recent pull requests, history, annotations, and contextual actions.
 - Use **Fit**, zoom, pan, minimap, arrow keys, or drag nodes. **Save layout**
   appends a new presentation revision; it does not change canonical knowledge.
+- Use **Focus here** or **Expand one hop** for progressive disclosure. The focus
+  root and expansion depth are server-authorized and reflected in the URL.
+- Set **As of** to bound entity creation and assertion/relationship observation
+  time. Identity fields still reflect the current authorized entity row; this
+  is not a full historical identity snapshot.
 - Use **Why are these connected?** for one deterministic permitted path of at
   most six hops.
-- Drawing a relationship is represented by the proposal form. Review the typed
+- Enter **Draw proposal**, choose a typed relationship, then drag from one node
+  to another (or select the endpoints by keyboard). Review the resulting form's
   endpoints and current revisions; submission creates a governed proposal only.
+- Ask a scoped organizational question from a selected node. Results use only
+  its permitted one-hop context and bounded authorized Explorer search.
+- Add annotations to the current layout, then save a new revision to persist
+  them. An annotation never changes canonical knowledge.
 - A share links to the exact current revision but requires the recipient's
-  current Anva authorization.
+  current Anva authorization. An owner or current manager can revoke an active
+  share; revocation is immediate and keeps audit history.
 
 Without JavaScript, use the **Permitted nodes** and **Relationships** tables,
-semantic GET form, path form, and proposal form. The tables are also the
-keyboard/accessibility equivalent of the map.
+semantic GET form, path form, proposal form, and scoped Explorer question form.
+The tables are also the keyboard/accessibility equivalent of the map.
 
 ## Operational limits
 
@@ -72,6 +84,8 @@ the production static manifest does not require a development-only source map.
 - Stable unavailable response: the view/entity/share is missing, foreign,
   revoked, expired, or outside current permissions. The response deliberately
   does not distinguish those cases.
+- Share revocation `409`: reload the exact saved revision before retrying; a
+  newer Canvas revision won the optimistic-concurrency check.
 - Empty view: confirm successful source ingestion and repository/scope access,
   then broaden typed filters. An empty result is not evidence that hidden data
   exists or does not exist.

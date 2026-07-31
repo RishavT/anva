@@ -531,6 +531,7 @@ def openapi_document() -> dict[str, object]:
                 "UNKNOWN",
             ],
         },
+        "as_of": {"type": "string", "format": "date-time"},
         "search": {"type": "string", "maxLength": 500},
         "layers": {
             "type": "array",
@@ -614,13 +615,86 @@ def openapi_document() -> dict[str, object]:
                     ],
                 },
             },
-            "filters": {"type": "array", "maxItems": 20, "items": {"type": "object"}},
-            "layers": {"type": "array", "maxItems": 20, "items": {"type": "object"}},
-            "groups": {"type": "array", "maxItems": 50, "items": {"type": "object"}},
+            "filters": {
+                "type": "array",
+                "maxItems": 20,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "field": {
+                            "type": "string",
+                            "enum": [
+                                "entity_type",
+                                "owner",
+                                "status",
+                                "time",
+                                "risk",
+                                "freshness",
+                            ],
+                        },
+                        "operator": {
+                            "type": "string",
+                            "enum": ["EQUALS", "CONTAINS", "IN", "SINCE"],
+                        },
+                        "value": {"$ref": "#/components/schemas/canvas-filter-value"},
+                    },
+                    "required": ["field", "operator", "value"],
+                },
+            },
+            "layers": {
+                "type": "array",
+                "maxItems": 20,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "key": {
+                            "type": "string",
+                            "enum": [
+                                "execution",
+                                "ownership",
+                                "dependencies",
+                                "governance",
+                                "provenance",
+                            ],
+                        },
+                        "label": {"type": "string", "maxLength": 100},
+                        "is_visible": {"type": "boolean"},
+                    },
+                    "required": ["key", "label", "is_visible"],
+                },
+            },
+            "groups": {
+                "type": "array",
+                "maxItems": 50,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "label": {"type": "string", "maxLength": 200},
+                        "x": {"type": "number", "minimum": -1_000_000, "maximum": 1_000_000},
+                        "y": {"type": "number", "minimum": -1_000_000, "maximum": 1_000_000},
+                        "width": {"type": "number", "exclusiveMinimum": 0, "maximum": 1_000_000},
+                        "height": {"type": "number", "exclusiveMinimum": 0, "maximum": 1_000_000},
+                    },
+                    "required": ["label", "x", "y", "width", "height"],
+                },
+            },
             "annotations": {
                 "type": "array",
                 "maxItems": 100,
-                "items": {"type": "object"},
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "entity_id": {"type": ["string", "null"], "format": "uuid"},
+                        "body": {"type": "string", "maxLength": 2_000},
+                        "x": {"type": "number", "minimum": -1_000_000, "maximum": 1_000_000},
+                        "y": {"type": "number", "minimum": -1_000_000, "maximum": 1_000_000},
+                    },
+                    "required": ["entity_id", "body", "x", "y"],
+                },
             },
         },
         "required": ["placements", "filters", "layers", "groups", "annotations"],
@@ -674,6 +748,15 @@ def openapi_document() -> dict[str, object]:
             "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 500},
         },
         "required": ["idempotency_key"],
+    }
+    canvas_share_revoke_request = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "expected_view_revision": {"type": "integer", "minimum": 1},
+            "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 500},
+        },
+        "required": ["expected_view_revision", "idempotency_key"],
     }
     canvas_relationship_request = {
         "type": "object",
@@ -1241,6 +1324,21 @@ def openapi_document() -> dict[str, object]:
                     "responses": created_or_replayed_responses,
                 }
             },
+            "/canvas/shares/{resource_id}/revoke": {
+                "post": {
+                    "operationId": "revokeOrganizationalCanvasShare",
+                    "description": (
+                        "Immediately close one sign-in-required link without deleting its "
+                        "pinned immutable view revision."
+                    ),
+                    "parameters": [resource_parameter, *mutation_parameters],
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": canvas_share_revoke_request}},
+                    },
+                    "responses": authorized_responses,
+                }
+            },
             "/canvas/relationship-proposals": {
                 "post": {
                     "operationId": "proposeOrganizationalCanvasRelationship",
@@ -1588,6 +1686,28 @@ def openapi_document() -> dict[str, object]:
         "components": {
             "schemas": {
                 **SCHEMAS,
+                "canvas-filter-value": {
+                    "oneOf": [
+                        {"type": "null"},
+                        {"type": "boolean"},
+                        {"type": "integer"},
+                        {"type": "number"},
+                        {"type": "string", "maxLength": 2_000},
+                        {
+                            "type": "array",
+                            "maxItems": 2_000,
+                            "items": {"$ref": "#/components/schemas/canvas-filter-value"},
+                        },
+                        {
+                            "type": "object",
+                            "maxProperties": 2_000,
+                            "propertyNames": {"maxLength": 500},
+                            "additionalProperties": {
+                                "$ref": "#/components/schemas/canvas-filter-value"
+                            },
+                        },
+                    ]
+                },
                 "structured-error": {
                     "type": "object",
                     "additionalProperties": False,
