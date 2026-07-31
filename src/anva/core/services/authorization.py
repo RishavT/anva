@@ -45,7 +45,9 @@ class Action(StrEnum):
     KNOWLEDGE_VIEW = "knowledge.view"
     KNOWLEDGE_PROPOSE = "knowledge.propose"
     KNOWLEDGE_REVIEW = "knowledge.review"
+    ASSURANCE_VIEW = "assurance.view"
     ASSURANCE_EXECUTE = "assurance.execute"
+    AUDIT_VIEW = "audit.view"
     FINDING_DISMISS = "finding.dismiss"
     POLICY_OVERRIDE = "policy.override"
     WORK_VIEW = "work.view"
@@ -77,6 +79,7 @@ VIEW_ACTIONS = frozenset(
         Action.WORK_VIEW,
         Action.POLICY_VIEW,
         Action.EVIDENCE_VIEW,
+        Action.ASSURANCE_VIEW,
     }
 )
 ROLE_ACTIONS: dict[str, frozenset[Action]] = {
@@ -128,6 +131,7 @@ ROLE_ACTIONS: dict[str, frozenset[Action]] = {
     Role.Code.SECURITY_REVIEWER: VIEW_ACTIONS
     | frozenset(
         {
+            Action.AUDIT_VIEW,
             Action.KNOWLEDGE_PROPOSE,
             Action.FINDING_DISMISS,
             Action.POLICY_OVERRIDE,

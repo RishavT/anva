@@ -1,0 +1,54 @@
+{% extends "product/base.html" %}
+{% block title %}Attention{% endblock %}
+{% block content %}
+  <header class="page-header page-header--home">
+    <div>
+      <p class="eyebrow">Attention home</p>
+      <h1>What needs a decision?</h1>
+      <p class="page-intro">Prioritized changes, blocks, and stale knowledge across only the repositories and sources available to you.</p>
+    </div>
+    <div class="currentness" aria-label="Current source health">
+      <span class="signal-orbit" aria-hidden="true"><span></span></span>
+      <div><strong>{{ page.current_sources }} of {{ page.source_total }}</strong><small>sources current</small></div>
+    </div>
+  </header>
+  <div class="metric-strip" aria-label="Workspace currentness">
+    <div><span class="metric-label">Visible boundary</span><strong>{{ page.repositories_count }}</strong><small>repositories</small></div>
+    <div><span class="metric-label">Source currentness</span><strong>{{ page.current_sources }}/{{ page.source_total }}</strong><small>successfully synced</small></div>
+    <div><span class="metric-label">Data posture</span><strong>Scoped</strong><small>before ranking or counts</small></div>
+  </div>
+  <div class="home-grid">
+    <section class="panel attention-panel" aria-labelledby="attention-title">
+      <div class="panel-heading"><div><p class="eyebrow">Now</p><h2 id="attention-title">Needs attention</h2></div><span class="item-count">{{ page.attention|length }}</span></div>
+      {% if page.attention %}
+        <ol class="attention-list">
+          {% for item in page.attention %}
+            <li>
+              <a href="{{ item.href }}">
+                <span class="attention-kind">{{ item.kind }}</span>
+                <span class="attention-copy"><strong>{{ item.title }}</strong><small>{{ item.detail }}</small></span>
+                {% include "product/components/status.html" with status=item.status %}
+                <time datetime="{{ item.time|date:'c' }}">{{ item.time|timesince }} ago</time>
+                <span class="attention-arrow" aria-hidden="true">→</span>
+              </a>
+            </li>
+          {% endfor %}
+        </ol>
+      {% else %}
+        {% include "product/components/empty.html" with empty_title="No visible decision is waiting" empty_message="As sources sync and assurance runs complete, consequential changes appear here rather than as vanity counters." %}
+      {% endif %}
+    </section>
+    <aside class="panel context-panel" aria-labelledby="changed-title">
+      <div class="panel-heading"><div><p class="eyebrow">Governed history</p><h2 id="changed-title">What changed</h2></div><a href="/app/audit">Search audit</a></div>
+      {% if page.latest_audit %}
+        <ol class="change-list">
+          {% for event in page.latest_audit %}
+            <li><span class="timeline-node" aria-hidden="true"></span><div><strong>{{ event.action }}</strong><p>{{ event.target_type }} · {{ event.to_state|default:"recorded" }}</p><time datetime="{{ event.created_at|date:'c' }}">{{ event.created_at|timesince }} ago</time></div></li>
+          {% endfor %}
+        </ol>
+      {% else %}
+        <p class="limitation">Audit history is unavailable to this role or no governed mutation has been recorded.</p>
+      {% endif %}
+    </aside>
+  </div>
+{% endblock %}

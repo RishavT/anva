@@ -37,3 +37,11 @@ RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen
 COPY tests ./tests
 USER anva
 CMD ["pytest"]
+
+FROM test AS browser-test
+USER root
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends chromium chromium-driver \
+    && rm -rf /var/lib/apt/lists/*
+USER anva
+CMD ["pytest", "-m", "browser"]

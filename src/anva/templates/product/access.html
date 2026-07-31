@@ -1,0 +1,21 @@
+{% extends "product/base_public.html" %}
+{% block title %}Access Anva{% endblock %}
+{% block content %}
+  <section class="access-card" aria-labelledby="access-title">
+    <p class="eyebrow">Human access</p>
+    <h1 id="access-title">Your workspace is protected.</h1>
+    {% if bootstrap_available %}
+      <p class="lede">No organization exists yet. Complete the one-time local setup to establish the first human administrator.</p>
+      <a class="button button--primary" href="/setup">Begin setup <span aria-hidden="true">→</span></a>
+    {% else %}
+      <div class="state-panel state-panel--unavailable">
+        <span class="state-icon" aria-hidden="true">!</span>
+        <div>
+          <h2>Interactive sign-in is not configured</h2>
+          <p>This installation currently supports the active bootstrap session only. GitHub user OAuth is not configured, and repository bearer tokens cannot sign into the human product.</p>
+        </div>
+      </div>
+      <p class="limitation"><strong>Operator action:</strong> restore an approved user authenticator or create a new human session through the documented local recovery process. No token or credential value is accepted on this page.</p>
+    {% endif %}
+  </section>
+{% endblock %}

@@ -1,0 +1,32 @@
+{% extends "product/base.html" %}
+{% block title %}Onboarding{% endblock %}
+{% block content %}
+  <header class="page-header">
+    <div><p class="eyebrow">Path to first value</p><h1>Onboarding readiness</h1><p class="page-intro">A real, ordered exit path. Unavailable integrations stay visible instead of being counted as complete.</p></div>
+  </header>
+  <section class="progress-rail" aria-labelledby="progress-title">
+    <h2 id="progress-title" class="sr-only">Onboarding checklist</h2>
+    <ol>
+      {% for check in page.checks %}
+        <li class="progress-item progress-item--{{ check.state|lower }}">
+          <span class="progress-index" aria-hidden="true">{% if check.state == "DONE" %}✓{% elif check.state == "UNAVAILABLE" %}—{% else %}{{ forloop.counter }}{% endif %}</span>
+          <div><span class="progress-state">{{ check.state|cut:"_"|title }}</span><h3>{{ check.name }}</h3><p>{{ check.detail }}</p><a href="{{ check.href }}">Open next step <span aria-hidden="true">→</span></a></div>
+        </li>
+      {% endfor %}
+    </ol>
+  </section>
+  <section class="panel settings-summary" id="organization-settings" aria-labelledby="settings-title">
+    <div class="panel-heading"><div><p class="eyebrow">Persisted defaults</p><h2 id="settings-title">Organization settings</h2></div></div>
+    {% if page.settings_record %}
+      <dl class="definition-grid">
+        <div><dt>Retention</dt><dd>{{ page.settings_record.retention_days }} days</dd></div>
+        <div><dt>Model processing</dt><dd>{{ page.settings_record.get_model_processing_display }}</dd></div>
+        <div><dt>Skill distribution</dt><dd>{{ page.settings_record.get_skill_distribution_display }}</dd></div>
+        <div><dt>Assurance mode</dt><dd>{{ page.settings_record.get_assurance_mode_display }}</dd></div>
+      </dl>
+    {% else %}<p class="limitation">Settings are unavailable. Setup did not report success for values that were not stored.</p>{% endif %}
+  </section>
+  <section class="state-panel state-panel--unavailable" id="github-installation">
+    <span class="state-icon" aria-hidden="true">↗</span><div><h2>GitHub installation is operator-assisted</h2><p>Anva will report an active installation only after an installation mapping and repository binding are verified. This screen cannot claim GitHub account ownership or initiate user OAuth.</p></div>
+  </section>
+{% endblock %}

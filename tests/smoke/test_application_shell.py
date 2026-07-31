@@ -10,22 +10,24 @@ from django.test import Client
 
 
 @pytest.mark.smoke
+@pytest.mark.django_db
 def test_home_page_is_semantic_and_has_no_frontend_build_dependency(client: Client) -> None:
-    response = client.get("/")
+    response = client.get("/", follow=True)
     content = response.content.decode()
 
     assert response.status_code == 200
     assert "<main" in content
-    assert 'href="#main"' in content
-    assert "data-health-message" in content
-    assert "The connective intelligence" in content
+    assert 'href="#main-content"' in content
+    assert "Organization bootstrap" in content
+    assert "Make organizational context operational" in content
+    assert 'name="csrfmiddlewaretoken"' in content
 
 
 @pytest.mark.smoke
 def test_browser_javascript_is_plain_static_source() -> None:
     script = Path("src/anva/static/anva/app.js").read_text()
 
-    assert "fetch(" in script
+    assert "addEventListener(" in script
     assert "import " not in script
     assert "require(" not in script
 

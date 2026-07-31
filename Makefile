@@ -4,7 +4,7 @@ TEST_COMPOSE := $(COMPOSE) -p anva-tests
 TEST_RUN := $(TEST_COMPOSE) --profile test run --rm --build test
 CORPUS_COMPOSE := $(TEST_COMPOSE) -f compose.yaml -f compose.corpus.yaml
 
-.PHONY: help up up-exposed down reset logs migrate migrations-check shell cli lock contracts contracts-check skills-render skills-package skills-check format format-check lint type unit integration corpus contract smoke coverage test test-down check ci
+.PHONY: help up up-exposed down reset logs migrate migrations-check shell cli lock contracts contracts-check skills-render skills-package skills-check format format-check lint type unit integration corpus contract smoke browser coverage test test-down check ci
 
 help:
 	@echo "Anva development commands (all application tooling runs in Compose)"
@@ -13,6 +13,7 @@ help:
 	@echo "  make check         Run formatting, lint, typing, and every test suite"
 	@echo "  make contracts     Regenerate versioned OpenAPI, MCP, schemas, and examples"
 	@echo "  make skills-check  Verify rendered skills, archives, checksums, and evals"
+	@echo "  make browser       Run the browser-native product journey in Chromium"
 	@echo "  make corpus        Ingest the sibling anva-test repo through a read-only mount"
 	@echo "  make test-down     Remove the isolated test project"
 	@echo "  make reset         Remove local containers and named data volumes"
@@ -90,14 +91,17 @@ contract:
 smoke:
 	$(TEST_RUN) pytest -m smoke
 
+browser:
+	$(TEST_COMPOSE) --profile test --profile browser run --rm --build browser-test pytest -m browser
+
 coverage:
 	$(TEST_RUN) sh -c "coverage run -m pytest && coverage report"
 
 test: unit integration contract smoke
 
 test-down:
-	$(TEST_COMPOSE) --profile test down --volumes --remove-orphans
+	$(TEST_COMPOSE) --profile test --profile browser down --volumes --remove-orphans
 
-check: format-check lint type migrations-check contracts-check skills-check coverage
+check: format-check lint type migrations-check contracts-check skills-check coverage browser
 
 ci: check

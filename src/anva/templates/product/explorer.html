@@ -1,0 +1,41 @@
+{% extends "product/base.html" %}
+{% block title %}Explorer{% endblock %}
+{% block content %}
+  <header class="page-header">
+    <div><p class="eyebrow">Permission-aware discovery</p><h1>Anva Explorer</h1><p class="page-intro">Find entities and source-backed context. Filtering happens inside your repository and source boundary before results are ranked.</p></div>
+  </header>
+  <form method="get" class="search-bar" role="search" aria-label="Search organizational context">
+    <label class="search-input"><span class="sr-only">Search entities and sources</span><span aria-hidden="true">⌕</span><input type="search" name="q" value="{{ page.query }}" maxlength="500" placeholder="Search a system, decision, owner, requirement…"></label>
+    <label><span>Repository</span><select name="repository">{% for repository in shell.repositories %}<option value="{{ repository.id }}" {% if page.selected_repository.id == repository.id %}selected{% endif %}>{{ repository.name }}</option>{% endfor %}</select></label>
+    <label><span>Entity type</span><select name="type"><option value="">All types</option>{% for value,label in page.entity_types %}<option value="{{ value }}" {% if page.entity_type == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+    <label><span>Freshness</span><select name="freshness"><option value="">Any freshness</option>{% for value,label in page.freshness_states %}<option value="{{ value }}" {% if page.freshness == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+    <button class="button button--primary" type="submit">Search</button>
+  </form>
+  {% if page.selected_repository %}
+    <div class="result-grid">
+      <section class="panel" aria-labelledby="entity-results-title">
+        <div class="panel-heading"><div><p class="eyebrow">Knowledge model</p><h2 id="entity-results-title">Entities</h2></div><span class="item-count">{{ page.entities|length }}</span></div>
+        {% if page.entities %}
+          <ul class="entity-list">
+            {% for entity in page.entities %}
+              <li><a href="/app/explorer/entities/{{ entity.id }}?repository={{ page.selected_repository.id }}"><span class="entity-glyph" aria-hidden="true">◇</span><span><strong>{{ entity.display_name }}</strong><small>{{ entity.entity_type|title }} · {{ entity.canonical_key }}</small></span><span aria-hidden="true">→</span></a></li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          {% include "product/components/empty.html" with empty_title="No visible entities match" empty_message="Try a broader term or remove a filter. Hidden sources are never searched client-side." %}
+        {% endif %}
+      </section>
+      <section class="panel" aria-labelledby="source-results-title">
+        <div class="panel-heading"><div><p class="eyebrow">Source records</p><h2 id="source-results-title">Excerpts</h2></div><span class="item-count">{{ page.source_results|length }}</span></div>
+        {% if page.source_results %}
+          <ol class="excerpt-list">{% for result in page.source_results %}<li><p>{{ result.text }}</p><div><span>Source-backed</span><code>{{ result.content_hash|slice:":12" }}</code><small>{{ result.canonical_url }}</small></div></li>{% endfor %}</ol>
+        {% else %}<p class="limitation">Enter a search term to retrieve authorized source excerpts. Natural-language answers remain unavailable until cited context can be constructed safely.</p>{% endif %}
+      </section>
+    </div>
+    {% if page.freshness_assertions %}
+      <section class="panel table-panel"><div class="panel-heading"><h2>Assertions by freshness</h2></div><div class="table-scroll" tabindex="0"><table><caption>Visible assertions matching the freshness filter</caption><thead><tr><th>Subject</th><th>Claim</th><th>Review</th><th>Observed</th></tr></thead><tbody>{% for assertion in page.freshness_assertions %}<tr><th>{{ assertion.subject_key }}</th><td>{{ assertion.predicate }}</td><td>{{ assertion.review_state|title }}</td><td><time datetime="{{ assertion.observed_at|date:'c' }}">{{ assertion.observed_at|date:"M j, Y" }}</time></td></tr>{% endfor %}</tbody></table></div></section>
+    {% endif %}
+  {% else %}
+    {% include "product/components/empty.html" with empty_title="Connect a repository boundary first" empty_message="Explorer needs an authorized repository before it can resolve source visibility." %}
+  {% endif %}
+{% endblock %}

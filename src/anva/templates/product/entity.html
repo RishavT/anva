@@ -1,0 +1,44 @@
+{% extends "product/base.html" %}
+{% block title %}{{ page.entity.display_name }}{% endblock %}
+{% block content %}
+  <nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/app/explorer">Explorer</a><span aria-hidden="true">/</span><span>{{ page.entity.display_name }}</span></nav>
+  <header class="page-header entity-header">
+    <div><p class="eyebrow">{{ page.entity.entity_type|title }} · revision {{ page.entity.revision }}</p><h1>{{ page.entity.display_name }}</h1><p class="page-intro mono">{{ page.entity.canonical_key }}</p></div>
+    <span class="status status--positive"><span class="status__icon" aria-hidden="true">✓</span>Active entity</span>
+  </header>
+  <div class="entity-layout">
+    <div>
+      <section class="panel" aria-labelledby="assertions-title">
+        <div class="panel-heading"><div><p class="eyebrow">What Anva believes</p><h2 id="assertions-title">Assertions</h2></div><span class="item-count">{{ page.assertions|length }}</span></div>
+        {% if page.assertions %}
+          <ol class="assertion-list">
+            {% for item in page.assertions %}
+              <li>
+                <div class="assertion-head"><strong>{{ item.record.predicate|cut:"_"|title }}</strong>{% include "product/components/status.html" with status=item.status %}</div>
+                <p class="assertion-value">{{ item.value }}</p>
+                <dl class="provenance-grid">
+                  <div><dt>Basis</dt><dd>{% if item.record.is_inferred %}Inference{% else %}Source-backed{% endif %} · {{ item.record.extraction_class|title }}</dd></div>
+                  <div><dt>Confidence</dt><dd>{{ item.record.confidence|floatformat:2 }}</dd></div>
+                  <div><dt>Review</dt><dd>{{ item.record.review_state|cut:"_"|title }}</dd></div>
+                  <div><dt>Observed</dt><dd><time datetime="{{ item.record.observed_at|date:'c' }}">{{ item.record.observed_at|date:"M j, Y H:i T" }}</time></dd></div>
+                </dl>
+                <details><summary>Provenance · {{ item.citations|length }} visible source{{ item.citations|length|pluralize }}</summary>
+                  {% if item.citations %}<ul class="citation-list">{% for citation in item.citations %}<li><span aria-hidden="true">↗</span><div><strong>{{ citation.locator|default:"Source location" }}</strong><code>{{ citation.source_content_hash|slice:":12" }}</code><small>Observed {{ citation.observed_at }}</small></div></li>{% endfor %}</ul>{% else %}<p class="limitation">No current source excerpt is visible. The assertion may be human-authored or its source may be unavailable.</p>{% endif %}
+                </details>
+              </li>
+            {% endfor %}
+          </ol>
+        {% else %}{% include "product/components/empty.html" with empty_title="No current assertions are visible" empty_message="The entity identity is available, but its claims may be unindexed, revoked, or outside this repository boundary." %}{% endif %}
+      </section>
+      <section class="panel table-panel" aria-labelledby="relationships-title">
+        <div class="panel-heading"><div><p class="eyebrow">Accessible list alternative</p><h2 id="relationships-title">Relationships</h2></div><span class="item-count">{{ page.relationships|length }}</span></div>
+        {% if page.relationships %}<div class="table-scroll" tabindex="0"><table><caption>Permission-visible one-hop relationships; the visual Canvas belongs to MVP-012.</caption><thead><tr><th>From</th><th>Relationship</th><th>To</th><th>Confidence</th></tr></thead><tbody>{% for edge in page.relationships %}<tr><td>{{ edge.source_name }}</td><td>{{ edge.relationship_type|cut:"_"|lower }}</td><td>{{ edge.target_name }}</td><td>{{ edge.confidence|floatformat:2 }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<p class="limitation">No current, authorized relationship is visible. Anva does not load hidden node details into this page.</p>{% endif %}
+      </section>
+    </div>
+    <aside class="context-stack">
+      <section class="panel"><div class="panel-heading"><h2>Conflicts</h2><span class="item-count">{{ page.conflicts|length }}</span></div>{% if page.conflicts %}<ul class="compact-list">{% for conflict in page.conflicts %}<li><strong>{{ conflict.predicate }}</strong><span>{{ conflict.status|title }}</span></li>{% endfor %}</ul>{% else %}<p class="quiet">No open conflict is visible.</p>{% endif %}</section>
+      <section class="panel"><div class="panel-heading"><h2>Revision history</h2><span class="item-count">{{ page.revisions|length }}</span></div>{% if page.revisions %}<ol class="change-list">{% for revision in page.revisions %}<li><span class="timeline-node" aria-hidden="true"></span><div><strong>Revision {{ revision.revision }}</strong><time datetime="{{ revision.created_at|date:'c' }}">{{ revision.created_at|date:"M j, Y H:i" }}</time></div></li>{% endfor %}</ol>{% else %}<p class="quiet">No reconstructed revision is available.</p>{% endif %}</section>
+      <a class="button button--secondary button--wide" href="/app/review">Propose a correction</a>
+    </aside>
+  </div>
+{% endblock %}

@@ -1,0 +1,6 @@
+{% extends "product/base.html" %}
+{% block title %}Policies{% endblock %}
+{% block content %}
+  <header class="page-header"><div><p class="eyebrow">Deterministic organizational rules</p><h1>Policies</h1><p class="page-intro">Exact, immutable versions and their scope. A simulation is never an authoritative evaluation or override.</p></div></header>
+  <section class="panel table-panel"><div class="panel-heading"><div><p class="eyebrow">Policy catalog</p><h2>Visible policies</h2></div><span class="item-count">{{ page.policies|length }}</span></div>{% if page.policies %}<div class="table-scroll" tabindex="0"><table><caption>Policies whose access scopes are visible to the current organization role</caption><thead><tr><th>Policy</th><th>Owner</th><th>Status</th><th>Revision</th><th>Scope</th></tr></thead><tbody>{% for policy in page.policies %}<tr><th><a href="/app/policies/{{ policy.id }}">{{ policy.name }}</a></th><td>{{ policy.owner }}</td><td>{{ policy.status|title }}</td><td>{{ policy.revision }}</td><td>{{ policy.access_scope.name }}</td></tr>{% endfor %}</tbody></table></div>{% else %}{% include "product/components/empty.html" with empty_title="No policy is visible" empty_message="Readiness can still observe repository state, but it cannot claim organization-policy coverage." %}{% endif %}</section>
+{% endblock %}

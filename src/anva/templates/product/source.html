@@ -1,0 +1,18 @@
+{% extends "product/base.html" %}
+{% block title %}{{ page.source.display_name|default:page.source.external_key }}{% endblock %}
+{% block content %}
+  <nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/app/sources">Source health</a><span aria-hidden="true">/</span><span>{{ page.source.display_name|default:page.source.external_key }}</span></nav>
+  <header class="page-header"><div><p class="eyebrow">{{ page.source.connector_kind|title }} source · revision {{ page.source.revision }}</p><h1>{{ page.source.display_name|default:page.source.external_key }}</h1><p class="page-intro">{{ page.source.repository.name }} · permission scope {{ page.source.access_scope.name|default:"Unavailable" }}</p></div>{% include "product/components/status.html" with status=page.status %}</header>
+  {% if page.source.state == "DEGRADED" or page.source.state == "FAILED" %}
+    <div class="state-panel state-panel--warning"><span class="state-icon" aria-hidden="true">!</span><div><h2>Source is degraded</h2><p>Last safe error code: <code>{{ page.source.last_error_code|default:"source_unavailable" }}</code>. Existing source-backed claims may be stale; Anva does not expose connector credentials or raw failures.</p></div></div>
+  {% endif %}
+  <div class="source-grid">
+    <section class="panel" aria-labelledby="sync-title"><div class="panel-heading"><div><p class="eyebrow">Freshness</p><h2 id="sync-title">Sync history</h2></div></div>
+      {% if page.runs %}<ol class="run-timeline">{% for run in page.runs %}<li><span class="timeline-node" aria-hidden="true"></span><div><div class="timeline-head"><strong>{{ run.state|cut:"_"|title }}</strong><span>{{ run.scan_mode|title }}</span></div><p>{{ run.processed_count }} processed · {{ run.failed_count }} failed · {{ run.tombstoned_count }} tombstoned</p><time datetime="{{ run.created_at|date:'c' }}">{{ run.created_at|date:"M j, Y H:i T" }}</time>{% if run.failure_code %}<code>{{ run.failure_code }}</code>{% endif %}</div></li>{% endfor %}</ol>{% else %}<p class="limitation">No sync run has started. The source is connected but has not established indexed provenance.</p>{% endif %}
+    </section>
+    <aside class="panel action-panel" aria-labelledby="actions-title"><div class="panel-heading"><h2 id="actions-title">Source controls</h2></div>
+      <form method="post" action="/app/sources/{{ page.source.id }}/sync">{% csrf_token %}<input type="hidden" name="scan_mode" value="INCREMENTAL"><button class="button button--primary button--wide" type="submit" {% if shell.read_only or page.source.state == "REVOKED" or not page.can_sync %}disabled{% endif %}>Request incremental sync</button></form>
+      <details class="danger-zone"><summary>Revoke source access</summary><p>Revocation invalidates access snapshots, visible chunks, derived scopes, and reusable context. It does not silently delete the audit trail.</p><form method="post" action="/app/sources/{{ page.source.id }}/revoke">{% csrf_token %}<input type="hidden" name="expected_revision" value="{{ page.source.revision }}"><label>Type <strong>REVOKE</strong> to confirm<input name="confirmation" required autocomplete="off" pattern="REVOKE"></label><button class="button button--danger button--wide" type="submit" {% if shell.read_only or page.source.state == "REVOKED" or not page.can_revoke %}disabled{% endif %}>Revoke and invalidate</button></form></details>
+    </aside>
+  </div>
+{% endblock %}

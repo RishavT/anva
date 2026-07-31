@@ -1,0 +1,8 @@
+{% extends "product/base.html" %}
+{% block title %}Work & requirements{% endblock %}
+{% block content %}
+  <header class="page-header"><div><p class="eyebrow">Intent before implementation</p><h1>Work & requirements</h1><p class="page-intro">Versioned delivery intent, explicit scope, and acceptance evidence—never inferred solely from a pull-request summary.</p></div></header>
+  <section class="panel table-panel" aria-labelledby="work-title"><div class="panel-heading"><div><p class="eyebrow">Visible repository scope</p><h2 id="work-title">Work items</h2></div><span class="item-count">{{ page.work_items|length }}</span></div>
+    {% if page.work_items %}<div class="table-scroll" tabindex="0"><table><caption>Permission-visible versioned work items</caption><thead><tr><th>Work</th><th>Repository</th><th>Type</th><th>Status</th><th>Revision</th><th>Content identity</th></tr></thead><tbody>{% for item in page.work_items %}<tr><th><a href="/app/work/{{ item.id }}">{{ item.title }}</a><small>{{ item.external_key|default:"Anva-native" }}</small></th><td>{{ item.repository.name }}</td><td>{{ item.work_type|title }}</td><td>{{ item.status|title }}</td><td>{{ item.revision }}</td><td><code>{{ item.current_content_hash|slice:":12" }}</code></td></tr>{% endfor %}</tbody></table></div>{% else %}{% include "product/components/empty.html" with empty_title="No approved delivery intent is visible" empty_message="Import or create a scoped work item before assurance can claim requirement-level coverage." %}{% endif %}
+  </section>
+{% endblock %}

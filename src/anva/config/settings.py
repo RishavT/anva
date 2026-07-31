@@ -110,6 +110,7 @@ ALLOWED_HOSTS = [
 
 INSTALLED_APPS = [
     "django.contrib.contenttypes",
+    "django.contrib.sessions",
     "django.contrib.staticfiles",
     "anva.core",
     "anva.foundation",
@@ -118,8 +119,11 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "anva.core.middleware.ProductSecurityHeadersMiddleware",
 ]
 
 ROOT_URLCONF = "anva.config.urls"
@@ -173,8 +177,16 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = "DENY"
 SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = "Lax"
+SESSION_COOKIE_SECURE = ENVIRONMENT == "production"
+SESSION_COOKIE_AGE = 60 * 60 * 12
+SESSION_SAVE_EVERY_REQUEST = True
 CSRF_COOKIE_HTTPONLY = True
+CSRF_COOKIE_SAMESITE = "Lax"
+CSRF_COOKIE_SECURE = ENVIRONMENT == "production"
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+SECURE_REFERRER_POLICY = "same-origin"
+ANVA_WEB_READ_ONLY = env_bool("ANVA_WEB_READ_ONLY", default=False)
 
 OBJECT_STORAGE_ENDPOINT = os.getenv("ANVA_OBJECT_STORAGE_ENDPOINT", "http://minio:9000")
 OBJECT_STORAGE_BUCKET = os.getenv("ANVA_OBJECT_STORAGE_BUCKET", "anva")

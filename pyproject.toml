@@ -31,6 +31,7 @@ dev = [
   "pytest==8.4.1",
   "pytest-django==4.11.1",
   "ruff==0.12.9",
+  "selenium==4.34.2",
 ]
 
 [project.scripts]
@@ -88,6 +89,7 @@ markers = [
   "corpus: optional read-only external corpus acceptance test",
   "skill_eval: deterministic host-skill behavior and safety evaluation",
   "smoke: deployable-process smoke checks",
+  "browser: Selenium browser-native product flows",
 ]
 
 [tool.coverage.run]

@@ -25,6 +25,13 @@ Code. Generated repository skills and installable plugins use the existing
 authenticated MCP facade; packages contain no customer knowledge, endpoint, or
 credential.
 
+The browser product is a server-rendered, JavaScript-optional operating surface
+for onboarding, attention triage, permission-aware knowledge exploration,
+source health, human review, repository profiles, work and policy inspection,
+pull-request assurance, developer-skill diagnostics, and privileged audit.
+Human sessions resolve active membership and role state on every request and
+never reuse repository service tokens.
+
 ## Prerequisites
 
 - Docker Engine 24+ with the Docker Compose v2 plugin
@@ -84,6 +91,7 @@ make integration
 make corpus
 make contract
 make smoke
+make browser
 make coverage
 make check
 ```

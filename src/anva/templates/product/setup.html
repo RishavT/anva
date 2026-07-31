@@ -1,0 +1,87 @@
+{% extends "product/base_public.html" %}
+{% block title %}Set up Anva{% endblock %}
+{% block content %}
+  <section class="setup-intro" aria-labelledby="setup-title">
+    <p class="eyebrow">Organization bootstrap · step 1 of 1</p>
+    <h1 id="setup-title">Make organizational context operational.</h1>
+    <p class="lede">Create the first governed workspace, human administrator, and repository boundary. Every choice below is stored; GitHub installation and source authorization remain explicit follow-up steps.</p>
+    <div class="trust-note">
+      <span class="trust-note__mark" aria-hidden="true">◇</span>
+      <p><strong>Local, one-time boundary.</strong> The bootstrap secret is verified server-side, never stored in your browser session, and the machine token created for API use is never used as your human identity.</p>
+    </div>
+  </section>
+  <section class="setup-panel" aria-labelledby="details-title">
+    {% if errors %}
+      <div class="error-summary" role="alert" tabindex="-1" data-error-summary>
+        <h2>Setup needs attention</h2>
+        <ul>{% for error in errors %}<li>{{ error }}</li>{% endfor %}</ul>
+      </div>
+    {% endif %}
+    <form method="post" class="form-stack">
+      {% csrf_token %}
+      <fieldset>
+        <legend id="details-title">Workspace identity</legend>
+        <div class="field-grid">
+          <label>Organization name
+            <input name="organization_name" required maxlength="300" autocomplete="organization" value="{{ safe_values.organization_name }}">
+          </label>
+          <label>Organization slug
+            <input name="organization_slug" required maxlength="80" pattern="[a-z0-9\-]+" placeholder="northstar" value="{{ safe_values.organization_slug }}">
+          </label>
+          <label>Administrator name
+            <input name="admin_name" required maxlength="200" autocomplete="name" value="{{ safe_values.admin_name }}">
+          </label>
+          <label>Administrator email
+            <input name="admin_email" required type="email" maxlength="320" autocomplete="email" value="{{ safe_values.admin_email }}">
+          </label>
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend>First repository boundary</legend>
+        <div class="field-grid">
+          <label>Repository name
+            <input name="repository_name" required maxlength="300" placeholder="payments" value="{{ safe_values.repository_name }}">
+          </label>
+          <label>External identity
+            <input name="repository_external_id" required maxlength="300" placeholder="github:organization/repository" value="{{ safe_values.repository_external_id }}">
+          </label>
+        </div>
+        <p class="field-help">This identifies the authorization boundary; it does not claim that a GitHub installation is connected.</p>
+      </fieldset>
+      <fieldset>
+        <legend>Governance defaults</legend>
+        <div class="field-grid">
+          <label>Retention period
+            <span class="input-suffix"><input name="retention_days" required type="number" min="1" max="3650" value="{{ safe_values.retention_days|default:'365' }}"><span>days</span></span>
+          </label>
+          <label>Model processing
+            <select name="model_processing">
+              <option value="REDACTED_ONLY">Redacted context only</option>
+              <option value="DISABLED">Disabled</option>
+              <option value="ALLOWED">Allowed by policy</option>
+            </select>
+          </label>
+          <label>Skill distribution
+            <select name="skill_distribution">
+              <option value="SELF_SERVICE">Self-service packages</option>
+              <option value="MANAGED">Organization managed</option>
+            </select>
+          </label>
+          <label>Default assurance mode
+            <select name="assurance_mode">
+              <option value="OBSERVE">Observe existing CI</option>
+              <option value="EVIDENCE">Anva evidence manifests</option>
+            </select>
+          </label>
+        </div>
+      </fieldset>
+      <label>Local bootstrap secret
+        <input name="bootstrap_secret" required type="password" autocomplete="off" data-sensitive>
+        <span class="field-help">Cleared after every attempt. It is not your future sign-in credential.</span>
+      </label>
+      <button class="button button--primary button--wide" type="submit">
+        Create governed workspace <span aria-hidden="true">→</span>
+      </button>
+    </form>
+  </section>
+{% endblock %}
