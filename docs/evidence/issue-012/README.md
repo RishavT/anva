@@ -17,11 +17,11 @@ environment value, or customer source payload.
 
 | Image | Evidence | SHA-256 |
 | --- | --- | --- |
-| `01-canvas-desktop.png` | Source-backed 9-node/1-relationship semantic map, typed controls, minimap, and inspector | `e8d04632327b1ff89ab1daaebbcdc3c1c3ae324436311a1eaecb53102b10efe6` |
-| `02-canvas-inspector-saved-layout.png` | Keyboard/mouse selection, node inspector, drag, zoom, and immutable layout revision 2 | `d5fe2d672327aa70c187083066d69c347c714001144da5679584806bd7cdd878` |
+| `01-canvas-desktop.png` | Source-backed 9-node/1-relationship semantic map, typed controls, minimap, and inspector | `c7d3960f4d9de14ce84852ff61881c4f52db6a64dee49b93ead64e1ecd89e5c7` |
+| `02-canvas-inspector-saved-layout.png` | Keyboard/mouse selection, node inspector, drag, zoom, and immutable layout revision 2 | `fe3b39203b2bc2cd0ad87fab4ef52c4ab35b88f42a5bc6a327a415b5d919ce02` |
 | `03-canvas-mobile-320-no-js.png` | JavaScript-disabled canonical node table at 320 pixels | `cb941effd8523b796fcc00db8c14512eab049d7a6ad4320d2bfd8e447514e305` |
-| `04-canvas-browser-zoom-200.png` | Readable, non-overflowing 300-node Canvas at 200% browser zoom | `fcbcf2f5854825b27ecf1517fc4d3db45cd759a3e35f3e98dcbfd43408a1675a` |
-| `05-canvas-300-node-performance.png` | Standard-budget 300-node/1-relationship map rendered and fit at 25% | `8287e0fbbafca7a5a635a349d6d35e6ae10c580745dcc9ce09cec2871d2f663c` |
+| `04-canvas-browser-zoom-200.png` | Readable, non-overflowing 300-node Canvas at 200% browser zoom | `86578b274d12fb5c701331cc5ee7741ed8b8faa78c4379c4d6435ca5efe0d7d3` |
+| `05-canvas-300-node-performance.png` | Standard-budget 300-node/1-relationship map rendered and fit at 25% | `68c2378aaf78c7e630119608729442c4ac85470b8e69d267153baaef9a24462d` |
 
 The test additionally asserts that the loaded graph has a real relationship,
 Dagre is available locally, the minimap is visible, all 24 proposal relationship
@@ -34,16 +34,16 @@ console contains no unexpected severe entry.
 The raw, post-warm 30-sample measurements are committed as
 `performance/browser.json` and `performance/database.json`. On the recorded
 browser run, the 300-node/1-relationship shell-to-interactive p50/p95/max was
-362.5/484.5/498.9 ms, Dagre layout was 29.3/48.7/50.5 ms, the HTTP path was
-156.4/177.9/180.5 ms, and local search/filter/select stayed below 13 ms. Canvas
-gesture work was 0.6/0.7/0.8 ms; the event-to-rAF diagnostic was
-16.6/16.8/16.8 ms and is not represented as physical device timing. The
+396.15/602.2/624.5 ms, Dagre layout was 27.1/52.0/88.4 ms, the HTTP path was
+157.9/202.9/262.8 ms, and local search/filter/select p95 stayed below 10 ms.
+Canvas gesture work was 0.6/1.1/1.4 ms; the event-to-rAF diagnostic was
+16.6/18.4/18.9 ms and is not represented as physical device timing. The
 gesture measurement window observed no long task, all 30 samples made zero
 external request, and the graph payload was 153,075 bytes.
 
 On the recorded database run, strict authorization/query/hydration p95 was
-288.914 ms with exactly 21 queries in every sample. Path service p95 was
-176.242 ms with exactly 18 queries in every sample. Its 300-node source-backed
+131.453 ms with exactly 21 queries in every sample. Path service p95 was
+86.381 ms with exactly 18 queries in every sample. Its 300-node source-backed
 payload was 139,254 bytes. These remain below the 400 ms strict-query, 1,000 ms
 path, and 768,000-byte payload gates. Query-count equality is the explicit N+1
 regression assertion.
@@ -60,7 +60,7 @@ The vendored release JavaScript is unchanged except that its optional
 `sourceMappingURL` trailer is removed. This keeps the production WhiteNoise
 manifest closed without shipping a 201,454-byte development-only source map.
 
-The last focused browser run passed in 65.06 seconds. During evidence
+The last focused browser run passed in 70.23 seconds. During evidence
 generation, only isolated PostgreSQL and MinIO support services remained
 running (approximately 259 MiB combined). The one-off browser image is
 1,260,998,368 bytes and includes the matching Debian Chromium/ChromeDriver and
