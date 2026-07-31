@@ -448,6 +448,257 @@ def openapi_document() -> dict[str, object]:
         "additionalProperties": False,
         "maxProperties": 0,
     }
+    canvas_entity_types = [
+        "GOAL",
+        "METRIC",
+        "INITIATIVE",
+        "PRODUCT",
+        "OWNER",
+        "ENVIRONMENT",
+        "CUSTOMER_COMMITMENT",
+        "ARCHITECTURAL_DECISION",
+        "ACCEPTANCE_CRITERION",
+        "RELEASE",
+        "TEAM",
+        "REPOSITORY",
+        "SERVICE",
+        "COMPONENT",
+        "API",
+        "DATA_ASSET",
+        "WORK_ITEM",
+        "TASK",
+        "PULL_REQUEST",
+        "EVIDENCE",
+        "RISK",
+        "INCIDENT",
+        "CONTROL",
+        "DECISION",
+        "POLICY",
+        "REQUIREMENT",
+        "UNKNOWN",
+    ]
+    canvas_relationship_types = [
+        "GOAL_MEASURED_BY_METRIC",
+        "INITIATIVE_SUPPORTS_GOAL",
+        "INITIATIVE_OWNED_BY_TEAM",
+        "INITIATIVE_AFFECTS_PRODUCT",
+        "PRODUCT_IMPLEMENTED_BY_REPOSITORY",
+        "COMPONENT_BELONGS_TO_PRODUCT",
+        "REPOSITORY_OWNED_BY_TEAM",
+        "REPOSITORY_CONTAINS_COMPONENT",
+        "SERVICE_IMPLEMENTED_BY_REPOSITORY",
+        "SERVICE_DEPENDS_ON_SERVICE",
+        "API_PROVIDED_BY_SERVICE",
+        "API_CONSUMED_BY_COMPONENT",
+        "DATA_ASSET_USED_BY_SERVICE",
+        "DECISION_APPLIES_TO_ENTITY",
+        "POLICY_APPLIES_TO_ENTITY",
+        "RISK_AFFECTS_ENTITY",
+        "INCIDENT_AFFECTED_ENTITY",
+        "REQUIREMENT_SUPPORTS_INITIATIVE",
+        "REQUIREMENT_IMPLEMENTED_BY_PULL_REQUEST",
+        "ACCEPTANCE_CRITERION_VERIFIED_BY_EVIDENCE",
+        "TASK_CHANGES_ENTITY",
+        "PULL_REQUEST_CHANGES_ENTITY",
+        "ENTITY_OWNED_BY_OWNER",
+        "ENTITY_REVIEWED_BY_TEAM",
+    ]
+    canvas_semantic_properties: dict[str, object] = {
+        "root_entity_id": {"type": "string", "format": "uuid"},
+        "repository_ids": {
+            "type": "array",
+            "items": {"type": "string", "format": "uuid"},
+            "maxItems": 100,
+            "uniqueItems": True,
+        },
+        "entity_types": {
+            "type": "array",
+            "items": {"type": "string", "enum": canvas_entity_types},
+            "maxItems": len(canvas_entity_types),
+            "uniqueItems": True,
+        },
+        "owner": {"type": "string", "maxLength": 500},
+        "status": {"type": "string", "maxLength": 500},
+        "risk": {"type": "string", "maxLength": 500},
+        "freshness": {
+            "type": "string",
+            "enum": [
+                "FRESH",
+                "AGING",
+                "STALE",
+                "CONTRADICTED",
+                "SOURCE_UNAVAILABLE",
+                "UNKNOWN",
+            ],
+        },
+        "search": {"type": "string", "maxLength": 500},
+        "layers": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "enum": [
+                    "execution",
+                    "ownership",
+                    "dependencies",
+                    "governance",
+                    "provenance",
+                ],
+            },
+            "maxItems": 5,
+            "uniqueItems": True,
+        },
+        "depth": {"type": "integer", "minimum": 1, "maximum": 4},
+    }
+    canvas_query_request = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "view_id": {"type": "string", "format": "uuid"},
+            "view_revision": {"type": "integer", "minimum": 1},
+            **{
+                key: value
+                for key, value in canvas_semantic_properties.items()
+                if key != "root_entity_id"
+            },
+            "anchor_id": {"type": "string", "format": "uuid"},
+            "node_limit": {"type": "integer", "minimum": 1, "maximum": 300},
+            "edge_limit": {"type": "integer", "minimum": 1, "maximum": 600},
+        },
+    }
+    canvas_path_request = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "source_id": {"type": "string", "format": "uuid"},
+            "target_id": {"type": "string", "format": "uuid"},
+            "repository_ids": canvas_semantic_properties["repository_ids"],
+            "max_depth": {"type": "integer", "minimum": 1, "maximum": 6},
+        },
+        "required": ["source_id", "target_id"],
+    }
+    canvas_semantic_query = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": canvas_semantic_properties,
+    }
+    canvas_presentation = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "placements": {
+                "type": "array",
+                "maxItems": 300,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "entity_id": {"type": "string", "format": "uuid"},
+                        "x": {"type": "number", "minimum": -1_000_000, "maximum": 1_000_000},
+                        "y": {"type": "number", "minimum": -1_000_000, "maximum": 1_000_000},
+                        "is_pinned": {"type": "boolean"},
+                        "is_hidden": {"type": "boolean"},
+                        "group_index": {
+                            "oneOf": [
+                                {"type": "integer", "minimum": 0, "maximum": 49},
+                                {"type": "null"},
+                            ]
+                        },
+                    },
+                    "required": [
+                        "entity_id",
+                        "x",
+                        "y",
+                        "is_pinned",
+                        "is_hidden",
+                        "group_index",
+                    ],
+                },
+            },
+            "filters": {"type": "array", "maxItems": 20, "items": {"type": "object"}},
+            "layers": {"type": "array", "maxItems": 20, "items": {"type": "object"}},
+            "groups": {"type": "array", "maxItems": 50, "items": {"type": "object"}},
+            "annotations": {
+                "type": "array",
+                "maxItems": 100,
+                "items": {"type": "object"},
+            },
+        },
+        "required": ["placements", "filters", "layers", "groups", "annotations"],
+    }
+    canvas_view_request = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "name": {"type": "string", "minLength": 1, "maxLength": 200},
+            "description": {"type": "string", "maxLength": 1_000},
+            "view_type": {
+                "type": "string",
+                "enum": [
+                    "STRATEGY",
+                    "PRODUCT_SYSTEM",
+                    "INITIATIVE",
+                    "RISK_POLICY",
+                    "CHANGE_HISTORY",
+                    "CUSTOM",
+                ],
+            },
+            "semantic_query": canvas_semantic_query,
+            "repository_id": {"type": "string", "format": "uuid"},
+            "access_scope_id": {"type": "string", "format": "uuid"},
+            "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 500},
+        },
+        "required": ["name", "view_type", "semantic_query", "idempotency_key"],
+    }
+    canvas_revision_request = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "expected_revision": {"type": "integer", "minimum": 1},
+            "semantic_query": canvas_semantic_query,
+            "presentation": canvas_presentation,
+            "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 500},
+        },
+        "required": [
+            "expected_revision",
+            "semantic_query",
+            "presentation",
+            "idempotency_key",
+        ],
+    }
+    canvas_share_request = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "recipient_membership_id": {"type": "string", "format": "uuid"},
+            "expires_at": {"type": "string", "format": "date-time"},
+            "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 500},
+        },
+        "required": ["idempotency_key"],
+    }
+    canvas_relationship_request = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "source_id": {"type": "string", "format": "uuid"},
+            "target_id": {"type": "string", "format": "uuid"},
+            "relationship_type": {"type": "string", "enum": canvas_relationship_types},
+            "repository_id": {"type": "string", "format": "uuid"},
+            "expected_source_revision": {"type": "integer", "minimum": 1},
+            "expected_target_revision": {"type": "integer", "minimum": 1},
+            "rationale": {"type": "string", "minLength": 1, "maxLength": 2_000},
+            "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 500},
+        },
+        "required": [
+            "source_id",
+            "target_id",
+            "relationship_type",
+            "repository_id",
+            "expected_source_revision",
+            "expected_target_revision",
+            "rationale",
+            "idempotency_key",
+        ],
+    }
     evaluator_responses: dict[str, object] = {
         "200": {
             "description": "Stored evaluator result.",
@@ -903,6 +1154,105 @@ def openapi_document() -> dict[str, object]:
                     "operationId": "queryAuthorizedKnowledge",
                     "parameters": [{"$ref": "#/components/parameters/CorrelationId"}],
                     "responses": authorized_responses,
+                }
+            },
+            "/canvas/query": {
+                "post": {
+                    "operationId": "queryOrganizationalCanvas",
+                    "description": (
+                        "Return a deterministic, bounded union of independently authorized "
+                        "repository projections. Hidden records never enter counts or layout."
+                    ),
+                    "parameters": [{"$ref": "#/components/parameters/CorrelationId"}],
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": canvas_query_request}},
+                    },
+                    "responses": authorized_responses,
+                }
+            },
+            "/canvas/path": {
+                "post": {
+                    "operationId": "explainOrganizationalCanvasPath",
+                    "parameters": [{"$ref": "#/components/parameters/CorrelationId"}],
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": canvas_path_request}},
+                    },
+                    "responses": authorized_responses,
+                }
+            },
+            "/canvas/entities/{resource_id}": {
+                "get": {
+                    "operationId": "getOrganizationalCanvasEntity",
+                    "parameters": [
+                        resource_parameter,
+                        {
+                            "name": "repository_id",
+                            "in": "query",
+                            "required": False,
+                            "schema": {
+                                "type": "array",
+                                "items": {"type": "string", "format": "uuid"},
+                                "maxItems": 100,
+                            },
+                        },
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "responses": authorized_responses,
+                }
+            },
+            "/canvas/views": {
+                "get": {
+                    "operationId": "listOrganizationalCanvasViews",
+                    "parameters": [{"$ref": "#/components/parameters/CorrelationId"}],
+                    "responses": authorized_responses,
+                },
+                "post": {
+                    "operationId": "createOrganizationalCanvasView",
+                    "parameters": mutation_parameters,
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": canvas_view_request}},
+                    },
+                    "responses": created_or_replayed_responses,
+                },
+            },
+            "/canvas/views/{resource_id}/revisions": {
+                "post": {
+                    "operationId": "appendOrganizationalCanvasViewRevision",
+                    "parameters": [resource_parameter, *mutation_parameters],
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": canvas_revision_request}},
+                    },
+                    "responses": created_or_replayed_responses,
+                }
+            },
+            "/canvas/views/{resource_id}/shares": {
+                "post": {
+                    "operationId": "shareOrganizationalCanvasViewRevision",
+                    "description": "Create a sign-in-required deep link that grants no authority.",
+                    "parameters": [resource_parameter, *mutation_parameters],
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": canvas_share_request}},
+                    },
+                    "responses": created_or_replayed_responses,
+                }
+            },
+            "/canvas/relationship-proposals": {
+                "post": {
+                    "operationId": "proposeOrganizationalCanvasRelationship",
+                    "description": (
+                        "Create review state only; this endpoint never writes a canonical edge."
+                    ),
+                    "parameters": mutation_parameters,
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": canvas_relationship_request}},
+                    },
+                    "responses": created_or_replayed_responses,
                 }
             },
             "/context-packets": {

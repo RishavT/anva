@@ -261,6 +261,7 @@ services:
     volumes:
       - .:/workspace
     environment:
+      PYTHONPATH: /workspace/src
       ANVA_ENV: test
       ANVA_DEBUG: "false"
       ANVA_SECRET_KEY: test-only-not-a-secret
@@ -302,6 +303,7 @@ services:
       - .:/workspace
     environment:
       HOME: /tmp
+      PYTHONPATH: /workspace/src
       ANVA_ENV: test
       ANVA_DEBUG: "false"
       ANVA_SECRET_KEY: test-only-not-a-secret
@@ -340,6 +342,7 @@ services:
       - .:/workspace
     command: ["pytest", "tests/smoke/test_mcp_compose_client.py", "-vv"]
     environment:
+      PYTHONPATH: /workspace/src
       ANVA_API_TEST_URL: http://api:8000
       ANVA_MCP_TEST_URL: http://mcp:8001/mcp
       ANVA_MCP_READ_ONLY_TEST_URL: http://mcp-read-only:8002/mcp

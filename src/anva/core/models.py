@@ -1044,12 +1044,29 @@ class KnowledgeEntity(RevisionedTenantModel):
     """Common explicit entity identity without a table per future noun."""
 
     class EntityType(models.TextChoices):
+        GOAL = "GOAL"
+        METRIC = "METRIC"
+        INITIATIVE = "INITIATIVE"
+        PRODUCT = "PRODUCT"
+        OWNER = "OWNER"
+        ENVIRONMENT = "ENVIRONMENT"
+        CUSTOMER_COMMITMENT = "CUSTOMER_COMMITMENT"
+        ARCHITECTURAL_DECISION = "ARCHITECTURAL_DECISION"
+        ACCEPTANCE_CRITERION = "ACCEPTANCE_CRITERION"
+        RELEASE = "RELEASE"
         TEAM = "TEAM"
         REPOSITORY = "REPOSITORY"
         SERVICE = "SERVICE"
         COMPONENT = "COMPONENT"
         API = "API"
         DATA_ASSET = "DATA_ASSET"
+        WORK_ITEM = "WORK_ITEM"
+        TASK = "TASK"
+        PULL_REQUEST = "PULL_REQUEST"
+        EVIDENCE = "EVIDENCE"
+        RISK = "RISK"
+        INCIDENT = "INCIDENT"
+        CONTROL = "CONTROL"
         DECISION = "DECISION"
         POLICY = "POLICY"
         REQUIREMENT = "REQUIREMENT"
@@ -1138,9 +1155,42 @@ class KnowledgeRelationship(UUIDModel):
     """Normalized, provenance-bearing edge committed for graph consumers."""
 
     class RelationshipType(models.TextChoices):
+        GOAL_MEASURED_BY_METRIC = "GOAL_MEASURED_BY_METRIC"
+        INITIATIVE_SUPPORTS_GOAL = "INITIATIVE_SUPPORTS_GOAL"
+        INITIATIVE_OWNED_BY_TEAM = "INITIATIVE_OWNED_BY_TEAM"
+        INITIATIVE_AFFECTS_PRODUCT = "INITIATIVE_AFFECTS_PRODUCT"
+        PRODUCT_IMPLEMENTED_BY_REPOSITORY = "PRODUCT_IMPLEMENTED_BY_REPOSITORY"
+        COMPONENT_BELONGS_TO_PRODUCT = "COMPONENT_BELONGS_TO_PRODUCT"
+        REPOSITORY_OWNED_BY_TEAM = "REPOSITORY_OWNED_BY_TEAM"
+        REPOSITORY_CONTAINS_COMPONENT = "REPOSITORY_CONTAINS_COMPONENT"
+        SERVICE_IMPLEMENTED_BY_REPOSITORY = "SERVICE_IMPLEMENTED_BY_REPOSITORY"
+        SERVICE_DEPENDS_ON_SERVICE = "SERVICE_DEPENDS_ON_SERVICE"
+        API_PROVIDED_BY_SERVICE = "API_PROVIDED_BY_SERVICE"
+        API_CONSUMED_BY_COMPONENT = "API_CONSUMED_BY_COMPONENT"
+        DATA_ASSET_USED_BY_SERVICE = "DATA_ASSET_USED_BY_SERVICE"
+        DECISION_APPLIES_TO_ENTITY = "DECISION_APPLIES_TO_ENTITY"
+        POLICY_APPLIES_TO_ENTITY = "POLICY_APPLIES_TO_ENTITY"
+        RISK_AFFECTS_ENTITY = "RISK_AFFECTS_ENTITY"
+        INCIDENT_AFFECTED_ENTITY = "INCIDENT_AFFECTED_ENTITY"
+        REQUIREMENT_SUPPORTS_INITIATIVE = "REQUIREMENT_SUPPORTS_INITIATIVE"
+        REQUIREMENT_IMPLEMENTED_BY_PULL_REQUEST = "REQUIREMENT_IMPLEMENTED_BY_PULL_REQUEST"
+        ACCEPTANCE_CRITERION_VERIFIED_BY_EVIDENCE = "ACCEPTANCE_CRITERION_VERIFIED_BY_EVIDENCE"
+        TASK_CHANGES_ENTITY = "TASK_CHANGES_ENTITY"
+        PULL_REQUEST_CHANGES_ENTITY = "PULL_REQUEST_CHANGES_ENTITY"
+        ENTITY_OWNED_BY_OWNER = "ENTITY_OWNED_BY_OWNER"
+        ENTITY_REVIEWED_BY_TEAM = "ENTITY_REVIEWED_BY_TEAM"
         OWNED_BY = "OWNED_BY"
         MAINTAINED_BY = "MAINTAINED_BY"
         DEPENDS_ON = "DEPENDS_ON"
+        MEASURED_BY = "MEASURED_BY"
+        ADVANCES = "ADVANCES"
+        IMPLEMENTS = "IMPLEMENTS"
+        PART_OF = "PART_OF"
+        AFFECTS = "AFFECTS"
+        GOVERNED_BY = "GOVERNED_BY"
+        EVIDENCED_BY = "EVIDENCED_BY"
+        BLOCKED_BY = "BLOCKED_BY"
+        CHANGES = "CHANGES"
 
     class ReviewState(models.TextChoices):
         UNREVIEWED = "UNREVIEWED"
@@ -1150,7 +1200,7 @@ class KnowledgeRelationship(UUIDModel):
 
     objects: ClassVar[models.Manager[KnowledgeRelationship]] = models.Manager()
     organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
-    relationship_type = models.CharField(max_length=32, choices=RelationshipType)
+    relationship_type = models.CharField(max_length=64, choices=RelationshipType)
     source_entity = models.ForeignKey(
         KnowledgeEntity,
         on_delete=models.PROTECT,
@@ -1161,8 +1211,8 @@ class KnowledgeRelationship(UUIDModel):
         on_delete=models.PROTECT,
         related_name="incoming_relationships",
     )
-    source_entity_type = models.CharField(max_length=32, choices=KnowledgeEntity.EntityType)
-    target_entity_type = models.CharField(max_length=32, choices=KnowledgeEntity.EntityType)
+    source_entity_type = models.CharField(max_length=64, choices=KnowledgeEntity.EntityType)
+    target_entity_type = models.CharField(max_length=64, choices=KnowledgeEntity.EntityType)
     assertion = models.ForeignKey(KnowledgeAssertion, on_delete=models.PROTECT)
     source_location = models.ForeignKey(SourceLocation, on_delete=models.PROTECT)
     source_observation = models.ForeignKey(SourceObservation, on_delete=models.PROTECT)
@@ -1209,6 +1259,388 @@ class KnowledgeRelationship(UUIDModel):
             models.CheckConstraint(
                 condition=Q(confidence__gte=0.0, confidence__lte=1.0),
                 name="core_relationship_confidence_range",
+            ),
+        ]
+
+
+class CanvasView(RevisionedTenantModel):
+    """A permission-bound semantic projection over canonical knowledge."""
+
+    class ViewType(models.TextChoices):
+        STRATEGY = "STRATEGY"
+        PRODUCT_SYSTEM = "PRODUCT_SYSTEM"
+        INITIATIVE = "INITIATIVE"
+        RISK_POLICY = "RISK_POLICY"
+        CHANGE_HISTORY = "CHANGE_HISTORY"
+        CUSTOM = "CUSTOM"
+
+    repository = models.ForeignKey(
+        "Repository",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    access_scope = models.ForeignKey(
+        "AccessScope",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    owner_membership = models.ForeignKey("Membership", on_delete=models.PROTECT)
+    name = models.CharField(max_length=200)
+    description = models.CharField(max_length=1_000, blank=True)
+    view_type = models.CharField(max_length=24, choices=ViewType)
+    is_archived = models.BooleanField(default=False)
+    created_by_type = models.CharField(max_length=20)
+    created_by_id = models.CharField(max_length=200)
+    idempotency_key = models.CharField(max_length=64)
+    request_hash = models.CharField(max_length=64)
+
+    class Meta(RevisionedTenantModel.Meta):
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(
+                fields=["organization", "repository", "is_archived", "name"],
+                name="core_canvas_view_repo_idx",
+            )
+        ]
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            *RevisionedTenantModel.Meta.constraints,
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_canvas_view_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "created_by_type", "created_by_id", "name"],
+                condition=Q(is_archived=False),
+                name="core_canvas_view_active_name_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "idempotency_key"],
+                name="core_canvas_view_idempotency_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(idempotency_key__regex=r"^[a-f0-9]{64}$"),
+                name="core_canvas_view_idem_sha256",
+            ),
+            models.CheckConstraint(
+                condition=Q(request_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_canvas_view_request_sha256",
+            ),
+        ]
+
+
+class CanvasViewRevision(UUIDModel):
+    """Immutable, checksummed semantic query and presentation revision."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    canvas_view = models.ForeignKey(CanvasView, on_delete=models.PROTECT)
+    revision = models.PositiveBigIntegerField()
+    schema_version = models.CharField(max_length=16, default="1")
+    semantic_query = models.JSONField(default=dict)
+    presentation = models.JSONField(default=dict)
+    layout_algorithm = models.CharField(max_length=50)
+    layout_version = models.CharField(max_length=50)
+    content_hash = models.CharField(max_length=64, editable=False)
+    created_by_type = models.CharField(max_length=20)
+    created_by_id = models.CharField(max_length=200)
+    idempotency_key = models.CharField(max_length=64)
+    request_hash = models.CharField(max_length=64)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_canvas_revision_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "canvas_view", "revision"],
+                name="core_canvas_revision_number_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "canvas_view", "idempotency_key"],
+                name="core_canvas_revision_idempotency_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(revision__gte=1),
+                name="core_canvas_revision_gte_1",
+            ),
+            models.CheckConstraint(
+                condition=Q(content_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_canvas_revision_hash_sha256",
+            ),
+            models.CheckConstraint(
+                condition=Q(schema_version="1"),
+                name="core_canvas_revision_schema_v1",
+            ),
+            models.CheckConstraint(
+                condition=Q(idempotency_key__regex=r"^[a-f0-9]{64}$"),
+                name="core_canvas_revision_idem_sha256",
+            ),
+            models.CheckConstraint(
+                condition=Q(request_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_canvas_revision_request_sha256",
+            ),
+        ]
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Seal revision semantics while allowing no in-place replacement."""
+        payload = {
+            "schema_version": self.schema_version,
+            "semantic_query": self.semantic_query,
+            "presentation": self.presentation,
+            "layout_algorithm": self.layout_algorithm,
+            "layout_version": self.layout_version,
+            "revision": self.revision,
+        }
+        digest = content_hash(payload)
+        if not self._state.adding:
+            raise ArtifactImmutableError("Canvas view revisions cannot be updated")
+        if self.content_hash and self.content_hash != digest:
+            raise ArtifactImmutableError("Canvas revision hash does not match content")
+        self.content_hash = digest
+        super().save(*args, **kwargs)
+
+
+class ImmutableCanvasChild(UUIDModel):
+    """Reject direct mutation of records belonging to a sealed Canvas revision."""
+
+    class Meta:
+        abstract = True
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        if not self._state.adding:
+            raise ArtifactImmutableError("Canvas revision children cannot be updated")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        raise ArtifactImmutableError("Canvas revision children cannot be deleted")
+
+
+class CanvasGroup(ImmutableCanvasChild):
+    """A presentation-only grouping region within one immutable view revision."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    view_revision = models.ForeignKey(CanvasViewRevision, on_delete=models.PROTECT)
+    label = models.CharField(max_length=200)
+    x = models.FloatField()
+    y = models.FloatField()
+    width = models.FloatField()
+    height = models.FloatField()
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_canvas_group_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(width__gt=0, width__lte=1_000_000),
+                name="core_canvas_group_width_range",
+            ),
+            models.CheckConstraint(
+                condition=Q(height__gt=0, height__lte=1_000_000),
+                name="core_canvas_group_height_range",
+            ),
+            models.CheckConstraint(
+                condition=Q(x__gte=-1_000_000, x__lte=1_000_000),
+                name="core_canvas_group_x_range",
+            ),
+            models.CheckConstraint(
+                condition=Q(y__gte=-1_000_000, y__lte=1_000_000),
+                name="core_canvas_group_y_range",
+            ),
+        ]
+
+
+class CanvasNodePlacement(ImmutableCanvasChild):
+    """Presentation coordinates for a canonical entity; never canonical state."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    view_revision = models.ForeignKey(CanvasViewRevision, on_delete=models.PROTECT)
+    entity = models.ForeignKey(KnowledgeEntity, on_delete=models.PROTECT)
+    group = models.ForeignKey(
+        CanvasGroup,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    x = models.FloatField()
+    y = models.FloatField()
+    is_pinned = models.BooleanField(default=False)
+    is_hidden = models.BooleanField(default=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_canvas_place_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "view_revision", "entity"],
+                name="core_canvas_place_entity_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(x__gte=-1_000_000, x__lte=1_000_000),
+                name="core_canvas_place_x_range",
+            ),
+            models.CheckConstraint(
+                condition=Q(y__gte=-1_000_000, y__lte=1_000_000),
+                name="core_canvas_place_y_range",
+            ),
+        ]
+
+
+class CanvasFilter(ImmutableCanvasChild):
+    """A validated typed filter saved with one view revision."""
+
+    class Operator(models.TextChoices):
+        EQUALS = "EQUALS"
+        CONTAINS = "CONTAINS"
+        IN = "IN"
+        SINCE = "SINCE"
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    view_revision = models.ForeignKey(CanvasViewRevision, on_delete=models.PROTECT)
+    position = models.PositiveIntegerField()
+    field = models.CharField(max_length=32)
+    operator = models.CharField(max_length=16, choices=Operator)
+    value = models.JSONField()
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_canvas_filter_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "view_revision", "position"],
+                name="core_canvas_filter_position_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(
+                    field__in=[
+                        "entity_type",
+                        "owner",
+                        "status",
+                        "time",
+                        "risk",
+                        "freshness",
+                    ]
+                ),
+                name="core_canvas_filter_field_allowed",
+            ),
+        ]
+
+
+class CanvasLayer(ImmutableCanvasChild):
+    """A typed semantic layer toggle saved with one view revision."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    view_revision = models.ForeignKey(CanvasViewRevision, on_delete=models.PROTECT)
+    position = models.PositiveIntegerField()
+    key = models.CharField(max_length=50)
+    label = models.CharField(max_length=100)
+    is_visible = models.BooleanField(default=True)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_canvas_layer_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "view_revision", "key"],
+                name="core_canvas_layer_key_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "view_revision", "position"],
+                name="core_canvas_layer_position_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(
+                    key__in=[
+                        "execution",
+                        "ownership",
+                        "dependencies",
+                        "governance",
+                        "provenance",
+                    ]
+                ),
+                name="core_canvas_layer_key_allowed",
+            ),
+        ]
+
+
+class CanvasAnnotation(ImmutableCanvasChild):
+    """Presentation-only explanatory text attached to a view revision."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    view_revision = models.ForeignKey(CanvasViewRevision, on_delete=models.PROTECT)
+    entity = models.ForeignKey(
+        KnowledgeEntity,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    body = models.CharField(max_length=2_000)
+    x = models.FloatField()
+    y = models.FloatField()
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_canvas_note_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(x__gte=-1_000_000, x__lte=1_000_000),
+                name="core_canvas_note_x_range",
+            ),
+            models.CheckConstraint(
+                condition=Q(y__gte=-1_000_000, y__lte=1_000_000),
+                name="core_canvas_note_y_range",
+            ),
+        ]
+
+
+class CanvasShare(UUIDModel):
+    """A revocable deep-link identity that never bypasses live authorization."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    canvas_view = models.ForeignKey(CanvasView, on_delete=models.PROTECT)
+    view_revision = models.ForeignKey(CanvasViewRevision, on_delete=models.PROTECT)
+    recipient_membership = models.ForeignKey(
+        "Membership",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    created_by_type = models.CharField(max_length=20)
+    created_by_id = models.CharField(max_length=200)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    idempotency_key = models.CharField(max_length=64)
+    request_hash = models.CharField(max_length=64)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_canvas_share_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "idempotency_key"],
+                name="core_canvas_share_idempotency_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(idempotency_key__regex=r"^[a-f0-9]{64}$"),
+                name="core_canvas_share_idem_sha256",
+            ),
+            models.CheckConstraint(
+                condition=Q(request_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_canvas_share_request_sha256",
             ),
         ]
 

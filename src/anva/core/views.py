@@ -51,6 +51,18 @@ from anva.core.services.authorization import (
     get_tenant_record,
 )
 from anva.core.services.bootstrap import bootstrap_local_organization
+from anva.core.services.canvas import (
+    CANVAS_PAYLOAD_LIMIT_BYTES,
+    CanvasQuery,
+    canvas_entity_detail,
+    canvas_path,
+    canvas_projection,
+    create_canvas_share,
+    create_canvas_view,
+    list_canvas_views,
+    propose_canvas_relationship,
+    save_canvas_revision,
+)
 from anva.core.services.context import ActorContext
 from anva.core.services.context_packets import (
     PacketBudget,
@@ -282,6 +294,328 @@ def _object_list(payload: dict[str, object], name: str) -> list[dict[str, str]]:
 def _actor(request: HttpRequest) -> ActorContext:
     actor = authenticate_bearer(request.headers.get("Authorization", ""))
     return replace(actor, request_id=_correlation_id(request))
+
+
+def _canvas_query_payload(payload: dict[str, object]) -> CanvasQuery:
+    """Parse the closed, bounded Canvas read contract shared by API consumers."""
+    allowed = frozenset(
+        {
+            "view_id",
+            "view_revision",
+            "repository_ids",
+            "entity_types",
+            "owner",
+            "status",
+            "risk",
+            "freshness",
+            "search",
+            "layers",
+            "anchor_id",
+            "depth",
+            "node_limit",
+            "edge_limit",
+        }
+    )
+    _closed_payload(payload, allowed=allowed, required=frozenset())
+
+    def optional_uuid(name: str) -> uuid.UUID | None:
+        value = payload.get(name)
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError(f"{name} must be a UUID")
+        return uuid.UUID(value)
+
+    def optional_strings(name: str) -> tuple[str, ...]:
+        value = payload.get(name, [])
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise ValueError(f"{name} must be a list of strings")
+        return tuple(value)
+
+    def optional_text(name: str) -> str:
+        value = payload.get(name, "")
+        if not isinstance(value, str):
+            raise ValueError(f"{name} must be a string")
+        return value
+
+    def optional_int(name: str, default: int) -> int:
+        value = payload.get(name, default)
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise ValueError(f"{name} must be an integer")
+        return value
+
+    view_revision = payload.get("view_revision")
+    if view_revision is not None and (
+        not isinstance(view_revision, int) or isinstance(view_revision, bool)
+    ):
+        raise ValueError("view_revision must be an integer")
+    return CanvasQuery(
+        view_id=optional_uuid("view_id"),
+        view_revision=view_revision,
+        repository_ids=tuple(uuid.UUID(value) for value in optional_strings("repository_ids")),
+        entity_types=optional_strings("entity_types"),
+        owner=optional_text("owner"),
+        status=optional_text("status"),
+        risk=optional_text("risk"),
+        freshness=optional_text("freshness"),
+        search=optional_text("search"),
+        layers=optional_strings("layers"),
+        anchor_id=optional_uuid("anchor_id"),
+        depth=optional_int("depth", 2),
+        node_limit=optional_int("node_limit", 300),
+        edge_limit=optional_int("edge_limit", 600),
+    )
+
+
+def _canvas_json_body(request: HttpRequest) -> dict[str, object]:
+    if len(request.body) > CANVAS_PAYLOAD_LIMIT_BYTES:
+        raise ValueError("Canvas request exceeds the 750 KiB byte budget")
+    payload = json.loads(request.body or b"{}")
+    if not isinstance(payload, dict):
+        raise ValueError("Canvas request must be an object")
+    return payload
+
+
+def _canvas_presentation(payload: object) -> dict[str, list[dict[str, object]]]:
+    if not isinstance(payload, dict):
+        raise ValueError("presentation must be an object")
+    allowed = {"placements", "filters", "layers", "groups", "annotations"}
+    if set(payload) != allowed:
+        raise ValueError("presentation fields are invalid")
+    for value in payload.values():
+        if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+            raise ValueError("presentation entries must be object lists")
+    return cast(dict[str, list[dict[str, object]]], payload)
+
+
+@api_errors
+@require_http_methods(["POST"])
+def canvas_query(request: HttpRequest) -> JsonResponse:
+    """Return only the deterministic union of strict per-repository authorized projections."""
+    actor = _actor(request)
+    return JsonResponse(
+        canvas_projection(actor=actor, query=_canvas_query_payload(_canvas_json_body(request))),
+        json_dumps_params={"ensure_ascii": False, "separators": (",", ":")},
+    )
+
+
+@api_errors
+@require_http_methods(["POST"])
+def canvas_path_query(request: HttpRequest) -> JsonResponse:
+    actor = _actor(request)
+    payload = _closed_payload(
+        _canvas_json_body(request),
+        allowed=frozenset({"source_id", "target_id", "repository_ids", "max_depth"}),
+        required=frozenset({"source_id", "target_id"}),
+    )
+    return JsonResponse(
+        canvas_path(
+            actor=actor,
+            source_id=uuid.UUID(_string(payload, "source_id")),
+            target_id=uuid.UUID(_string(payload, "target_id")),
+            repository_ids=tuple(_uuid_list(payload, "repository_ids"))
+            if "repository_ids" in payload
+            else (),
+            max_depth=_optional_integer(payload, "max_depth", 6),
+        )
+    )
+
+
+@api_errors
+@require_http_methods(["GET"])
+def canvas_entity(request: HttpRequest, entity_id: uuid.UUID) -> JsonResponse:
+    actor = _actor(request)
+    repository_ids = tuple(uuid.UUID(value) for value in request.GET.getlist("repository_id"))
+    return JsonResponse(
+        canvas_entity_detail(
+            actor=actor,
+            entity_id=entity_id,
+            repository_ids=repository_ids,
+        )
+    )
+
+
+@api_errors
+@require_http_methods(["GET", "POST"])
+def canvas_views(request: HttpRequest) -> JsonResponse:
+    actor = _actor(request)
+    if request.method == "GET":
+        return JsonResponse(
+            {
+                "views": [
+                    {
+                        "id": str(view.id),
+                        "name": view.name,
+                        "description": view.description,
+                        "view_type": view.view_type,
+                        "revision": view.revision,
+                        "repository_id": str(view.repository_id) if view.repository_id else None,
+                    }
+                    for view in list_canvas_views(actor=actor)
+                ]
+            }
+        )
+    payload = _closed_payload(
+        _canvas_json_body(request),
+        allowed=frozenset(
+            {
+                "name",
+                "description",
+                "view_type",
+                "semantic_query",
+                "repository_id",
+                "access_scope_id",
+                "idempotency_key",
+            }
+        ),
+        required=frozenset({"name", "view_type", "semantic_query", "idempotency_key"}),
+    )
+    if actor.actor_type != "USER":
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    semantic_query = payload["semantic_query"]
+    if not isinstance(semantic_query, dict):
+        raise ValueError("semantic_query must be an object")
+    description = payload.get("description", "")
+    if not isinstance(description, str):
+        raise ValueError("description must be a string")
+    repository = _optional_string(payload, "repository_id")
+    scope = _optional_string(payload, "access_scope_id")
+    view, created = create_canvas_view(
+        actor=actor,
+        name=_string(payload, "name"),
+        description=description,
+        view_type=_string(payload, "view_type"),
+        semantic_query=cast(dict[str, object], semantic_query),
+        repository_id=uuid.UUID(repository) if repository else None,
+        access_scope_id=uuid.UUID(scope) if scope else None,
+        idempotency_key=_string(payload, "idempotency_key"),
+    )
+    return JsonResponse(
+        {"id": str(view.id), "revision": view.revision, "created": created},
+        status=201 if created else 200,
+    )
+
+
+@api_errors
+@require_http_methods(["POST"])
+def canvas_view_revisions(request: HttpRequest, view_id: uuid.UUID) -> JsonResponse:
+    actor = _actor(request)
+    payload = _closed_payload(
+        _canvas_json_body(request),
+        allowed=frozenset(
+            {"expected_revision", "semantic_query", "presentation", "idempotency_key"}
+        ),
+        required=frozenset(
+            {"expected_revision", "semantic_query", "presentation", "idempotency_key"}
+        ),
+    )
+    semantic_query = payload["semantic_query"]
+    if not isinstance(semantic_query, dict):
+        raise ValueError("semantic_query must be an object")
+    presentation = _canvas_presentation(payload["presentation"])
+    revision, created = save_canvas_revision(
+        actor=actor,
+        view_id=view_id,
+        expected_revision=_integer(payload, "expected_revision"),
+        semantic_query=cast(dict[str, object], semantic_query),
+        placements=presentation["placements"],
+        filters=presentation["filters"],
+        layers=presentation["layers"],
+        groups=presentation["groups"],
+        annotations=presentation["annotations"],
+        idempotency_key=_string(payload, "idempotency_key"),
+    )
+    return JsonResponse(
+        {
+            "id": str(revision.id),
+            "revision": revision.revision,
+            "content_hash": revision.content_hash,
+            "created": created,
+        },
+        status=201 if created else 200,
+    )
+
+
+@api_errors
+@require_http_methods(["POST"])
+def canvas_view_shares(request: HttpRequest, view_id: uuid.UUID) -> JsonResponse:
+    actor = _actor(request)
+    payload = _closed_payload(
+        _canvas_json_body(request),
+        allowed=frozenset({"recipient_membership_id", "expires_at", "idempotency_key"}),
+        required=frozenset({"idempotency_key"}),
+    )
+    recipient = _optional_string(payload, "recipient_membership_id")
+    expires = payload.get("expires_at")
+    if expires is not None and not isinstance(expires, str):
+        raise ValueError("expires_at must be an ISO 8601 string")
+    parsed_expires = parse_datetime(expires) if isinstance(expires, str) else None
+    if expires is not None and (parsed_expires is None or parsed_expires.tzinfo is None):
+        raise ValueError("expires_at must be timezone-aware")
+    share, created = create_canvas_share(
+        actor=actor,
+        view_id=view_id,
+        recipient_membership_id=uuid.UUID(recipient) if recipient else None,
+        expires_at=parsed_expires,
+        idempotency_key=_string(payload, "idempotency_key"),
+    )
+    return JsonResponse(
+        {
+            "id": str(share.id),
+            "view_revision": share.view_revision.revision,
+            "deep_link": f"/app/canvas?share={share.id}",
+            "created": created,
+        },
+        status=201 if created else 200,
+    )
+
+
+@api_errors
+@require_http_methods(["POST"])
+def canvas_relationship_proposals(request: HttpRequest) -> JsonResponse:
+    actor = _actor(request)
+    payload = _closed_payload(
+        _canvas_json_body(request),
+        allowed=frozenset(
+            {
+                "source_id",
+                "target_id",
+                "relationship_type",
+                "repository_id",
+                "expected_source_revision",
+                "expected_target_revision",
+                "rationale",
+                "idempotency_key",
+            }
+        ),
+        required=frozenset(
+            {
+                "source_id",
+                "target_id",
+                "relationship_type",
+                "repository_id",
+                "expected_source_revision",
+                "expected_target_revision",
+                "rationale",
+                "idempotency_key",
+            }
+        ),
+    )
+    proposal, created = propose_canvas_relationship(
+        actor=actor,
+        source_id=uuid.UUID(_string(payload, "source_id")),
+        target_id=uuid.UUID(_string(payload, "target_id")),
+        relationship_type=_string(payload, "relationship_type"),
+        repository_id=uuid.UUID(_string(payload, "repository_id")),
+        expected_source_revision=_integer(payload, "expected_source_revision"),
+        expected_target_revision=_integer(payload, "expected_target_revision"),
+        rationale=_string(payload, "rationale"),
+        idempotency_key=_string(payload, "idempotency_key"),
+    )
+    return JsonResponse(
+        {"id": str(proposal.id), "state": proposal.state, "created": created},
+        status=201 if created else 200,
+    )
 
 
 @require_http_methods(["POST"])

@@ -16,6 +16,34 @@ urlpatterns = [
     path("app", product_views.home, name="product-home"),
     path("app/onboarding", product_views.onboarding, name="product-onboarding"),
     path("app/explorer", product_views.explorer, name="product-explorer"),
+    path("app/canvas", product_views.canvas, name="product-canvas"),
+    path("app/canvas/query", product_views.canvas_query, name="product-canvas-query"),
+    path("app/canvas/path", product_views.canvas_path_query, name="product-canvas-path"),
+    path(
+        "app/canvas/entities/<uuid:entity_id>",
+        product_views.canvas_entity_detail,
+        name="product-canvas-entity",
+    ),
+    path(
+        "app/canvas/views",
+        product_views.canvas_view_create,
+        name="product-canvas-view-create",
+    ),
+    path(
+        "app/canvas/views/<uuid:view_id>/revisions",
+        product_views.canvas_view_revision,
+        name="product-canvas-view-revision",
+    ),
+    path(
+        "app/canvas/views/<uuid:view_id>/shares",
+        product_views.canvas_view_share,
+        name="product-canvas-view-share",
+    ),
+    path(
+        "app/canvas/relationship-proposals",
+        product_views.canvas_relationship_proposal,
+        name="product-canvas-relationship-proposal",
+    ),
     path(
         "app/explorer/entities/<uuid:entity_id>",
         product_views.entity_detail,
@@ -119,6 +147,29 @@ urlpatterns = [
     ),
     path("api/v1/search", core_views.search, name="api-v1-search"),
     path("api/v1/query", core_views.query, name="api-v1-query"),
+    path("api/v1/canvas/query", core_views.canvas_query, name="api-v1-canvas-query"),
+    path("api/v1/canvas/path", core_views.canvas_path_query, name="api-v1-canvas-path"),
+    path(
+        "api/v1/canvas/entities/<uuid:entity_id>",
+        core_views.canvas_entity,
+        name="api-v1-canvas-entity",
+    ),
+    path("api/v1/canvas/views", core_views.canvas_views, name="api-v1-canvas-views"),
+    path(
+        "api/v1/canvas/views/<uuid:view_id>/revisions",
+        core_views.canvas_view_revisions,
+        name="api-v1-canvas-view-revisions",
+    ),
+    path(
+        "api/v1/canvas/views/<uuid:view_id>/shares",
+        core_views.canvas_view_shares,
+        name="api-v1-canvas-view-shares",
+    ),
+    path(
+        "api/v1/canvas/relationship-proposals",
+        core_views.canvas_relationship_proposals,
+        name="api-v1-canvas-relationship-proposals",
+    ),
     path(
         "api/v1/context-packets",
         core_views.context_packets,

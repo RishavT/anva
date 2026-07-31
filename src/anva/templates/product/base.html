@@ -7,7 +7,9 @@
     <meta name="description" content="Anva organizational context and assurance.">
     <title>{% block title %}Anva{% endblock %} · {{ shell.organization.name }}</title>
     <link rel="stylesheet" href="{% static 'anva/app.css' %}">
+    {% block extra_head %}{% endblock %}
     <script src="{% static 'anva/app.js' %}" defer></script>
+    {% block extra_scripts %}{% endblock %}
   </head>
   <body class="product-shell">
     <a class="skip-link" href="#main-content">Skip to content</a>
@@ -41,6 +43,7 @@
         <a href="/app" {% if current_section == "home" %}aria-current="page"{% endif %}><span aria-hidden="true">⌁</span>Attention</a>
         <a href="/app/onboarding" {% if current_section == "onboarding" %}aria-current="page"{% endif %}><span aria-hidden="true">◫</span>Onboarding</a>
         <a href="/app/explorer" {% if current_section == "explorer" %}aria-current="page"{% endif %}><span aria-hidden="true">⌕</span>Explorer</a>
+        <a href="/app/canvas" {% if current_section == "canvas" %}aria-current="page"{% endif %}><span aria-hidden="true">⌘</span>Canvas</a>
         <a href="/app/review" {% if current_section == "review" %}aria-current="page"{% endif %}><span aria-hidden="true">◇</span>Knowledge review</a>
         <a href="/app/assurance" {% if current_section == "assurance" %}aria-current="page"{% endif %}><span aria-hidden="true">✓</span>Assurance</a>
         <p class="nav-label">Govern</p>

@@ -27,6 +27,9 @@ from anva.core.models import (
     AssuranceReport,
     AssuranceRun,
     AuditEvent,
+    CanvasShare,
+    CanvasView,
+    CanvasViewRevision,
     ContextPacketRecord,
     CriterionEvidence,
     Decision,
@@ -38,6 +41,7 @@ from anva.core.models import (
     KnowledgeEntity,
     KnowledgeProposal,
     KnowledgeProposalScope,
+    KnowledgeRelationship,
     Membership,
     NonRequirement,
     Organization,
@@ -65,6 +69,20 @@ from anva.core.services.authorization import (
     get_tenant_record_for_update,
 )
 from anva.core.services.bootstrap import BootstrapResult, bootstrap_local_organization
+from anva.core.services.canvas import (
+    DEFAULT_LAYERS,
+    RELATIONSHIP_ENDPOINTS,
+    CanvasQuery,
+    canvas_entity_detail,
+    canvas_path,
+    canvas_projection,
+    create_canvas_share,
+    create_canvas_view,
+    list_canvas_views,
+    propose_canvas_relationship,
+    resolve_canvas_share,
+    save_canvas_revision,
+)
 from anva.core.services.context import ActorContext
 from anva.core.services.context_packets import authorized_assertion_citations
 from anva.core.services.creation import submit_knowledge_proposal
@@ -847,6 +865,167 @@ class ProductUIFacade:
             "conflicts": conflicts,
             "revisions": revisions,
         }
+
+    def canvas(
+        self,
+        *,
+        query: CanvasQuery,
+        path_source_id: uuid.UUID | None = None,
+        path_target_id: uuid.UUID | None = None,
+    ) -> dict[str, object]:
+        """Return a visual projection and the complete server-rendered equivalent."""
+        graph = canvas_projection(actor=self.actor, query=query)
+        labels = {
+            cast(str, node["id"]): cast(str, node["label"])
+            for node in cast(list[dict[str, object]], graph["nodes"])
+        }
+        relationship_rows = [
+            {
+                **edge,
+                "source_label": labels[cast(str, edge["source"])],
+                "target_label": labels[cast(str, edge["target"])],
+            }
+            for edge in cast(list[dict[str, object]], graph["edges"])
+        ]
+        path_result: dict[str, object] | None = None
+        if path_source_id and path_target_id:
+            path_result = canvas_path(
+                actor=self.actor,
+                source_id=path_source_id,
+                target_id=path_target_id,
+                repository_ids=query.repository_ids,
+            )
+        can_manage = not settings.ANVA_WEB_READ_ONLY
+        can_propose = not settings.ANVA_WEB_READ_ONLY
+        try:
+            authorize_action(actor=self.actor, action=Action.CANVAS_MANAGE)
+        except ResourceNotFoundError:
+            can_manage = False
+        try:
+            authorize_action(actor=self.actor, action=Action.KNOWLEDGE_PROPOSE)
+        except ResourceNotFoundError:
+            can_propose = False
+        return {
+            "graph": graph,
+            "relationship_rows": relationship_rows,
+            "saved_views": list_canvas_views(actor=self.actor),
+            "entity_types": KnowledgeEntity.EntityType.choices,
+            "relationship_types": [
+                choice
+                for choice in KnowledgeRelationship.RelationshipType.choices
+                if choice[0] in RELATIONSHIP_ENDPOINTS
+            ],
+            "layers": DEFAULT_LAYERS,
+            "query": query,
+            "path": path_result,
+            "can_manage": can_manage,
+            "can_propose": can_propose,
+            "read_only": settings.ANVA_WEB_READ_ONLY,
+            "idempotency_key": str(uuid.uuid4()),
+        }
+
+    def canvas_detail(
+        self,
+        *,
+        entity_id: uuid.UUID,
+        repository_ids: tuple[uuid.UUID, ...] = (),
+    ) -> dict[str, object]:
+        return canvas_entity_detail(
+            actor=self.actor,
+            entity_id=entity_id,
+            repository_ids=repository_ids,
+        )
+
+    def canvas_share_query(self, share_id: uuid.UUID) -> CanvasQuery:
+        view, revision = resolve_canvas_share(actor=self.actor, share_id=share_id)
+        return CanvasQuery(view_id=view.id, view_revision=revision.revision)
+
+    def create_canvas(
+        self,
+        *,
+        name: str,
+        description: str,
+        view_type: str,
+        semantic_query: dict[str, object],
+        repository_id: uuid.UUID | None,
+        idempotency_key: str,
+    ) -> tuple[CanvasView, bool]:
+        if settings.ANVA_WEB_READ_ONLY:
+            raise ResourceNotFoundError("Web mutations are disabled")
+        return create_canvas_view(
+            actor=self.actor,
+            name=name,
+            description=description,
+            view_type=view_type,
+            semantic_query=semantic_query,
+            repository_id=repository_id,
+            access_scope_id=None,
+            idempotency_key=idempotency_key,
+        )
+
+    def save_canvas(
+        self,
+        *,
+        view_id: uuid.UUID,
+        expected_revision: int,
+        semantic_query: dict[str, object],
+        presentation: dict[str, list[dict[str, object]]],
+        idempotency_key: str,
+    ) -> tuple[CanvasViewRevision, bool]:
+        if settings.ANVA_WEB_READ_ONLY:
+            raise ResourceNotFoundError("Web mutations are disabled")
+        return save_canvas_revision(
+            actor=self.actor,
+            view_id=view_id,
+            expected_revision=expected_revision,
+            semantic_query=semantic_query,
+            placements=presentation.get("placements", []),
+            filters=presentation.get("filters", []),
+            layers=presentation.get("layers", []),
+            groups=presentation.get("groups", []),
+            annotations=presentation.get("annotations", []),
+            idempotency_key=idempotency_key,
+        )
+
+    def share_canvas(
+        self,
+        *,
+        view_id: uuid.UUID,
+        idempotency_key: str,
+    ) -> tuple[CanvasShare, bool]:
+        if settings.ANVA_WEB_READ_ONLY:
+            raise ResourceNotFoundError("Web mutations are disabled")
+        return create_canvas_share(
+            actor=self.actor,
+            view_id=view_id,
+            idempotency_key=idempotency_key,
+        )
+
+    def propose_canvas_relationship(
+        self,
+        *,
+        source_id: uuid.UUID,
+        target_id: uuid.UUID,
+        relationship_type: str,
+        repository_id: uuid.UUID,
+        expected_source_revision: int,
+        expected_target_revision: int,
+        rationale: str,
+        idempotency_key: str,
+    ) -> tuple[KnowledgeProposal, bool]:
+        if settings.ANVA_WEB_READ_ONLY:
+            raise ResourceNotFoundError("Web mutations are disabled")
+        return propose_canvas_relationship(
+            actor=self.actor,
+            source_id=source_id,
+            target_id=target_id,
+            relationship_type=relationship_type,
+            repository_id=repository_id,
+            expected_source_revision=expected_source_revision,
+            expected_target_revision=expected_target_revision,
+            rationale=rationale,
+            idempotency_key=idempotency_key,
+        )
 
     def sources(self) -> dict[str, object]:
         repositories = self._repositories()

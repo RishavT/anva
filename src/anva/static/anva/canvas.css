@@ -1,0 +1,552 @@
+.canvas-page-header {
+  align-items: end;
+}
+
+.canvas-as-of {
+  display: grid;
+  gap: 0.55rem;
+  justify-items: end;
+  text-align: right;
+}
+
+.canvas-as-of small,
+.canvas-toolbar span {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+}
+
+.canvas-banner {
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  color: var(--ink-soft);
+  background: rgba(112, 216, 192, 0.08);
+  border: 1px solid rgba(112, 216, 192, 0.25);
+  border-radius: 0.6rem;
+}
+
+.canvas-banner--warning {
+  background: rgba(240, 198, 107, 0.08);
+  border-color: rgba(240, 198, 107, 0.3);
+}
+
+.canvas-controls {
+  padding: 1rem;
+  margin-bottom: 1rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.canvas-filter-form {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 0.8rem;
+  align-items: end;
+}
+
+.canvas-filter-form > label,
+.canvas-filter-form > fieldset {
+  grid-column: span 2;
+}
+
+.canvas-filter-form .canvas-search,
+.canvas-filter-form > fieldset {
+  grid-column: span 3;
+}
+
+.canvas-filter-form label,
+.canvas-path-form label,
+.canvas-create-form label,
+.canvas-proposal-form label {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.canvas-filter-form input,
+.canvas-filter-form select,
+.canvas-path-form select,
+.canvas-create-form input,
+.canvas-create-form select,
+.canvas-create-form textarea,
+.canvas-proposal-form input,
+.canvas-proposal-form select,
+.canvas-proposal-form textarea {
+  width: 100%;
+  min-height: 44px;
+  color: var(--ink);
+  background: var(--canvas-raised);
+  border: 1px solid var(--line-strong);
+  border-radius: 0.4rem;
+}
+
+.canvas-filter-form fieldset {
+  min-width: 0;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+}
+
+.canvas-filter-form legend {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.control-checks {
+  display: flex;
+  max-height: 5rem;
+  gap: 0.45rem 0.8rem;
+  flex-wrap: wrap;
+  overflow: auto;
+}
+
+.control-checks label {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  color: var(--ink-soft);
+  font-size: 0.7rem;
+}
+
+.control-checks input {
+  width: 1rem;
+  min-height: auto;
+}
+
+.canvas-workspace {
+  display: grid;
+  min-height: 43rem;
+  margin-bottom: 1rem;
+  grid-template-columns: minmax(0, 1fr) minmax(17rem, 22rem);
+  background: #080c0b;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: clip;
+}
+
+.canvas-visual-panel {
+  min-width: 0;
+}
+
+.canvas-toolbar {
+  display: flex;
+  min-height: 4.4rem;
+  padding: 0.75rem 1rem;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+.canvas-toolbar > div:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 0.15rem;
+}
+
+.canvas-toolbar strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-toolbar__actions {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.canvas-toolbar button,
+.canvas-toolbar output {
+  display: inline-grid;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0.45rem 0.65rem;
+  place-items: center;
+  color: var(--ink-soft);
+  background: var(--canvas-raised);
+  border: 1px solid var(--line-strong);
+  border-radius: 0.4rem;
+}
+
+.canvas-toolbar button:hover {
+  color: var(--ink);
+  border-color: var(--teal);
+}
+
+.canvas-toolbar kbd {
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+.canvas-viewport {
+  position: relative;
+  height: 38rem;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+  background:
+    linear-gradient(rgba(112, 216, 192, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(112, 216, 192, 0.035) 1px, transparent 1px),
+    radial-gradient(circle at 50% 30%, rgba(185, 245, 106, 0.05), transparent 28rem),
+    #070a09;
+  background-size: 24px 24px, 24px 24px, auto, auto;
+}
+
+.canvas-viewport[data-panning="true"] {
+  cursor: grabbing;
+}
+
+.canvas-loading {
+  position: absolute;
+  z-index: 5;
+  inset: 1rem auto auto 1rem;
+  max-width: 30rem;
+  padding: 0.7rem;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 0.4rem;
+}
+
+.canvas-world {
+  position: absolute;
+  width: 1200px;
+  height: 700px;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.canvas-edges,
+.canvas-nodes {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.canvas-edge {
+  fill: none;
+  stroke: #53645d;
+  stroke-width: 1.5;
+  marker-end: url("#canvas-arrow");
+}
+
+.canvas-edge[data-basis="INFERENCE"] {
+  stroke-dasharray: 7 5;
+}
+
+#canvas-arrow path {
+  fill: #7f938a;
+}
+
+.canvas-node {
+  position: absolute;
+  display: grid;
+  width: 13.5rem;
+  min-height: 5.3rem;
+  padding: 0.75rem 0.85rem;
+  gap: 0.3rem;
+  color: var(--ink);
+  text-align: start;
+  background: linear-gradient(145deg, #17201d, #101714);
+  border: 1px solid #405047;
+  border-inline-start: 4px solid var(--teal);
+  border-radius: 0.6rem;
+  box-shadow: 0 0.45rem 1.2rem rgba(0, 0, 0, 0.28);
+  cursor: pointer;
+  user-select: none;
+}
+
+.canvas-node:hover,
+.canvas-node[aria-pressed="true"] {
+  background: linear-gradient(145deg, #1c2823, #131d19);
+  border-color: var(--signal);
+  box-shadow: 0 0 0 2px rgba(185, 245, 106, 0.15), 0 0.6rem 1.4rem rgba(0, 0, 0, 0.4);
+}
+
+.canvas-node[data-freshness="STALE"] {
+  border-inline-start-color: var(--amber);
+}
+
+.canvas-node[data-conflict="true"] {
+  border-block-start: 3px double var(--red);
+}
+
+.canvas-node__type,
+.canvas-node__meta {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.canvas-node__name {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 0.82rem;
+  font-weight: 750;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.canvas-minimap {
+  position: absolute;
+  z-index: 6;
+  right: 0.75rem;
+  bottom: 0.75rem;
+  width: 13.75rem;
+  height: 8.1rem;
+  background: rgba(9, 14, 12, 0.92);
+  border: 1px solid var(--line-strong);
+  border-radius: 0.45rem;
+}
+
+.canvas-minimap[hidden] {
+  display: none;
+}
+
+.canvas-inspector {
+  min-width: 0;
+  padding: 1.2rem;
+  background: var(--panel);
+  border-inline-start: 1px solid var(--line);
+  overflow-y: auto;
+}
+
+.canvas-inspector h2 {
+  font-size: 1.8rem;
+  overflow-wrap: anywhere;
+}
+
+.canvas-inspector h3 {
+  margin-top: 1.4rem;
+  color: var(--ink-soft);
+}
+
+.canvas-inspector-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.7rem;
+}
+
+.canvas-inspector-grid div {
+  min-width: 0;
+  padding: 0.6rem;
+  background: var(--canvas-raised);
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+}
+
+.canvas-inspector dt {
+  color: var(--muted);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+}
+
+.canvas-inspector dd {
+  margin: 0.2rem 0 0;
+  overflow-wrap: anywhere;
+}
+
+.canvas-inspector ul {
+  padding-inline-start: 1.1rem;
+}
+
+.canvas-semantic-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.canvas-semantic-grid th small {
+  display: block;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-weight: 400;
+}
+
+.table-node-button {
+  min-height: 44px;
+  padding: 0;
+  color: var(--ink);
+  text-align: start;
+  background: transparent;
+  border: 0;
+  font-weight: 750;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.canvas-state {
+  padding: 0.15rem 0.35rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.canvas-state--stale {
+  border-style: dashed;
+  border-color: var(--amber);
+}
+
+.canvas-path-panel,
+.canvas-create-view,
+.canvas-proposal {
+  margin-top: 1rem;
+}
+
+.canvas-path-form,
+.canvas-create-form,
+.canvas-proposal-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.8rem;
+  align-items: end;
+}
+
+.canvas-path-result,
+.canvas-proposal-form .limitation {
+  margin-top: 1rem;
+}
+
+.canvas-create-view > summary,
+.canvas-proposal > summary {
+  min-height: 44px;
+  cursor: pointer;
+  font-size: 1.05rem;
+  font-weight: 750;
+}
+
+.canvas-rationale {
+  grid-column: span 2;
+}
+
+@media (max-width: 80rem) {
+  .canvas-filter-form > label,
+  .canvas-filter-form .canvas-search,
+  .canvas-filter-form > fieldset {
+    grid-column: span 4;
+  }
+
+  .canvas-workspace {
+    grid-template-columns: minmax(0, 1fr) 18rem;
+  }
+}
+
+@media (max-width: 64rem) {
+  .canvas-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .canvas-inspector {
+    max-height: none;
+    border-top: 1px solid var(--line);
+    border-inline-start: 0;
+  }
+
+  .canvas-semantic-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 48rem) {
+  .canvas-page-header,
+  .canvas-toolbar {
+    align-items: stretch;
+  }
+
+  .canvas-as-of {
+    justify-items: start;
+    text-align: start;
+  }
+
+  .canvas-filter-form > label,
+  .canvas-filter-form .canvas-search,
+  .canvas-filter-form > fieldset {
+    grid-column: 1 / -1;
+  }
+
+  .canvas-toolbar {
+    flex-direction: column;
+  }
+
+  .canvas-toolbar__actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(44px, 1fr));
+  }
+
+  .canvas-viewport {
+    height: 29rem;
+  }
+
+  .canvas-path-form,
+  .canvas-create-form,
+  .canvas-proposal-form {
+    grid-template-columns: 1fr;
+  }
+
+  .canvas-rationale {
+    grid-column: auto;
+  }
+
+  .canvas-minimap {
+    width: 9rem;
+    height: 5.5rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .canvas-world,
+  .canvas-node {
+    scroll-behavior: auto;
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .canvas-node,
+  .canvas-node[aria-pressed="true"],
+  .canvas-edge,
+  .canvas-state,
+  .canvas-minimap {
+    color: CanvasText;
+    background: Canvas;
+    border-color: CanvasText;
+    forced-color-adjust: auto;
+    stroke: CanvasText;
+  }
+
+  .canvas-node[data-conflict="true"] {
+    border-block-start: 4px double LinkText;
+  }
+}
+
+@media print {
+  .canvas-controls,
+  .canvas-workspace,
+  .canvas-create-view,
+  .canvas-proposal,
+  .sidebar,
+  .product-footer {
+    display: none !important;
+  }
+
+  .canvas-semantic-grid {
+    display: block;
+  }
+
+  .canvas-semantic-grid .panel,
+  .canvas-path-panel {
+    break-inside: avoid;
+    border: 1px solid #000;
+  }
+}

@@ -59,6 +59,7 @@ class Action(StrEnum):
     EVIDENCE_SUBMIT = "evidence.submit"
     SEARCH = "search.query"
     CANVAS_VIEW = "canvas.view"
+    CANVAS_MANAGE = "canvas.manage"
     MCP_CONTEXT = "mcp.context"
     ARTIFACT_VIEW = "artifact.view"
     ARTIFACT_CREATE = "artifact.create"
@@ -89,6 +90,7 @@ ROLE_ACTIONS: dict[str, frozenset[Action]] = {
         {
             Action.KNOWLEDGE_PROPOSE,
             Action.KNOWLEDGE_REVIEW,
+            Action.CANVAS_MANAGE,
             Action.ARTIFACT_CREATE,
             Action.SCOPE_MANAGE,
             Action.WORK_MANAGE,
@@ -100,6 +102,7 @@ ROLE_ACTIONS: dict[str, frozenset[Action]] = {
         {
             Action.KNOWLEDGE_PROPOSE,
             Action.KNOWLEDGE_REVIEW,
+            Action.CANVAS_MANAGE,
             Action.SOURCE_SYNC,
             Action.ASSURANCE_EXECUTE,
             Action.ARTIFACT_CREATE,
@@ -115,19 +118,28 @@ ROLE_ACTIONS: dict[str, frozenset[Action]] = {
             Action.KNOWLEDGE_REVIEW,
             Action.WORK_MANAGE,
             Action.WORK_APPROVE,
+            Action.CANVAS_MANAGE,
         }
     ),
     Role.Code.DEVELOPER: VIEW_ACTIONS
     | frozenset(
         {
             Action.KNOWLEDGE_PROPOSE,
+            Action.CANVAS_MANAGE,
             Action.ASSURANCE_EXECUTE,
             Action.ARTIFACT_CREATE,
             Action.EVIDENCE_SUBMIT,
         }
     ),
     Role.Code.REVIEWER: VIEW_ACTIONS
-    | frozenset({Action.KNOWLEDGE_PROPOSE, Action.KNOWLEDGE_REVIEW, Action.WORK_APPROVE}),
+    | frozenset(
+        {
+            Action.KNOWLEDGE_PROPOSE,
+            Action.KNOWLEDGE_REVIEW,
+            Action.WORK_APPROVE,
+            Action.CANVAS_MANAGE,
+        }
+    ),
     Role.Code.SECURITY_REVIEWER: VIEW_ACTIONS
     | frozenset(
         {

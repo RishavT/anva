@@ -14,6 +14,7 @@ from anva.core.services.context import ActorContext
 MAX_GRAPH_DEPTH = 4
 MAX_GRAPH_DEGREE = 100
 MAX_GRAPH_EDGES = 500
+MAX_CANVAS_GRAPH_EDGES = 600
 
 _GRAPH_SQL = """
 WITH RECURSIVE
@@ -371,6 +372,35 @@ ORDER BY depth, relationship_id
 LIMIT %(edge_limit)s
 """
 
+_AUTHORIZED_EDGE_SELECT = (
+    "WITH "
+    + _GRAPH_SQL.partition("WITH RECURSIVE\n")[2].partition("\n),\nwalk AS (")[0]
+    + """
+)
+SELECT
+    relationship_id,
+    relationship_type,
+    source_entity_id,
+    target_entity_id,
+    source_entity_type,
+    target_entity_type,
+    source_key,
+    source_name,
+    target_key,
+    target_name,
+    assertion_id,
+    source_location_id,
+    source_observation_id,
+    access_snapshot_id,
+    observed_at,
+    confidence,
+    1 AS depth
+FROM authorized_edges
+ORDER BY relationship_id
+LIMIT %(edge_limit)s
+"""
+)
+
 
 @dataclass(frozen=True, slots=True)
 class GraphEdge:
@@ -438,6 +468,37 @@ class GraphResult:
             "truncated": self.truncated,
             "edges": [edge.as_dict() for edge in self.edges],
         }
+
+
+def authorized_graph_edges(
+    *,
+    actor: ActorContext,
+    repository_id: uuid.UUID,
+    edge_limit: int = MAX_CANVAS_GRAPH_EDGES,
+) -> tuple[tuple[GraphEdge, ...], bool]:
+    """List one repository's fully authorized edges using the traversal's exact CTE."""
+    if edge_limit < 1 or edge_limit > MAX_CANVAS_GRAPH_EDGES:
+        raise ValueError("Canvas edge_limit must be between 1 and 600")
+    authorize_action(
+        actor=actor,
+        repository_id=repository_id,
+        action=Action.CANVAS_VIEW,
+    )
+    with connection.cursor() as cursor:
+        cursor.execute(
+            _AUTHORIZED_EDGE_SELECT,
+            {
+                "organization_id": actor.organization_id,
+                "repository_id": repository_id,
+                "actor_type": actor.actor_type,
+                "actor_id": uuid.UUID(actor.actor_id),
+                "credential_id": actor.credential_id,
+                "action": Action.CANVAS_VIEW.value,
+                "edge_limit": edge_limit + 1,
+            },
+        )
+        rows = cursor.fetchall()
+    return tuple(GraphEdge(*row) for row in rows[:edge_limit]), len(rows) > edge_limit
 
 
 def traverse_graph(
