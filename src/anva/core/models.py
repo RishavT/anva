@@ -2262,6 +2262,36 @@ class KnowledgeProposal(RevisionedTenantModel):
         ]
 
 
+class KnowledgeProposalScope(UUIDModel):
+    """Explicit repository and visibility binding for a review-only proposal."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    knowledge_proposal = models.OneToOneField(KnowledgeProposal, on_delete=models.PROTECT)
+    repository = models.ForeignKey("Repository", on_delete=models.PROTECT)
+    access_scope = models.ForeignKey("AccessScope", on_delete=models.PROTECT)
+    assertion = models.ForeignKey(
+        KnowledgeAssertion,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
+    idempotency_key = models.CharField(max_length=64, null=True, blank=True)
+    request_hash = models.CharField(max_length=64, null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_proposal_scope_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "idempotency_key"],
+                name="core_proposal_scope_idempotency_unique",
+            ),
+        ]
+
+
 class GitHubInstallation(RevisionedTenantModel):
     """Tenant mapping for one GitHub App installation; credentials are never stored."""
 
@@ -2940,6 +2970,104 @@ class Repository(TenantOwnedModel):
             models.UniqueConstraint(
                 fields=["organization", "id"],
                 name="core_repository_org_id_unique",
+            ),
+        ]
+
+
+class OrganizationProductSettings(UUIDModel):
+    """Durable product choices captured during organization setup."""
+
+    class ModelProcessing(models.TextChoices):
+        DISABLED = "DISABLED"
+        REDACTED_ONLY = "REDACTED_ONLY"
+        ALLOWED = "ALLOWED"
+
+    class SkillDistribution(models.TextChoices):
+        SELF_SERVICE = "SELF_SERVICE"
+        MANAGED = "MANAGED"
+
+    class AssuranceMode(models.TextChoices):
+        OBSERVE = "OBSERVE"
+        EVIDENCE = "EVIDENCE"
+
+    organization = models.OneToOneField(Organization, on_delete=models.PROTECT)
+    retention_days = models.PositiveIntegerField(default=365)
+    model_processing = models.CharField(
+        max_length=24,
+        choices=ModelProcessing,
+        default=ModelProcessing.DISABLED,
+    )
+    skill_distribution = models.CharField(
+        max_length=24,
+        choices=SkillDistribution,
+        default=SkillDistribution.SELF_SERVICE,
+    )
+    assurance_mode = models.CharField(
+        max_length=24,
+        choices=AssuranceMode,
+        default=AssuranceMode.OBSERVE,
+    )
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.CheckConstraint(
+                condition=Q(retention_days__gte=1, retention_days__lte=3650),
+                name="core_product_settings_retention_range",
+            )
+        ]
+
+
+class RepositoryProfile(RevisionedTenantModel):
+    """Governed repository profile proposed during onboarding and human-confirmed."""
+
+    class Status(models.TextChoices):
+        DRAFT = "DRAFT"
+        PROPOSED = "PROPOSED"
+        CONFIRMED = "CONFIRMED"
+
+    repository = models.OneToOneField(Repository, on_delete=models.PROTECT)
+    purpose = models.TextField(blank=True)
+    owning_team = models.CharField(max_length=300, blank=True)
+    products = models.JSONField(default=list)
+    systems = models.JSONField(default=list)
+    runtime = models.JSONField(default=list)
+    setup_commands = models.JSONField(default=list)
+    required_checks = models.JSONField(default=list)
+    sensitive_paths = models.JSONField(default=list)
+    unsupported_or_ambiguous = models.JSONField(default=list)
+    source_references = models.JSONField(default=list)
+    status = models.CharField(max_length=16, choices=Status, default=Status.DRAFT)
+    confirmed_by_type = models.CharField(max_length=20, blank=True)
+    confirmed_by_id = models.CharField(max_length=200, blank=True)
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta(RevisionedTenantModel.Meta):
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            *RevisionedTenantModel.Meta.constraints,
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_repository_profile_org_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        status="CONFIRMED",
+                        confirmed_at__isnull=False,
+                        confirmed_by_type__gt="",
+                        confirmed_by_id__gt="",
+                    )
+                    | (
+                        ~Q(status="CONFIRMED")
+                        & Q(
+                            confirmed_at__isnull=True,
+                            confirmed_by_type="",
+                            confirmed_by_id="",
+                        )
+                    )
+                ),
+                name="core_repository_profile_confirmation_coherent",
             ),
         ]
 

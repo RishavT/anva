@@ -1,0 +1,14 @@
+{% extends "product/base.html" %}
+{% block title %}Source health{% endblock %}
+{% block content %}
+  <header class="page-header"><div><p class="eyebrow">Currentness & revocation</p><h1>Source health</h1><p class="page-intro">Operational state and freshness for only the source connections attached to your visible repository boundaries.</p></div></header>
+  <section class="panel table-panel" aria-labelledby="sources-title">
+    <div class="panel-heading"><div><p class="eyebrow">Connections</p><h2 id="sources-title">Authorized sources</h2></div><span class="item-count">{{ page.sources|length }}</span></div>
+    {% if page.sources %}
+      <div class="table-scroll" tabindex="0"><table><caption>Source state, last successful sync, and safe failure code</caption><thead><tr><th>Source</th><th>Repository</th><th>State</th><th>Last successful sync</th><th>Safe diagnostic</th><th><span class="sr-only">Open</span></th></tr></thead><tbody>
+        {% for item in page.sources %}<tr><th><a href="/app/sources/{{ item.record.id }}">{{ item.record.display_name|default:item.record.external_key }}</a><small>{{ item.record.connector_kind|title }}</small></th><td>{{ item.record.repository.name }}</td><td>{% include "product/components/status.html" with status=item.status %}</td><td>{% if item.record.last_successful_sync_at %}<time datetime="{{ item.record.last_successful_sync_at|date:'c' }}">{{ item.record.last_successful_sync_at|timesince }} ago</time>{% else %}<span class="quiet">Never</span>{% endif %}</td><td><code>{{ item.record.last_error_code|default:"—" }}</code></td><td><a class="row-link" href="/app/sources/{{ item.record.id }}" aria-label="Open {{ item.record.display_name|default:item.record.external_key }}">→</a></td></tr>{% endfor %}
+      </tbody></table></div>
+    {% else %}{% include "product/components/empty.html" with empty_title="No source connection is visible" empty_message="Connect and scope a supported source through the API or operator workflow. Anva cannot claim current knowledge without one." %}{% endif %}
+  </section>
+  <div class="state-panel state-panel--info"><span class="state-icon" aria-hidden="true">i</span><div><h2>Permission changes are retrieval changes</h2><p>Revoking a source invalidates current snapshots and future context. Derived assertions never widen the visibility of their contributing sources.</p></div></div>
+{% endblock %}

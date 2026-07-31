@@ -1,0 +1,7 @@
+{% extends "product/base_public.html" %}
+{% block title %}{{ status_code }} · {{ error_title }}{% endblock %}
+{% block content %}
+  <section class="error-page" aria-labelledby="error-title">
+    <div class="error-code" aria-hidden="true">{{ status_code }}</div><p class="eyebrow">Safe unavailable state</p><h1 id="error-title">{{ error_title }}</h1><p class="lede">{{ error_message }}</p><p class="correlation">Correlation identifier <code>{{ correlation_id }}</code></p><div class="button-group"><a class="button button--primary" href="/app">Return to attention</a><a class="button button--secondary" href="/app/explorer">Open Explorer</a></div>
+  </section>
+{% endblock %}

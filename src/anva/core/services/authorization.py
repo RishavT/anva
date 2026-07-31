@@ -45,7 +45,9 @@ class Action(StrEnum):
     KNOWLEDGE_VIEW = "knowledge.view"
     KNOWLEDGE_PROPOSE = "knowledge.propose"
     KNOWLEDGE_REVIEW = "knowledge.review"
+    ASSURANCE_VIEW = "assurance.view"
     ASSURANCE_EXECUTE = "assurance.execute"
+    AUDIT_VIEW = "audit.view"
     FINDING_DISMISS = "finding.dismiss"
     POLICY_OVERRIDE = "policy.override"
     WORK_VIEW = "work.view"
@@ -77,6 +79,7 @@ VIEW_ACTIONS = frozenset(
         Action.WORK_VIEW,
         Action.POLICY_VIEW,
         Action.EVIDENCE_VIEW,
+        Action.ASSURANCE_VIEW,
     }
 )
 ROLE_ACTIONS: dict[str, frozenset[Action]] = {
@@ -128,6 +131,7 @@ ROLE_ACTIONS: dict[str, frozenset[Action]] = {
     Role.Code.SECURITY_REVIEWER: VIEW_ACTIONS
     | frozenset(
         {
+            Action.AUDIT_VIEW,
             Action.KNOWLEDGE_PROPOSE,
             Action.FINDING_DISMISS,
             Action.POLICY_OVERRIDE,
@@ -235,13 +239,18 @@ def _scope_allows(
     principal: Principal,
     access_scope: AccessScope,
     repository_id: uuid.UUID | None,
+    include_inactive: bool = False,
+    include_revoked_sources: bool = False,
 ) -> bool:
-    if not access_scope.is_active:
+    if not include_inactive and not access_scope.is_active:
         return False
-    if AccessScopeSource.objects.filter(
-        access_scope=access_scope,
-        source_connection__state=SourceConnection.State.REVOKED,
-    ).exists():
+    if (
+        not include_revoked_sources
+        and AccessScopeSource.objects.filter(
+            access_scope=access_scope,
+            source_connection__state=SourceConnection.State.REVOKED,
+        ).exists()
+    ):
         return False
     if not access_scope.all_repositories:
         if (
@@ -381,3 +390,40 @@ def authorize_action(
     if source_connection_id is not None:
         path_parts.append(f"source:{source_connection_id}")
     return AuthorizationDecision(action, ">".join(path_parts))
+
+
+def authorized_access_scope_ids(
+    *,
+    actor: ActorContext,
+    action: Action,
+    repository_id: uuid.UUID,
+    include_inactive: bool = False,
+    include_revoked_sources: bool = False,
+) -> set[uuid.UUID]:
+    """Resolve current principal and scope boundaries before querying scoped records."""
+    try:
+        authorize_action(
+            actor=actor,
+            action=action,
+            repository_id=repository_id,
+        )
+    except ResourceNotFoundError:
+        return set()
+
+    principal = resolve_principal(actor)
+    candidates = AccessScope.objects.filter(
+        organization_id=actor.organization_id,
+    )
+    if not include_inactive:
+        candidates = candidates.filter(is_active=True)
+    return {
+        scope.id
+        for scope in candidates
+        if _scope_allows(
+            principal=principal,
+            access_scope=scope,
+            repository_id=repository_id,
+            include_inactive=include_inactive,
+            include_revoked_sources=include_revoked_sources,
+        )
+    }

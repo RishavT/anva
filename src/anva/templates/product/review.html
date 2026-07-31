@@ -1,0 +1,31 @@
+{% extends "product/base.html" %}
+{% load product_ui %}
+{% block title %}Knowledge review{% endblock %}
+{% block content %}
+  <header class="page-header"><div><p class="eyebrow">Human authority boundary</p><h1>Knowledge review</h1><p class="page-intro">Confirm, reject, stale-mark, or propose a cited correction. A correction remains a proposal and never silently overwrites reviewed knowledge.</p></div></header>
+  <form method="get" class="filter-bar" aria-label="Review queue filters">
+    <label>Repository<select name="repository">{% for repository in shell.repositories %}<option value="{{ repository.id }}" {% if page.selected_repository.id == repository.id %}selected{% endif %}>{{ repository.name }}</option>{% endfor %}</select></label>
+    <label>Queue<select name="queue"><option value="unreviewed" {% if page.queue == "unreviewed" %}selected{% endif %}>Unreviewed assertions</option><option value="conflicts" {% if page.queue == "conflicts" %}selected{% endif %}>Conflicts</option><option value="stale" {% if page.queue == "stale" %}selected{% endif %}>Stale critical</option></select></label>
+    <button class="button button--secondary" type="submit">Apply filter</button>
+  </form>
+  {% if page.selected_repository %}
+    <div class="review-layout">
+      <section class="panel" aria-labelledby="queue-title">
+        <div class="panel-heading"><div><p class="eyebrow">{{ page.queue|title }} queue</p><h2 id="queue-title">Assertions awaiting judgment</h2></div><span class="item-count">{{ page.assertions|length }}</span></div>
+        {% if page.assertions %}
+          <ol class="review-list">
+            {% for item in page.assertions %}
+              <li id="assertion-{{ item.record.id }}">
+                <div class="review-copy"><div class="assertion-head"><span class="entity-glyph" aria-hidden="true">◇</span><div><strong>{{ item.record.subject_key }}</strong><small>{{ item.record.predicate|humanize_identifier }}</small></div>{% include "product/components/status.html" with status=item.status %}</div>
+                <div class="claim-card"><span>Current claim</span><p>{{ item.value }}</p></div>
+                <dl class="provenance-grid"><div><dt>Method</dt><dd>{{ item.record.extraction_class|title }} · {% if item.record.is_inferred %}inferred{% else %}source-backed{% endif %}</dd></div><div><dt>Confidence</dt><dd>{{ item.record.confidence|floatformat:2 }}</dd></div><div><dt>Observed</dt><dd><time datetime="{{ item.record.observed_at|date:'c' }}">{{ item.record.observed_at|date:"M j, Y" }}</time></dd></div><div><dt>Revision</dt><dd>{{ item.record.revision }}</dd></div></dl></div>
+                <form class="review-actions" method="post" action="/app/review/{{ item.record.id }}">{% csrf_token %}<input type="hidden" name="repository_id" value="{{ page.selected_repository.id }}"><input type="hidden" name="expected_revision" value="{{ item.record.revision }}"><div class="button-group" role="group" aria-label="Decision for {{ item.record.subject_key }}"><button name="decision" value="CONFIRM" class="button button--primary" type="submit" {% if shell.read_only or not item.can_review %}disabled{% endif %}>✓ Confirm</button><button name="decision" value="REJECT" class="button button--secondary" type="submit" {% if shell.read_only or not item.can_review %}disabled{% endif %}>× Reject</button><button name="decision" value="MARK_STALE" class="button button--secondary" type="submit" {% if shell.read_only or not item.can_review %}disabled{% endif %}>! Mark stale</button></div><details><summary>Propose a correction</summary><label>Corrected claim<textarea name="correction" rows="3" maxlength="2000" placeholder="State the proposed replacement and why it is more accurate."></textarea></label><button name="decision" value="CORRECT" class="button button--secondary" type="submit" {% if shell.read_only or not item.can_propose %}disabled{% endif %}>Submit cited proposal</button></details></form>
+              </li>
+            {% endfor %}
+          </ol>
+        {% else %}{% include "product/components/empty.html" with empty_title="This queue is clear" empty_message="No permission-visible assertion currently matches the selected repository and queue." %}{% endif %}
+      </section>
+      <aside class="panel context-panel"><div class="panel-heading"><div><p class="eyebrow">Proposal-only</p><h2>Corrections in flight</h2></div><span class="item-count">{{ page.proposals|length }}</span></div>{% if page.proposals %}<ul class="compact-list">{% for submission in page.proposals %}<li><strong>{{ submission.knowledge_proposal.summary }}</strong><span>{{ submission.knowledge_proposal.state|humanize_identifier }}</span><small>Bound to {{ submission.repository.name }}</small></li>{% endfor %}</ul>{% else %}<p class="limitation">No scoped correction proposal is visible. Unscoped generic proposals are deliberately excluded.</p>{% endif %}</aside>
+    </div>
+  {% else %}{% include "product/components/empty.html" with empty_title="No repository boundary is available" empty_message="Review requires an authorized repository so source and proposal scope can be enforced." %}{% endif %}
+{% endblock %}

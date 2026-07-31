@@ -4,11 +4,75 @@ from __future__ import annotations
 
 from django.urls import path
 
+from anva.core import product_views
 from anva.core import views as core_views
 from anva.foundation import views
 
 urlpatterns = [
-    path("", views.home, name="home"),
+    path("", product_views.root, name="home"),
+    path("setup", product_views.setup, name="product-setup"),
+    path("access", product_views.access, name="product-access"),
+    path("logout", product_views.logout, name="product-logout"),
+    path("app", product_views.home, name="product-home"),
+    path("app/onboarding", product_views.onboarding, name="product-onboarding"),
+    path("app/explorer", product_views.explorer, name="product-explorer"),
+    path(
+        "app/explorer/entities/<uuid:entity_id>",
+        product_views.entity_detail,
+        name="product-entity",
+    ),
+    path("app/sources", product_views.sources, name="product-sources"),
+    path(
+        "app/sources/<uuid:source_id>",
+        product_views.source_detail,
+        name="product-source",
+    ),
+    path(
+        "app/sources/<uuid:source_id>/sync",
+        product_views.source_sync,
+        name="product-source-sync",
+    ),
+    path(
+        "app/sources/<uuid:source_id>/revoke",
+        product_views.source_revoke,
+        name="product-source-revoke",
+    ),
+    path("app/review", product_views.review, name="product-review"),
+    path(
+        "app/review/<uuid:assertion_id>",
+        product_views.review_decision,
+        name="product-review-decision",
+    ),
+    path(
+        "app/repositories/<uuid:repository_id>",
+        product_views.repositories,
+        name="product-repository",
+    ),
+    path(
+        "app/repositories/<uuid:repository_id>/profile",
+        product_views.repository_profile,
+        name="product-repository-profile",
+    ),
+    path("app/work", product_views.work, name="product-work"),
+    path(
+        "app/work/<uuid:work_item_id>",
+        product_views.work_detail,
+        name="product-work-detail",
+    ),
+    path("app/policies", product_views.policies, name="product-policies"),
+    path(
+        "app/policies/<uuid:policy_id>",
+        product_views.policy_detail,
+        name="product-policy",
+    ),
+    path("app/assurance", product_views.assurance, name="product-assurance"),
+    path(
+        "app/assurance/<uuid:run_id>",
+        product_views.assurance_detail,
+        name="product-assurance-detail",
+    ),
+    path("app/skills", product_views.skills, name="product-skills"),
+    path("app/audit", product_views.audit, name="product-audit"),
     path("health/live", views.liveness, name="liveness"),
     path("health/ready", views.readiness, name="readiness"),
     path("webhooks/github", core_views.github_webhook, name="github-webhook"),

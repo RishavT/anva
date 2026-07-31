@@ -23,6 +23,7 @@ from anva.core.exceptions import ResourceNotFoundError
 from anva.core.models import (
     AccessGrant,
     AccessScope,
+    AccessScopeServiceIdentity,
     AssuranceRun,
     AuditEvent,
     BackgroundJob,
@@ -365,7 +366,7 @@ def test_binding_status_and_revocation_http_lifecycle() -> None:
             "pull_requests": "read",
         },
         "external_repository_id": 8010,
-        "full_name": "anva/http",
+        "full_name": "canary-hidden/github-api",
         "default_branch": "main",
         "private": True,
         "archived": False,
@@ -386,6 +387,45 @@ def test_binding_status_and_revocation_http_lifecycle() -> None:
         content_type="application/json",
         headers={"Authorization": authorization},
     )
+    binding = GitHubRepositoryBinding.objects.get(repository=bootstrapped.repository)
+    hidden_scope = AccessScope.objects.create(
+        organization=bootstrapped.organization,
+        name="CANARY-HIDDEN-GITHUB-API-SCOPE",
+        all_memberships=False,
+        all_repositories=True,
+        all_service_identities=False,
+    )
+    binding.access_scope = hidden_scope
+    binding.save(update_fields=["access_scope", "updated_at"])
+    foreign_organization = Organization.objects.create(
+        slug=f"github-http-foreign-{uuid.uuid4()}",
+        name="GitHub HTTP Foreign",
+    )
+    foreign_repository = Repository.objects.create(
+        organization=foreign_organization,
+        external_id=f"github:http:foreign:{uuid.uuid4()}",
+        name="GitHub HTTP foreign repository",
+    )
+    correlation = str(uuid.uuid4())
+    unavailable = [
+        client.get(
+            f"/api/v1/repositories/{repository_id}/github-binding",
+            headers={
+                "Authorization": authorization,
+                "X-Correlation-ID": correlation,
+            },
+        )
+        for repository_id in (
+            bootstrapped.repository.id,
+            foreign_repository.id,
+            uuid.uuid4(),
+        )
+    ]
+    AccessScopeServiceIdentity.objects.create(
+        organization=bootstrapped.organization,
+        access_scope=hidden_scope,
+        service_identity=bootstrapped.service_identity,
+    )
     status = client.get(
         f"/api/v1/repositories/{bootstrapped.repository.id}/github-binding",
         headers={"Authorization": authorization},
@@ -396,16 +436,39 @@ def test_binding_status_and_revocation_http_lifecycle() -> None:
         content_type="application/json",
         headers={"Authorization": authorization},
     )
+    revoked_status = client.get(
+        f"/api/v1/repositories/{bootstrapped.repository.id}/github-binding",
+        headers={
+            "Authorization": authorization,
+            "X-Correlation-ID": correlation,
+        },
+    )
+    missing_status = client.get(
+        f"/api/v1/repositories/{uuid.uuid4()}/github-binding",
+        headers={
+            "Authorization": authorization,
+            "X-Correlation-ID": correlation,
+        },
+    )
 
     assert configured.status_code == 201
     assert configured.json()["created"] is True
     assert replay.status_code == 200
     assert replay.json()["created"] is False
+    assert {response.status_code for response in unavailable} == {404}
+    assert len({response.content for response in unavailable}) == 1
+    assert all(
+        cast(str, payload["full_name"]) not in response.content.decode() for response in unavailable
+    )
+    assert all(str(binding.id) not in response.content.decode() for response in unavailable)
     assert status.status_code == 200
     assert status.json()["state"] == "ACTIVE"
+    assert status.json()["full_name"] == payload["full_name"]
     assert status.json()["last_delivery"] is None
     assert revoked.status_code == 200
     assert revoked.json()["state"] == "REVOKED"
+    assert revoked_status.status_code == missing_status.status_code
+    assert revoked_status.content == missing_status.content
 
 
 @pytest.mark.integration

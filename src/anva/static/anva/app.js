@@ -1,27 +1,24 @@
-const message = document.querySelector("[data-health-message]");
-const indicator = document.querySelector("[data-health-indicator]");
-const retry = document.querySelector("[data-health-retry]");
+const navigation = document.querySelector("[data-navigation]");
 
-async function checkHealth() {
-  message.textContent = "Checking service readiness…";
-  indicator.dataset.state = "checking";
-  retry.hidden = true;
-
-  try {
-    const response = await fetch("/health/ready", {
-      headers: { Accept: "application/json" },
-    });
-    if (!response.ok) {
-      throw new Error("readiness check failed");
-    }
-    message.textContent = "All foundation services are ready";
-    indicator.dataset.state = "ready";
-  } catch {
-    message.textContent = "A required service is unavailable";
-    indicator.dataset.state = "unavailable";
-    retry.hidden = false;
+if (navigation) {
+  if (window.matchMedia("(max-width: 56rem)").matches) {
+    navigation.open = false;
   }
+  navigation.addEventListener("click", (event) => {
+    if (event.target.closest("a") && window.matchMedia("(max-width: 56rem)").matches) {
+      navigation.open = false;
+    }
+  });
 }
 
-retry.addEventListener("click", checkHealth);
-checkHealth();
+const errorSummary = document.querySelector("[data-error-summary]");
+if (errorSummary) {
+  errorSummary.focus();
+}
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && navigation?.open) {
+    navigation.open = false;
+    navigation.querySelector("summary")?.focus();
+  }
+});

@@ -17,6 +17,9 @@ x-app-environment: &app-environment
   ANVA_FILESYSTEM_ALLOWED_ROOTS: ${ANVA_FILESYSTEM_ALLOWED_ROOTS:-/fixtures}
   ANVA_API_URL: ${ANVA_API_URL:-http://api:8000/api/v1}
   ANVA_PUBLIC_BASE_URL: ${ANVA_PUBLIC_BASE_URL:-http://api:8000}
+  ANVA_WEB_READ_ONLY: ${ANVA_WEB_READ_ONLY:-false}
+  ANVA_MCP_URL: ${ANVA_MCP_URL:-http://mcp:8001/mcp}
+  ANVA_MCP_ALLOWED_HOSTS: ${ANVA_MCP_ALLOWED_HOSTS:-mcp}
   ANVA_MCP_READ_ONLY: ${ANVA_MCP_READ_ONLY:-false}
   ANVA_MCP_PUBLIC_BASE_URL: ${ANVA_MCP_PUBLIC_BASE_URL:-http://mcp:8001}
   ANVA_LOG_LEVEL: ${ANVA_LOG_LEVEL:-INFO}
@@ -272,6 +275,9 @@ services:
       ANVA_OBJECT_STORAGE_ACCESS_KEY: anva-test
       ANVA_OBJECT_STORAGE_SECRET_KEY: anva-test-only
       ANVA_PUBLIC_BASE_URL: http://testserver
+      ANVA_WEB_READ_ONLY: ${ANVA_WEB_READ_ONLY:-false}
+      ANVA_MCP_URL: ${ANVA_MCP_URL:-http://mcp:8001/mcp}
+      ANVA_MCP_ALLOWED_HOSTS: ${ANVA_MCP_ALLOWED_HOSTS:-mcp}
       ANVA_MCP_PUBLIC_BASE_URL: http://mcp:8001
       ANVA_MCP_READ_ONLY: "false"
       ANVA_GITHUB_WEBHOOK_SECRETS: test-github-webhook-secret
@@ -279,6 +285,44 @@ services:
       MYPY_CACHE_DIR: /tmp/anva-mypy-cache
       PYTEST_ADDOPTS: "-o cache_dir=/tmp/anva-pytest-cache"
       RUFF_CACHE_DIR: /tmp/anva-ruff-cache
+    depends_on:
+      test-postgres:
+        condition: service_healthy
+      test-minio:
+        condition: service_healthy
+
+  browser-test:
+    build:
+      context: .
+      target: browser-test
+    profiles: ["browser"]
+    working_dir: /workspace
+    user: "${ANVA_HOST_UID:-1000}:${ANVA_HOST_GID:-1000}"
+    volumes:
+      - .:/workspace
+    environment:
+      HOME: /tmp
+      ANVA_ENV: test
+      ANVA_DEBUG: "false"
+      ANVA_SECRET_KEY: test-only-not-a-secret
+      ANVA_TOKEN_PEPPER: test-only-token-pepper
+      ANVA_TOKEN_ISSUER: anva-test
+      ANVA_TOKEN_AUDIENCE: anva-test-api
+      ANVA_BOOTSTRAP_SECRET: test-only-bootstrap-secret
+      ANVA_ALLOWED_HOSTS: testserver,localhost,127.0.0.1
+      ANVA_DATABASE_URL: postgresql://anva_test:anva-test-only@test-postgres:5432/anva_test
+      ANVA_OBJECT_STORAGE_ENDPOINT: http://test-minio:9000
+      ANVA_OBJECT_STORAGE_BUCKET: anva-test
+      ANVA_OBJECT_STORAGE_ACCESS_KEY: anva-test
+      ANVA_OBJECT_STORAGE_SECRET_KEY: anva-test-only
+      ANVA_PUBLIC_BASE_URL: http://localhost
+      ANVA_WEB_READ_ONLY: ${ANVA_WEB_READ_ONLY:-false}
+      ANVA_MCP_URL: ${ANVA_MCP_URL:-http://mcp:8001/mcp}
+      ANVA_MCP_ALLOWED_HOSTS: ${ANVA_MCP_ALLOWED_HOSTS:-mcp}
+      ANVA_MCP_PUBLIC_BASE_URL: http://mcp:8001
+      ANVA_MCP_READ_ONLY: "false"
+      ANVA_GITHUB_WEBHOOK_SECRETS: test-github-webhook-secret
+      PYTEST_ADDOPTS: "-o cache_dir=/tmp/anva-pytest-cache"
     depends_on:
       test-postgres:
         condition: service_healthy

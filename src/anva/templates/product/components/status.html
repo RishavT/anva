@@ -1,0 +1,1 @@
+<span class="status status--{{ status.tone }}"><span class="status__icon" aria-hidden="true">{% if status.tone == "positive" %}✓{% elif status.tone == "critical" %}×{% elif status.tone == "warning" %}!{% else %}·{% endif %}</span>{{ status.label }}</span>
