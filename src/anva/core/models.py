@@ -2275,6 +2275,8 @@ class KnowledgeProposalScope(UUIDModel):
         null=True,
         blank=True,
     )
+    idempotency_key = models.CharField(max_length=64, null=True, blank=True)
+    request_hash = models.CharField(max_length=64, null=True, blank=True)
     created_at = models.DateTimeField(default=timezone.now, editable=False)
 
     class Meta:
@@ -2282,7 +2284,11 @@ class KnowledgeProposalScope(UUIDModel):
             models.UniqueConstraint(
                 fields=["organization", "id"],
                 name="core_proposal_scope_org_id_unique",
-            )
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "idempotency_key"],
+                name="core_proposal_scope_idempotency_unique",
+            ),
         ]
 
 
@@ -2989,7 +2995,7 @@ class OrganizationProductSettings(UUIDModel):
     model_processing = models.CharField(
         max_length=24,
         choices=ModelProcessing,
-        default=ModelProcessing.REDACTED_ONLY,
+        default=ModelProcessing.DISABLED,
     )
     skill_distribution = models.CharField(
         max_length=24,

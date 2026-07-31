@@ -1,4 +1,5 @@
 {% extends "product/base.html" %}
+{% load product_ui %}
 {% block title %}{{ page.source.display_name|default:page.source.external_key }}{% endblock %}
 {% block content %}
   <nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/app/sources">Source health</a><span aria-hidden="true">/</span><span>{{ page.source.display_name|default:page.source.external_key }}</span></nav>
@@ -8,7 +9,7 @@
   {% endif %}
   <div class="source-grid">
     <section class="panel" aria-labelledby="sync-title"><div class="panel-heading"><div><p class="eyebrow">Freshness</p><h2 id="sync-title">Sync history</h2></div></div>
-      {% if page.runs %}<ol class="run-timeline">{% for run in page.runs %}<li><span class="timeline-node" aria-hidden="true"></span><div><div class="timeline-head"><strong>{{ run.state|cut:"_"|title }}</strong><span>{{ run.scan_mode|title }}</span></div><p>{{ run.processed_count }} processed · {{ run.failed_count }} failed · {{ run.tombstoned_count }} tombstoned</p><time datetime="{{ run.created_at|date:'c' }}">{{ run.created_at|date:"M j, Y H:i T" }}</time>{% if run.failure_code %}<code>{{ run.failure_code }}</code>{% endif %}</div></li>{% endfor %}</ol>{% else %}<p class="limitation">No sync run has started. The source is connected but has not established indexed provenance.</p>{% endif %}
+      {% if page.runs %}<ol class="run-timeline">{% for run in page.runs %}<li><span class="timeline-node" aria-hidden="true"></span><div><div class="timeline-head"><strong>{{ run.state|humanize_identifier }}</strong><span>{{ run.scan_mode|humanize_identifier }}</span></div><p>{{ run.processed_count }} processed · {{ run.failed_count }} failed · {{ run.tombstoned_count }} tombstoned</p><time datetime="{{ run.created_at|date:'c' }}">{{ run.created_at|date:"M j, Y H:i T" }}</time>{% if run.failure_code %}<code>{{ run.failure_code }}</code>{% endif %}</div></li>{% endfor %}</ol>{% else %}<p class="limitation">No sync run has started. The source is connected but has not established indexed provenance.</p>{% endif %}
     </section>
     <aside class="panel action-panel" aria-labelledby="actions-title"><div class="panel-heading"><h2 id="actions-title">Source controls</h2></div>
       <form method="post" action="/app/sources/{{ page.source.id }}/sync">{% csrf_token %}<input type="hidden" name="scan_mode" value="INCREMENTAL"><button class="button button--primary button--wide" type="submit" {% if shell.read_only or page.source.state == "REVOKED" or not page.can_sync %}disabled{% endif %}>Request incremental sync</button></form>

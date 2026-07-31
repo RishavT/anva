@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from django.db import IntegrityError, connection, transaction
-from django.test import Client
+from django.db import IntegrityError, close_old_connections, connection, connections, transaction
+from django.test import Client, override_settings
 from django.utils import timezone
 
 from anva.core.models import (
@@ -14,7 +16,11 @@ from anva.core.models import (
     AssuranceCheck,
     AssuranceRun,
     AuditEvent,
+    ContextPacketRecord,
+    Evidence,
+    EvidenceManifest,
     Finding,
+    ImmutableArtifact,
     KnowledgeAssertion,
     KnowledgeEntity,
     KnowledgeProposal,
@@ -22,6 +28,7 @@ from anva.core.models import (
     Membership,
     Organization,
     OrganizationProductSettings,
+    OutboxEvent,
     PullRequest,
     Repository,
     RepositoryProfile,
@@ -29,8 +36,12 @@ from anva.core.models import (
     SourceConnection,
     SyncRun,
     User,
+    content_hash,
 )
 from anva.core.services.bootstrap import bootstrap_local_organization
+from anva.core.services.context import ActorContext
+from anva.core.services.product_ui import ProductUIFacade
+from anva.core.services.scopes import derive_scope_intersection
 
 
 def _signed_in_client() -> tuple[Client, Repository]:
@@ -554,3 +565,422 @@ def test_product_records_reject_cross_tenant_relationship_grafts() -> None:
         )
         with connection.cursor() as cursor:
             cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_product_pages_filter_hidden_revoked_source_packet_proposal_audit_and_evidence() -> None:
+    client, repository = _signed_in_client()
+    organization = repository.organization
+    visible_scope = AccessScope.objects.get(organization=organization)
+    hidden_scope = AccessScope.objects.create(
+        organization=organization,
+        name="CANARY-HIDDEN-SCOPE",
+        all_memberships=False,
+        all_repositories=True,
+    )
+    visible_source = SourceConnection.objects.create(
+        organization=organization,
+        repository=repository,
+        access_scope=visible_scope,
+        external_key="filesystem:visible",
+        display_name="Visible source",
+        state=SourceConnection.State.ACTIVE,
+        last_successful_sync_at=timezone.now(),
+    )
+    hidden_source = SourceConnection.objects.create(
+        organization=organization,
+        repository=repository,
+        access_scope=hidden_scope,
+        external_key="filesystem:hidden",
+        display_name="CANARY-HIDDEN-SOURCE",
+        state=SourceConnection.State.FAILED,
+        last_error_code="CANARY-HIDDEN-ERROR",
+    )
+    revoked_source = SourceConnection.objects.create(
+        organization=organization,
+        repository=repository,
+        access_scope=visible_scope,
+        external_key="filesystem:revoked",
+        display_name="CANARY-REVOKED-SOURCE",
+        state=SourceConnection.State.REVOKED,
+    )
+    hidden_packet_scope = derive_scope_intersection(
+        actor=ActorContext(
+            actor_type="USER",
+            actor_id=str(client.session["anva_web_user_id"]),
+            organization_id=organization.id,
+            authorization_path="session:untrusted",
+            repository_id=repository.id,
+            request_id=uuid.uuid4(),
+        ),
+        source_scope_ids=[hidden_scope.id],
+        name="CANARY-HIDDEN-PACKET-SCOPE",
+    )
+    packet_artifact = ImmutableArtifact.objects.create(
+        organization=organization,
+        access_scope=hidden_packet_scope,
+        kind=ImmutableArtifact.Kind.CONTEXT_PACKET,
+        schema_name="context-packet",
+        schema_version="1.0",
+        payload={"canary": "CANARY-HIDDEN-PACKET"},
+    )
+    hidden_packet = ContextPacketRecord.objects.create(
+        organization=organization,
+        artifact=packet_artifact,
+        repository=repository,
+        access_scope=hidden_packet_scope,
+        actor_type="USER",
+        actor_id=str(client.session["anva_web_user_id"]),
+        phase=ContextPacketRecord.Phase.PREPARE,
+        normalized_request={"task": "CANARY-HIDDEN-PACKET"},
+        request_hash="1" * 64,
+        authorization_hash="2" * 64,
+        selection_hash="3" * 64,
+        retrieval_watermark=1,
+        retrieval_algorithm_version="test",
+        index_version="test",
+        embedding_version="test",
+        budget_max_items=10,
+        budget_max_tokens=100,
+        budget_max_bytes=1000,
+        budget_max_citations=10,
+        selected_items=1,
+        selected_tokens=1,
+        selected_bytes=1,
+        selected_citations=1,
+        limitations=["CANARY-HIDDEN-PACKET-LIMIT"],
+        cache_key="4" * 64,
+    )
+    hidden_assertion = KnowledgeAssertion.objects.create(
+        organization=organization,
+        access_scope=hidden_scope,
+        subject_key="CANARY-HIDDEN-ASSERTION",
+        predicate="owned_by",
+        value={"owner": "CANARY-HIDDEN-OWNER"},
+        provenance=[{"source_id": str(hidden_source.id)}],
+        observed_at=timezone.now(),
+    )
+    hidden_proposal = KnowledgeProposal.objects.create(
+        organization=organization,
+        summary="CANARY-HIDDEN-PROPOSAL",
+        proposed_changes=[{"operation": "CORRECT"}],
+        anva_sources=[{"source_id": str(hidden_source.id)}],
+    )
+    KnowledgeProposalScope.objects.create(
+        organization=organization,
+        knowledge_proposal=hidden_proposal,
+        repository=repository,
+        access_scope=hidden_scope,
+        assertion=hidden_assertion,
+    )
+    AuditEvent.objects.create(
+        organization=organization,
+        actor_type="USER",
+        actor_id=str(client.session["anva_web_user_id"]),
+        action="CANARY-HIDDEN-AUDIT",
+        target_type="sourceconnection",
+        target_id=hidden_source.id,
+        from_state="ACTIVE",
+        to_state="FAILED",
+        authorization_path="role:ORG_ADMIN",
+        request_id=uuid.uuid4(),
+    )
+    hidden_run = AssuranceRun.objects.create(
+        organization=organization,
+        repository=repository,
+        repository_external_id=repository.external_id,
+        pull_request_number=77,
+        head_commit="7" * 40,
+        policy_version=1,
+        context_packet=hidden_packet,
+    )
+    visible_run = AssuranceRun.objects.create(
+        organization=organization,
+        repository=repository,
+        repository_external_id=repository.external_id,
+        pull_request_number=78,
+        head_commit="8" * 40,
+        evaluated_commit="8" * 40,
+        report_commit="8" * 40,
+        policy_version=1,
+        readiness=AssuranceRun.State.FAILED,
+        state=AssuranceRun.State.FAILED,
+        completed_at=timezone.now(),
+    )
+    manifest_artifact = ImmutableArtifact.objects.create(
+        organization=organization,
+        access_scope=hidden_scope,
+        kind=ImmutableArtifact.Kind.EVIDENCE_MANIFEST,
+        schema_name="evidence-manifest",
+        schema_version="1.0",
+        payload={"canary": "CANARY-HIDDEN-EVIDENCE-MANIFEST"},
+    )
+    manifest = EvidenceManifest.objects.create(
+        organization=organization,
+        repository=repository,
+        access_scope=hidden_scope,
+        artifact=manifest_artifact,
+        pull_request_number=visible_run.pull_request_number,
+        commit_sha=visible_run.head_commit,
+        schema_version="1.0",
+        producer="CANARY-HIDDEN-PRODUCER",
+        producer_version="secret",
+        producer_mode=EvidenceManifest.ProducerMode.CI,
+        payload_hash=manifest_artifact.content_hash,
+        payload_size=1,
+    )
+    Evidence.objects.create(
+        organization=organization,
+        manifest=manifest,
+        commit_sha=visible_run.head_commit,
+        kind=Evidence.Kind.TEST_RESULT,
+        name="CANARY-HIDDEN-EVIDENCE",
+        producer="CANARY-HIDDEN-PRODUCER",
+        producer_version="secret",
+        status=Evidence.Status.FAILED,
+        completed_at=timezone.now(),
+        content_hash=content_hash({"evidence": str(uuid.uuid4())}),
+        limitations=["CANARY-HIDDEN-EVIDENCE-LIMIT"],
+        retention_class="test",
+    )
+
+    routes = (
+        "/app",
+        "/app/onboarding",
+        "/app/sources",
+        f"/app/repositories/{repository.id}",
+        "/app/review",
+        "/app/assurance",
+        f"/app/assurance/{visible_run.id}",
+        "/app/skills",
+        "/app/audit",
+    )
+    prohibited = (
+        "CANARY-HIDDEN",
+        "CANARY-REVOKED",
+        str(hidden_source.id),
+        str(hidden_source.id)[:12],
+        str(hidden_packet.id),
+        str(hidden_packet.id)[:12],
+        str(hidden_proposal.id),
+        str(hidden_proposal.id)[:12],
+    )
+    for route in routes:
+        response = client.get(route)
+        assert response.status_code == 200, route
+        rendered = response.content.decode()
+        for value in prohibited:
+            assert value not in rendered, (route, value)
+    home = client.get("/app").content.decode()
+    assert "1 of 1" in home
+    assert "1/1" in home
+    onboarding = client.get("/app/onboarding").content.decode()
+    assert "1 source connection" in onboarding
+    assert "No successful context packet is visible." in onboarding
+
+    foreign = Organization.objects.create(slug="source-foreign", name="Source Foreign")
+    foreign_repository = Repository.objects.create(
+        organization=foreign,
+        external_id="github:foreign/source",
+        name="source",
+    )
+    foreign_source = SourceConnection.objects.create(
+        organization=foreign,
+        repository=foreign_repository,
+        external_key="filesystem:foreign",
+        display_name="CANARY-FOREIGN-SOURCE",
+    )
+    correlation = str(uuid.uuid4())
+    unavailable = [
+        client.get(
+            f"/app/sources/{source_id}",
+            HTTP_X_CORRELATION_ID=correlation,
+        )
+        for source_id in (
+            hidden_source.id,
+            revoked_source.id,
+            foreign_source.id,
+            uuid.uuid4(),
+        )
+    ]
+    assert {response.status_code for response in unavailable} == {404}
+    assert len({response.content for response in unavailable}) == 1
+    hidden_assurance = client.get(
+        f"/app/assurance/{hidden_run.id}",
+        HTTP_X_CORRELATION_ID=correlation,
+    )
+    assert hidden_assurance.status_code == 404
+    assert hidden_assurance.content == unavailable[0].content
+    assert visible_source.id
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_correction_is_revision_checked_and_canonical_retry_idempotent() -> None:
+    client, repository = _signed_in_client()
+    scope = AccessScope.objects.get(organization=repository.organization)
+    assertion = KnowledgeAssertion.objects.create(
+        organization=repository.organization,
+        access_scope=scope,
+        subject_key="system:payments",
+        predicate="owned_by",
+        value={"team": "platform"},
+        provenance=[{"source_id": str(uuid.uuid4())}],
+        observed_at=timezone.now(),
+    )
+    path = f"/app/review/{assertion.id}"
+    payload = {
+        "decision": "CORRECT",
+        "expected_revision": str(assertion.revision),
+        "repository_id": str(repository.id),
+        "correction": "Owned by Payments Platform.",
+    }
+
+    first = client.post(path, payload)
+    proposal = KnowledgeProposal.objects.get()
+    first_counts = (
+        KnowledgeProposal.objects.count(),
+        KnowledgeProposalScope.objects.count(),
+        AuditEvent.objects.filter(target_type="knowledgeproposal").count(),
+        OutboxEvent.objects.filter(aggregate_type="knowledgeproposal").count(),
+    )
+    replay = client.post(path, payload)
+    replay_scope = KnowledgeProposalScope.objects.get()
+
+    assert first.status_code == 302
+    assert replay.status_code == 302
+    assert replay_scope.knowledge_proposal_id == proposal.id
+    assert (
+        (
+            KnowledgeProposal.objects.count(),
+            KnowledgeProposalScope.objects.count(),
+            AuditEvent.objects.filter(target_type="knowledgeproposal").count(),
+            OutboxEvent.objects.filter(aggregate_type="knowledgeproposal").count(),
+        )
+        == first_counts
+        == (1, 1, 1, 1)
+    )
+    audit = AuditEvent.objects.get(target_type="knowledgeproposal")
+    assert audit.actor_type == "USER"
+    assert audit.authorization_path.startswith("role:ORG_ADMIN")
+    assert "web-session" not in audit.authorization_path
+
+    changed_payload = {**payload, "correction": "Owned by a different team."}
+    changed = client.post(path, changed_payload)
+    assert changed.status_code == 409
+    assert (
+        KnowledgeProposal.objects.count(),
+        KnowledgeProposalScope.objects.count(),
+        AuditEvent.objects.filter(target_type="knowledgeproposal").count(),
+        OutboxEvent.objects.filter(aggregate_type="knowledgeproposal").count(),
+    ) == first_counts
+
+    KnowledgeAssertion.objects.filter(id=assertion.id).update(revision=assertion.revision + 1)
+    stale = client.post(path, payload)
+    assert stale.status_code == 409
+    assert (
+        KnowledgeProposal.objects.count(),
+        KnowledgeProposalScope.objects.count(),
+        AuditEvent.objects.filter(target_type="knowledgeproposal").count(),
+        OutboxEvent.objects.filter(aggregate_type="knowledgeproposal").count(),
+    ) == first_counts
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+@override_settings(
+    ANVA_MCP_URL="http://missing.invalid/mcp",
+    ANVA_MCP_ALLOWED_HOSTS=("missing.invalid",),
+)
+def test_skills_reports_configured_mcp_dns_failure_without_claiming_compatibility() -> None:
+    client, _repository = _signed_in_client()
+
+    response = client.get("/app/skills")
+    content = response.content.decode()
+
+    assert response.status_code == 200
+    assert "DNS unavailable" in content
+    assert "Compatible" not in content
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_stale_correction_creates_no_proposal_audit_or_outbox() -> None:
+    client, repository = _signed_in_client()
+    scope = AccessScope.objects.get(organization=repository.organization)
+    assertion = KnowledgeAssertion.objects.create(
+        organization=repository.organization,
+        access_scope=scope,
+        subject_key="system:stale",
+        predicate="owned_by",
+        value={"team": "platform"},
+        provenance=[{"source_id": str(uuid.uuid4())}],
+        observed_at=timezone.now(),
+    )
+    KnowledgeAssertion.objects.filter(id=assertion.id).update(revision=2)
+
+    response = client.post(
+        f"/app/review/{assertion.id}",
+        {
+            "decision": "CORRECT",
+            "expected_revision": "1",
+            "repository_id": str(repository.id),
+            "correction": "Owned by Payments Platform.",
+        },
+    )
+
+    assert response.status_code == 409
+    assert KnowledgeProposal.objects.count() == 0
+    assert KnowledgeProposalScope.objects.count() == 0
+    assert AuditEvent.objects.filter(target_type="knowledgeproposal").count() == 0
+    assert OutboxEvent.objects.filter(aggregate_type="knowledgeproposal").count() == 0
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_concurrent_exact_correction_retries_create_one_canonical_proposal() -> None:
+    client, repository = _signed_in_client()
+    scope = AccessScope.objects.get(organization=repository.organization)
+    assertion = KnowledgeAssertion.objects.create(
+        organization=repository.organization,
+        access_scope=scope,
+        subject_key="system:concurrent",
+        predicate="owned_by",
+        value={"team": "platform"},
+        provenance=[{"source_id": str(uuid.uuid4())}],
+        observed_at=timezone.now(),
+    )
+    user_id = str(client.session["anva_web_user_id"])
+    barrier = threading.Barrier(2)
+
+    def propose() -> uuid.UUID:
+        close_old_connections()
+        try:
+            actor = ActorContext(
+                organization_id=repository.organization_id,
+                actor_type="USER",
+                actor_id=user_id,
+                authorization_path="session:untrusted",
+                request_id=uuid.uuid4(),
+            )
+            barrier.wait()
+            result = ProductUIFacade(actor).review_assertion(
+                repository_id=repository.id,
+                assertion_id=assertion.id,
+                decision="CORRECT",
+                expected_revision=1,
+                correction="Owned by Payments Platform.",
+            )
+            return result.id
+        finally:
+            connections.close_all()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        proposal_ids = {future.result() for future in [executor.submit(propose) for _ in range(2)]}
+
+    assert len(proposal_ids) == 1
+    assert KnowledgeProposal.objects.count() == 1
+    assert KnowledgeProposalScope.objects.count() == 1
+    assert AuditEvent.objects.filter(target_type="knowledgeproposal").count() == 1
+    assert OutboxEvent.objects.filter(aggregate_type="knowledgeproposal").count() == 1

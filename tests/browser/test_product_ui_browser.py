@@ -11,6 +11,7 @@ from django.utils import timezone
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions
@@ -27,7 +28,7 @@ from anva.core.models import (
     Repository,
 )
 
-SCREENSHOTS = Path("docs/evidence/issue-011/screenshots")
+SCREENSHOTS = Path("docs/evidence/issue-011/remediation/screenshots")
 
 
 def _capture(driver: webdriver.Chrome, name: str) -> None:
@@ -232,15 +233,61 @@ def test_primary_product_journey_and_responsive_states(live_server: object) -> N
         _capture(driver, "08-safe-error.png")
 
         driver.set_window_size(390, 844)
-        driver.get(f"{base_url}/app")
-        toggle = driver.find_element(By.CSS_SELECTOR, "[data-nav-toggle]")
-        toggle.click()
-        wait.until(lambda current: toggle.get_attribute("aria-expanded") == "true")
-        assert driver.execute_script(
-            "return document.documentElement.scrollWidth <= window.innerWidth"
+        driver.execute_cdp_cmd(
+            "Emulation.setScriptExecutionDisabled",
+            {"value": True},
         )
-        assert driver.find_element(By.CSS_SELECTOR, "[data-navigation]").is_displayed()
+        driver.get(f"{base_url}/app")
+        navigation = driver.find_element(By.CSS_SELECTOR, "[data-navigation]")
+        toggle = driver.find_element(By.CSS_SELECTOR, "[data-navigation] > summary")
+        assert navigation.get_attribute("open") is not None
+        assert all(
+            link.is_displayed()
+            for link in driver.find_elements(By.CSS_SELECTOR, "[data-navigation] nav a")
+        )
+        toggle.click()
+        wait.until(lambda _current: navigation.get_attribute("open") is None)
+        toggle.click()
+        wait.until(lambda _current: navigation.get_attribute("open") is not None)
+        assert navigation.is_displayed()
         _capture(driver, "09-attention-mobile-navigation.png")
+
+        driver.execute_cdp_cmd(
+            "Emulation.setScriptExecutionDisabled",
+            {"value": False},
+        )
+        assert driver.execute_script(
+            "return Math.max(document.documentElement.scrollWidth, document.body.scrollWidth)"
+            " <= window.innerWidth"
+        )
+        driver.get(f"{base_url}/app")
+        navigation = driver.find_element(By.CSS_SELECTOR, "[data-navigation]")
+        toggle = driver.find_element(By.CSS_SELECTOR, "[data-navigation] > summary")
+        wait.until(lambda _current: navigation.get_attribute("open") is None)
+        toggle.click()
+        wait.until(lambda _current: navigation.get_attribute("open") is not None)
+
+        driver.set_window_size(320, 700)
+        driver.get(f"{base_url}/app/onboarding")
+        driver.find_element(By.CSS_SELECTOR, "[data-navigation] > summary").click()
+        assert driver.execute_script(
+            "return Math.max(document.documentElement.scrollWidth, document.body.scrollWidth)"
+            " <= window.innerWidth"
+        )
+        assert driver.find_element(By.CSS_SELECTOR, "[data-navigation] nav").is_displayed()
+        _capture(driver, "10-onboarding-mobile-320.png")
+
+        driver.set_window_size(640, 700)
+        driver.get(f"{base_url}/app/onboarding")
+        for _step in range(5):
+            ActionChains(driver).key_down(Keys.CONTROL).send_keys("+").key_up(
+                Keys.CONTROL
+            ).perform()
+        assert driver.execute_script(
+            "return Math.max(document.documentElement.scrollWidth, document.body.scrollWidth)"
+            " <= window.innerWidth"
+        )
+        _capture(driver, "11-onboarding-browser-zoom-200.png")
 
         severe_logs = [
             entry

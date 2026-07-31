@@ -77,6 +77,9 @@ proposal data. Rolling back to core `0014` deletes those tables.
   repository/scope access; the UI deliberately does not distinguish them.
 - Stable 409: reload the detail and resubmit against its current revision.
 - Disabled buttons: `ANVA_WEB_READ_ONLY=true`.
+- Live developer-skill status: `ANVA_MCP_URL` identifies the MCP transport URL and
+  `ANVA_MCP_ALLOWED_HOSTS` must contain its exact host. The web process derives and probes only
+  the bounded `/diagnostics` route; it does not follow redirects or accept a URL from a request.
 - Missing GitHub/source/assurance completion: confirm the corresponding stored
   binding, successful sync, context packet, or run; do not manually mark it
   complete.

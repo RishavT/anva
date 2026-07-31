@@ -31,6 +31,50 @@ DROP_SAME_TENANT_SQL = "\n".join(
     for table, column, _target in reversed(SAME_TENANT_RELATIONS)
 )
 
+IDENTITY_ONLY_LIMITATION = (
+    "Profile backfill preserved repository identity only; ownership, purpose, runtime, "
+    "checks, and sensitive paths require human confirmation."
+)
+
+
+def backfill_product_records(apps, _schema_editor):
+    Organization = apps.get_model("core", "Organization")
+    OrganizationProductSettings = apps.get_model("core", "OrganizationProductSettings")
+    Repository = apps.get_model("core", "Repository")
+    RepositoryProfile = apps.get_model("core", "RepositoryProfile")
+
+    for organization in Organization.objects.order_by("id").iterator():
+        OrganizationProductSettings.objects.get_or_create(
+            organization_id=organization.id,
+            defaults={
+                "retention_days": 365,
+                "model_processing": "DISABLED",
+                "skill_distribution": "SELF_SERVICE",
+                "assurance_mode": "OBSERVE",
+            },
+        )
+    for repository in Repository.objects.order_by("id").iterator():
+        RepositoryProfile.objects.get_or_create(
+            organization_id=repository.organization_id,
+            repository_id=repository.id,
+            defaults={
+                "status": "DRAFT",
+                "unsupported_or_ambiguous": [IDENTITY_ONLY_LIMITATION],
+                "source_references": [
+                    {
+                        "external_id": repository.external_id,
+                        "kind": "repository_identity",
+                        "name": repository.name,
+                    }
+                ],
+            },
+        )
+
+
+def remove_backfilled_product_records(apps, _schema_editor):
+    apps.get_model("core", "RepositoryProfile").objects.all().delete()
+    apps.get_model("core", "OrganizationProductSettings").objects.all().delete()
+
 
 class Migration(migrations.Migration):
     dependencies: ClassVar[list[tuple[str, str]]] = [
@@ -51,6 +95,11 @@ class Migration(migrations.Migration):
                     "created_at",
                     models.DateTimeField(default=django.utils.timezone.now, editable=False),
                 ),
+                (
+                    "idempotency_key",
+                    models.CharField(blank=True, max_length=64, null=True),
+                ),
+                ("request_hash", models.CharField(blank=True, max_length=64, null=True)),
                 (
                     "access_scope",
                     models.ForeignKey(
@@ -89,7 +138,11 @@ class Migration(migrations.Migration):
                 "constraints": [
                     models.UniqueConstraint(
                         fields=("organization", "id"), name="core_proposal_scope_org_id_unique"
-                    )
+                    ),
+                    models.UniqueConstraint(
+                        fields=("organization", "idempotency_key"),
+                        name="core_proposal_scope_idempotency_unique",
+                    ),
                 ],
             },
         ),
@@ -111,7 +164,7 @@ class Migration(migrations.Migration):
                             ("REDACTED_ONLY", "Redacted Only"),
                             ("ALLOWED", "Allowed"),
                         ],
-                        default="REDACTED_ONLY",
+                        default="DISABLED",
                         max_length=24,
                     ),
                 ),
@@ -237,6 +290,10 @@ class Migration(migrations.Migration):
                     ),
                 ],
             },
+        ),
+        migrations.RunPython(
+            backfill_product_records,
+            reverse_code=remove_backfilled_product_records,
         ),
         migrations.RunSQL(
             sql=SAME_TENANT_SQL,

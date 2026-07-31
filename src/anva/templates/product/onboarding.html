@@ -1,4 +1,5 @@
 {% extends "product/base.html" %}
+{% load product_ui %}
 {% block title %}Onboarding{% endblock %}
 {% block content %}
   <header class="page-header">
@@ -10,7 +11,7 @@
       {% for check in page.checks %}
         <li class="progress-item progress-item--{{ check.state|lower }}">
           <span class="progress-index" aria-hidden="true">{% if check.state == "DONE" %}✓{% elif check.state == "UNAVAILABLE" %}—{% else %}{{ forloop.counter }}{% endif %}</span>
-          <div><span class="progress-state">{{ check.state|cut:"_"|title }}</span><h3>{{ check.name }}</h3><p>{{ check.detail }}</p><a href="{{ check.href }}">Open next step <span aria-hidden="true">→</span></a></div>
+          <div><span class="progress-state">{{ check.state|humanize_identifier }}</span><h3>{{ check.name }}</h3><p>{{ check.detail }}</p><a href="{{ check.href }}">Open next step <span aria-hidden="true">→</span></a></div>
         </li>
       {% endfor %}
     </ol>

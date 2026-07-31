@@ -15,12 +15,13 @@ from typing import cast
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Q, QuerySet
 from django.utils import timezone
 
 from anva.core.exceptions import DomainOperationError, ResourceNotFoundError
 from anva.core.models import (
     AcceptanceCriterion,
+    AccessScope,
     AssertionConflict,
     AssertionRevision,
     AssuranceCheck,
@@ -31,9 +32,11 @@ from anva.core.models import (
     CriterionEvidence,
     Decision,
     Evidence,
+    EvidenceManifest,
     Finding,
     GitHubInstallation,
     GitHubRepositoryBinding,
+    ImmutableArtifact,
     KnowledgeAssertion,
     KnowledgeEntity,
     KnowledgeProposal,
@@ -61,6 +64,7 @@ from anva.core.services.authorization import (
     Action,
     authorize_action,
     get_tenant_record,
+    get_tenant_record_for_update,
 )
 from anva.core.services.bootstrap import BootstrapResult, bootstrap_local_organization
 from anva.core.services.context import ActorContext
@@ -69,7 +73,6 @@ from anva.core.services.creation import submit_knowledge_proposal
 from anva.core.services.events import record_transition
 from anva.core.services.graph import traverse_graph
 from anva.core.services.ingestion import request_ingestion_sync
-from anva.core.services.mcp_gateway import diagnostics_payload
 from anva.core.services.retrieval import (
     authorized_assertions,
     authorized_entities,
@@ -78,9 +81,14 @@ from anva.core.services.retrieval import (
 from anva.core.services.scopes import revoke_source_connection
 from anva.core.services.search import search_chunks
 from anva.core.services.secured_operations import review_assertion
+from anva.integrations.mcp_diagnostics import probe_mcp_diagnostics
 
 PAGE_LIMIT = 100
 SEARCH_LIMIT = 30
+IDENTITY_ONLY_PROFILE_LIMITATION = (
+    "Profile backfill preserved repository identity only; ownership, purpose, runtime, "
+    "checks, and sensitive paths require human confirmation."
+)
 
 
 def _short(value: object, length: int = 12) -> str:
@@ -132,6 +140,20 @@ def _status(value: str, *, label: str | None = None) -> dict[str, str]:
         "value": value,
         "label": label or value.replace("_", " ").title(),
         "tone": _state_tone(value),
+    }
+
+
+def _profile_defaults(repository: Repository) -> dict[str, object]:
+    return {
+        "status": RepositoryProfile.Status.DRAFT,
+        "unsupported_or_ambiguous": [IDENTITY_ONLY_PROFILE_LIMITATION],
+        "source_references": [
+            {
+                "external_id": repository.external_id,
+                "kind": "repository_identity",
+                "name": repository.name,
+            }
+        ],
     }
 
 
@@ -230,6 +252,181 @@ class ProductUIFacade:
         authorize_action(actor=self.actor, action=action, repository_id=repository.id)
         return repository
 
+    def _visible_scope_ids(self, *, repository_id: uuid.UUID, action: Action) -> set[uuid.UUID]:
+        """Resolve scope visibility before any scoped product records are queried."""
+        candidates = AccessScope.objects.filter(
+            organization_id=self.actor.organization_id,
+            is_active=True,
+        ).values_list("id", flat=True)
+        return {
+            scope_id
+            for scope_id in candidates
+            if _authorized(self.actor, action, repository_id, scope_id)
+        }
+
+    def _scoped_repository_boundary(
+        self,
+        *,
+        repositories: list[Repository],
+        action: Action,
+        repository_field: str = "repository_id",
+        scope_field: str = "access_scope_id",
+    ) -> Q:
+        boundary = Q(pk__in=[])
+        for repository in repositories:
+            scope_ids = self._visible_scope_ids(repository_id=repository.id, action=action)
+            scope_boundary = Q(**{f"{scope_field}__in": scope_ids})
+            if _authorized(self.actor, action, repository.id, None):
+                scope_boundary |= Q(**{f"{scope_field}__isnull": True})
+            boundary |= Q(**{repository_field: repository.id}) & scope_boundary
+        return boundary
+
+    def _visible_sources(
+        self,
+        repositories: list[Repository],
+    ) -> QuerySet[SourceConnection]:
+        boundary = self._scoped_repository_boundary(
+            repositories=repositories,
+            action=Action.SOURCE_VIEW,
+        )
+        return (
+            SourceConnection.objects.filter(
+                organization_id=self.actor.organization_id,
+            )
+            .filter(boundary)
+            .exclude(state=SourceConnection.State.REVOKED)
+        )
+
+    def _visible_packets(
+        self,
+        repositories: list[Repository],
+    ) -> QuerySet[ContextPacketRecord]:
+        return ContextPacketRecord.objects.filter(
+            organization_id=self.actor.organization_id,
+        ).filter(
+            self._scoped_repository_boundary(
+                repositories=repositories,
+                action=Action.MCP_CONTEXT,
+            )
+        )
+
+    def _visible_assurance_runs(
+        self,
+        repositories: list[Repository],
+    ) -> QuerySet[AssuranceRun]:
+        boundary = Q(pk__in=[])
+        for repository in repositories:
+            scope_ids = self._visible_scope_ids(
+                repository_id=repository.id,
+                action=Action.ASSURANCE_VIEW,
+            )
+            repository_match = Q(repository_id=repository.id) | Q(
+                repository_external_id=repository.external_id
+            )
+            scoped_context = Q(context_packet__access_scope_id__in=scope_ids) | (
+                Q(context_packet__isnull=True)
+                & (
+                    Q(context_artifact__isnull=True)
+                    | Q(context_artifact__access_scope_id__isnull=True)
+                    | Q(context_artifact__access_scope_id__in=scope_ids)
+                )
+            )
+            boundary |= repository_match & scoped_context
+        return AssuranceRun.objects.filter(
+            organization_id=self.actor.organization_id,
+        ).filter(boundary)
+
+    def _visible_manifests(
+        self,
+        repositories: list[Repository],
+    ) -> QuerySet[EvidenceManifest]:
+        return EvidenceManifest.objects.filter(
+            organization_id=self.actor.organization_id,
+        ).filter(
+            self._scoped_repository_boundary(
+                repositories=repositories,
+                action=Action.EVIDENCE_VIEW,
+            )
+        )
+
+    def _visible_audit_events(
+        self,
+        repositories: list[Repository],
+    ) -> QuerySet[AuditEvent]:
+        source_ids = set(self._visible_sources(repositories).values_list("id", flat=True))
+        sync_run_ids = set(
+            SyncRun.objects.filter(
+                organization_id=self.actor.organization_id,
+                source_connection_id__in=source_ids,
+            ).values_list("id", flat=True)
+        )
+        assertion_ids: set[uuid.UUID] = set()
+        for repository in repositories:
+            assertion_ids.update(
+                authorized_assertions(
+                    actor=self.actor,
+                    repository_id=repository.id,
+                    action=Action.KNOWLEDGE_VIEW,
+                ).values_list("id", flat=True)
+            )
+        proposal_ids = set(
+            KnowledgeProposalScope.objects.filter(
+                organization_id=self.actor.organization_id,
+            )
+            .filter(
+                self._scoped_repository_boundary(
+                    repositories=repositories,
+                    action=Action.KNOWLEDGE_VIEW,
+                )
+            )
+            .values_list("knowledge_proposal_id", flat=True)
+        )
+        run_ids = set(self._visible_assurance_runs(repositories).values_list("id", flat=True))
+        manifest_ids = set(self._visible_manifests(repositories).values_list("id", flat=True))
+        work_ids = set(
+            WorkItem.objects.filter(organization_id=self.actor.organization_id)
+            .filter(
+                self._scoped_repository_boundary(
+                    repositories=repositories,
+                    action=Action.WORK_VIEW,
+                )
+            )
+            .values_list("id", flat=True)
+        )
+        visible_scope_ids: set[uuid.UUID] = set()
+        for repository in repositories:
+            visible_scope_ids.update(
+                self._visible_scope_ids(
+                    repository_id=repository.id,
+                    action=Action.ARTIFACT_VIEW,
+                )
+            )
+        artifact_ids = set(
+            ImmutableArtifact.objects.filter(
+                organization_id=self.actor.organization_id,
+                access_scope_id__in=visible_scope_ids,
+            ).values_list("id", flat=True)
+        )
+        visibility = (
+            Q(target_type="organization", target_id=self.actor.organization_id)
+            | Q(target_type="membership")
+            | Q(target_type="repositoryprofile")
+            | Q(target_type="repositoryaccesstoken")
+            | Q(target_type="sourceconnection", target_id__in=source_ids)
+            | Q(target_type="syncrun", target_id__in=sync_run_ids)
+            | Q(target_type="accesssnapshot", target_id__in=source_ids)
+            | Q(target_type="knowledgeassertion", target_id__in=assertion_ids)
+            | Q(target_type="knowledgeproposal", target_id__in=proposal_ids)
+            | Q(target_type="assurancerun", target_id__in=run_ids)
+            | Q(target_type="evidencemanifest", target_id__in=manifest_ids)
+            | Q(target_type="workitem", target_id__in=work_ids)
+            | Q(target_type="immutable_artifact", target_id__in=artifact_ids)
+            | Q(target_type="accessscope", target_id__in=visible_scope_ids)
+        )
+        return AuditEvent.objects.filter(
+            organization_id=self.actor.organization_id,
+        ).filter(visibility)
+
     def shell(self) -> dict[str, object]:
         organization = Organization.objects.get(id=self.actor.organization_id)
         repositories = self._repositories()
@@ -258,10 +455,7 @@ class ProductUIFacade:
         repositories = self._repositories()
         repository_ids = [item.id for item in repositories]
         sources = list(
-            SourceConnection.objects.filter(
-                organization_id=self.actor.organization_id,
-                repository_id__in=repository_ids,
-            ).order_by("display_name", "id")[:PAGE_LIMIT]
+            self._visible_sources(repositories).order_by("display_name", "id")[:PAGE_LIMIT]
         )
         profiles = {
             profile.repository_id: profile
@@ -270,25 +464,17 @@ class ProductUIFacade:
                 repository_id__in=repository_ids,
             )
         }
-        settings_record = OrganizationProductSettings.objects.filter(
-            organization_id=self.actor.organization_id
-        ).first()
-        latest_packet = (
-            ContextPacketRecord.objects.filter(
-                organization_id=self.actor.organization_id,
-                repository_id__in=repository_ids,
-            )
-            .order_by("-generated_at")
-            .first()
+        settings_record, _created = OrganizationProductSettings.objects.get_or_create(
+            organization_id=self.actor.organization_id,
+            defaults={
+                "retention_days": 365,
+                "model_processing": OrganizationProductSettings.ModelProcessing.DISABLED,
+                "skill_distribution": OrganizationProductSettings.SkillDistribution.SELF_SERVICE,
+                "assurance_mode": OrganizationProductSettings.AssuranceMode.OBSERVE,
+            },
         )
-        latest_run = (
-            AssuranceRun.objects.filter(
-                organization_id=self.actor.organization_id,
-                repository_id__in=repository_ids,
-            )
-            .order_by("-created_at")
-            .first()
-        )
+        latest_packet = self._visible_packets(repositories).order_by("-generated_at").first()
+        latest_run = self._visible_assurance_runs(repositories).order_by("-created_at").first()
         binding_count = GitHubRepositoryBinding.objects.filter(
             organization_id=self.actor.organization_id,
             repository_id__in=repository_ids,
@@ -388,13 +574,8 @@ class ProductUIFacade:
 
     def home(self) -> dict[str, object]:
         repositories = self._repositories()
-        repository_ids = [item.id for item in repositories]
-        external_ids = [item.external_id for item in repositories]
         sources = list(
-            SourceConnection.objects.filter(
-                organization_id=self.actor.organization_id,
-                repository_id__in=repository_ids,
-            )
+            self._visible_sources(repositories)
             .filter(
                 Q(state__in=[SourceConnection.State.DEGRADED, SourceConnection.State.FAILED])
                 | Q(last_successful_sync_at__isnull=True)
@@ -402,12 +583,7 @@ class ProductUIFacade:
             .order_by("-updated_at")[:8]
         )
         runs = list(
-            AssuranceRun.objects.filter(
-                organization_id=self.actor.organization_id,
-            )
-            .filter(
-                Q(repository_id__in=repository_ids) | Q(repository_external_id__in=external_ids)
-            )
+            self._visible_assurance_runs(repositories)
             .filter(
                 Q(readiness__in=["BLOCKED", "STALE", "FAILED"])
                 | Q(state__in=[AssuranceRun.State.STALE, AssuranceRun.State.FAILED])
@@ -471,15 +647,12 @@ class ProductUIFacade:
         try:
             authorize_action(actor=self.actor, action=Action.AUDIT_VIEW)
             latest_audit = list(
-                AuditEvent.objects.filter(organization_id=self.actor.organization_id).order_by(
-                    "-created_at"
-                )[:6]
+                self._visible_audit_events(repositories).order_by("-created_at")[:6]
             )
         except ResourceNotFoundError:
             pass
-        current_sources = SourceConnection.objects.filter(
-            organization_id=self.actor.organization_id,
-            repository_id__in=repository_ids,
+        visible_sources = self._visible_sources(repositories)
+        current_sources = visible_sources.filter(
             state=SourceConnection.State.ACTIVE,
             last_successful_sync_at__isnull=False,
         ).count()
@@ -487,10 +660,7 @@ class ProductUIFacade:
             "attention": attention[:16],
             "repositories_count": len(repositories),
             "current_sources": current_sources,
-            "source_total": SourceConnection.objects.filter(
-                organization_id=self.actor.organization_id,
-                repository_id__in=repository_ids,
-            ).count(),
+            "source_total": visible_sources.count(),
             "latest_audit": latest_audit,
         }
 
@@ -623,33 +793,20 @@ class ProductUIFacade:
 
     def sources(self) -> dict[str, object]:
         repositories = self._repositories()
-        repository_ids = [item.id for item in repositories]
-        candidates = list(
-            SourceConnection.objects.filter(
-                organization_id=self.actor.organization_id,
-                repository_id__in=repository_ids,
-            )
+        rows = list(
+            self._visible_sources(repositories)
             .select_related("repository")
             .order_by("display_name", "external_key")[:PAGE_LIMIT]
         )
-        rows = [
-            row
-            for row in candidates
-            if row.repository_id is not None
-            and _authorized_source(
-                self.actor,
-                Action.SOURCE_VIEW,
-                row.repository_id,
-                row.id,
-                row.access_scope_id,
-                allow_revoked=True,
-            )
-        ]
         return {"sources": [{"record": row, "status": _status(row.state)} for row in rows]}
 
     def source(self, source_id: uuid.UUID) -> dict[str, object]:
+        repositories = self._repositories()
         source = get_tenant_record(
-            queryset=SourceConnection.objects.select_related("repository", "access_scope"),
+            queryset=self._visible_sources(repositories).select_related(
+                "repository",
+                "access_scope",
+            ),
             record_id=source_id,
             organization_id=self.actor.organization_id,
         )
@@ -662,7 +819,6 @@ class ProductUIFacade:
             repository_id=source.repository_id,
             source_connection_id=source.id,
             access_scope_id=source.access_scope_id,
-            allow_revoked_source=True,
         )
         runs = list(
             SyncRun.objects.filter(
@@ -687,7 +843,6 @@ class ProductUIFacade:
                 source.repository_id,
                 source.id,
                 source.access_scope_id,
-                allow_revoked=True,
             ),
         }
 
@@ -754,24 +909,20 @@ class ProductUIFacade:
         else:
             assertions = assertions.filter(review_state=KnowledgeAssertion.ReviewState.UNREVIEWED)
         assertion_rows = list(assertions.distinct().order_by("-observed_at")[:PAGE_LIMIT])
-        proposal_candidates = list(
+        proposal_scopes = list(
             KnowledgeProposalScope.objects.filter(
                 organization_id=self.actor.organization_id,
                 repository=selected,
             )
+            .filter(
+                self._scoped_repository_boundary(
+                    repositories=[selected],
+                    action=Action.KNOWLEDGE_VIEW,
+                )
+            )
             .select_related("knowledge_proposal", "assertion")
             .order_by("-created_at")[:PAGE_LIMIT]
         )
-        proposal_scopes = [
-            scope
-            for scope in proposal_candidates
-            if _authorized(
-                self.actor,
-                Action.KNOWLEDGE_VIEW,
-                selected.id,
-                scope.access_scope_id,
-            )
-        ]
         return {
             "selected_repository": selected,
             "assertions": [
@@ -825,37 +976,70 @@ class ProductUIFacade:
             )
         if decision != "CORRECT" or not correction.strip():
             raise ValueError("A supported decision and correction text are required")
-        assertion = (
-            authorized_assertions(
+        with transaction.atomic():
+            assertion: KnowledgeAssertion = get_tenant_record_for_update(
+                queryset=KnowledgeAssertion.objects.all(),
+                record_id=assertion_id,
+                organization_id=self.actor.organization_id,
+            )
+            if assertion.access_scope_id is None:
+                raise ResourceNotFoundError("Governed record was not found")
+            authorization = authorize_action(
+                actor=self.actor,
+                action=Action.KNOWLEDGE_PROPOSE,
+                repository_id=repository.id,
+                access_scope_id=assertion.access_scope_id,
+            )
+            if assertion.revision != expected_revision:
+                raise DomainOperationError(
+                    "The assertion changed; review the current version before deciding."
+                )
+            current_value_hash = content_hash(assertion.value)
+            idempotency_key = content_hash(
+                {
+                    "actor_id": self.actor.actor_id,
+                    "actor_type": self.actor.actor_type,
+                    "assertion_id": str(assertion.id),
+                    "expected_revision": expected_revision,
+                    "operation": "CORRECT",
+                    "organization_id": str(self.actor.organization_id),
+                    "repository_id": str(repository.id),
+                }
+            )
+            request_hash = content_hash(
+                {
+                    "correction": correction.strip(),
+                    "current_value_hash": current_value_hash,
+                    "idempotency_key": idempotency_key,
+                }
+            )
+            existing = (
+                KnowledgeProposalScope.objects.select_related("knowledge_proposal")
+                .filter(
+                    organization_id=self.actor.organization_id,
+                    idempotency_key=idempotency_key,
+                )
+                .first()
+            )
+            if existing is not None:
+                if existing.request_hash != request_hash:
+                    raise DomainOperationError(
+                        "The correction retry conflicts with the original request."
+                    )
+                return existing.knowledge_proposal
+            citations = authorized_assertion_citations(
                 actor=self.actor,
                 repository_id=repository.id,
-                action=Action.KNOWLEDGE_PROPOSE,
+                assertion_id=assertion.id,
             )
-            .filter(id=assertion_id)
-            .first()
-        )
-        if assertion is None or assertion.access_scope_id is None:
-            raise ResourceNotFoundError("Governed record was not found")
-        citations = authorized_assertion_citations(
-            actor=self.actor,
-            repository_id=repository.id,
-            assertion_id=assertion.id,
-        )
-        sources = [
-            {
-                "type": "assertion",
-                "id": str(assertion.id),
-                "locator": citation.get("locator", ""),
-            }
-            for citation in citations
-        ] or [{"type": "assertion", "id": str(assertion.id)}]
-        authorization = authorize_action(
-            actor=self.actor,
-            action=Action.KNOWLEDGE_PROPOSE,
-            repository_id=repository.id,
-            access_scope_id=assertion.access_scope_id,
-        )
-        with transaction.atomic():
+            sources = [
+                {
+                    "type": "assertion",
+                    "id": str(assertion.id),
+                    "locator": citation.get("locator", ""),
+                }
+                for citation in citations
+            ] or [{"type": "assertion", "id": str(assertion.id)}]
             proposal = submit_knowledge_proposal(
                 actor=replace(self.actor, authorization_path=authorization.authorization_path),
                 summary=f"Correction proposed for {assertion.subject_key}",
@@ -863,7 +1047,7 @@ class ProductUIFacade:
                     {
                         "operation": "CORRECT",
                         "assertion_id": str(assertion.id),
-                        "current_value_hash": content_hash(assertion.value),
+                        "current_value_hash": current_value_hash,
                         "proposed_value": correction.strip(),
                     }
                 ],
@@ -875,33 +1059,23 @@ class ProductUIFacade:
                 repository=repository,
                 access_scope_id=assertion.access_scope_id,
                 assertion=assertion,
+                idempotency_key=idempotency_key,
+                request_hash=request_hash,
             )
             return proposal
 
     def repository(self, repository_id: uuid.UUID) -> dict[str, object]:
         repository = self._repository(repository_id, action=Action.REPOSITORY_VIEW)
-        profile = RepositoryProfile.objects.filter(
+        profile, _created = RepositoryProfile.objects.get_or_create(
             organization_id=self.actor.organization_id,
             repository=repository,
-        ).first()
-        source_candidates = list(
-            SourceConnection.objects.filter(
-                organization_id=self.actor.organization_id,
-                repository=repository,
-            ).order_by("display_name", "external_key")[:PAGE_LIMIT]
+            defaults=_profile_defaults(repository),
         )
-        sources = [
-            source
-            for source in source_candidates
-            if _authorized_source(
-                self.actor,
-                Action.SOURCE_VIEW,
-                repository.id,
-                source.id,
-                source.access_scope_id,
-                allow_revoked=True,
-            )
-        ]
+        sources = list(
+            self._visible_sources([repository]).order_by("display_name", "external_key")[
+                :PAGE_LIMIT
+            ]
+        )
         policy_candidates = list(
             Policy.objects.filter(
                 organization_id=self.actor.organization_id,
@@ -920,11 +1094,7 @@ class ProductUIFacade:
                 policy.access_scope_id,
             )
         ]
-        runs = list(
-            AssuranceRun.objects.filter(organization_id=self.actor.organization_id)
-            .filter(Q(repository=repository) | Q(repository_external_id=repository.external_id))
-            .order_by("-created_at")[:12]
-        )
+        runs = list(self._visible_assurance_runs([repository]).order_by("-created_at")[:12])
         unresolved = list(
             authorized_assertions(
                 actor=self.actor,
@@ -972,9 +1142,14 @@ class ProductUIFacade:
             raise DomainOperationError("This web installation is read-only")
         repository = self._repository(repository_id, action=Action.WORK_MANAGE)
         with transaction.atomic():
+            fallback_profile, _created = RepositoryProfile.objects.get_or_create(
+                organization_id=self.actor.organization_id,
+                repository=repository,
+                defaults=_profile_defaults(repository),
+            )
             profile = get_tenant_record(
                 queryset=RepositoryProfile.objects.select_for_update(),
-                record_id=RepositoryProfile.objects.get(repository=repository).id,
+                record_id=fallback_profile.id,
                 organization_id=self.actor.organization_id,
             )
             if profile.revision != expected_revision:
@@ -1079,10 +1254,19 @@ class ProductUIFacade:
             ).order_by("position")[:PAGE_LIMIT]
         )
         criterion_ids = [item.id for item in criteria]
+        evidence_scope_ids = self._visible_scope_ids(
+            repository_id=work_item.repository_id,
+            action=Action.EVIDENCE_VIEW,
+        )
         evidence = list(
             CriterionEvidence.objects.filter(
                 organization_id=self.actor.organization_id,
                 criterion_id__in=criterion_ids,
+                access_scope_id__in=evidence_scope_ids,
+            )
+            .filter(
+                Q(evidence__isnull=True)
+                | Q(evidence__manifest__access_scope_id__in=evidence_scope_ids)
             )
             .select_related("evidence")
             .order_by("criterion_id", "-created_at")[:PAGE_LIMIT]
@@ -1199,28 +1383,21 @@ class ProductUIFacade:
 
     def assurance(self) -> dict[str, object]:
         repositories = self._repositories()
-        repository_ids = [item.id for item in repositories]
-        external_ids = [item.external_id for item in repositories]
         for repository in repositories:
             authorize_action(
                 actor=self.actor,
                 action=Action.ASSURANCE_VIEW,
                 repository_id=repository.id,
             )
-        runs = list(
-            AssuranceRun.objects.filter(organization_id=self.actor.organization_id)
-            .filter(
-                Q(repository_id__in=repository_ids) | Q(repository_external_id__in=external_ids)
-            )
-            .order_by("-created_at")[:PAGE_LIMIT]
-        )
+        runs = list(self._visible_assurance_runs(repositories).order_by("-created_at")[:PAGE_LIMIT])
         return {
             "runs": [{"record": run, "status": _status(run.readiness or run.state)} for run in runs]
         }
 
     def assurance_detail(self, run_id: uuid.UUID) -> dict[str, object]:
+        repositories = self._repositories()
         run = get_tenant_record(
-            queryset=AssuranceRun.objects.select_related(
+            queryset=self._visible_assurance_runs(repositories).select_related(
                 "repository",
                 "pull_request_revision",
                 "work_item_revision",
@@ -1241,11 +1418,12 @@ class ProductUIFacade:
             raise ResourceNotFoundError("Governed record was not found")
         self._repository(repository.id, action=Action.ASSURANCE_VIEW)
         runs = list(
-            AssuranceRun.objects.filter(
-                organization_id=self.actor.organization_id,
+            self._visible_assurance_runs([repository])
+            .filter(
                 repository_external_id=run.repository_external_id,
                 pull_request_number=run.pull_request_number,
-            ).order_by("-created_at")[:PAGE_LIMIT]
+            )
+            .order_by("-created_at")[:PAGE_LIMIT]
         )
         checks = list(
             AssuranceCheck.objects.filter(
@@ -1262,7 +1440,7 @@ class ProductUIFacade:
         evidence = list(
             Evidence.objects.filter(
                 organization_id=self.actor.organization_id,
-                manifest__repository=repository,
+                manifest_id__in=self._visible_manifests([repository]).values("id"),
                 commit_sha=run.head_commit,
             ).order_by("kind", "name")[:PAGE_LIMIT]
         )
@@ -1306,16 +1484,8 @@ class ProductUIFacade:
 
     def skills(self) -> dict[str, object]:
         repositories = self._repositories()
-        repository_ids = [item.id for item in repositories]
-        last_packet = (
-            ContextPacketRecord.objects.filter(
-                organization_id=self.actor.organization_id,
-                repository_id__in=repository_ids,
-            )
-            .order_by("-generated_at")
-            .first()
-        )
-        diagnostic = diagnostics_payload()
+        last_packet = self._visible_packets(repositories).order_by("-generated_at").first()
+        diagnostic = probe_mcp_diagnostics()
         settings_record = OrganizationProductSettings.objects.filter(
             organization_id=self.actor.organization_id
         ).first()
@@ -1339,7 +1509,7 @@ class ProductUIFacade:
 
     def audit(self, filters: dict[str, str]) -> dict[str, object]:
         authorize_action(actor=self.actor, action=Action.AUDIT_VIEW)
-        events = AuditEvent.objects.filter(organization_id=self.actor.organization_id)
+        events = self._visible_audit_events(self._repositories())
         if filters.get("actor"):
             events = events.filter(actor_id__icontains=filters["actor"][:200])
         if filters.get("action"):

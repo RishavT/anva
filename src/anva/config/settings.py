@@ -8,7 +8,7 @@ from urllib.parse import unquote, urlparse
 
 from django.core.exceptions import ImproperlyConfigured
 
-BASE_DIR = Path(__file__).resolve().parents[3]
+PACKAGE_DIR = Path(__file__).resolve().parents[1]
 
 
 def env_bool(name: str, *, default: bool) -> bool:
@@ -68,6 +68,24 @@ if not ANVA_PUBLIC_BASE_URL.startswith(("http://", "https://")):
 ANVA_MCP_PUBLIC_BASE_URL = os.getenv("ANVA_MCP_PUBLIC_BASE_URL", "http://localhost:8001")
 if not ANVA_MCP_PUBLIC_BASE_URL.startswith(("http://", "https://")):
     raise ImproperlyConfigured("ANVA_MCP_PUBLIC_BASE_URL must be an HTTP(S) URL")
+ANVA_MCP_URL = os.getenv("ANVA_MCP_URL", "http://mcp:8001/mcp")
+_anva_mcp_url = urlparse(ANVA_MCP_URL)
+if (
+    _anva_mcp_url.scheme not in {"http", "https"}
+    or not _anva_mcp_url.hostname
+    or _anva_mcp_url.username is not None
+    or _anva_mcp_url.password is not None
+    or _anva_mcp_url.query
+    or _anva_mcp_url.fragment
+):
+    raise ImproperlyConfigured("ANVA_MCP_URL must be a credential-free HTTP(S) URL")
+ANVA_MCP_ALLOWED_HOSTS = tuple(
+    host.strip().lower()
+    for host in os.getenv("ANVA_MCP_ALLOWED_HOSTS", "mcp").split(",")
+    if host.strip()
+)
+if not ANVA_MCP_ALLOWED_HOSTS or _anva_mcp_url.hostname.lower() not in ANVA_MCP_ALLOWED_HOSTS:
+    raise ImproperlyConfigured("ANVA_MCP_URL host must be listed in ANVA_MCP_ALLOWED_HOSTS")
 ANVA_MCP_READ_ONLY = env_bool("ANVA_MCP_READ_ONLY", default=False)
 ANVA_GITHUB_WEBHOOK_SECRETS = tuple(
     value
@@ -133,7 +151,7 @@ ASGI_APPLICATION = "anva.config.asgi.application"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [BASE_DIR / "src" / "anva" / "templates"],
+        "DIRS": [PACKAGE_DIR / "templates"],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -158,8 +176,8 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = "static/"
-STATIC_ROOT = Path("/app/staticfiles") if ENVIRONMENT == "test" else BASE_DIR / "staticfiles"
-STATICFILES_DIRS = [BASE_DIR / "src" / "anva" / "static"]
+STATIC_ROOT = Path("/app/staticfiles")
+STATICFILES_DIRS = [PACKAGE_DIR / "static"]
 STORAGES = {
     "staticfiles": {
         "BACKEND": (

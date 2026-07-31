@@ -1,17 +1,12 @@
-const navigationToggle = document.querySelector("[data-nav-toggle]");
 const navigation = document.querySelector("[data-navigation]");
 
-if (navigationToggle && navigation) {
-  navigationToggle.addEventListener("click", () => {
-    const open = navigationToggle.getAttribute("aria-expanded") !== "true";
-    navigationToggle.setAttribute("aria-expanded", String(open));
-    navigation.dataset.open = String(open);
-  });
-
+if (navigation) {
+  if (window.matchMedia("(max-width: 56rem)").matches) {
+    navigation.open = false;
+  }
   navigation.addEventListener("click", (event) => {
     if (event.target.closest("a") && window.matchMedia("(max-width: 56rem)").matches) {
-      navigationToggle.setAttribute("aria-expanded", "false");
-      navigation.dataset.open = "false";
+      navigation.open = false;
     }
   });
 }
@@ -22,9 +17,8 @@ if (errorSummary) {
 }
 
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && navigationToggle && navigation?.dataset.open === "true") {
-    navigationToggle.setAttribute("aria-expanded", "false");
-    navigation.dataset.open = "false";
-    navigationToggle.focus();
+  if (event.key === "Escape" && navigation?.open) {
+    navigation.open = false;
+    navigation.querySelector("summary")?.focus();
   }
 });

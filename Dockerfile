@@ -20,21 +20,27 @@ COPY pyproject.toml uv.lock README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-dev
 
+FROM base AS wheel-builder
 COPY src ./src
-COPY packages/anva-skills ./packages/anva-skills
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev \
-    && python -m anva.manage collectstatic --noinput \
-    && chown -R anva:anva /app
-
-USER anva
+    uv build --wheel --out-dir /dist
 
 FROM base AS runtime
+COPY --from=wheel-builder /dist /dist
+COPY packages/anva-skills ./packages/anva-skills
+RUN uv pip install --no-deps /dist/*.whl \
+    && python -m anva.manage collectstatic --noinput \
+    && chown -R anva:anva /app
+USER anva
 CMD ["gunicorn", "anva.config.wsgi:application", "--bind=0.0.0.0:8000", "--access-logfile=-", "--error-logfile=-"]
 
 FROM base AS test
+COPY src ./src
+COPY packages/anva-skills ./packages/anva-skills
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen
 COPY tests ./tests
+RUN mkdir -p /app/staticfiles \
+    && chown -R anva:anva /app
 USER anva
 CMD ["pytest"]
 

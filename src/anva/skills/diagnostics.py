@@ -97,7 +97,7 @@ def _positive_int(value: object, *, name: str, maximum: int) -> int:
     return value
 
 
-def _validate_payload(payload: object) -> dict[str, object]:
+def validate_diagnostics_payload(payload: object) -> dict[str, object]:
     _bounded_structure(payload, nodes=[0])
     if not isinstance(payload, dict) or set(payload) != _TOP_LEVEL_FIELDS:
         raise _UnsupportedDiagnosticsError("Diagnostics fields do not match the stable contract")
@@ -111,7 +111,14 @@ def _validate_payload(payload: object) -> dict[str, object]:
     if not isinstance(endpoint, str) or len(endpoint) > 2048:
         raise _UnsupportedDiagnosticsError("Diagnostics endpoint is invalid")
     parsed_endpoint = urlsplit(endpoint)
-    if parsed_endpoint.scheme not in {"http", "https"} or not parsed_endpoint.netloc:
+    if (
+        parsed_endpoint.scheme not in {"http", "https"}
+        or not parsed_endpoint.netloc
+        or parsed_endpoint.username is not None
+        or parsed_endpoint.password is not None
+        or parsed_endpoint.query
+        or parsed_endpoint.fragment
+    ):
         raise _UnsupportedDiagnosticsError("Diagnostics endpoint is invalid")
     contract = payload["contract_version"]
     if not isinstance(contract, str) or not contract or len(contract) > 64:
@@ -140,8 +147,6 @@ def _validate_payload(payload: object) -> dict[str, object]:
         authentication["revocation"], bool
     ):
         raise _UnsupportedDiagnosticsError("Diagnostics authentication flags are invalid")
-    if authentication["rotation"] is not True or authentication["revocation"] is not True:
-        raise _UnsupportedDiagnosticsError("Diagnostics authentication flags are unsupported")
     limits = payload["limits"]
     if not isinstance(limits, dict) or set(limits) != _LIMIT_FIELDS:
         raise _UnsupportedDiagnosticsError("Diagnostics limits are invalid")
@@ -204,7 +209,7 @@ def diagnose_skills(
                 raise _UnsupportedDiagnosticsError("Diagnostics response is too large")
             try:
                 decoded = body.decode("utf-8")
-                payload = _validate_payload(json.loads(decoded))
+                payload = validate_diagnostics_payload(json.loads(decoded))
             except (json.JSONDecodeError, UnicodeDecodeError):
                 raise _UnsupportedDiagnosticsError("Diagnostics JSON is invalid") from None
     except _UnsupportedDiagnosticsError as error:

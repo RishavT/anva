@@ -17,6 +17,9 @@ x-app-environment: &app-environment
   ANVA_FILESYSTEM_ALLOWED_ROOTS: ${ANVA_FILESYSTEM_ALLOWED_ROOTS:-/fixtures}
   ANVA_API_URL: ${ANVA_API_URL:-http://api:8000/api/v1}
   ANVA_PUBLIC_BASE_URL: ${ANVA_PUBLIC_BASE_URL:-http://api:8000}
+  ANVA_WEB_READ_ONLY: ${ANVA_WEB_READ_ONLY:-false}
+  ANVA_MCP_URL: ${ANVA_MCP_URL:-http://mcp:8001/mcp}
+  ANVA_MCP_ALLOWED_HOSTS: ${ANVA_MCP_ALLOWED_HOSTS:-mcp}
   ANVA_MCP_READ_ONLY: ${ANVA_MCP_READ_ONLY:-false}
   ANVA_MCP_PUBLIC_BASE_URL: ${ANVA_MCP_PUBLIC_BASE_URL:-http://mcp:8001}
   ANVA_LOG_LEVEL: ${ANVA_LOG_LEVEL:-INFO}
@@ -272,6 +275,9 @@ services:
       ANVA_OBJECT_STORAGE_ACCESS_KEY: anva-test
       ANVA_OBJECT_STORAGE_SECRET_KEY: anva-test-only
       ANVA_PUBLIC_BASE_URL: http://testserver
+      ANVA_WEB_READ_ONLY: ${ANVA_WEB_READ_ONLY:-false}
+      ANVA_MCP_URL: ${ANVA_MCP_URL:-http://mcp:8001/mcp}
+      ANVA_MCP_ALLOWED_HOSTS: ${ANVA_MCP_ALLOWED_HOSTS:-mcp}
       ANVA_MCP_PUBLIC_BASE_URL: http://mcp:8001
       ANVA_MCP_READ_ONLY: "false"
       ANVA_GITHUB_WEBHOOK_SECRETS: test-github-webhook-secret
@@ -310,6 +316,9 @@ services:
       ANVA_OBJECT_STORAGE_ACCESS_KEY: anva-test
       ANVA_OBJECT_STORAGE_SECRET_KEY: anva-test-only
       ANVA_PUBLIC_BASE_URL: http://localhost
+      ANVA_WEB_READ_ONLY: ${ANVA_WEB_READ_ONLY:-false}
+      ANVA_MCP_URL: ${ANVA_MCP_URL:-http://mcp:8001/mcp}
+      ANVA_MCP_ALLOWED_HOSTS: ${ANVA_MCP_ALLOWED_HOSTS:-mcp}
       ANVA_MCP_PUBLIC_BASE_URL: http://mcp:8001
       ANVA_MCP_READ_ONLY: "false"
       ANVA_GITHUB_WEBHOOK_SECRETS: test-github-webhook-secret
