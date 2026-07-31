@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from copy import deepcopy
 from dataclasses import replace
 from datetime import timedelta
 
@@ -13,6 +14,7 @@ from django.db import DatabaseError, IntegrityError, connection, transaction
 from django.test import Client
 from django.utils import timezone
 
+from anva.contracts.catalog import EXAMPLES
 from anva.core.exceptions import AuthenticationError, ResourceNotFoundError
 from anva.core.models import (
     AccessGrant,
@@ -31,6 +33,8 @@ from anva.core.models import (
     SourceConnection,
 )
 from anva.core.services.authorization import NOT_FOUND_MESSAGE, Action
+from anva.core.services.context import ActorContext
+from anva.core.services.intent import import_work_item
 from anva.core.services.mcp_gateway import (
     MCPGatewayError,
     _decode_cursor,
@@ -65,9 +69,15 @@ def _gateway_tenant(label: str) -> tuple[Organization, Repository, AccessScope, 
     )
     actions = frozenset(
         {
+            Action.ARTIFACT_CREATE,
+            Action.ARTIFACT_VIEW,
+            Action.MCP_CONTEXT,
             Action.REPOSITORY_VIEW,
+            Action.SEARCH,
             Action.KNOWLEDGE_VIEW,
             Action.KNOWLEDGE_PROPOSE,
+            Action.WORK_MANAGE,
+            Action.WORK_VIEW,
         }
     )
     AccessGrant.objects.bulk_create(
@@ -89,6 +99,88 @@ def _gateway_tenant(label: str) -> tuple[Organization, Repository, AccessScope, 
         expires_at=timezone.now() + timedelta(hours=1),
     )
     return organization, repository, scope, issued.plaintext
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_codex_and_claude_workflow_traces_share_exact_authorized_packet() -> None:
+    organization, repository, scope, plaintext = _gateway_tenant("mcp-host-parity")
+    base_actor = authenticate_bearer(f"Bearer {plaintext}")
+    work_payload = deepcopy(EXAMPLES["work-item-import"])
+    work_payload.update(
+        {
+            "organization_id": str(organization.id),
+            "repository_id": str(repository.id),
+            "access_scope_id": str(scope.id),
+            "work_item_id": str(uuid.uuid4()),
+            "external_key": "ANVA-HOST-10",
+            "title": "Host-neutral workflow parity",
+            "summary": "Retrieve the same bounded context from each supported host.",
+            "status": "READY",
+        }
+    )
+    imported = import_work_item(actor=base_actor, payload=work_payload)
+    work_item = imported.work_item
+    task = "Implement ANVA-HOST-10 without changing unrelated services"
+    repository_arguments: dict[str, object] = {
+        "contract_version": "1",
+        "repository_id": str(repository.id),
+    }
+    work_arguments: dict[str, object] = {
+        **repository_arguments,
+        "external_key": work_item.external_key,
+    }
+    context_arguments: dict[str, object] = {
+        **repository_arguments,
+        "task": task,
+        "phase": "PREPARE",
+    }
+
+    def invoke(
+        actor: ActorContext,
+    ) -> tuple[list[dict[str, object]], dict[str, object], list[uuid.UUID]]:
+        trace: list[dict[str, object]] = []
+        request_ids: list[uuid.UUID] = []
+        for tool_name, arguments in (
+            ("anva.resolve_repository", repository_arguments),
+            ("anva.resolve_work_item", work_arguments),
+            ("anva.get_context_packet", context_arguments),
+        ):
+            request_id = uuid.uuid4()
+            request_ids.append(request_id)
+            trace.append(
+                dispatch_tool(
+                    actor=replace(actor, request_id=request_id),
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    transport="MCP",
+                )
+            )
+        return trace, trace[-1], request_ids
+
+    codex_trace, codex_context, codex_request_ids = invoke(base_actor)
+    claude_trace, claude_context, claude_request_ids = invoke(base_actor)
+
+    assert codex_trace[:2] == claude_trace[:2]
+    codex_data = codex_context["data"]
+    claude_data = claude_context["data"]
+    assert isinstance(codex_data, dict)
+    assert isinstance(claude_data, dict)
+    assert codex_data["packet_id"] == claude_data["packet_id"]
+    codex_packet = codex_data["packet"]
+    claude_packet = claude_data["packet"]
+    assert isinstance(codex_packet, dict)
+    assert isinstance(claude_packet, dict)
+    assert codex_packet["content_hash"] == claude_packet["content_hash"]
+    assert codex_packet["items"] == claude_packet["items"]
+    assert codex_packet["limitations"] == claude_packet["limitations"]
+    assert codex_data["created"] is True
+    assert claude_data["created"] is False
+    for request_ids in (codex_request_ids, claude_request_ids):
+        assert [
+            MCPToolInvocation.objects.get(request_id=request_id).tool_name
+            for request_id in request_ids
+        ] == ["anva.resolve_repository", "anva.resolve_work_item", "anva.get_context_packet"]
 
 
 @pytest.mark.integration

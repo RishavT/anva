@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.anva.dev/skills/v1/preflight.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "review_target",
+    "advisory_status",
+    "requirements_coverage",
+    "policy_findings",
+    "checks",
+    "missing_evidence",
+    "conflicts",
+    "assumptions",
+    "limitations",
+    "anva_sources",
+    "proposal"
+  ],
+  "properties": {
+    "review_target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "revision"],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    },
+    "advisory_status": {"enum": ["LOCAL_ADVISORY", "UNVERIFIED"]},
+    "requirements_coverage": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/materialClaims"
+    },
+    "policy_findings": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/materialClaims"
+    },
+    "checks": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/localItems"
+    },
+    "missing_evidence": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/localItems"
+    },
+    "conflicts": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/materialClaims"
+    },
+    "assumptions": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/localItems"
+    },
+    "limitations": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/localItems"
+    },
+    "anva_sources": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/normalizedSources"
+    },
+    "proposal": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/reviewProposal"
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"advisory_status": {"const": "LOCAL_ADVISORY"}}},
+      "then": {"properties": {"anva_sources": {"minItems": 1}}}
+    },
+    {
+      "if": {"properties": {"advisory_status": {"const": "UNVERIFIED"}}},
+      "then": {
+        "properties": {
+          "requirements_coverage": {"maxItems": 0},
+          "policy_findings": {"maxItems": 0},
+          "conflicts": {"maxItems": 0},
+          "anva_sources": {"maxItems": 0},
+          "proposal": {"type": "null"}
+        }
+      }
+    }
+  ]
+}

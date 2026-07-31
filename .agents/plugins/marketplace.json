@@ -1,0 +1,20 @@
+{
+  "interface": {
+    "displayName": "Anva Repository Plugins"
+  },
+  "name": "anva-repository",
+  "plugins": [
+    {
+      "category": "Developer Tools",
+      "name": "anva",
+      "policy": {
+        "authentication": "ON_INSTALL",
+        "installation": "AVAILABLE"
+      },
+      "source": {
+        "path": "./packages/anva-skills/generated/codex-plugin",
+        "source": "local"
+      }
+    }
+  ]
+}

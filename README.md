@@ -19,6 +19,12 @@ revocation-aware retries. It intentionally
 does **not** contain a coding-agent runtime, workflow engine, graph database, or customer-code
 sandbox.
 
+The repository also packages host-neutral `anva-prepare`, `anva-build`,
+`anva-preflight`, and explicit-only `anva-learn` workflows for Codex and Claude
+Code. Generated repository skills and installable plugins use the existing
+authenticated MCP facade; packages contain no customer knowledge, endpoint, or
+credential.
+
 ## Prerequisites
 
 - Docker Engine 24+ with the Docker Compose v2 plugin
@@ -72,6 +78,7 @@ make lint
 make type
 make migrations-check
 make contracts-check
+make skills-check
 make unit
 make integration
 make corpus
@@ -108,6 +115,12 @@ Review and commit both `pyproject.toml` and `uv.lock`.
 Regenerate and verify the checked-in JSON Schema, OpenAPI, MCP, and example contracts with
 `make contracts` and `make contracts-check`. Generated contract files are deterministic and
 must not be edited directly.
+
+Render, package, and exact-check the Codex/Claude distributions with
+`make skills-render`, `make skills-package`, and `make skills-check`. Fresh
+installation, environment-only MCP handoff, checksums, diagnostics, read-only
+behavior, and provider limitations are documented in
+[the developer skills runbook](docs/runbooks/developer-skills.md).
 
 ## CLI and common operations
 
@@ -217,6 +230,7 @@ src/anva/entrypoints/  API-adjacent CLI, worker, and MCP process boundaries
 src/anva/templates/    Server-rendered semantic HTML
 src/anva/static/       Browser-native CSS and JavaScript
 tests/                 Unit, integration, contract, and smoke suites
+packages/anva-skills/  Portable workflow source and generated host distributions
 docs/product/          Canonical product requirements
 docs/adr/              Architecture decisions
 docs/runbooks/         Operational procedures

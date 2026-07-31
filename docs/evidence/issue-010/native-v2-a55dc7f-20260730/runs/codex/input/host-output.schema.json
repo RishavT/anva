@@ -1,0 +1,255 @@
+{
+  "$defs": {
+    "boundedString": {
+      "type": "string"
+    },
+    "localItem": {
+      "additionalProperties": false,
+      "properties": {
+        "basis": {
+          "enum": [
+            "LOCAL",
+            "USER",
+            "TOOL",
+            "LIMITATION"
+          ],
+          "type": "string"
+        },
+        "material": {
+          "enum": [
+            false
+          ],
+          "type": "boolean"
+        },
+        "summary": {
+          "$ref": "#/$defs/boundedString"
+        }
+      },
+      "required": [
+        "basis",
+        "material",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "localItems": {
+      "items": {
+        "$ref": "#/$defs/localItem"
+      },
+      "maxItems": 128,
+      "type": "array"
+    },
+    "materialClaim": {
+      "additionalProperties": false,
+      "properties": {
+        "freshness": {
+          "enum": [
+            "CURRENT",
+            "STALE",
+            "UNKNOWN"
+          ],
+          "type": "string"
+        },
+        "inferred": {
+          "type": "boolean"
+        },
+        "material": {
+          "enum": [
+            true
+          ],
+          "type": "boolean"
+        },
+        "source_refs": {
+          "$ref": "#/$defs/sourceRefs"
+        },
+        "summary": {
+          "$ref": "#/$defs/boundedString"
+        }
+      },
+      "required": [
+        "freshness",
+        "inferred",
+        "material",
+        "source_refs",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "materialClaims": {
+      "items": {
+        "$ref": "#/$defs/materialClaim"
+      },
+      "maxItems": 128,
+      "type": "array"
+    },
+    "normalizedSource": {
+      "additionalProperties": false,
+      "properties": {
+        "content_hash": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "locator": {
+          "type": "string"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "source_ref": {
+          "$ref": "#/$defs/sourceRef"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "content_hash",
+        "locator",
+        "observed_at",
+        "source_ref",
+        "url"
+      ],
+      "type": "object"
+    },
+    "normalizedSources": {
+      "items": {
+        "$ref": "#/$defs/normalizedSource"
+      },
+      "maxItems": 32,
+      "type": "array"
+    },
+    "reviewProposal": {
+      "additionalProperties": false,
+      "properties": {
+        "approved": {
+          "enum": [
+            false
+          ],
+          "type": "boolean"
+        },
+        "explicit_approval": {
+          "enum": [
+            true
+          ],
+          "type": "boolean"
+        },
+        "idempotency_key": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9:._-]+$",
+          "type": "string"
+        },
+        "proposal_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "review_required": {
+          "enum": [
+            true
+          ],
+          "type": "boolean"
+        },
+        "review_state": {
+          "enum": [
+            "PROPOSED"
+          ],
+          "type": "string"
+        },
+        "source_refs": {
+          "$ref": "#/$defs/sourceRefs"
+        }
+      },
+      "required": [
+        "approved",
+        "explicit_approval",
+        "idempotency_key",
+        "proposal_id",
+        "review_required",
+        "review_state",
+        "source_refs"
+      ],
+      "type": "object"
+    },
+    "sourceRef": {
+      "pattern": "^S[1-9][0-9]{0,3}$",
+      "type": "string"
+    },
+    "sourceRefs": {
+      "items": {
+        "$ref": "#/$defs/sourceRef"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "type": "array"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "acceptance_criteria": {
+      "$ref": "#/$defs/localItems"
+    },
+    "affected_systems_and_owners": {
+      "$ref": "#/$defs/materialClaims"
+    },
+    "anva_sources": {
+      "$ref": "#/$defs/normalizedSources"
+    },
+    "assumptions": {
+      "$ref": "#/$defs/localItems"
+    },
+    "conflicts": {
+      "$ref": "#/$defs/materialClaims"
+    },
+    "decisions_and_policies": {
+      "$ref": "#/$defs/materialClaims"
+    },
+    "facts": {
+      "$ref": "#/$defs/materialClaims"
+    },
+    "implementation_plan": {
+      "$ref": "#/$defs/localItems"
+    },
+    "limitations": {
+      "$ref": "#/$defs/localItems"
+    },
+    "out_of_scope": {
+      "$ref": "#/$defs/localItems"
+    },
+    "problem": {
+      "type": "string"
+    },
+    "requirements": {
+      "$ref": "#/$defs/materialClaims"
+    },
+    "status": {
+      "enum": [
+        "GROUNDED",
+        "UNVERIFIED"
+      ],
+      "type": "string"
+    },
+    "unresolved_questions": {
+      "$ref": "#/$defs/localItems"
+    },
+    "verification_plan": {
+      "$ref": "#/$defs/localItems"
+    }
+  },
+  "required": [
+    "acceptance_criteria",
+    "affected_systems_and_owners",
+    "anva_sources",
+    "assumptions",
+    "conflicts",
+    "decisions_and_policies",
+    "facts",
+    "implementation_plan",
+    "limitations",
+    "out_of_scope",
+    "problem",
+    "requirements",
+    "status",
+    "unresolved_questions",
+    "verification_plan"
+  ],
+  "type": "object"
+}

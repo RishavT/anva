@@ -21,6 +21,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-dev
 
 COPY src ./src
+COPY packages/anva-skills ./packages/anva-skills
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev \
     && python -m anva.manage collectstatic --noinput \

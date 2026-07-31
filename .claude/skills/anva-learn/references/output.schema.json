@@ -1,0 +1,189 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.anva.dev/skills/v1/learn.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "proposal_type",
+    "target",
+    "proposed_content",
+    "rationale",
+    "source_references",
+    "normalized_sources",
+    "preview",
+    "explicit_approval",
+    "submission_status",
+    "review_state",
+    "approved",
+    "review_required",
+    "proposal_id",
+    "idempotency_key",
+    "limitations"
+  ],
+  "properties": {
+    "proposal_type": {
+      "enum": ["correction", "relationship", "decision", "work_summary"]
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "identifier"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "identifier": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    },
+    "proposed_content": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary"],
+      "properties": {
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "patch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384
+        }
+      }
+    },
+    "rationale": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "source_references": {
+      "type": "array",
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/sourceRef"
+      }
+    },
+    "normalized_sources": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/normalizedSources"
+    },
+    "preview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proposal_type",
+        "target",
+        "proposed_content",
+        "rationale",
+        "source_references"
+      ],
+      "properties": {
+        "proposal_type": {
+          "enum": ["correction", "relationship", "decision", "work_summary"]
+        },
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "identifier"],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "identifier": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          }
+        },
+        "proposed_content": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["summary"],
+          "properties": {
+            "summary": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "patch": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16384
+            }
+          }
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "source_references": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/sourceRef"
+          }
+        }
+      }
+    },
+    "explicit_approval": {"type": "boolean"},
+    "submission_status": {"enum": ["NOT_SUBMITTED", "PROPOSED"]},
+    "review_state": {"enum": ["DRAFT", "PROPOSED"]},
+    "approved": {"const": false},
+    "review_required": {"const": true},
+    "proposal_id": {
+      "type": ["string", "null"],
+      "format": "uuid",
+      "maxLength": 64
+    },
+    "idempotency_key": {
+      "type": ["string", "null"],
+      "minLength": 8,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9:._-]+$"
+    },
+    "limitations": {
+      "$ref": "https://schemas.anva.dev/skills/v1/common.schema.json#/$defs/localItems"
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "explicit_approval": {"const": false},
+        "submission_status": {"const": "NOT_SUBMITTED"},
+        "review_state": {"const": "DRAFT"},
+        "approved": {"const": false},
+        "review_required": {"const": true},
+        "proposal_id": {"type": "null"},
+        "idempotency_key": {"type": "null"}
+      }
+    },
+    {
+      "properties": {
+        "source_references": {"minItems": 1},
+        "normalized_sources": {"minItems": 1},
+        "preview": {
+          "properties": {"source_references": {"minItems": 1}}
+        },
+        "explicit_approval": {"const": true},
+        "submission_status": {"const": "PROPOSED"},
+        "review_state": {"const": "PROPOSED"},
+        "approved": {"const": false},
+        "review_required": {"const": true},
+        "proposal_id": {"type": "string"},
+        "idempotency_key": {"type": "string"}
+      }
+    }
+  ]
+}

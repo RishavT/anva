@@ -1,0 +1,32 @@
+{
+  "candidate_commit_sha": "a55dc7f43e90d74a9f7866e544a19db536f6c83e",
+  "commitment_id": "c603d9ab7f21df6e057a7eb2494efd14176e8acf39bc34666aa9d08aa1cb46e0",
+  "committed_at": "2026-07-30T21:53:10.767376+00:00",
+  "external_timestamp_url": "https://github.com/RishavT/anva/pull/23#issuecomment-5136648497",
+  "format_version": 1,
+  "grader_sha256": "d91df2fe961276404049d8c71f5da06477b927dc5e8a1f12e610916565d6de2d",
+  "hosts": {
+    "claude": {
+      "canonical_schema_sha256": "cb0c90360a47cbc037dfa1b166abf05b56f43933a1b0cd91e4ab9654b916486a",
+      "host": "claude",
+      "host_version_target": "2.1.220 (Claude Code)",
+      "input_artifact_sha256": "c606edf7f0db2d03df532ceff5ebed4295ccd05afc65153c7ca57af68951cc5a",
+      "input_hashes_sha256": "c606edf7f0db2d03df532ceff5ebed4295ccd05afc65153c7ca57af68951cc5a",
+      "isolation_manifest_sha256": "78f7a4a84c87a070f42733546507fa8f533976c6645a5ba5232c3622eec9eddc",
+      "provider_schema_sha256": "a11f1dec4bd6d8fbbf1fbf91d8afb9edf438b33e0d6a3d4f535f3b26f8308738"
+    },
+    "codex": {
+      "canonical_schema_sha256": "cb0c90360a47cbc037dfa1b166abf05b56f43933a1b0cd91e4ab9654b916486a",
+      "host": "codex",
+      "host_version_target": "codex-cli 0.145.0",
+      "input_artifact_sha256": "78b7ee115e60eb318765b51fc5f938a7876f336642c4b5209e32bc3c6ec590fa",
+      "input_hashes_sha256": "78b7ee115e60eb318765b51fc5f938a7876f336642c4b5209e32bc3c6ec590fa",
+      "isolation_manifest_sha256": "128a18dd074dcfbd8f3feaba1706c0427fb41f80be6accec6b88fb27166fdfdf",
+      "provider_schema_sha256": "a11f1dec4bd6d8fbbf1fbf91d8afb9edf438b33e0d6a3d4f535f3b26f8308738"
+    }
+  },
+  "oracle_sha256": "247b263c1f869210e1332b91144cbe34b9735f1f059a99a3ffbe7611d945514b",
+  "skill_version": "1.0.0",
+  "stage": "EVALUATOR_HASHES_COMMITTED",
+  "workflow": "anva-prepare"
+}

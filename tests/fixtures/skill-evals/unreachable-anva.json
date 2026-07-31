@@ -1,0 +1,41 @@
+{
+  "scenario": "unreachable-anva",
+  "workflow": "anva-prepare",
+  "expected_tools": [],
+  "requires_limitation": true,
+  "forbid_proposal": true,
+  "forbidden_strings": ["CANARY-NETWORK-ERROR"],
+  "structured_output": {
+    "status": "UNVERIFIED",
+    "problem": "Prepare the requested task.",
+    "facts": [],
+    "requirements": [],
+    "out_of_scope": [],
+    "assumptions": [],
+    "conflicts": [],
+    "acceptance_criteria": [],
+    "affected_systems_and_owners": [],
+    "decisions_and_policies": [],
+    "implementation_plan": [],
+    "verification_plan": [],
+    "unresolved_questions": [],
+    "limitations": [{"summary": "Anva is unavailable; alignment is unverified.", "basis": "LIMITATION"}],
+    "anva_sources": []
+  },
+  "hosts": {
+    "codex": {
+      "canonical_tools": [],
+      "claims": [{"kind": "LIMITATION", "material": true, "text": "Anva is unavailable; alignment is unverified.", "sources": []}],
+      "limitations": ["No HTTP or database fallback was attempted."],
+      "proposal": null,
+      "semantic": {"status": "UNVERIFIED", "local_only_requires_consent": true}
+    },
+    "claude": {
+      "canonical_tools": [],
+      "claims": [{"kind": "LIMITATION", "material": true, "text": "Anva is unavailable; alignment is unverified.", "sources": []}],
+      "limitations": ["No HTTP or database fallback was attempted."],
+      "proposal": null,
+      "semantic": {"status": "UNVERIFIED", "local_only_requires_consent": true}
+    }
+  }
+}

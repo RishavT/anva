@@ -1,0 +1,43 @@
+name: "anva-learn"
+description: "Draft and explicitly submit reviewable Anva correction, relationship, decision, or work-summary proposals. Use only when the user explicitly asks to teach, correct, or propose knowledge; never invoke implicitly, approve proposals, or mutate accepted knowledge."
+phase: "LEARN"
+implicit: false
+read_tools:
+  - "anva.resolve_repository"
+  - "anva.resolve_work_item"
+  - "anva.get_context_packet"
+  - "anva.get_entity"
+  - "anva.get_relationships"
+  - "anva.explain_assertion"
+  - "anva.get_source_excerpt"
+proposal_tools:
+  - "anva.propose_correction"
+  - "anva.propose_relationship"
+  - "anva.propose_decision"
+  - "anva.submit_work_summary"
+steps:
+  - "Resolve the exact repository and relevant work item or knowledge target."
+  - "Read only the minimum currently authorized context needed to ground the proposal."
+  - "Draft exact proposed content, source references, rationale, and deterministic idempotency key."
+  - "Show the complete proposal payload and request explicit user intent before the tool call."
+  - "Submit only through the matching Anva proposal tool with host approval."
+  - "Report PROPOSED, approved false, review required, proposal identifier, and limitations."
+stop_conditions:
+  - "The user has not explicitly requested a proposal."
+  - "Source references are missing, inaccessible, revoked, or conflicting."
+  - "The deployment is read-only or host approval is declined."
+degraded_behavior:
+  - "Return a local draft marked NOT_SUBMITTED and create no external state."
+  - "Never retry changed content under an existing idempotency key."
+  - "Never describe a draft or proposal as accepted, approved, or authoritative knowledge."
+output_schema: "shared/output-schemas/learn.schema.json"
+output_sections:
+  - "Proposal type"
+  - "Target"
+  - "Proposed content"
+  - "Rationale"
+  - "Source references"
+  - "Explicit approval"
+  - "Submission status"
+  - "Review state"
+  - "Limitations"

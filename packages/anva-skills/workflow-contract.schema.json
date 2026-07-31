@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.anva.dev/skills/v1/workflow-contract.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "description",
+    "phase",
+    "read_tools",
+    "proposal_tools",
+    "steps",
+    "stop_conditions",
+    "degraded_behavior",
+    "output_schema",
+    "output_sections"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^anva-[a-z0-9-]+$"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 40,
+      "maxLength": 500
+    },
+    "phase": {
+      "enum": ["PREPARE", "BUILD", "PREFLIGHT", "LEARN"]
+    },
+    "implicit": {
+      "type": "boolean"
+    },
+    "read_tools": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^anva\\."
+      }
+    },
+    "proposal_tools": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^anva\\."
+      }
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 4,
+      "items": {
+        "type": "string",
+        "minLength": 10
+      }
+    },
+    "stop_conditions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 5
+      }
+    },
+    "degraded_behavior": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "string",
+        "minLength": 10
+      }
+    },
+    "output_schema": {
+      "type": "string",
+      "pattern": "^shared/output-schemas/[a-z-]+\\.schema\\.json$"
+    },
+    "output_sections": {
+      "type": "array",
+      "minItems": 4,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 2
+      }
+    }
+  }
+}

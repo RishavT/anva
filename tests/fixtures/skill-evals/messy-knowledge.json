@@ -1,0 +1,66 @@
+{
+  "scenario": "messy-knowledge",
+  "workflow": "anva-prepare",
+  "expected_tools": [
+    {"name": "anva.resolve_repository", "arguments": {"contract_version": "1", "repository_id": "11111111-1111-4111-8111-111111111111"}},
+    {"name": "anva.resolve_work_item", "arguments": {"contract_version": "1", "repository_id": "11111111-1111-4111-8111-111111111111", "external_key": "EXAM-42"}},
+    {"name": "anva.get_context_packet", "arguments": {"contract_version": "1", "repository_id": "11111111-1111-4111-8111-111111111111", "task": "Add moderated regrade export with a migration and browser state", "phase": "PREPARE"}}
+  ],
+  "forbidden_strings": ["ORACLE-SENTINEL"],
+  "structured_output": {
+    "status": "GROUNDED",
+    "problem": "Add a moderated regrade export.",
+    "facts": [],
+    "requirements": [
+      {"summary": "Security review is mandatory.", "material": true, "source_refs": ["S1"]}
+    ],
+    "out_of_scope": [],
+    "assumptions": [],
+    "conflicts": [
+      {"summary": "Current retention values conflict.", "material": true, "source_refs": ["S2"]}
+    ],
+    "acceptance_criteria": [],
+    "affected_systems_and_owners": [],
+    "decisions_and_policies": [],
+    "implementation_plan": [],
+    "verification_plan": [],
+    "unresolved_questions": [],
+    "limitations": [{"summary": "Technical owner is unavailable.", "basis": "LIMITATION"}],
+    "anva_sources": [
+      {"source_ref": "S1", "url": "https://knowledge.invalid/policies/security", "locator": "section-4", "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "observed_at": "2026-07-29T10:00:00Z"},
+      {"source_ref": "S2", "url": "https://knowledge.invalid/decisions/retention", "locator": "decision-7", "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "observed_at": "2026-07-28T10:00:00Z"}
+    ]
+  },
+  "hosts": {
+    "codex": {
+      "canonical_tools": [
+        {"name": "anva.resolve_repository", "arguments": {"contract_version": "1", "repository_id": "11111111-1111-4111-8111-111111111111"}},
+        {"name": "anva.resolve_work_item", "arguments": {"contract_version": "1", "repository_id": "11111111-1111-4111-8111-111111111111", "external_key": "EXAM-42"}},
+        {"name": "anva.get_context_packet", "arguments": {"contract_version": "1", "repository_id": "11111111-1111-4111-8111-111111111111", "task": "Add moderated regrade export with a migration and browser state", "phase": "PREPARE"}}
+      ],
+      "claims": [
+        {"kind": "REQUIREMENT", "material": true, "text": "Security review is mandatory.", "sources": [{"url": "https://knowledge.invalid/policies/security", "locator": "section-4", "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "observed_at": "2026-07-29T10:00:00Z"}]},
+        {"kind": "CONFLICT", "material": true, "text": "Two current retention values conflict.", "sources": [{"url": "https://knowledge.invalid/decisions/retention", "locator": "decision-7", "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "observed_at": "2026-07-28T10:00:00Z"}]},
+        {"kind": "LIMITATION", "material": true, "text": "Technical owner is missing.", "sources": []}
+      ],
+      "limitations": ["Owner unavailable and budget omitted."],
+      "proposal": null,
+      "semantic": {"status": "PAUSED", "facts": 0, "requirements": 1, "conflicts": 1, "limitations": 1}
+    },
+    "claude": {
+      "canonical_tools": [
+        {"name": "anva.resolve_repository", "arguments": {"contract_version": "1", "repository_id": "11111111-1111-4111-8111-111111111111"}},
+        {"name": "anva.resolve_work_item", "arguments": {"contract_version": "1", "repository_id": "11111111-1111-4111-8111-111111111111", "external_key": "EXAM-42"}},
+        {"name": "anva.get_context_packet", "arguments": {"contract_version": "1", "repository_id": "11111111-1111-4111-8111-111111111111", "task": "Add moderated regrade export with a migration and browser state", "phase": "PREPARE"}}
+      ],
+      "claims": [
+        {"kind": "REQUIREMENT", "material": true, "text": "Security review is mandatory.", "sources": [{"url": "https://knowledge.invalid/policies/security", "locator": "section-4", "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "observed_at": "2026-07-29T10:00:00Z"}]},
+        {"kind": "CONFLICT", "material": true, "text": "Two current retention values conflict.", "sources": [{"url": "https://knowledge.invalid/decisions/retention", "locator": "decision-7", "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "observed_at": "2026-07-28T10:00:00Z"}]},
+        {"kind": "LIMITATION", "material": true, "text": "Technical owner is missing.", "sources": []}
+      ],
+      "limitations": ["Owner unavailable and budget omitted."],
+      "proposal": null,
+      "semantic": {"status": "PAUSED", "facts": 0, "requirements": 1, "conflicts": 1, "limitations": 1}
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "non_host_gate_attempt": {
+    "command_phase": "prepare",
+    "host_model_launched": false,
+    "evidence_directory_created": false,
+    "result": "system Python lacked jsonschema"
+  },
+  "resolution": "Created an isolated temporary virtual environment outside the repository and used it for all successful gate phases.",
+  "impact_on_native_launch_count": "none"
+}

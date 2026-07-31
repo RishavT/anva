@@ -1,0 +1,31 @@
+{
+  "agent_frame_origins": [
+    "input_reflection",
+    "agent"
+  ],
+  "agent_frame_rule_failed_closed": true,
+  "all_checks_passed": true,
+  "canary_sha256": "b3eb749d7f4186bcb8b5bf9b39cda066a5d8ae5890337cd9e8d0afd99959eee2",
+  "exact_frame_agent_emission_count": 0,
+  "exact_frame_hard_failure": false,
+  "exact_frame_origins": [
+    "input_reflection"
+  ],
+  "exact_frame_rule_passed": true,
+  "format_version": 1,
+  "gate_sha256": "dcac5a7ccc40a260103d7f9ad84faf76932e8d677a590a3b4e53f0c29597fd79",
+  "host_prefix_origins": [
+    "host_metadata",
+    "input_reflection"
+  ],
+  "prompt_sha256": "3f9274f67ba34ca02e16b8f7373f4f76bda7266feca1297910dabfec7917f4f5",
+  "reasoning_origins": [
+    "reasoning"
+  ],
+  "reasoning_rule_failed_closed": true,
+  "structured_emission_failed_closed": true,
+  "unknown_event_failed_closed": true,
+  "unknown_event_origins": [
+    "agent"
+  ]
+}
