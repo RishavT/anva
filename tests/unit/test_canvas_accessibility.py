@@ -43,6 +43,8 @@ def test_canvas_script_has_keyboard_minimap_and_no_browser_secret_storage() -> N
         "chooseProposalEndpoint",
         "drawProposalPath",
         "requestSubmit",
+        "connectedNodeIds",
+        "unconnectedColumns",
         'ranker: "tight-tree"',
     ):
         assert required in script

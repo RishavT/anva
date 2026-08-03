@@ -166,6 +166,11 @@
     return;
   }
 
+  const connectedNodeIds = new Set(edges.flatMap((edge) => [edge.source, edge.target]));
+  const orderedNodes = [...nodes].sort((left, right) =>
+    `${left.type}:${left.id}`.localeCompare(`${right.type}:${right.id}`),
+  );
+  const connectedNodes = orderedNodes.filter((node) => connectedNodeIds.has(node.id));
   const layoutGraph = new window.dagre.graphlib.Graph({ multigraph: true });
   layoutGraph.setGraph({
     rankdir: "LR",
@@ -176,22 +181,40 @@
     marginy: 80,
   });
   layoutGraph.setDefaultEdgeLabel(() => ({}));
-  [...nodes]
-    .sort((left, right) => `${left.type}:${left.id}`.localeCompare(`${right.type}:${right.id}`))
-    .forEach((node) => layoutGraph.setNode(node.id, { width: 216, height: 85 }));
+  connectedNodes.forEach((node) => layoutGraph.setNode(node.id, { width: 216, height: 85 }));
   [...edges]
     .sort((left, right) => `${left.type}:${left.id}`.localeCompare(`${right.type}:${right.id}`))
     .forEach((edge) => layoutGraph.setEdge(edge.source, edge.target, {}, edge.id));
   const layoutStarted = performance.now();
-  window.dagre.layout(layoutGraph);
+  if (connectedNodes.length) window.dagre.layout(layoutGraph);
   recordDuration("anva-canvas-layout", layoutStarted);
 
-  nodes.forEach((node) => {
+  connectedNodes.forEach((node) => {
     const computed = layoutGraph.node(node.id);
     const position = node.is_pinned
       ? node.position
       : { x: Math.max(30, computed.x - 108), y: Math.max(30, computed.y - 42.5) };
     positionById.set(node.id, { x: Number(position.x), y: Number(position.y) });
+  });
+  orderedNodes
+    .filter((node) => !connectedNodeIds.has(node.id) && node.is_pinned)
+    .forEach((node) => {
+      positionById.set(node.id, {
+        x: Number(node.position.x),
+        y: Number(node.position.y),
+      });
+    });
+  const unconnectedNodes = orderedNodes.filter(
+    (node) => !connectedNodeIds.has(node.id) && !node.is_pinned,
+  );
+  const occupiedMaxX = Math.max(0, ...[...positionById.values()].map((position) => position.x));
+  const unconnectedStartX = positionById.size ? occupiedMaxX + 320 : 80;
+  const unconnectedColumns = Math.max(1, Math.ceil(Math.sqrt(unconnectedNodes.length * 1.5)));
+  unconnectedNodes.forEach((node, index) => {
+    positionById.set(node.id, {
+      x: unconnectedStartX + (index % unconnectedColumns) * 250,
+      y: 80 + Math.floor(index / unconnectedColumns) * 119,
+    });
   });
 
   const worldBounds = () => {
