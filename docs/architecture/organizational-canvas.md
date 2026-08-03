@@ -105,6 +105,12 @@ edge: its only result is a governed proposal form with typed endpoints. The
 document remains useful without JavaScript through the canonical tables and
 forms, including a bounded Explorer-backed question fallback.
 
+Dagre runs only on the edge-connected subgraph. Permitted disconnected nodes
+are not dropped: unpinned nodes use a deterministic compact grid outside the
+occupied connected/pinned bounds, while saved pins always win. This keeps dense
+layout cost tied to topology without turning disconnected entities into hidden
+or unreachable results.
+
 Dagre 2.0.0 is vendored under `src/anva/static/anva/vendor`, with its license,
 legal notice, and reviewed SHA-256 checksums. There is no Node/npm runtime,
 package fetch, dynamic code evaluation, browser storage, or cross-origin

@@ -32,6 +32,13 @@ revision. A typed relationship drawn by actual drag or keyboard endpoint
 selection creates a governed proposal at exact source and target revisions and
 leaves canonical relationships unchanged.
 
+Layout work is bounded to the edge-connected subgraph. Disconnected permitted
+nodes remain first-class results and are placed in a deterministic compact grid
+beyond the connected/pinned bounds; saved pins override both paths. Browser
+regressions prove every disconnected node is rendered and searchable, the grid
+does not overlap occupied layout, both connected and isolated pins win, and all
+300 positions remain identical across 31 renders.
+
 The implementation uses Django, PostgreSQL, browser-native JavaScript, and a
 locally vendored Dagre 2.0.0 build. It adds no Node/npm runtime, frontend build
 tool, dynamic module download, cross-origin script, or browser persistence.
@@ -96,7 +103,9 @@ tool, dynamic module download, cross-origin script, or browser persistence.
   no-JS table, 320-pixel layout, 200% zoom, no document-level overflow, and no
   unexpected severe console message.
 - Seven visually reviewed screenshots and dependency checksums are recorded in
-  `docs/evidence/issue-012/README.md`.
+  `docs/evidence/issue-012/README.md`. Capture-time regressions assert the
+  horizontal bounds of the actual shell, main, sidebar, title, semantic
+  controls, and focus control rather than relying on scroll state alone.
 - Schema migration has no model drift and applies in clean browser/integration
   databases. OpenAPI generation emits the exact Canvas v3 enums, closed
   request schemas, routes, and limits.
@@ -108,7 +117,8 @@ tool, dynamic module download, cross-origin script, or browser persistence.
   passes Django's deploy check apart from the repository's documented
   proxy-owned SSL redirect/HSTS warnings.
 - Both database and browser performance reports preserve all 30 post-warm raw
-  samples, environment/fixture metadata, query counts, and exact thresholds.
+  samples, environment/fixture metadata, query counts, exact thresholds, and
+  source/test commit `e157a3f34aea2730fe5766d1cc79124440673b6d`.
 - Hosted GitHub Actions remains disabled because the repository account's
   billing state cannot safely run workflows. All reported gates were executed
   locally in the isolated Docker Compose profiles; no workflow was enabled as
