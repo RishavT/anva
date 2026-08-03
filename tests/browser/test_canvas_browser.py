@@ -70,41 +70,76 @@ def _cpu_model() -> str:
     return "unavailable"
 
 
-def _capture(driver: webdriver.Chrome, name: str) -> None:
+def _capture(
+    driver: webdriver.Chrome,
+    name: str,
+    *,
+    wait_for_animation_frames: bool = True,
+) -> None:
     SCREENSHOTS.mkdir(parents=True, exist_ok=True)
-    state = driver.execute_async_script(
-        """
-        const done = arguments[0];
+    if wait_for_animation_frames:
+        state = driver.execute_async_script(
+            """
+            const done = arguments[0];
+            const preservedTop = window.scrollY;
+            if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+            requestAnimationFrame(() => {
+              const scroller = document.scrollingElement;
+              window.scrollTo({ left: 0, top: preservedTop, behavior: "instant" });
+              scroller.scrollLeft = 0;
+              document.documentElement.scrollLeft = 0;
+              document.body.scrollLeft = 0;
+              for (const element of document.querySelectorAll("*")) element.scrollLeft = 0;
+              requestAnimationFrame(() => requestAnimationFrame(() => {
+                const sidebar = document.getElementById("primary-navigation");
+                const desktop = window.innerWidth > 896;
+                const sidebarBounds = sidebar?.getBoundingClientRect();
+                done({
+                  windowScrollX: window.scrollX,
+                  visualViewportPageLeft: window.visualViewport?.pageLeft || 0,
+                  documentScrollLeft: document.documentElement.scrollLeft,
+                  bodyScrollLeft: document.body.scrollLeft,
+                  descendantScrollers: [...document.querySelectorAll("*")]
+                    .filter((element) => element.scrollLeft !== 0)
+                    .map((element) => element.tagName),
+                  desktopSidebarLeft: desktop ? sidebarBounds?.left : null,
+                  desktopSidebarVisible: desktop
+                    ? Boolean(sidebar && sidebar.open && sidebarBounds?.width)
+                    : null,
+                });
+              }));
+            });
+            """
+        )
+    else:
+        state = driver.execute_script(
+            """
         const preservedTop = window.scrollY;
         if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
-        requestAnimationFrame(() => {
-          const scroller = document.scrollingElement;
-          window.scrollTo({ left: 0, top: preservedTop, behavior: "instant" });
-          scroller.scrollLeft = 0;
-          document.documentElement.scrollLeft = 0;
-          document.body.scrollLeft = 0;
-          for (const element of document.querySelectorAll("*")) element.scrollLeft = 0;
-          requestAnimationFrame(() => requestAnimationFrame(() => {
-            const sidebar = document.getElementById("primary-navigation");
-            const desktop = window.innerWidth > 896;
-            const sidebarBounds = sidebar?.getBoundingClientRect();
-            done({
-              windowScrollX: window.scrollX,
-              visualViewportPageLeft: window.visualViewport?.pageLeft || 0,
-              documentScrollLeft: document.documentElement.scrollLeft,
-              bodyScrollLeft: document.body.scrollLeft,
-              descendantScrollers: [...document.querySelectorAll("*")]
-                .filter((element) => element.scrollLeft !== 0)
-                .map((element) => element.tagName),
-              desktopSidebarLeft: desktop ? sidebarBounds?.left : null,
-              desktopSidebarVisible: desktop
-                ? Boolean(sidebar && sidebar.open && sidebarBounds?.width)
-                : null,
-            });
-          }));
-        });
+        const scroller = document.scrollingElement;
+        window.scrollTo({ left: 0, top: preservedTop, behavior: "instant" });
+        scroller.scrollLeft = 0;
+        document.documentElement.scrollLeft = 0;
+        document.body.scrollLeft = 0;
+        for (const element of document.querySelectorAll("*")) element.scrollLeft = 0;
+        const sidebar = document.getElementById("primary-navigation");
+        const desktop = window.innerWidth > 896;
+        const sidebarBounds = sidebar?.getBoundingClientRect();
+        return {
+          windowScrollX: window.scrollX,
+          visualViewportPageLeft: window.visualViewport?.pageLeft || 0,
+          documentScrollLeft: document.documentElement.scrollLeft,
+          bodyScrollLeft: document.body.scrollLeft,
+          descendantScrollers: [...document.querySelectorAll("*")]
+            .filter((element) => element.scrollLeft !== 0)
+            .map((element) => element.tagName),
+          desktopSidebarLeft: desktop ? sidebarBounds?.left : null,
+          desktopSidebarVisible: desktop
+            ? Boolean(sidebar && sidebar.open && sidebarBounds?.width)
+            : null,
+        };
         """
-    )
+        )
     assert state == {
         "windowScrollX": 0,
         "visualViewportPageLeft": 0,
@@ -1103,7 +1138,11 @@ def test_organizational_canvas_interaction_no_js_and_responsive_evidence(
         node_list = driver.find_element(By.ID, "canvas-node-list-title")
         driver.execute_script("arguments[0].scrollIntoView()", node_list)
         assert node_list.text == "Permitted nodes"
-        _capture(driver, "03-canvas-mobile-320-no-js.png")
+        _capture(
+            driver,
+            "03-canvas-mobile-320-no-js.png",
+            wait_for_animation_frames=False,
+        )
 
         driver.execute_cdp_cmd("Emulation.setScriptExecutionDisabled", {"value": False})
         driver.set_window_size(640, 760)
