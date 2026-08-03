@@ -149,7 +149,99 @@ def _capture(
         "desktopSidebarLeft": 0 if driver.get_window_size()["width"] > 896 else None,
         "desktopSidebarVisible": True if driver.get_window_size()["width"] > 896 else None,
     }
+    _assert_viewport_geometry(_viewport_geometry(driver))
     driver.save_screenshot(str(SCREENSHOTS / name))
+
+
+def _viewport_geometry(driver: webdriver.Chrome) -> dict[str, object]:
+    return cast(
+        dict[str, object],
+        driver.execute_script(
+            """
+            const roundedRect = (element) => {
+              if (!element) return null;
+              const rect = element.getBoundingClientRect();
+              const style = getComputedStyle(element);
+              return {
+                left: Number(rect.left.toFixed(3)),
+                right: Number(rect.right.toFixed(3)),
+                top: Number(rect.top.toFixed(3)),
+                bottom: Number(rect.bottom.toFixed(3)),
+                width: Number(rect.width.toFixed(3)),
+                height: Number(rect.height.toFixed(3)),
+                display: style.display,
+                overflowX: style.overflowX,
+                position: style.position,
+                transform: style.transform,
+              };
+            };
+            const selectors = {
+              shell: ".product-shell",
+              main: "#main-content",
+              sidebar: "#primary-navigation",
+              sidebarContent: ".sidebar__content",
+              title: "h1",
+              controls: ".canvas-controls",
+              focus: ".canvas-filter-form select[name='focus']",
+            };
+            return {
+              viewport: {
+                innerWidth: window.innerWidth,
+                innerHeight: window.innerHeight,
+                scrollX: window.scrollX,
+                scrollY: window.scrollY,
+                visual: window.visualViewport ? {
+                  pageLeft: window.visualViewport.pageLeft,
+                  pageTop: window.visualViewport.pageTop,
+                  offsetLeft: window.visualViewport.offsetLeft,
+                  width: window.visualViewport.width,
+                  height: window.visualViewport.height,
+                  scale: window.visualViewport.scale,
+                } : null,
+              },
+              document: {
+                clientWidth: document.documentElement.clientWidth,
+                scrollWidth: document.documentElement.scrollWidth,
+                rect: roundedRect(document.documentElement),
+              },
+              body: {
+                clientWidth: document.body.clientWidth,
+                scrollWidth: document.body.scrollWidth,
+                rect: roundedRect(document.body),
+              },
+              elements: Object.fromEntries(
+                Object.entries(selectors).map(([name, selector]) => [
+                  name,
+                  roundedRect(document.querySelector(selector)),
+                ]),
+              ),
+              activeElement: {
+                tag: document.activeElement?.tagName || null,
+                name: document.activeElement?.getAttribute("name") || null,
+              },
+            };
+            """
+        ),
+    )
+
+
+def _assert_viewport_geometry(geometry: dict[str, object]) -> None:
+    viewport = cast(dict[str, object], geometry["viewport"])
+    document = cast(dict[str, object], geometry["document"])
+    body = cast(dict[str, object], geometry["body"])
+    elements = cast(dict[str, object], geometry["elements"])
+    viewport_width = cast(float, viewport["innerWidth"])
+    assert cast(float, document["scrollWidth"]) <= viewport_width, geometry
+    assert cast(float, body["scrollWidth"]) <= viewport_width, geometry
+    for name in ("shell", "main", "sidebar", "sidebarContent", "title", "controls", "focus"):
+        bounds = cast(dict[str, object], elements[name])
+        if cast(float, bounds["width"]) == 0:
+            continue
+        assert cast(float, bounds["left"]) >= -0.5, {name: bounds, "viewport": viewport}
+        assert cast(float, bounds["right"]) <= viewport_width + 0.5, {
+            name: bounds,
+            "viewport": viewport,
+        }
 
 
 def _chrome() -> webdriver.Chrome:
