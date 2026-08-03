@@ -204,6 +204,15 @@ def _seed_canvas(root: Path) -> tuple[CanvasView, dict[str, KnowledgeEntity]]:
             "ACTIVE",
             "MEDIUM",
         ),
+        (
+            "isolated",
+            "COMPONENT",
+            "component:isolated-evidence",
+            "Isolated evidence component",
+            "Architecture",
+            "ACTIVE",
+            "LOW",
+        ),
         ("api", "API", "api:payments", "Payments API", "Platform", "ACTIVE", "HIGH"),
         (
             "repository",
@@ -700,6 +709,7 @@ def test_organizational_canvas_interaction_no_js_and_responsive_evidence(
         payload_bytes_samples: list[float] = []
         external_request_samples: list[float] = []
         resource_origins: set[str] = set()
+        layout_snapshot: list[dict[str, object]] | None = None
         for sample in range(31):
             driver.get(performance_url)
             wait.until(
@@ -709,6 +719,72 @@ def test_organizational_canvas_interaction_no_js_and_responsive_evidence(
                 == "true"
             )
             assert len(driver.find_elements(By.CSS_SELECTOR, ".canvas-node")) == 300
+            current_layout = cast(
+                list[dict[str, object]],
+                driver.execute_script(
+                    "const graph = JSON.parse(document.getElementById('canvas-data').textContent);"
+                    "return graph.nodes.map((node) => {"
+                    " const selector = `.canvas-node[data-node-id='${node.id}']`;"
+                    " const button = document.querySelector(selector);"
+                    " return {id: node.id, left: button.style.left, top: button.style.top};"
+                    "});"
+                ),
+            )
+            if layout_snapshot is None:
+                layout_snapshot = current_layout
+                layout_contract = driver.execute_script(
+                    "const graph = JSON.parse(document.getElementById('canvas-data').textContent);"
+                    "const endpoints = graph.edges.flatMap((edge) => [edge.source, edge.target]);"
+                    "const connected = new Set(endpoints);"
+                    "const button = (id) => document.querySelector("
+                    "  `.canvas-node[data-node-id='${id}']`);"
+                    "const position = (id) => ({"
+                    " x: Number.parseFloat(button(id).style.left),"
+                    " y: Number.parseFloat(button(id).style.top),"
+                    "});"
+                    "const matchesSavedPosition = (id) => {"
+                    " const node = graph.nodes.find((item) => item.id === id);"
+                    " const rendered = position(id);"
+                    " return node.is_pinned && Math.abs(rendered.x - node.position.x) < 0.001"
+                    "   && Math.abs(rendered.y - node.position.y) < 0.001;"
+                    "};"
+                    "const disconnected = graph.nodes.filter((node) => !connected.has(node.id));"
+                    "const unpinnedDisconnected = disconnected.filter((node) => !node.is_pinned);"
+                    "const occupied = graph.nodes.filter((node) =>"
+                    "  connected.has(node.id) || node.is_pinned);"
+                    "const maxOccupiedX = Math.max(...occupied.map((node) => position(node.id).x));"
+                    "const unpinnedX = unpinnedDisconnected.map((node) => position(node.id).x);"
+                    "const minUnpinnedX = Math.min(...unpinnedX);"
+                    "const search = document.querySelector('.canvas-filter-form input[name=q]');"
+                    "search.value = 'Performance component 004';"
+                    "search.dispatchEvent(new Event('input', {bubbles: true}));"
+                    "const visibleSearchResults = [...document.querySelectorAll('.canvas-node')]"
+                    ".filter((item) => !item.hidden);"
+                    "search.value = ''; search.dispatchEvent(new Event('input', {bubbles: true}));"
+                    "return {"
+                    " disconnected: disconnected.length,"
+                    " renderedDisconnected: disconnected.filter((node) => button(node.id)).length,"
+                    " visibleSearchResults: visibleSearchResults.length,"
+                    " searchResultsMatch: visibleSearchResults.every((item) =>"
+                    "   item.textContent.includes('Performance component 004')) ,"
+                    " unconnectedGap: minUnpinnedX - maxOccupiedX,"
+                    " connectedPinWins: connected.has(arguments[0])"
+                    "   && matchesSavedPosition(arguments[0]),"
+                    " isolatedPinWins: !connected.has(arguments[1])"
+                    "   && matchesSavedPosition(arguments[1]),"
+                    "};",
+                    str(entities["goal"].id),
+                    str(entities["isolated"].id),
+                )
+                assert layout_contract["disconnected"] >= 200
+                assert layout_contract["renderedDisconnected"] == layout_contract["disconnected"]
+                assert layout_contract["visibleSearchResults"] == 1
+                assert layout_contract["searchResultsMatch"] is True
+                assert layout_contract["unconnectedGap"] >= 320
+                assert layout_contract["connectedPinWins"] is True
+                assert layout_contract["isolatedPinWins"] is True
+            else:
+                assert current_layout == layout_snapshot
             metrics = driver.execute_script(
                 "const origin = window.location.origin;"
                 "const resources = performance.getEntriesByType('resource');"
