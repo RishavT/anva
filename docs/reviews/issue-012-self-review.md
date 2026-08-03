@@ -109,8 +109,8 @@ tool, dynamic module download, cross-origin script, or browser persistence.
 - Schema migration has no model drift and applies in clean browser/integration
   databases. OpenAPI generation emits the exact Canvas v3 enums, closed
   request schemas, routes, and limits.
-- The full repository gate passed with 667 tests, four expected skips, and 85%
-  aggregate branch coverage. Canvas service coverage is 89%.
+- The full repository gate passed with 673 tests, four expected skips, and 86%
+  aggregate branch coverage. Canvas service coverage is 90%.
 - The production wheel contains the migration, Canvas template, JS, CSS, and
   vendored Dagre asset. Its non-root runtime image passes `collectstatic`,
   emits hashed/compressed Canvas assets, imports the installed package, and
@@ -118,7 +118,7 @@ tool, dynamic module download, cross-origin script, or browser persistence.
   proxy-owned SSL redirect/HSTS warnings.
 - Both database and browser performance reports preserve all 30 post-warm raw
   samples, environment/fixture metadata, query counts, exact thresholds, and
-  source/test commit `e157a3f34aea2730fe5766d1cc79124440673b6d`.
+  source/test commit `fb5ce5d8c2d97f895802be3b2e4bdba479510925`.
 - Hosted GitHub Actions remains disabled because the repository account's
   billing state cannot safely run workflows. All reported gates were executed
   locally in the isolated Docker Compose profiles; no workflow was enabled as
