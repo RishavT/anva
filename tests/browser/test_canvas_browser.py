@@ -770,10 +770,12 @@ def test_organizational_canvas_interaction_no_js_and_responsive_evidence(
             Select(path_form.find_element(By.NAME, "path_from")).select_by_value(str(source.id))
             Select(path_form.find_element(By.NAME, "path_to")).select_by_value(str(target.id))
             path_form.find_element(By.CSS_SELECTOR, 'button[type="submit"]').click()
+            wait.until(expected_conditions.staleness_of(path_form))
             wait.until(
-                expected_conditions.presence_of_element_located(
-                    (By.CSS_SELECTOR, ".canvas-path-result ol")
+                lambda current: len(
+                    current.find_elements(By.CSS_SELECTOR, ".canvas-path-result li")
                 )
+                >= 2
             )
             assert len(driver.find_elements(By.CSS_SELECTOR, ".canvas-path-result li")) >= 2
         path_result = driver.find_element(By.CSS_SELECTOR, ".canvas-path-result")
