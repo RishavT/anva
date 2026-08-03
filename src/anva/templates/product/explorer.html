@@ -31,7 +31,7 @@
         <div class="panel-heading"><div><p class="eyebrow">Source records</p><h2 id="source-results-title">Excerpts</h2></div><span class="item-count">{{ page.source_results|length }}</span></div>
         {% if page.source_results %}
           <ol class="excerpt-list">{% for result in page.source_results %}<li><p>{{ result.text }}</p><div><span>Source-backed</span><code>{{ result.content_hash|slice:":12" }}</code><small>{{ result.canonical_url }}</small></div></li>{% endfor %}</ol>
-        {% else %}<p class="limitation">{% if page.query %}No authorized source excerpts match this {% if page.start_entity %}selection-scoped {% endif %}search. Try a broader term or remove a filter.{% else %}Enter a search term to retrieve authorized source excerpts. Natural-language answers remain unavailable until cited context can be constructed safely.{% endif %}</p>{% endif %}
+        {% else %}<p class="limitation">{% if page.query %}{% if page.start_entity %}No authorized source excerpts match this selection-scoped search.{% else %}No authorized source excerpts match this search.{% endif %} Try a broader term or remove a filter.{% else %}Enter a search term to retrieve authorized source excerpts. Natural-language answers remain unavailable until cited context can be constructed safely.{% endif %}</p>{% endif %}
       </section>
     </div>
     {% if page.freshness_assertions %}
