@@ -24,6 +24,7 @@ from anva.core.services.canvas import (
     AuthorizedCanvasEdge,
     CanvasQuery,
     _bounded_integer,
+    _canonical_filter_value,
     _canonical_presentation,
     _canvas_payload_size,
     _coordinate,
@@ -36,6 +37,7 @@ from anva.core.services.canvas import (
     _layout,
     _normalized_semantic_query,
     _safe_text,
+    _semantic_query,
 )
 
 
@@ -111,6 +113,53 @@ def test_saved_semantic_query_is_typed_closed_and_canonical() -> None:
     with pytest.raises(ValueError, match="timezone-aware"):
         CanvasQuery(as_of=datetime(2026, 7, 31, 12, 30, tzinfo=UTC).replace(tzinfo=None))
     assert CanvasQuery(as_of=datetime(2026, 7, 31, 12, 30, tzinfo=UTC)).as_of is not None
+
+
+@pytest.mark.unit
+def test_saved_semantic_constraints_use_explicit_presence_to_clear() -> None:
+    root_id = uuid.uuid4()
+    saved = {
+        "repository_ids": [str(uuid.uuid4())],
+        "root_entity_id": str(root_id),
+        "entity_types": ["PRODUCT"],
+        "owner": "Product",
+        "status": "ACTIVE",
+        "risk": "HIGH",
+        "freshness": "FRESH",
+        "as_of": "2026-07-31T12:30:00+00:00",
+        "search": "storefront",
+        "layers": ["provenance"],
+        "depth": 3,
+    }
+    revision = SimpleNamespace(semantic_query=saved)
+    view = SimpleNamespace(view_type="CUSTOM")
+    retained = _semantic_query(
+        query=CanvasQuery(),
+        view=cast(Any, view),
+        revision=cast(Any, revision),
+    )
+    assert retained == saved
+
+    cleared = _semantic_query(
+        query=CanvasQuery(
+            provided_semantic_fields=frozenset(
+                {
+                    "root_entity_id",
+                    "entity_types",
+                    "owner",
+                    "status",
+                    "risk",
+                    "freshness",
+                    "as_of",
+                    "search",
+                    "layers",
+                }
+            )
+        ),
+        view=cast(Any, view),
+        revision=cast(Any, revision),
+    )
+    assert cleared == {"repository_ids": saved["repository_ids"], "depth": 3}
 
 
 @pytest.mark.unit
@@ -244,6 +293,12 @@ def test_canvas_filter_values_recursively_reject_secret_shaped_strings(
             groups=[],
             annotations=[],
         )
+
+
+@pytest.mark.unit
+def test_canvas_filter_values_preserve_recursive_integer_and_fractional_json() -> None:
+    value = {"integer": 1, "fractional": 1.5, "nested": [2, 2.5]}
+    assert _canonical_filter_value(value) == value
 
 
 @pytest.mark.unit

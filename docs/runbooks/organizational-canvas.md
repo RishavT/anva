@@ -27,7 +27,8 @@ product navigation or visit `/app/canvas`.
   to another (or select the endpoints by keyboard). Review the resulting form's
   endpoints and current revisions; submission creates a governed proposal only.
 - Ask a scoped organizational question from a selected node. Results use only
-  its permitted one-hop context and bounded authorized Explorer search.
+  its permitted one-hop context and bounded authorized Explorer search. The
+  no-JavaScript Explorer form preserves the same selected-entity boundary.
 - Add annotations to the current layout, then save a new revision to persist
   them. An annotation never changes canonical knowledge.
 - A share links to the exact current revision but requires the recipient's
@@ -90,6 +91,9 @@ the production static manifest does not require a development-only source map.
   then broaden typed filters. An empty result is not evidence that hidden data
   exists or does not exist.
 - Truncated view: reduce repositories or filters/focus before investigation.
+- Truncated selection-scoped evidence: the permitted one-hop edge, assertion,
+  or source-lineage budget was reached. Narrow the repository or question; do
+  not treat omitted excerpts as proof of absence.
 - `409` while saving: another revision won. Reload the view and reapply the
   presentation edit.
 - Proposal revision conflict: reload source and target details before proposing

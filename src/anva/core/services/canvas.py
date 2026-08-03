@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Any, cast
 
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 
 from anva.core.exceptions import (
@@ -23,6 +23,7 @@ from anva.core.exceptions import (
 )
 from anva.core.models import (
     AssertionConflict,
+    AssertionProvenance,
     AssertionRevision,
     CanvasAnnotation,
     CanvasFilter,
@@ -32,6 +33,7 @@ from anva.core.models import (
     CanvasShare,
     CanvasView,
     CanvasViewRevision,
+    EntityResolution,
     KnowledgeAssertion,
     KnowledgeEntity,
     KnowledgeProposal,
@@ -40,6 +42,8 @@ from anva.core.models import (
     Membership,
     Organization,
     Repository,
+    SourceChunkVisibility,
+    SourceLocation,
     content_hash,
 )
 from anva.core.services.authorization import (
@@ -54,7 +58,11 @@ from anva.core.services.context import ActorContext
 from anva.core.services.context_packets import authorized_assertion_citations
 from anva.core.services.creation import submit_knowledge_proposal
 from anva.core.services.events import record_transition
-from anva.core.services.graph import GraphEdge, authorized_graph_edges
+from anva.core.services.graph import (
+    GraphEdge,
+    authorized_graph_edges,
+    authorized_incident_graph_edges,
+)
 from anva.core.services.retrieval import authorized_assertions, authorized_entities
 
 CANVAS_NODE_LIMIT = 300
@@ -67,6 +75,23 @@ CANVAS_LAYOUT_ALGORITHM = "deterministic-semantic-columns"
 CANVAS_FRESHNESS_STATES = (*KnowledgeAssertion.StalenessState.values, "UNKNOWN")
 CANVAS_DETAIL_RELATIONSHIP_LIMIT = 50
 CANVAS_DETAIL_SECTION_LIMIT = 20
+CANVAS_QUESTION_RELATIONSHIP_LIMIT = 100
+CANVAS_QUESTION_ASSERTION_LIMIT = 200
+CANVAS_QUESTION_LINEAGE_LIMIT = 500
+CANVAS_SEMANTIC_OVERRIDE_FIELDS = frozenset(
+    {
+        "root_entity_id",
+        "entity_types",
+        "owner",
+        "status",
+        "risk",
+        "freshness",
+        "as_of",
+        "search",
+        "layers",
+        "depth",
+    }
+)
 SECRET_PATTERN = re.compile(
     r"(?i)(?:gh[pousr]_[a-z0-9]{20,}|bearer\s+[a-z0-9._-]{12,}|"
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----|sessionid\s*=)"
@@ -322,6 +347,7 @@ class CanvasQuery:
     layers: tuple[str, ...] = ()
     anchor_id: uuid.UUID | None = None
     depth: int | None = None
+    provided_semantic_fields: frozenset[str] = frozenset()
     node_limit: int = CANVAS_NODE_LIMIT
     edge_limit: int = CANVAS_EDGE_LIMIT
 
@@ -346,6 +372,8 @@ class CanvasQuery:
             _safe_text(value, maximum=500)
         if self.view_revision is not None and self.view_revision < 1:
             raise ValueError("Canvas view revision must be positive")
+        if not self.provided_semantic_fields <= CANVAS_SEMANTIC_OVERRIDE_FIELDS:
+            raise ValueError("Canvas semantic override fields are invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -534,9 +562,20 @@ def _semantic_query(
     revision: CanvasViewRevision | None,
 ) -> dict[str, object]:
     saved = dict(revision.semantic_query) if revision else {}
-    if view and not query.entity_types and view.view_type in VIEW_TYPE_ENTITY_TYPES:
+    provided = query.provided_semantic_fields
+    if (
+        view
+        and not query.entity_types
+        and "entity_types" not in provided
+        and view.view_type in VIEW_TYPE_ENTITY_TYPES
+    ):
         saved.setdefault("entity_types", sorted(VIEW_TYPE_ENTITY_TYPES[view.view_type]))
-    if query.entity_types:
+    if "entity_types" in provided:
+        if query.entity_types:
+            saved["entity_types"] = list(query.entity_types)
+        else:
+            saved.pop("entity_types", None)
+    elif query.entity_types:
         saved["entity_types"] = list(query.entity_types)
     for key, value in (
         ("owner", query.owner),
@@ -545,13 +584,33 @@ def _semantic_query(
         ("freshness", query.freshness),
         ("search", query.search),
     ):
-        if value:
+        if key in provided:
+            if value:
+                saved[key] = value
+            else:
+                saved.pop(key, None)
+        elif value:
             saved[key] = value
-    if query.as_of is not None:
+    if "as_of" in provided:
+        if query.as_of is not None:
+            saved["as_of"] = query.as_of.isoformat()
+        else:
+            saved.pop("as_of", None)
+    elif query.as_of is not None:
         saved["as_of"] = query.as_of.isoformat()
-    if query.layers:
+    if "layers" in provided:
+        if query.layers:
+            saved["layers"] = list(query.layers)
+        else:
+            saved.pop("layers", None)
+    elif query.layers:
         saved["layers"] = list(query.layers)
-    if query.anchor_id:
+    if "root_entity_id" in provided:
+        if query.anchor_id:
+            saved["root_entity_id"] = str(query.anchor_id)
+        else:
+            saved.pop("root_entity_id", None)
+    elif query.anchor_id:
         saved["root_entity_id"] = str(query.anchor_id)
     if query.depth is not None:
         saved["depth"] = query.depth
@@ -649,6 +708,36 @@ def _authorized_edge_union(
         key=lambda item: (str(item.edge.relationship_id), str(item.repository_id)),
     )
     return ordered, repository_truncated
+
+
+def _authorized_incident_edge_union(
+    *,
+    actor: ActorContext,
+    repositories: tuple[Repository, ...],
+    entity_id: uuid.UUID,
+    edge_limit: int,
+) -> tuple[list[AuthorizedCanvasEdge], bool]:
+    """Union strict incident edges before applying the caller's deterministic local cap."""
+    edges: dict[uuid.UUID, AuthorizedCanvasEdge] = {}
+    repository_truncated = False
+    for repository in repositories:
+        records, truncated = authorized_incident_graph_edges(
+            actor=actor,
+            repository_id=repository.id,
+            entity_id=entity_id,
+            edge_limit=edge_limit,
+        )
+        repository_truncated = repository_truncated or truncated
+        for edge in records:
+            edges.setdefault(
+                edge.relationship_id,
+                AuthorizedCanvasEdge(repository_id=repository.id, edge=edge),
+            )
+    ordered = sorted(
+        edges.values(),
+        key=lambda item: (str(item.edge.relationship_id), str(item.repository_id)),
+    )
+    return ordered[:edge_limit], repository_truncated or len(ordered) > edge_limit
 
 
 def _freshness(assertions: list[KnowledgeAssertion]) -> str:
@@ -1207,6 +1296,182 @@ def canvas_path(
     }
 
 
+def canvas_selection_scope(
+    *,
+    actor: ActorContext,
+    entity_id: uuid.UUID,
+    repository_id: uuid.UUID,
+) -> dict[str, object]:
+    """Resolve one selected entity, its strict one-hop context, and only their source lineage."""
+    repositories = _visible_repositories(actor=actor, requested_ids=(repository_id,))
+    entity = _authorized_entity_union(
+        actor=actor,
+        entity_id=entity_id,
+        repositories=repositories,
+    )
+    incident_edges, edges_truncated = _authorized_incident_edge_union(
+        actor=actor,
+        repositories=repositories,
+        entity_id=entity.id,
+        edge_limit=CANVAS_QUESTION_RELATIONSHIP_LIMIT,
+    )
+    context_ids = {
+        entity.id,
+        *(
+            item.edge.target_entity_id
+            if item.edge.source_entity_id == entity.id
+            else item.edge.source_entity_id
+            for item in incident_edges
+        ),
+    }
+    context_entities: dict[uuid.UUID, KnowledgeEntity] = {entity.id: entity}
+    for repository in repositories:
+        for related in (
+            authorized_entities(
+                actor=actor,
+                repository_id=repository.id,
+                action=Action.CANVAS_VIEW,
+            )
+            .filter(id__in=context_ids)
+            .order_by("id")
+        ):
+            context_entities.setdefault(related.id, related)
+    if set(context_entities) != context_ids:
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+
+    ordered_entities = sorted(
+        context_entities.values(),
+        key=lambda item: (item.display_name.casefold(), str(item.id)),
+    )
+    subject_keys = {item.canonical_key for item in ordered_entities}
+    assertion_ids: set[uuid.UUID] = set()
+    evidence_truncated = False
+    for repository in repositories:
+        repository_assertion_ids = list(
+            authorized_assertions(
+                actor=actor,
+                repository_id=repository.id,
+                action=Action.CANVAS_VIEW,
+            )
+            .filter(subject_key__in=subject_keys)
+            .order_by("id")
+            .values_list("id", flat=True)[: CANVAS_QUESTION_ASSERTION_LIMIT + 1]
+        )
+        evidence_truncated = evidence_truncated or (
+            len(repository_assertion_ids) > CANVAS_QUESTION_ASSERTION_LIMIT
+        )
+        assertion_ids.update(repository_assertion_ids[:CANVAS_QUESTION_ASSERTION_LIMIT])
+
+    source_location_ids = {item.edge.source_location_id for item in incident_edges}
+    assertion_location_ids = list(
+        AssertionProvenance.objects.filter(
+            organization_id=actor.organization_id,
+            assertion_id__in=assertion_ids,
+        )
+        .order_by("source_location_id")
+        .values_list("source_location_id", flat=True)[: CANVAS_QUESTION_LINEAGE_LIMIT + 1]
+    )
+    resolution_location_ids = list(
+        EntityResolution.objects.filter(
+            organization_id=actor.organization_id,
+            entity_id__in=context_ids,
+        )
+        .order_by("source_location_id")
+        .values_list("source_location_id", flat=True)[: CANVAS_QUESTION_LINEAGE_LIMIT + 1]
+    )
+    evidence_truncated = evidence_truncated or any(
+        len(items) > CANVAS_QUESTION_LINEAGE_LIMIT
+        for items in (assertion_location_ids, resolution_location_ids)
+    )
+    source_location_ids.update(assertion_location_ids[:CANVAS_QUESTION_LINEAGE_LIMIT])
+    source_location_ids.update(resolution_location_ids[:CANVAS_QUESTION_LINEAGE_LIMIT])
+    evidence_truncated = evidence_truncated or (
+        len(source_location_ids) > CANVAS_QUESTION_LINEAGE_LIMIT
+    )
+    bounded_lineage_location_ids = tuple(
+        sorted(source_location_ids, key=str)[:CANVAS_QUESTION_LINEAGE_LIMIT]
+    )
+    lineage_observation_ids = SourceLocation.objects.filter(
+        organization_id=actor.organization_id,
+        id__in=bounded_lineage_location_ids,
+    ).values_list("source_observation_id", flat=True)
+    search_scope_ids: set[uuid.UUID] = set()
+    for repository in repositories:
+        search_scope_ids.update(
+            authorized_access_scope_ids(
+                actor=actor,
+                action=Action.SEARCH,
+                repository_id=repository.id,
+            )
+        )
+    root_location_ids = list(
+        SourceChunkVisibility.objects.filter(
+            organization_id=actor.organization_id,
+            access_scope_id__in=search_scope_ids,
+            source_observation_id__in=lineage_observation_ids,
+            source_observation__source_document__source_container__source_connection__repository_id__in=(
+                repository.id for repository in repositories
+            ),
+            state=SourceChunkVisibility.State.AVAILABLE,
+            revoked_at__isnull=True,
+            access_snapshot__revoked_at__isnull=True,
+            source_observation__status="PRESENT",
+            source_observation__source_document__state="PRESENT",
+            source_observation__source_revision_id=F(
+                "source_observation__source_document__current_revision_id"
+            ),
+            source_observation__sync_run_id=F(
+                "source_observation__source_document__last_seen_run_id"
+            ),
+            source_observation__source_document__source_container__source_connection__state__in=(
+                "ACTIVE",
+                "DEGRADED",
+            ),
+        )
+        .order_by("source_location_id")
+        .values_list("source_location_id", flat=True)
+        .distinct()[: CANVAS_QUESTION_LINEAGE_LIMIT + 1]
+    )
+    evidence_truncated = evidence_truncated or (
+        len(root_location_ids) > CANVAS_QUESTION_LINEAGE_LIMIT
+    )
+    bounded_source_location_ids = tuple(root_location_ids[:CANVAS_QUESTION_LINEAGE_LIMIT])
+    return {
+        "entity": {
+            "id": str(entity.id),
+            "label": entity.display_name,
+            "type": entity.entity_type,
+        },
+        "selection_context": {
+            "depth": 1,
+            "nodes": [
+                {
+                    "id": str(item.id),
+                    "label": item.display_name,
+                    "type": item.entity_type,
+                    "canonical_key": item.canonical_key,
+                    "revision": item.revision,
+                }
+                for item in ordered_entities
+            ],
+            "edges": [
+                {
+                    "id": str(item.edge.relationship_id),
+                    "type": item.edge.relationship_type,
+                    "source": str(item.edge.source_entity_id),
+                    "target": str(item.edge.target_entity_id),
+                    "repository_id": str(item.repository_id),
+                    "observed_at": item.edge.observed_at.isoformat(),
+                    "confidence": item.edge.confidence,
+                }
+                for item in incident_edges
+            ],
+            "truncated": edges_truncated or evidence_truncated,
+        },
+        "source_location_ids": bounded_source_location_ids,
+    }
+
+
 def canvas_entity_detail(
     *,
     actor: ActorContext,
@@ -1265,19 +1530,12 @@ def canvas_entity_detail(
             }
         )
 
-    union_edges, repository_edge_truncated = _authorized_edge_union(
+    incident_edges, relationship_truncated = _authorized_incident_edge_union(
         actor=actor,
         repositories=repositories,
+        entity_id=entity.id,
+        edge_limit=CANVAS_DETAIL_RELATIONSHIP_LIMIT,
     )
-    incident_edges = [
-        item
-        for item in union_edges
-        if entity.id in {item.edge.source_entity_id, item.edge.target_entity_id}
-    ]
-    relationship_truncated = (
-        repository_edge_truncated or len(incident_edges) > CANVAS_DETAIL_RELATIONSHIP_LIMIT
-    )
-    incident_edges = incident_edges[:CANVAS_DETAIL_RELATIONSHIP_LIMIT]
     related_ids = {
         item.edge.target_entity_id
         if item.edge.source_entity_id == entity.id

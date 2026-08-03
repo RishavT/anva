@@ -337,8 +337,10 @@ def _canvas_query_payload(payload: dict[str, object]) -> CanvasQuery:
     _closed_payload(payload, allowed=allowed, required=frozenset())
 
     def optional_uuid(name: str) -> uuid.UUID | None:
-        value = payload.get(name)
-        if value is None:
+        if name not in payload:
+            return None
+        value = payload[name]
+        if name == "anchor_id" and value is None:
             return None
         if not isinstance(value, str):
             raise ValueError(f"{name} must be a UUID")
@@ -374,13 +376,29 @@ def _canvas_query_payload(payload: dict[str, object]) -> CanvasQuery:
         return parsed
 
     view_revision = payload.get("view_revision")
-    if view_revision is not None and (
+    if "view_revision" in payload and (
         not isinstance(view_revision, int) or isinstance(view_revision, bool)
     ):
         raise ValueError("view_revision must be an integer")
+    provided_semantic_fields = frozenset(
+        "root_entity_id" if name == "anchor_id" else name
+        for name in (
+            "entity_types",
+            "owner",
+            "status",
+            "risk",
+            "freshness",
+            "as_of",
+            "search",
+            "layers",
+            "anchor_id",
+            "depth",
+        )
+        if name in payload
+    )
     return CanvasQuery(
         view_id=optional_uuid("view_id"),
-        view_revision=view_revision,
+        view_revision=cast(int | None, view_revision),
         repository_ids=tuple(uuid.UUID(value) for value in optional_strings("repository_ids")),
         entity_types=optional_strings("entity_types"),
         owner=optional_text("owner"),
@@ -392,6 +410,7 @@ def _canvas_query_payload(payload: dict[str, object]) -> CanvasQuery:
         layers=optional_strings("layers"),
         anchor_id=optional_uuid("anchor_id"),
         depth=optional_int("depth", 2) if "depth" in payload else None,
+        provided_semantic_fields=provided_semantic_fields,
         node_limit=optional_int("node_limit", 300),
         edge_limit=optional_int("edge_limit", 600),
     )

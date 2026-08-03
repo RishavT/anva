@@ -40,7 +40,14 @@ The default repository discovery path applies its 100-repository cap only
 after authorization, so a run of inaccessible repositories cannot crowd out a
 later visible repository. Provenance-only mode has no permissive all-edge
 fallthrough. Entity detail and questions use bounded authorized sections and do
-not expose hidden section totals.
+not expose hidden section totals. Inspector lookup applies the entity-incident
+predicate inside the strict authorized edge CTE before its local cap, so a
+large unrelated authorized graph cannot starve the selected entity's context.
+Question and no-JavaScript Explorer retrieval bridge only the selected entity
+and authorized one-hop entities from claim locations to current indexed root
+chunks through their shared observation; unrelated same-repository chunks,
+stale observations, revoked snapshots, and duplicate chunk roots cannot consume
+the evidence cap.
 
 ### Share used as an access capability
 
@@ -83,6 +90,11 @@ layer, freshness, depth, coordinate, child-count, and text values are bounded.
 Secret-shaped text is rejected from queries, names, descriptions, annotations,
 groups, filters, and rationales, including recursively nested supported JSON.
 Unknown presentation members, scalar coercion, and non-JSON values are rejected.
+JSON integers do not accept booleans, numeric strings, or null; UUIDs and text
+must be strings, and list members retain their declared scalar type. Only
+`anchor_id` and `as_of` accept explicit null in a Canvas query, where null is the
+documented request to clear a saved constraint. REST, session JSON, and the
+published OpenAPI schema use the same rules.
 Requests and responses are capped at 750 KiB; response enforcement measures the
 actual compact unescaped Unicode wire bytes. Projection cardinality is capped
 at 100 repositories, 300 nodes, and 600 edges.
@@ -106,7 +118,10 @@ An `as_of` query is explicitly an observation-time boundary. It filters entity
 creation and assertion/relationship observations, while current authorized
 identity metadata remains current; the product states this caveat beside the
 control. Saved controls render the server-resolved query rather than ambiguous
-raw URL input.
+raw URL input. Override presence is tracked independently from truthiness, so
+explicit empty strings, empty lists, and the documented nullable values clear
+saved root, type, owner, status, risk, freshness, search, time, and layer
+constraints while omitted controls retain the saved constraint.
 
 ## Residual risks and limitations
 
@@ -133,7 +148,11 @@ raw URL input.
   revisions, tenant graft rejection, stale/idempotent writes, proposal-only
   relationships, share revocation history, observation-time filtering,
   recursively closed presentation input, adversarial Unicode wire sizing,
-  CSRF, session HTML, and bearer API boundaries.
+  CSRF, session HTML, and bearer API boundaries. Adversarial cases include
+  selected-evidence/decoy isolation across JSON and no-JavaScript paths, stale
+  and duplicate root-chunk lineage, an incident edge ordered after 600
+  unrelated edges, explicit saved-filter clearing, and rejected scalar/null
+  coercions.
 - Browser: keyboard selection, inspector, drag/save, exact-revision sharing,
   revocation, actual drag-drawn proposal, annotations, scoped questions,
   required organizational traces, dense topology/focus, source-backed edge

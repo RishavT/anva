@@ -329,6 +329,7 @@ def explorer(request: HttpRequest) -> HttpResponse:
     facade, shell = _product(request)
     page = facade.explorer(
         repository_id=_optional_uuid(request.GET.get("repository")),
+        start_entity_id=_optional_uuid(request.GET.get("start_entity")),
         query=request.GET.get("q", "").strip()[:500],
         entity_type=request.GET.get("type", ""),
         freshness=request.GET.get("freshness", ""),
@@ -369,7 +370,29 @@ def _string_tuple(values: list[object]) -> tuple[str, ...]:
     return tuple(str(value) for value in values if value)
 
 
-def _canvas_query(payload: dict[str, object]) -> CanvasQuery:
+def _json_string(payload: dict[str, object], name: str) -> str:
+    value = payload.get(name)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"Canvas {name} must be a non-empty string")
+    return value
+
+
+def _json_integer(payload: dict[str, object], name: str, *, default: int | None = None) -> int:
+    value = payload.get(name, default)
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError(f"Canvas {name} must be an integer")
+    return value
+
+
+def _json_uuid(payload: dict[str, object], name: str) -> uuid.UUID:
+    return uuid.UUID(_json_string(payload, name))
+
+
+def _canvas_query(
+    payload: dict[str, object],
+    *,
+    query_string_values: bool = False,
+) -> CanvasQuery:
     allowed = {
         "view_id",
         "view_revision",
@@ -392,38 +415,89 @@ def _canvas_query(payload: dict[str, object]) -> CanvasQuery:
     repositories = payload.get("repository_ids", [])
     entity_types = payload.get("entity_types", [])
     layers = payload.get("layers", [])
-    if not all(isinstance(value, list) for value in (repositories, entity_types, layers)):
+    if not all(
+        isinstance(value, list) and all(isinstance(item, str) for item in value)
+        for value in (repositories, entity_types, layers)
+    ):
         raise ValueError("Canvas query list fields are invalid")
-    as_of_value = payload.get("as_of", "")
-    if not isinstance(as_of_value, str):
+    as_of_value = payload.get("as_of")
+    if as_of_value is not None and not isinstance(as_of_value, str):
         raise ValueError("Canvas as-of time is invalid")
     parsed_as_of = parse_datetime(as_of_value) if as_of_value else None
     if parsed_as_of is not None and parsed_as_of.tzinfo is None:
         parsed_as_of = timezone.make_aware(parsed_as_of)
     if as_of_value and parsed_as_of is None:
         raise ValueError("Canvas as-of time is invalid")
+
+    def optional_uuid(name: str) -> uuid.UUID | None:
+        if name not in payload:
+            return None
+        value = payload[name]
+        if query_string_values and value == "":
+            return None
+        if name == "anchor_id" and value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError(f"Canvas {name} must be a UUID string")
+        return uuid.UUID(value)
+
+    def text(name: str) -> str:
+        value = payload.get(name, "")
+        if not isinstance(value, str):
+            raise ValueError(f"Canvas {name} must be a string")
+        return value
+
+    def integer(name: str, default: int, *, optional: bool = False) -> int | None:
+        if name not in payload:
+            return None if optional else default
+        value = payload[name]
+        if query_string_values and optional and value == "":
+            return None
+        if query_string_values:
+            if not isinstance(value, str):
+                raise ValueError(f"Canvas {name} must be an integer string")
+            return int(value)
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise ValueError(f"Canvas {name} must be an integer")
+        return value
+
+    provided_semantic_fields = frozenset(
+        "root_entity_id" if name == "anchor_id" else name
+        for name in (
+            "entity_types",
+            "owner",
+            "status",
+            "risk",
+            "freshness",
+            "as_of",
+            "search",
+            "layers",
+            "anchor_id",
+            "depth",
+        )
+        if name in payload
+    )
     return CanvasQuery(
-        view_id=uuid.UUID(str(payload["view_id"])) if payload.get("view_id") else None,
-        view_revision=(
-            int(cast(Any, payload["view_revision"]))
-            if payload.get("view_revision") is not None
-            else None
+        view_id=optional_uuid("view_id"),
+        view_revision=integer("view_revision", 0, optional=True),
+        repository_ids=tuple(
+            uuid.UUID(value)
+            for value in cast(list[str], repositories)
+            if value or not query_string_values
         ),
-        repository_ids=_uuid_tuple(cast(list[object], repositories)),
         entity_types=_string_tuple(cast(list[object], entity_types)),
-        owner=str(payload.get("owner", "")),
-        status=str(payload.get("status", "")),
-        risk=str(payload.get("risk", "")),
-        freshness=str(payload.get("freshness", "")),
+        owner=text("owner"),
+        status=text("status"),
+        risk=text("risk"),
+        freshness=text("freshness"),
         as_of=parsed_as_of,
-        search=str(payload.get("search", "")),
+        search=text("search"),
         layers=_string_tuple(cast(list[object], layers)),
-        anchor_id=(uuid.UUID(str(payload["anchor_id"])) if payload.get("anchor_id") else None),
-        depth=(
-            int(cast(Any, payload["depth"])) if payload.get("depth") not in (None, "") else None
-        ),
-        node_limit=int(cast(Any, payload.get("node_limit", 300))),
-        edge_limit=int(cast(Any, payload.get("edge_limit", 600))),
+        anchor_id=optional_uuid("anchor_id"),
+        depth=integer("depth", 2, optional=True),
+        provided_semantic_fields=provided_semantic_fields,
+        node_limit=cast(int, integer("node_limit", 300)),
+        edge_limit=cast(int, integer("edge_limit", 600)),
     )
 
 
@@ -451,25 +525,32 @@ def _canvas_presentation(payload: object) -> dict[str, list[dict[str, object]]]:
 
 
 def _canvas_get_query(request: HttpRequest) -> CanvasQuery:
-    return _canvas_query(
-        {
-            "view_id": request.GET.get("view", ""),
-            "view_revision": request.GET.get("revision") or None,
-            "repository_ids": request.GET.getlist("repository"),
-            "entity_types": request.GET.getlist("type"),
-            "owner": request.GET.get("owner", ""),
-            "status": request.GET.get("status", ""),
-            "risk": request.GET.get("risk", ""),
-            "freshness": request.GET.get("freshness", ""),
-            "as_of": request.GET.get("as_of", ""),
-            "search": request.GET.get("q", ""),
-            "layers": request.GET.getlist("layer"),
-            "anchor_id": request.GET.get("focus", ""),
-            "depth": request.GET.get("depth"),
-            "node_limit": request.GET.get("node_limit", "300"),
-            "edge_limit": request.GET.get("edge_limit", "600"),
-        }
-    )
+    payload: dict[str, object] = {}
+    controls_submitted = request.GET.get("semantic_controls") == "1"
+    scalar_fields = {
+        "view": "view_id",
+        "revision": "view_revision",
+        "owner": "owner",
+        "status": "status",
+        "risk": "risk",
+        "freshness": "freshness",
+        "as_of": "as_of",
+        "q": "search",
+        "focus": "anchor_id",
+        "depth": "depth",
+        "node_limit": "node_limit",
+        "edge_limit": "edge_limit",
+    }
+    semantic_controls = {"owner", "status", "risk", "freshness", "as_of", "q", "focus"}
+    for query_name, payload_name in scalar_fields.items():
+        if query_name in request.GET or (controls_submitted and query_name in semantic_controls):
+            payload[payload_name] = request.GET.get(query_name, "")
+    payload["repository_ids"] = request.GET.getlist("repository")
+    if "type" in request.GET or controls_submitted:
+        payload["entity_types"] = request.GET.getlist("type")
+    if "layer" in request.GET or controls_submitted:
+        payload["layers"] = request.GET.getlist("layer")
+    return _canvas_query(payload, query_string_values=True)
 
 
 @web_errors
@@ -486,6 +567,7 @@ def canvas(request: HttpRequest) -> HttpResponse:
             shared_query,
             anchor_id=requested_query.anchor_id,
             depth=requested_query.depth,
+            provided_semantic_fields=requested_query.provided_semantic_fields,
         )
     else:
         query = _canvas_get_query(request)
@@ -520,17 +602,19 @@ def canvas_path_query(request: HttpRequest) -> JsonResponse:
     if set(payload) - {"source_id", "target_id", "repository_ids", "max_depth"}:
         raise ValueError("Canvas path contains additional properties")
     repositories = payload.get("repository_ids", [])
-    if not isinstance(repositories, list):
+    if not isinstance(repositories, list) or not all(
+        isinstance(item, str) for item in repositories
+    ):
         raise ValueError("Canvas path repositories are invalid")
     from anva.core.services.canvas import canvas_path
 
     return _canvas_json_response(
         canvas_path(
             actor=facade.actor,
-            source_id=uuid.UUID(str(payload["source_id"])),
-            target_id=uuid.UUID(str(payload["target_id"])),
-            repository_ids=_uuid_tuple(cast(list[object], repositories)),
-            max_depth=int(cast(Any, payload.get("max_depth", 6))),
+            source_id=_json_uuid(payload, "source_id"),
+            target_id=_json_uuid(payload, "target_id"),
+            repository_ids=tuple(uuid.UUID(value) for value in cast(list[str], repositories)),
+            max_depth=_json_integer(payload, "max_depth", default=6),
         )
     )
 
@@ -600,10 +684,10 @@ def canvas_view_revision(request: HttpRequest, view_id: uuid.UUID) -> JsonRespon
     presentation = _canvas_presentation(payload.get("presentation"))
     revision, created = facade.save_canvas(
         view_id=view_id,
-        expected_revision=int(cast(Any, payload["expected_revision"])),
+        expected_revision=_json_integer(payload, "expected_revision"),
         semantic_query=cast(dict[str, object], semantic),
         presentation=presentation,
-        idempotency_key=str(payload["idempotency_key"]),
+        idempotency_key=_json_string(payload, "idempotency_key"),
     )
     return _canvas_json_response(
         {
@@ -625,7 +709,7 @@ def canvas_view_share(request: HttpRequest, view_id: uuid.UUID) -> JsonResponse:
         raise ValueError("Canvas share request is invalid")
     share, created = facade.share_canvas(
         view_id=view_id,
-        idempotency_key=str(payload["idempotency_key"]),
+        idempotency_key=_json_string(payload, "idempotency_key"),
     )
     return _canvas_json_response(
         {

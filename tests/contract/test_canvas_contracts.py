@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import cast
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from anva.contracts.generate import openapi_document
 
@@ -41,8 +42,10 @@ def test_canvas_openapi_surfaces_are_authenticated_bounded_and_closed() -> None:
         "maximum": 600,
     }
     assert cast(dict[str, object], query_schema["properties"])["as_of"] == {
-        "type": "string",
-        "format": "date-time",
+        "oneOf": [
+            {"type": "string", "format": "date-time"},
+            {"type": "null"},
+        ]
     }
 
     revision = cast(dict[str, object], paths["/canvas/views/{resource_id}/revisions"])["post"]
@@ -72,3 +75,26 @@ def test_canvas_openapi_surfaces_are_authenticated_bounded_and_closed() -> None:
     assert "never writes a canonical edge" in cast(
         str, cast(dict[str, object], proposal)["description"]
     )
+
+
+@pytest.mark.contract
+def test_canvas_filter_value_schema_accepts_recursive_integer_and_fractional_json() -> None:
+    document = openapi_document()
+    components = cast(dict[str, object], document["components"])
+    schemas = cast(dict[str, object], components["schemas"])
+    filter_value = cast(dict[str, object], schemas["canvas-filter-value"])
+    numeric_branches = [
+        branch
+        for branch in cast(list[dict[str, object]], filter_value["oneOf"])
+        if branch.get("type") in {"integer", "number"}
+    ]
+    assert numeric_branches == [{"type": "number"}]
+    validator = Draft202012Validator(
+        {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$ref": "#/components/schemas/canvas-filter-value",
+            "components": components,
+        }
+    )
+    for value in (1, 1.5, {"nested": [1, 2.5]}):
+        validator.validate(value)

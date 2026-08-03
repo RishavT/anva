@@ -561,7 +561,18 @@ def openapi_document() -> dict[str, object]:
                 for key, value in canvas_semantic_properties.items()
                 if key != "root_entity_id"
             },
-            "anchor_id": {"type": "string", "format": "uuid"},
+            "as_of": {
+                "oneOf": [
+                    {"type": "string", "format": "date-time"},
+                    {"type": "null"},
+                ]
+            },
+            "anchor_id": {
+                "oneOf": [
+                    {"type": "string", "format": "uuid"},
+                    {"type": "null"},
+                ]
+            },
             "node_limit": {"type": "integer", "minimum": 1, "maximum": 300},
             "edge_limit": {"type": "integer", "minimum": 1, "maximum": 600},
         },
@@ -1690,7 +1701,6 @@ def openapi_document() -> dict[str, object]:
                     "oneOf": [
                         {"type": "null"},
                         {"type": "boolean"},
-                        {"type": "integer"},
                         {"type": "number"},
                         {"type": "string", "maxLength": 2_000},
                         {

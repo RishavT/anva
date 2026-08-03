@@ -14,6 +14,7 @@ from typing import Any, cast
 
 import pytest
 from django.db import DatabaseError, IntegrityError, connection, transaction
+from django.db.models import F
 from django.test import Client
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
@@ -27,11 +28,14 @@ from anva.core.models import (
     AccessGrant,
     AccessScope,
     AccessScopeMembership,
+    AssertionProvenance,
     AssertionRevision,
     CanvasNodePlacement,
     CanvasShare,
     CanvasView,
     CanvasViewRevision,
+    EntityResolution,
+    KnowledgeAssertion,
     KnowledgeEntity,
     KnowledgeProposal,
     KnowledgeRelationship,
@@ -40,6 +44,7 @@ from anva.core.models import (
     Repository,
     Role,
     ServiceIdentity,
+    SourceChunkVisibility,
     SourceConnection,
     User,
 )
@@ -50,6 +55,7 @@ from anva.core.services.canvas import (
     canvas_entity_detail,
     canvas_path,
     canvas_projection,
+    canvas_selection_scope,
     create_canvas_share,
     create_canvas_view,
     list_canvas_views,
@@ -59,6 +65,7 @@ from anva.core.services.canvas import (
     save_canvas_revision,
 )
 from anva.core.services.context import ActorContext
+from anva.core.services.graph import authorized_graph_edges
 from anva.core.services.ingestion import (
     connect_filesystem_source,
     execute_ingestion_job,
@@ -162,7 +169,7 @@ def _ingest(
         root=str(root),
     )
     assert created
-    run, created = request_ingestion_sync(actor=actor, source_connection_id=source.id)
+    _run, created = request_ingestion_sync(actor=actor, source_connection_id=source.id)
     assert created
     job = claim_next_job(worker_id=f"canvas-{key}", lease_seconds=600)
     assert job is not None
@@ -419,6 +426,305 @@ def test_canvas_detail_and_as_of_use_only_bounded_authorized_graph_context(
     assert str(late_relationship.id) in {edge["id"] for edge in current_edges}
     assert str(late_relationship.id) not in {edge["id"] for edge in historical_edges}
     assert historical["as_of"] == boundary.isoformat()
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_canvas_selected_question_and_no_js_explorer_exclude_same_repository_decoy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANVA_FILESYSTEM_ALLOWED_ROOTS", str(tmp_path))
+    organization, repository, actor, user = _tenant(slug="canvas-selection-evidence")
+    scope = AccessScope.objects.create(
+        organization=organization,
+        name="selection evidence scope",
+        all_memberships=True,
+        all_repositories=True,
+    )
+    root = tmp_path / "selection-evidence"
+    root.mkdir()
+    relevant_file = root / "relevant.json"
+    relevant_file.write_text(
+        json.dumps(
+            {
+                "service": "scopefixture-relevant",
+                "owner": "selection-team",
+                "evidence": "STALE-SELECTION-EVIDENCE",
+            }
+        )
+    )
+    (root / "decoy.json").write_text(
+        json.dumps(
+            {
+                "service": "scopefixture-decoy",
+                "owner": "decoy-team",
+                "evidence": "DECOY-REPOSITORY-EVIDENCE",
+            }
+        )
+    )
+    source = _ingest(
+        actor=actor,
+        repository=repository,
+        scope=scope,
+        root=root,
+        key="selection-evidence",
+    )
+    relevant_file.write_text(
+        json.dumps(
+            {
+                "service": "scopefixture-relevant",
+                "owner": "selection-team",
+                "evidence": "RELEVANT-SCOPED-EVIDENCE",
+                "filler": "x" * 4_500,
+            }
+        )
+    )
+    _run, created = request_ingestion_sync(actor=actor, source_connection_id=source.id)
+    assert created
+    job = claim_next_job(worker_id="canvas-selection-evidence-resync", lease_seconds=600)
+    assert job is not None
+    completed = execute_ingestion_job(
+        job=job,
+        worker_id="canvas-selection-evidence-resync",
+    )
+    complete_job(
+        actor=ActorContext(
+            organization_id=actor.organization_id,
+            actor_type="SERVICE",
+            actor_id="canvas-selection-evidence-resync",
+            authorization_path="internal:test-worker",
+            request_id=uuid.uuid4(),
+        ),
+        job_id=job.id,
+        worker_id="canvas-selection-evidence-resync",
+    )
+    assert completed.state in {completed.State.COMPLETED, completed.State.PARTIALLY_COMPLETED}
+    selected = KnowledgeEntity.objects.get(
+        organization=organization,
+        canonical_key="service:scopefixture-relevant",
+    )
+    selected_assertion = KnowledgeAssertion.objects.get(
+        organization=organization,
+        subject_key=selected.canonical_key,
+        predicate="declares_service",
+        valid_until__isnull=True,
+    )
+    selected_provenance = AssertionProvenance.objects.get(assertion=selected_assertion)
+    assert selected_provenance.source_location.pointer == "/service"
+    selected_resolution = EntityResolution.objects.get(
+        organization=organization,
+        entity=selected,
+        source_location=selected_provenance.source_location,
+    )
+    assert selected_resolution.source_location.pointer == "/service"
+    relevant_root = SourceChunkVisibility.objects.get(
+        organization=organization,
+        source_observation_id=selected_provenance.source_observation_id,
+        source_chunk__text__contains="RELEVANT-SCOPED-EVIDENCE",
+    )
+    assert relevant_root.source_location.pointer == "/"
+    assert "RELEVANT-SCOPED-EVIDENCE" in relevant_root.source_chunk.text
+    decoy_root = SourceChunkVisibility.objects.get(
+        organization=organization,
+        source_chunk__text__contains="DECOY-REPOSITORY-EVIDENCE",
+        source_observation__sync_run_id=F("source_observation__source_document__last_seen_run_id"),
+    )
+    assert decoy_root.source_location.pointer == "/"
+    assert decoy_root.source_observation_id != relevant_root.source_observation_id
+    relevant_document_id = relevant_root.source_observation.source_document_id
+    current_relevant_visibilities = SourceChunkVisibility.objects.filter(
+        organization=organization,
+        source_observation__source_document_id=relevant_document_id,
+        source_observation__sync_run_id=F("source_observation__source_document__last_seen_run_id"),
+    )
+    assert current_relevant_visibilities.count() >= 2
+    assert current_relevant_visibilities.values("source_location_id").distinct().count() == 1
+    stale_relevant_location_ids = set(
+        SourceChunkVisibility.objects.filter(
+            organization=organization,
+            source_observation__source_document_id=relevant_document_id,
+        )
+        .exclude(source_observation_id=relevant_root.source_observation_id)
+        .values_list("source_location_id", flat=True)
+    )
+    assert stale_relevant_location_ids
+    selection_scope = canvas_selection_scope(
+        actor=actor,
+        entity_id=selected.id,
+        repository_id=repository.id,
+    )
+    scoped_source_location_ids = cast(tuple[uuid.UUID, ...], selection_scope["source_location_ids"])
+    assert scoped_source_location_ids == (relevant_root.source_location_id,)
+    assert not stale_relevant_location_ids.intersection(scoped_source_location_ids)
+
+    client = Client(enforce_csrf_checks=True)
+    session = client.session
+    session["anva_web_user_id"] = str(user.id)
+    session["anva_web_organization_id"] = str(organization.id)
+    session.save()
+    page = client.get("/app/canvas")
+    assert page.status_code == 200
+    csrf = client.cookies["csrftoken"].value
+
+    question = client.post(
+        "/app/canvas/question",
+        data=json.dumps(
+            {
+                "entity_id": str(selected.id),
+                "repository_id": str(repository.id),
+                "question": "scopefixture",
+            }
+        ),
+        content_type="application/json",
+        HTTP_X_CSRFTOKEN=csrf,
+    )
+    assert question.status_code == 200
+    assert question.json()["entity"]["id"] == str(selected.id)
+    assert {item["source_location_id"] for item in question.json()["results"]} == {
+        str(relevant_root.source_location_id)
+    }
+    rendered_question = json.dumps(question.json(), sort_keys=True)
+    assert "RELEVANT-SCOPED-EVIDENCE" in rendered_question
+    assert "DECOY-REPOSITORY-EVIDENCE" not in rendered_question
+
+    explorer = client.get(
+        "/app/explorer",
+        {
+            "repository": str(repository.id),
+            "start_entity": str(selected.id),
+            "q": "scopefixture",
+            "type": KnowledgeEntity.EntityType.SERVICE,
+            "freshness": KnowledgeAssertion.StalenessState.FRESH,
+        },
+    )
+    assert explorer.status_code == 200
+    rendered_explorer = explorer.content.decode()
+    assert "currently authorized one-hop context" in rendered_explorer
+    assert (
+        f'href="/app/explorer/entities/{selected.id}?repository={repository.id}"'
+        in rendered_explorer
+    )
+    assert "service:scopefixture-relevant" in rendered_explorer
+    assert "service:scopefixture-decoy" not in rendered_explorer
+    assert "Assertions by freshness" in rendered_explorer
+    assert "RELEVANT-SCOPED-EVIDENCE" in rendered_explorer
+    assert "DECOY-REPOSITORY-EVIDENCE" not in rendered_explorer
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_canvas_detail_filters_incident_edges_before_global_six_hundred_edge_cap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANVA_FILESYSTEM_ALLOWED_ROOTS", str(tmp_path))
+    organization, repository, actor, _user = _tenant(slug="canvas-detail-starvation")
+    scope = AccessScope.objects.create(
+        organization=organization,
+        name="detail starvation scope",
+        all_memberships=True,
+        all_repositories=True,
+    )
+    root = tmp_path / "detail-starvation"
+    root.mkdir()
+    (root / "seed.json").write_text(json.dumps({"service": "seed"}))
+    _ingest(actor=actor, repository=repository, scope=scope, root=root, key="detail-starvation")
+    seed_assertion = KnowledgeAssertion.objects.get(
+        organization=organization,
+        predicate="declares_service",
+    )
+    seed_provenance = AssertionProvenance.objects.get(assertion=seed_assertion)
+    assert not KnowledgeRelationship.objects.filter(organization=organization).exists()
+    selected = KnowledgeEntity.objects.create(
+        organization=organization,
+        entity_type=KnowledgeEntity.EntityType.SERVICE,
+        canonical_key="service:selected-after-global-cap",
+        display_name="Selected after global cap",
+        access_scope=scope,
+    )
+    incident_target = KnowledgeEntity.objects.create(
+        organization=organization,
+        entity_type=KnowledgeEntity.EntityType.SERVICE,
+        canonical_key="service:selected-incident-target",
+        display_name="Selected incident target",
+        access_scope=scope,
+    )
+    unrelated_source = KnowledgeEntity.objects.create(
+        organization=organization,
+        entity_type=KnowledgeEntity.EntityType.SERVICE,
+        canonical_key="service:unrelated-source",
+        display_name="Unrelated source",
+        access_scope=scope,
+    )
+    unrelated_targets = [
+        KnowledgeEntity(
+            organization=organization,
+            entity_type=KnowledgeEntity.EntityType.SERVICE,
+            canonical_key=f"service:unrelated-target-{index:03d}",
+            display_name=f"Unrelated target {index:03d}",
+            access_scope=scope,
+        )
+        for index in range(600)
+    ]
+    KnowledgeEntity.objects.bulk_create(unrelated_targets)
+
+    common = {
+        "organization": organization,
+        "relationship_type": (KnowledgeRelationship.RelationshipType.SERVICE_DEPENDS_ON_SERVICE),
+        "source_entity_type": KnowledgeEntity.EntityType.SERVICE,
+        "target_entity_type": KnowledgeEntity.EntityType.SERVICE,
+        "assertion": seed_assertion,
+        "source_location": seed_provenance.source_location,
+        "source_observation": seed_provenance.source_observation,
+        "access_snapshot": seed_provenance.access_snapshot,
+        "access_scope": seed_assertion.access_scope,
+        "extraction_class": seed_provenance.extraction_class,
+        "confidence": seed_provenance.confidence,
+        "observed_at": seed_provenance.observed_at,
+        "review_state": KnowledgeRelationship.ReviewState.UNREVIEWED,
+    }
+    KnowledgeRelationship.objects.bulk_create(
+        [
+            KnowledgeRelationship(
+                id=uuid.UUID(int=index + 1),
+                source_entity=unrelated_source,
+                target_entity=target,
+                **common,
+            )
+            for index, target in enumerate(unrelated_targets)
+        ]
+    )
+    incident_id = uuid.UUID(int=(1 << 128) - 1)
+    KnowledgeRelationship.objects.create(
+        id=incident_id,
+        source_entity=selected,
+        target_entity=incident_target,
+        **common,
+    )
+
+    globally_capped, globally_truncated = authorized_graph_edges(
+        actor=actor,
+        repository_id=repository.id,
+        edge_limit=600,
+    )
+    low_ids = {uuid.UUID(int=index + 1) for index in range(600)}
+    assert globally_truncated is True
+    assert len(globally_capped) == 600
+    assert {edge.relationship_id for edge in globally_capped} == low_ids
+    assert incident_id not in {edge.relationship_id for edge in globally_capped}
+
+    detail = canvas_entity_detail(
+        actor=actor,
+        entity_id=selected.id,
+        repository_ids=(repository.id,),
+    )
+    relationships = cast(list[dict[str, object]], detail["relationships"])
+    assert [item["id"] for item in relationships] == [str(incident_id)]
+    assert [item["type"] for item in relationships] == [
+        KnowledgeRelationship.RelationshipType.SERVICE_DEPENDS_ON_SERVICE
+    ]
+    assert [item["target_id"] for item in relationships] == [str(incident_target.id)]
 
 
 @pytest.mark.integration
@@ -1084,7 +1390,7 @@ def test_canvas_http_query_requires_csrf_and_never_requires_javascript() -> None
         entity_type=KnowledgeEntity.EntityType.PRODUCT,
         canonical_key="product:http-storefront",
         display_name="HTTP storefront",
-        attributes={"owner": "Product", "status": "ACTIVE"},
+        attributes={"owner": "Product", "status": "ACTIVE", "risk": "HIGH"},
         access_scope=scope,
     )
     repository_entity = KnowledgeEntity.objects.create(
@@ -1123,6 +1429,44 @@ def test_canvas_http_query_requires_csrf_and_never_requires_javascript() -> None
     )
     assert allowed.status_code == 200
     assert allowed.json()["schema_version"] == "1"
+    invalid_query_payloads: tuple[dict[str, object], ...] = (
+        {"node_limit": "300"},
+        {"depth": None},
+        {"depth": True},
+        {"view_id": None},
+        {"view_id": {}},
+        {"view_revision": None},
+        {"repository_ids": [True]},
+        {"owner": []},
+        {"anchor_id": False},
+        {"as_of": {}},
+        {"entity_types": "PRODUCT"},
+        {"layers": [1]},
+    )
+    for invalid_payload in invalid_query_payloads:
+        invalid_query = client.post(
+            "/app/canvas/query",
+            data=json.dumps(invalid_payload),
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf,
+        )
+        assert invalid_query.status_code == 400, invalid_payload
+    strict_valid_query = client.post(
+        "/app/canvas/query",
+        data=json.dumps(
+            {
+                "repository_ids": [str(repository.id)],
+                "node_limit": 300,
+                "edge_limit": 600,
+                "owner": "",
+                "entity_types": [],
+            }
+        ),
+        content_type="application/json",
+        HTTP_X_CSRFTOKEN=csrf,
+    )
+    assert strict_valid_query.status_code == 200
+    assert strict_valid_query.json()["counts"] == allowed.json()["counts"]
 
     detail = client.get(
         f"/app/canvas/entities/{product.id}",
@@ -1148,16 +1492,27 @@ def test_canvas_http_query_requires_csrf_and_never_requires_javascript() -> None
     assert {node["id"] for node in scoped_question.json()["selection_context"]["nodes"]} == {
         str(product.id)
     }
+    path_payload = {
+        "source_id": str(product.id),
+        "target_id": str(repository_entity.id),
+        "repository_ids": [str(repository.id)],
+        "max_depth": 3,
+    }
+    for field, invalid_value in (
+        ("source_id", True),
+        ("repository_ids", [False]),
+        ("max_depth", "3"),
+    ):
+        invalid_path = client.post(
+            "/app/canvas/path",
+            data=json.dumps({**path_payload, field: invalid_value}),
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf,
+        )
+        assert invalid_path.status_code == 400, field
     no_path = client.post(
         "/app/canvas/path",
-        data=json.dumps(
-            {
-                "source_id": str(product.id),
-                "target_id": str(repository_entity.id),
-                "repository_ids": [str(repository.id)],
-                "max_depth": 3,
-            }
-        ),
+        data=json.dumps(path_payload),
         content_type="application/json",
         HTTP_X_CSRFTOKEN=csrf,
     )
@@ -1179,6 +1534,26 @@ def test_canvas_http_query_requires_csrf_and_never_requires_javascript() -> None
     assert created_view.status_code == 302
     view = CanvasView.objects.get(name="HTTP storefront map")
     saved_as_of = (timezone.now() + timedelta(hours=1)).isoformat()
+    invalid_saved_revision = client.post(
+        f"/app/canvas/views/{view.id}/revisions",
+        data=json.dumps(
+            {
+                "expected_revision": True,
+                "semantic_query": {},
+                "presentation": {
+                    "placements": [],
+                    "filters": [],
+                    "layers": [],
+                    "groups": [],
+                    "annotations": [],
+                },
+                "idempotency_key": "invalid-boolean-revision",
+            }
+        ),
+        content_type="application/json",
+        HTTP_X_CSRFTOKEN=csrf,
+    )
+    assert invalid_saved_revision.status_code == 400
     saved_revision = client.post(
         f"/app/canvas/views/{view.id}/revisions",
         data=json.dumps(
@@ -1186,12 +1561,15 @@ def test_canvas_http_query_requires_csrf_and_never_requires_javascript() -> None
                 "expected_revision": 1,
                 "semantic_query": {
                     "repository_ids": [str(repository.id)],
+                    "root_entity_id": str(product.id),
                     "entity_types": [KnowledgeEntity.EntityType.PRODUCT],
                     "owner": "Product",
                     "status": "ACTIVE",
+                    "risk": "HIGH",
                     "freshness": "UNKNOWN",
                     "layers": ["provenance"],
                     "as_of": saved_as_of,
+                    "search": "HTTP storefront",
                     "depth": 3,
                 },
                 "presentation": {
@@ -1229,6 +1607,63 @@ def test_canvas_http_query_requires_csrf_and_never_requires_javascript() -> None
     focused_page = client.get(f"/app/canvas?view={view.id}&focus={product.id}&depth=1")
     assert focused_page.status_code == 200
     assert f'value="{product.id}" selected' in focused_page.content.decode()
+    cleared_query = client.post(
+        "/app/canvas/query",
+        data=json.dumps(
+            {
+                "view_id": str(view.id),
+                "anchor_id": None,
+                "entity_types": [],
+                "owner": "",
+                "status": "",
+                "risk": "",
+                "freshness": "",
+                "as_of": None,
+                "search": "",
+                "layers": [],
+            }
+        ),
+        content_type="application/json",
+        HTTP_X_CSRFTOKEN=csrf,
+    )
+    assert cleared_query.status_code == 200
+    assert cleared_query.json()["semantic_query"] == {
+        "repository_ids": [str(repository.id)],
+        "depth": 3,
+    }
+    cleared_page = client.get(
+        "/app/canvas",
+        {
+            "view": str(view.id),
+            "semantic_controls": "1",
+            "q": "",
+            "freshness": "",
+            "owner": "",
+            "status": "",
+            "risk": "",
+            "as_of": "",
+            "focus": "",
+            "depth": "3",
+        },
+    )
+    assert cleared_page.status_code == 200
+    cleared_html = cleared_page.content.decode()
+    assert 'name="q" type="search" maxlength="500" value=""' in cleared_html
+    assert 'name="owner" maxlength="300" value=""' in cleared_html
+    assert 'name="status" maxlength="100" value=""' in cleared_html
+    assert 'name="risk" maxlength="100" value=""' in cleared_html
+    assert 'name="as_of" type="datetime-local" value=""' in cleared_html
+    assert 'value="PRODUCT" selected' not in cleared_html
+    assert 'value="FRESH" selected' not in cleared_html
+    assert f'value="{product.id}" selected' not in cleared_html
+    assert 'value="execution" checked' in cleared_html
+    invalid_share = client.post(
+        f"/app/canvas/views/{view.id}/shares",
+        data=json.dumps({"idempotency_key": {"not": "a string"}}),
+        content_type="application/json",
+        HTTP_X_CSRFTOKEN=csrf,
+    )
+    assert invalid_share.status_code == 400
     shared = client.post(
         f"/app/canvas/views/{view.id}/shares",
         data=json.dumps({"idempotency_key": "http-storefront-share"}),
@@ -1283,6 +1718,7 @@ def test_canvas_api_is_bearer_authenticated_and_closed() -> None:
     scope = AccessScope.objects.create(
         organization=organization,
         name="service canvas scope",
+        all_memberships=True,
         all_service_identities=True,
         all_repositories=True,
     )
@@ -1291,6 +1727,7 @@ def test_canvas_api_is_bearer_authenticated_and_closed() -> None:
         entity_type=KnowledgeEntity.EntityType.PRODUCT,
         canonical_key="product:api-visible",
         display_name="API visible product",
+        attributes={"owner": "API", "status": "ACTIVE", "risk": "LOW"},
         access_scope=scope,
     )
     target = KnowledgeEntity.objects.create(
@@ -1305,7 +1742,19 @@ def test_canvas_api_is_bearer_authenticated_and_closed() -> None:
         name="Bearer API view",
         description="A service-readable and manageable view",
         view_type=CanvasView.ViewType.CUSTOM,
-        semantic_query={"repository_ids": [str(repository.id)]},
+        semantic_query={
+            "repository_ids": [str(repository.id)],
+            "root_entity_id": str(entity.id),
+            "entity_types": [KnowledgeEntity.EntityType.PRODUCT],
+            "owner": "API",
+            "status": "ACTIVE",
+            "risk": "LOW",
+            "freshness": "UNKNOWN",
+            "as_of": (timezone.now() + timedelta(hours=1)).isoformat(),
+            "search": "API visible",
+            "layers": ["provenance"],
+            "depth": 4,
+        },
         repository_id=repository.id,
         access_scope_id=None,
         idempotency_key="bearer-api-view",
@@ -1357,6 +1806,24 @@ def test_canvas_api_is_bearer_authenticated_and_closed() -> None:
         HTTP_AUTHORIZATION=f"Bearer {issued.plaintext}",
     )
     assert invalid.status_code == 400
+    invalid_api_query_payloads: tuple[dict[str, object], ...] = (
+        {"node_limit": "300"},
+        {"depth": None},
+        {"anchor_id": True},
+        {"view_id": None},
+        {"view_revision": None},
+        {"repository_ids": [False]},
+        {"owner": {}},
+        {"layers": "execution"},
+    )
+    for invalid_payload in invalid_api_query_payloads:
+        invalid_typed = client.post(
+            "/api/v1/canvas/query",
+            data=json.dumps(invalid_payload),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {issued.plaintext}",
+        )
+        assert invalid_typed.status_code == 400, invalid_payload
     allowed = client.post(
         "/api/v1/canvas/query",
         data=json.dumps({"repository_ids": [str(repository.id)]}),
@@ -1370,6 +1837,30 @@ def test_canvas_api_is_bearer_authenticated_and_closed() -> None:
     }
 
     authorization = f"Bearer {issued.plaintext}"
+    cleared_api = client.post(
+        "/api/v1/canvas/query",
+        data=json.dumps(
+            {
+                "view_id": str(view.id),
+                "anchor_id": None,
+                "entity_types": [],
+                "owner": "",
+                "status": "",
+                "risk": "",
+                "freshness": "",
+                "as_of": None,
+                "search": "",
+                "layers": [],
+            }
+        ),
+        content_type="application/json",
+        HTTP_AUTHORIZATION=authorization,
+    )
+    assert cleared_api.status_code == 200
+    assert cleared_api.json()["semantic_query"] == {
+        "repository_ids": [str(repository.id)],
+        "depth": 4,
+    }
     listed = client.get(
         "/api/v1/canvas/views",
         HTTP_AUTHORIZATION=authorization,

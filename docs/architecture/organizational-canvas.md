@@ -60,6 +60,14 @@ path is bounded to six hops and can contain only nodes and edges visible through
 the selected repository set. Missing, foreign, revoked, and inaccessible
 identifiers all use the same unavailable response.
 
+Inspector detail uses a strict incident-edge variant of that CTE: the selected
+entity predicate is applied before the 50-edge detail cap, rather than filtering
+a globally capped 600-edge export. Selection-scoped questions and their
+server-rendered Explorer fallback share one scope resolver. It authorizes the
+selected entity, its bounded one-hop endpoints, and their assertions, then maps
+claim locations to distinct current indexed root locations by source
+observation. Search receives only that bounded root-location set.
+
 Shares re-run this pipeline against the viewer's current permissions. A share
 can therefore lose nodes or become unavailable as authorization changes. The
 owner or current view manager may revoke an active share with optimistic
@@ -92,6 +100,10 @@ boundary, not a historical identity snapshot: owner, label, and other canonical
 entity identity fields reflect the currently authorized entity row. The
 resolved `as_of`, focus, depth, repositories, filters, and layers are exposed
 back to server-rendered controls, including when they came from a saved view.
+Query adapters preserve field presence: omission inherits a saved constraint,
+whereas an explicit empty string/list or documented nullable root/time value
+removes it. Product session JSON and REST accept exact JSON types only; numeric
+strings and booleans are not integer values.
 
 ## Browser boundary
 

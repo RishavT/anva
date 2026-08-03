@@ -11,10 +11,16 @@ from datetime import timedelta
 from pathlib import Path
 from shutil import which
 from typing import cast
+from unittest.mock import Mock
 
 import pytest
 from django.utils import timezone
 from selenium import webdriver
+from selenium.common.exceptions import (
+    NoSuchElementException,
+    StaleElementReferenceException,
+    WebDriverException,
+)
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.action_chains import ActionChains
@@ -258,6 +264,30 @@ def _chrome() -> webdriver.Chrome:
     options.add_argument(f"--user-data-dir=/tmp/anva-canvas-chrome-{uuid.uuid4()}")
     options.set_capability("goog:loggingPrefs", {"browser": "ALL"})
     return webdriver.Chrome(service=Service("/usr/bin/chromedriver"), options=options)
+
+
+def _canvas_is_interactive(driver: webdriver.Chrome) -> bool:
+    try:
+        return (
+            driver.find_element(By.TAG_NAME, "html").get_attribute("data-canvas-interactive")
+            == "true"
+        )
+    except (NoSuchElementException, StaleElementReferenceException):
+        return False
+
+
+def test_canvas_interactive_wait_predicate_retries_only_navigation_races() -> None:
+    driver = Mock(spec=webdriver.Chrome)
+    ready = Mock()
+    ready.get_attribute.return_value = "true"
+    driver.find_element.side_effect = [StaleElementReferenceException(), ready]
+    typed_driver = cast(webdriver.Chrome, driver)
+    assert _canvas_is_interactive(typed_driver) is False
+    assert _canvas_is_interactive(typed_driver) is True
+
+    driver.find_element.side_effect = WebDriverException("non-navigation browser failure")
+    with pytest.raises(WebDriverException, match="non-navigation browser failure"):
+        _canvas_is_interactive(typed_driver)
 
 
 def _setup(driver: webdriver.Chrome, base_url: str) -> None:
@@ -839,12 +869,7 @@ def test_organizational_canvas_interaction_no_js_and_responsive_evidence(
         layout_snapshot: list[dict[str, object]] | None = None
         for sample in range(31):
             driver.get(performance_url)
-            wait.until(
-                lambda current: current.find_element(By.TAG_NAME, "html").get_attribute(
-                    "data-canvas-interactive"
-                )
-                == "true"
-            )
+            wait.until(_canvas_is_interactive)
             assert len(driver.find_elements(By.CSS_SELECTOR, ".canvas-node")) == 300
             current_layout = cast(
                 list[dict[str, object]],
@@ -1198,12 +1223,7 @@ def test_organizational_canvas_interaction_no_js_and_responsive_evidence(
         )
         Select(focus_form.find_element(By.NAME, "depth")).select_by_value("1")
         focus_form.find_element(By.CSS_SELECTOR, 'button[type="submit"]').click()
-        wait.until(
-            lambda current: current.find_element(By.TAG_NAME, "html").get_attribute(
-                "data-canvas-interactive"
-            )
-            == "true"
-        )
+        wait.until(_canvas_is_interactive)
         focused_graph = driver.execute_script(
             "return JSON.parse(document.getElementById('canvas-data').textContent)"
         )

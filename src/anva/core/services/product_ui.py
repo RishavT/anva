@@ -76,6 +76,7 @@ from anva.core.services.canvas import (
     canvas_entity_detail,
     canvas_path,
     canvas_projection,
+    canvas_selection_scope,
     create_canvas_share,
     create_canvas_view,
     list_canvas_views,
@@ -744,6 +745,7 @@ class ProductUIFacade:
         self,
         *,
         repository_id: uuid.UUID | None,
+        start_entity_id: uuid.UUID | None,
         query: str,
         entity_type: str,
         freshness: str,
@@ -762,8 +764,34 @@ class ProductUIFacade:
                 "query": query,
                 "entity_type": entity_type,
                 "freshness": freshness,
+                "start_entity": None,
+                "selection_context": None,
             }
+        selection_scope: dict[str, object] | None = None
+        scoped_entity_ids: set[uuid.UUID] | None = None
+        scoped_subject_keys: set[str] | None = None
+        scoped_source_locations: tuple[uuid.UUID, ...] | None = None
+        if start_entity_id is not None:
+            selection_scope = canvas_selection_scope(
+                actor=self.actor,
+                entity_id=start_entity_id,
+                repository_id=selected.id,
+            )
+            selection_context = cast(dict[str, object], selection_scope["selection_context"])
+            scoped_entity_ids = {
+                uuid.UUID(cast(str, item["id"]))
+                for item in cast(list[dict[str, object]], selection_context["nodes"])
+            }
+            scoped_subject_keys = {
+                cast(str, item["canonical_key"])
+                for item in cast(list[dict[str, object]], selection_context["nodes"])
+            }
+            scoped_source_locations = cast(
+                tuple[uuid.UUID, ...], selection_scope["source_location_ids"]
+            )
         entities = authorized_entities(actor=self.actor, repository_id=selected.id)
+        if scoped_entity_ids is not None:
+            entities = entities.filter(id__in=scoped_entity_ids)
         if query:
             entities = entities.filter(
                 Q(display_name__icontains=query) | Q(canonical_key__icontains=query)
@@ -779,19 +807,19 @@ class ProductUIFacade:
                     repository_id=selected.id,
                     query=query[:500],
                     limit=15,
+                    source_location_ids=scoped_source_locations,
                 ).results
             )
         assertions: list[KnowledgeAssertion] = []
         if freshness in KnowledgeAssertion.StalenessState.values:
-            assertions = list(
-                authorized_assertions(
-                    actor=self.actor,
-                    repository_id=selected.id,
-                    action=Action.KNOWLEDGE_VIEW,
-                )
-                .filter(staleness_state=freshness)
-                .order_by("-observed_at")[:SEARCH_LIMIT]
-            )
+            assertion_query = authorized_assertions(
+                actor=self.actor,
+                repository_id=selected.id,
+                action=Action.KNOWLEDGE_VIEW,
+            ).filter(staleness_state=freshness)
+            if scoped_subject_keys is not None:
+                assertion_query = assertion_query.filter(subject_key__in=scoped_subject_keys)
+            assertions = list(assertion_query.order_by("-observed_at")[:SEARCH_LIMIT])
         return {
             "selected_repository": selected,
             "entities": entity_rows,
@@ -800,6 +828,10 @@ class ProductUIFacade:
             "query": query,
             "entity_type": entity_type,
             "freshness": freshness,
+            "start_entity": selection_scope["entity"] if selection_scope else None,
+            "selection_context": (
+                selection_scope["selection_context"] if selection_scope else None
+            ),
             "entity_types": KnowledgeEntity.EntityType.choices,
             "freshness_states": KnowledgeAssertion.StalenessState.choices,
         }
@@ -953,34 +985,21 @@ class ProductUIFacade:
         question = question.strip()
         if not question or len(question) > 500:
             raise ValueError("Canvas question is outside its size budget")
-        detail = canvas_entity_detail(
+        selection_scope = canvas_selection_scope(
             actor=self.actor,
             entity_id=entity_id,
-            repository_ids=(repository_id,),
+            repository_id=repository_id,
         )
         response = search_chunks(
             actor=self.actor,
             repository_id=repository_id,
             query=question,
             limit=10,
-        )
-        selection = canvas_projection(
-            actor=self.actor,
-            query=CanvasQuery(
-                repository_ids=(repository_id,),
-                anchor_id=entity_id,
-                depth=1,
-                node_limit=100,
-                edge_limit=200,
-            ),
+            source_location_ids=cast(tuple[uuid.UUID, ...], selection_scope["source_location_ids"]),
         )
         return {
-            "entity": {"id": detail["id"], "label": detail["label"]},
-            "selection_context": {
-                "depth": 1,
-                "nodes": selection["nodes"],
-                "edges": selection["edges"],
-            },
+            "entity": selection_scope["entity"],
+            "selection_context": selection_scope["selection_context"],
             "results": [result.as_dict() for result in response.results],
             "limitation": (
                 "No authorized source excerpt matched this selection-scoped question."

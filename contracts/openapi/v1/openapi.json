@@ -183,9 +183,6 @@
             "type": "boolean"
           },
           {
-            "type": "integer"
-          },
-          {
             "type": "number"
           },
           {
@@ -3337,12 +3334,26 @@
                 "additionalProperties": false,
                 "properties": {
                   "anchor_id": {
-                    "format": "uuid",
-                    "type": "string"
+                    "oneOf": [
+                      {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   "as_of": {
-                    "format": "date-time",
-                    "type": "string"
+                    "oneOf": [
+                      {
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   "depth": {
                     "maximum": 4,
