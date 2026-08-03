@@ -72,14 +72,48 @@ def _cpu_model() -> str:
 
 def _capture(driver: webdriver.Chrome, name: str) -> None:
     SCREENSHOTS.mkdir(parents=True, exist_ok=True)
-    scroll_left = driver.execute_script(
-        "if (document.activeElement instanceof HTMLElement) document.activeElement.blur();"
-        "const scroller = document.scrollingElement;"
-        "scroller.scrollTo({left: 0, top: scroller.scrollTop, behavior: 'instant'});"
-        "document.documentElement.scrollLeft = 0; document.body.scrollLeft = 0;"
-        "return scroller.scrollLeft;"
+    state = driver.execute_async_script(
+        """
+        const done = arguments[0];
+        const preservedTop = window.scrollY;
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+        requestAnimationFrame(() => {
+          const scroller = document.scrollingElement;
+          window.scrollTo({ left: 0, top: preservedTop, behavior: "instant" });
+          scroller.scrollLeft = 0;
+          document.documentElement.scrollLeft = 0;
+          document.body.scrollLeft = 0;
+          for (const element of document.querySelectorAll("*")) element.scrollLeft = 0;
+          requestAnimationFrame(() => requestAnimationFrame(() => {
+            const sidebar = document.getElementById("primary-navigation");
+            const desktop = window.innerWidth > 896;
+            const sidebarBounds = sidebar?.getBoundingClientRect();
+            done({
+              windowScrollX: window.scrollX,
+              visualViewportPageLeft: window.visualViewport?.pageLeft || 0,
+              documentScrollLeft: document.documentElement.scrollLeft,
+              bodyScrollLeft: document.body.scrollLeft,
+              descendantScrollers: [...document.querySelectorAll("*")]
+                .filter((element) => element.scrollLeft !== 0)
+                .map((element) => element.tagName),
+              desktopSidebarLeft: desktop ? sidebarBounds?.left : null,
+              desktopSidebarVisible: desktop
+                ? Boolean(sidebar && sidebar.open && sidebarBounds?.width)
+                : null,
+            });
+          }));
+        });
+        """
     )
-    assert scroll_left == 0
+    assert state == {
+        "windowScrollX": 0,
+        "visualViewportPageLeft": 0,
+        "documentScrollLeft": 0,
+        "bodyScrollLeft": 0,
+        "descendantScrollers": [],
+        "desktopSidebarLeft": 0 if driver.get_window_size()["width"] > 896 else None,
+        "desktopSidebarVisible": True if driver.get_window_size()["width"] > 896 else None,
+    }
     driver.save_screenshot(str(SCREENSHOTS / name))
 
 
@@ -576,6 +610,10 @@ def test_organizational_canvas_interaction_no_js_and_responsive_evidence(
                 )
             )
             assert len(driver.find_elements(By.CSS_SELECTOR, ".canvas-path-result li")) >= 2
+        path_result = driver.find_element(By.CSS_SELECTOR, ".canvas-path-result")
+        driver.execute_script(
+            "arguments[0].scrollIntoView({block: 'center', inline: 'nearest'})", path_result
+        )
         _capture(driver, "06-canvas-required-traces.png")
         driver.get(f"{base_url}/app/canvas?view={view.id}")
         wait.until(

@@ -17,6 +17,7 @@ def test_canvas_template_keeps_a_complete_no_javascript_relationship_table() -> 
     assert "data-canvas-viewport" in template
     assert "data-canvas-inspector" in template
     assert "data-canvas-focus-select" in template
+    assert "canvas-as-of-control" in template
     assert "data-canvas-draw-relationship" in template
     assert "data-canvas-proposal-edge" in template
     assert "not page.resolved_query.layers or key in page.resolved_query.layers" in template

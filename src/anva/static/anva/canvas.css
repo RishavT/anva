@@ -91,6 +91,10 @@
   grid-column: span 3;
 }
 
+.canvas-filter-form > .canvas-as-of-control {
+  grid-column: span 3;
+}
+
 .canvas-filter-form label,
 .canvas-path-form label,
 .canvas-create-form label,
@@ -113,6 +117,7 @@
 .canvas-proposal-form select,
 .canvas-proposal-form textarea {
   width: 100%;
+  min-width: 0;
   min-height: 44px;
   color: var(--ink);
   background: var(--canvas-raised);
@@ -495,7 +500,8 @@
 @media (max-width: 80rem) {
   .canvas-filter-form > label,
   .canvas-filter-form .canvas-search,
-  .canvas-filter-form > fieldset {
+  .canvas-filter-form > fieldset,
+  .canvas-filter-form > .canvas-as-of-control {
     grid-column: span 4;
   }
 
@@ -533,7 +539,8 @@
 
   .canvas-filter-form > label,
   .canvas-filter-form .canvas-search,
-  .canvas-filter-form > fieldset {
+  .canvas-filter-form > fieldset,
+  .canvas-filter-form > .canvas-as-of-control {
     grid-column: 1 / -1;
   }
 
