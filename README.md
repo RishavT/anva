@@ -42,18 +42,28 @@ No host Python, Node.js, npm, or Go installation is used.
 
 ## Install and run
 
-From a fresh clone:
+From a fresh clone, the shortest local demo path is:
 
 ```bash
 cp .env.example .env
-docker compose up --build -d
-docker compose ps
+make install-demo
+```
+
+Without Make, run:
+
+```bash
+docker compose up --build --wait
+docker compose --profile demo run --rm --no-deps demo
 ```
 
 The checked-in Compose defaults also allow `docker compose up --build -d` without an `.env`
 file. Copying `.env.example` makes local configuration explicit and gives you one place to
-change credentials. The base stack publishes no host ports, which makes this exact command
-safe on shared development and CI machines.
+change credentials. `make install-demo` builds the wheel-installed runtime, waits for the
+dependencies and migrations, and idempotently creates synthetic demo data. The demo repository
+token is printed only to the attached terminal: the one-shot container uses no Docker logging
+driver and is removed after the command. Do not redirect or retain that output. Use `make up` when
+demo data is not wanted. The base stack publishes no host ports, which makes these commands safe
+on shared development and CI machines.
 
 To open the UI and local storage console from the host, use the optional port-mapping
 override:
@@ -124,6 +134,19 @@ Regenerate and verify the checked-in JSON Schema, OpenAPI, MCP, and example cont
 `make contracts` and `make contracts-check`. Generated contract files are deterministic and
 must not be edited directly.
 
+Build the local candidate wheel/skill archives, image SBOMs, scan reports, final
+manifest, and `SHA256SUMS` with `make release-artifacts`. The final manifest
+refuses tracked or untracked worktree changes and verifies that the image's OCI
+revision is the exact source commit. Skill archives are rebuilt and verified in
+the release builder. The source gate excludes operator-owned secrets, backups,
+release outputs, `.git`, and local tool caches from the distributable scan, then
+gates vulnerability, secret, and misconfiguration findings. The image gate has
+14 reviewed no-vendor-fix exceptions that expire on 2026-08-18; it does not
+claim that the image has no high/critical findings. On Linux, set
+`ANVA_DOCKER_GID` to the group ID of `/var/run/docker.sock` so the non-root
+scanner can inspect the local image. This creates local, ignored artifacts; it
+does not publish, sign, or tag them.
+
 Render, package, and exact-check the Codex/Claude distributions with
 `make skills-render`, `make skills-package`, and `make skills-check`. Fresh
 installation, environment-only MCP handoff, checksums, diagnostics, read-only
@@ -139,6 +162,34 @@ make migrate
 make shell
 make down
 ```
+
+Release-candidate lifecycle operations are also Compose-owned:
+
+```bash
+make backup
+make backup-verify
+make migration-rehearsal
+make uninstall       # preserve named data volumes
+make uninstall-clean # destructive: remove this Compose project's named volumes
+```
+
+Read the [operator guide](docs/guides/operator.md), [user
+guide](docs/guides/user.md), and [developer guide](docs/guides/developer.md),
+plus the [install/upgrade/uninstall](docs/runbooks/install-upgrade-uninstall.md)
+and [backup/restore](docs/runbooks/backup-and-restore.md) runbooks before using
+these beyond local evaluation. The current candidate has local build and scan
+artifacts but no release tag, registry digest, signature/provenance, or published
+package/image. See the [MVP-013 release notes](docs/releases/mvp-013.md),
+[compatibility matrix](docs/releases/compatibility.md), and [evidence
+index](docs/evidence/issue-013/README.md) for the exact boundary.
+
+After a test or drill, remove only the named task project with `make test-down`
+or `COMPOSE_PROJECT=<exact-project> make uninstall-clean`; inspect the resolved
+project before deletion. Remove only explicitly identified Anva images and the
+task-owned `release/.trivy-cache` when they are no longer needed. The MVP-013
+worktree exercise kept its task-owned Docker footprint below 5 GB through this
+scoped cleanup, but Anva does not configure or enforce an engine-wide 5 GB cap,
+and these commands must not prune unrelated Docker resources.
 
 The worker claims PostgreSQL-leased allowlisted jobs and revalidates source/snapshot access before
 and during ingestion. The dedicated MCP process exposes authenticated, stateless, versioned

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import time
 import uuid
 from dataclasses import dataclass
 
@@ -19,9 +20,12 @@ from anva.core.exceptions import AuthenticationError
 from anva.core.models import Membership, Organization, User
 from anva.core.services.authorization import INVALID_CREDENTIAL_MESSAGE
 from anva.core.services.context import ActorContext
+from anva.core.services.operations import enforce_rate_limit
 
 WEB_USER_SESSION_KEY = "anva_web_user_id"
 WEB_ORGANIZATION_SESSION_KEY = "anva_web_organization_id"
+WEB_AUTHENTICATED_AT_SESSION_KEY = "anva_web_authenticated_at"
+DECOMMISSION_RECENT_AUTH_SECONDS = 15 * 60
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +67,7 @@ def resolve_web_principal(request: HttpRequest) -> WebPrincipal:
         Membership.objects.select_related("organization", "user", "role")
         .filter(
             organization_id=organization_id,
+            organization__lifecycle_state=Organization.LifecycleState.ACTIVE,
             user_id=user_id,
             is_active=True,
             user__is_active=True,
@@ -79,6 +84,7 @@ def resolve_web_principal(request: HttpRequest) -> WebPrincipal:
         request_id=uuid.uuid4(),
         source_ip_hash=_source_ip_hash(request),
     )
+    enforce_rate_limit(actor=actor, channel="web")
     return WebPrincipal(
         actor=actor,
         organization=membership.organization,
@@ -97,6 +103,17 @@ def establish_web_session(
     request.session.cycle_key()
     request.session[WEB_USER_SESSION_KEY] = str(user_id)
     request.session[WEB_ORGANIZATION_SESSION_KEY] = str(organization_id)
+    request.session[WEB_AUTHENTICATED_AT_SESSION_KEY] = int(time.time())
+
+
+def require_recent_web_authentication(request: HttpRequest) -> None:
+    """Require a server-established human session no older than fifteen minutes."""
+    authenticated_at = request.session.get(WEB_AUTHENTICATED_AT_SESSION_KEY)
+    if isinstance(authenticated_at, bool) or not isinstance(authenticated_at, int | float):
+        raise AuthenticationError(INVALID_CREDENTIAL_MESSAGE)
+    age = time.time() - float(authenticated_at)
+    if age < -30 or age > DECOMMISSION_RECENT_AUTH_SECONDS:
+        raise AuthenticationError(INVALID_CREDENTIAL_MESSAGE)
 
 
 def clear_web_session(request: HttpRequest) -> None:

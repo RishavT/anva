@@ -3,17 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
 
+import httpx
 import pytest
+from mcp.server.auth.provider import AccessToken
+from mcp.shared.exceptions import McpError
 from mcp.shared.memory import create_connected_server_and_client_session
 from mcp.types import TextContent
 from pydantic import AnyUrl
 
+from anva.core.exceptions import RateLimitExceededError
 from anva.core.models import (
     AcceptanceCriterion,
     MCPProposalSubmission,
@@ -498,3 +503,335 @@ def test_official_sdk_unknown_tool_warning_is_sanitized_without_hiding_logs(
     assert canary not in caplog.text
     assert "Unlisted tool requested; SDK schema validation skipped" in caplog.text
     assert "unrelated MCP SDK warning remains visible" in caplog.text
+
+
+@pytest.mark.unit
+def test_official_sdk_runs_authenticated_actor_outside_async_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actor = _actor()
+    calls: list[str] = []
+
+    def sync_only_actor() -> ActorContext:
+        with pytest.raises(RuntimeError, match="no running event loop"):
+            asyncio.get_running_loop()
+        calls.append("actor")
+        return actor
+
+    monkeypatch.setattr(mcp_entrypoint, "_actor", sync_only_actor)
+
+    def rejected_dispatch(**_kwargs: object) -> dict[str, object]:
+        raise mcp_gateway.MCPGatewayError(
+            "capability_unavailable",
+            "Requested capability is unavailable; refresh MCP capability discovery",
+            http_status=404,
+            reason="unknown_capability",
+        )
+
+    monkeypatch.setattr(mcp_entrypoint, "dispatch_tool", rejected_dispatch)
+
+    async def use_authenticated_handlers() -> None:
+        async with create_connected_server_and_client_session(
+            mcp_entrypoint._create_server()
+        ) as session:
+            assert (await session.list_tools()).tools
+            assert (await session.list_resources()).resources
+            assert (await session.list_resource_templates()).resourceTemplates
+            result = await session.read_resource(AnyUrl("anva://diagnostics"))
+            assert len(result.contents) == 1
+            content = result.contents[0]
+            assert hasattr(content, "text")
+            assert '"status": "available"' in content.text
+            tool_result = await session.call_tool("anva.unknown", arguments={})
+            assert tool_result.isError
+
+    asyncio.run(use_authenticated_handlers())
+    assert calls == ["actor"] * 6
+
+
+@pytest.mark.unit
+def test_official_sdk_returns_safe_tool_error_when_actor_rate_limit_is_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def exhausted_actor() -> ActorContext:
+        raise RateLimitExceededError(17)
+
+    monkeypatch.setattr(mcp_entrypoint, "_actor", exhausted_actor)
+
+    async def call_rate_limited_tool() -> None:
+        async with create_connected_server_and_client_session(
+            mcp_entrypoint._create_server()
+        ) as session:
+            result = await session.call_tool("anva.unknown", arguments={})
+            assert result.isError
+            content = result.content[0]
+            assert isinstance(content, TextContent)
+            payload = json.loads(content.text)
+            assert payload["code"] == "rate_limited"
+            assert payload["message"] == "Request rate limit exceeded"
+            assert "correlation_id" in payload
+
+    asyncio.run(call_rate_limited_tool())
+
+
+@pytest.mark.unit
+def test_official_sdk_rate_limits_authenticated_discovery_with_safe_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def exhausted_actor() -> ActorContext:
+        raise RateLimitExceededError(17)
+
+    monkeypatch.setattr(mcp_entrypoint, "_actor", exhausted_actor)
+
+    async def list_rate_limited_tools() -> None:
+        async with create_connected_server_and_client_session(
+            mcp_entrypoint._create_server()
+        ) as session:
+            with pytest.raises(McpError, match="rate_limited"):
+                await session.list_tools()
+
+    asyncio.run(list_rate_limited_tools())
+
+
+@pytest.mark.unit
+def test_mcp_request_tier_rate_limits_valid_initialize_and_ping_once_each(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    token_canary = "MCP_VALID_TOKEN_MUST_NOT_BE_STORED_OR_LOGGED"  # noqa: S105
+    preauth_keys: list[str] = []
+    actor_rate_calls: list[str] = []
+
+    async def valid_token(
+        _verifier: object,
+        token: str,
+    ) -> AccessToken | None:
+        assert token == token_canary
+        return AccessToken(
+            token="opaque-credential-id",
+            client_id="rate-limit-client",
+            scopes=[],
+            subject="rate-limit-client",
+        )
+
+    def request_rate_limit(*, client_key: str) -> None:
+        preauth_keys.append(client_key)
+        if len(preauth_keys) > 1:
+            raise RateLimitExceededError(9)
+
+    monkeypatch.setattr(mcp_entrypoint.RepositoryTokenVerifier, "verify_token", valid_token)
+    monkeypatch.setattr(
+        mcp_entrypoint,
+        "enforce_pre_auth_rate_limit",
+        request_rate_limit,
+    )
+    monkeypatch.setattr(
+        mcp_entrypoint,
+        "enforce_rate_limit",
+        lambda **_kwargs: actor_rate_calls.append("actor"),
+    )
+    headers = {
+        "Authorization": f"Bearer {token_canary}",
+        "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json",
+    }
+    initialize = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "rate-limit-test", "version": "1"},
+        },
+    }
+
+    async def invoke() -> tuple[httpx.Response, httpx.Response]:
+        application = mcp_entrypoint.create_application()
+        transport = httpx.ASGITransport(app=application)
+        async with application.router.lifespan_context(application):
+            async with httpx.AsyncClient(
+                transport=transport,
+                base_url="http://mcp:8001",
+            ) as client:
+                initialized = await client.post("/mcp", headers=headers, json=initialize)
+                ping = await client.post(
+                    "/mcp",
+                    headers=headers,
+                    json={"jsonrpc": "2.0", "id": 2, "method": "ping"},
+                )
+        return initialized, ping
+
+    initialized, ping = asyncio.run(invoke())
+
+    assert initialized.status_code == 200
+    assert initialized.json()["result"]["serverInfo"]["name"] == "anva"
+    assert ping.status_code == 429
+    assert ping.headers["Retry-After"] == "9"
+    assert ping.headers["Cache-Control"] == "no-store"
+    assert ping.json() == {
+        "jsonrpc": "2.0",
+        "id": None,
+        "error": {
+            "code": -32000,
+            "message": "Request rate limit exceeded",
+            "data": {"code": "rate_limited"},
+        },
+    }
+    assert len(preauth_keys) == 2
+    assert preauth_keys[0] == preauth_keys[1]
+    assert token_canary not in preauth_keys[0]
+    assert actor_rate_calls == []
+    assert token_canary not in initialized.text
+    assert token_canary not in ping.text
+    assert token_canary not in caplog.text
+
+
+@pytest.mark.unit
+def test_mcp_tool_request_charges_request_and_actor_tiers_once_each(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actor = _actor()
+    preauth_calls: list[str] = []
+    actor_rate_calls: list[str] = []
+
+    async def valid_token(
+        _verifier: object,
+        _token: str,
+    ) -> AccessToken | None:
+        return AccessToken(
+            token=str(actor.credential_id),
+            client_id=actor.actor_id,
+            scopes=[],
+            subject=actor.actor_id,
+            claims={
+                "organization_id": str(actor.organization_id),
+                "repository_id": str(actor.repository_id),
+                "credential_id": str(actor.credential_id),
+                "actor_type": actor.actor_type,
+                "request_id": str(actor.request_id),
+            },
+        )
+
+    monkeypatch.setattr(mcp_entrypoint.RepositoryTokenVerifier, "verify_token", valid_token)
+    monkeypatch.setattr(
+        mcp_entrypoint,
+        "enforce_pre_auth_rate_limit",
+        lambda *, client_key: preauth_calls.append(client_key),
+    )
+    monkeypatch.setattr(
+        mcp_entrypoint,
+        "enforce_rate_limit",
+        lambda **_kwargs: actor_rate_calls.append("actor"),
+    )
+    headers = {
+        "Authorization": "Bearer valid-token",
+        "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json",
+    }
+
+    async def invoke() -> tuple[httpx.Response, httpx.Response]:
+        application = mcp_entrypoint.create_application()
+        transport = httpx.ASGITransport(app=application)
+        async with application.router.lifespan_context(application):
+            async with httpx.AsyncClient(
+                transport=transport,
+                base_url="http://mcp:8001",
+            ) as client:
+                initialized = await client.post(
+                    "/mcp",
+                    headers=headers,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2025-06-18",
+                            "capabilities": {},
+                            "clientInfo": {"name": "tier-test", "version": "1"},
+                        },
+                    },
+                )
+                called = await client.post(
+                    "/mcp",
+                    headers=headers,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {"name": "anva.unknown", "arguments": {}},
+                    },
+                )
+        return initialized, called
+
+    initialized, called = asyncio.run(invoke())
+
+    assert initialized.status_code == 200
+    assert called.status_code == 200
+    assert len(preauth_calls) == 2
+    assert actor_rate_calls == ["actor"]
+
+
+@pytest.mark.unit
+def test_actor_tier_reuses_discovery_once_but_preserves_later_handler_charges(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actor = _actor()
+    access_token = AccessToken(
+        token=str(actor.credential_id),
+        client_id=actor.actor_id,
+        scopes=[],
+        subject=actor.actor_id,
+        claims={
+            "organization_id": str(actor.organization_id),
+            "repository_id": str(actor.repository_id),
+            "credential_id": str(actor.credential_id),
+            "actor_type": actor.actor_type,
+            "request_id": str(actor.request_id),
+        },
+    )
+    actor_rate_calls: list[str] = []
+    monkeypatch.setattr(mcp_entrypoint, "get_access_token", lambda: access_token)
+    monkeypatch.setattr(
+        mcp_entrypoint,
+        "enforce_rate_limit",
+        lambda **_kwargs: actor_rate_calls.append("actor"),
+    )
+    state_token = mcp_entrypoint._actor_rate_state.set(
+        mcp_entrypoint._ActorRateRequestState(set(), {}, set())
+    )
+    discovery_token = mcp_entrypoint._actor_rate_kind.set("discovery")
+    try:
+        assert mcp_entrypoint._actor().credential_id == actor.credential_id
+        handler_token = mcp_entrypoint._actor_rate_kind.set("handler")
+        try:
+            assert mcp_entrypoint._actor().credential_id == actor.credential_id
+            assert mcp_entrypoint._actor().credential_id == actor.credential_id
+        finally:
+            mcp_entrypoint._actor_rate_kind.reset(handler_token)
+    finally:
+        mcp_entrypoint._actor_rate_kind.reset(discovery_token)
+        mcp_entrypoint._actor_rate_state.reset(state_token)
+
+    assert actor_rate_calls == ["actor", "actor"]
+
+
+@pytest.mark.unit
+def test_mcp_request_client_key_trusts_forwarding_only_from_exact_proxy(
+    settings: object,
+) -> None:
+    scope = cast(
+        Any,
+        {
+            "client": ("192.0.2.10", 1234),
+            "headers": [(b"x-forwarded-for", b"198.51.100.7, 192.0.2.10")],
+        },
+    )
+    settings.ANVA_TRUSTED_PROXY_IPS = []  # type: ignore[attr-defined]
+    assert mcp_entrypoint._request_client_rate_key(scope) == "192.0.2.10"
+
+    settings.ANVA_TRUSTED_PROXY_IPS = ["192.0.2.10"]  # type: ignore[attr-defined]
+    assert mcp_entrypoint._request_client_rate_key(scope) == "198.51.100.7"
+
+    scope["headers"] = [(b"x-forwarded-for", b"not-an-address")]
+    assert mcp_entrypoint._request_client_rate_key(scope) == "unresolved-client"

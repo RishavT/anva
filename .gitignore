@@ -13,4 +13,11 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+backups/*
+!backups/.gitkeep
+release/*
+!release/.gitkeep
+!release/.trivy-cache/
+release/.trivy-cache/*
+!release/.trivy-cache/.gitkeep
 .DS_Store

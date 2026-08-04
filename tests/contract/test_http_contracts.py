@@ -37,6 +37,7 @@ def test_api_readiness_contract(client: Client, ready_dependencies: None) -> Non
         "status": "ready",
         "checks": [
             {"name": "database", "healthy": True, "detail": "available"},
+            {"name": "migrations", "healthy": True, "detail": "current"},
             {"name": "object_storage", "healthy": True, "detail": "available"},
         ],
     }
@@ -46,6 +47,46 @@ def test_api_readiness_contract(client: Client, ready_dependencies: None) -> Non
 def test_api_health_endpoints_reject_unsupported_methods(client: Client) -> None:
     assert client.post("/health/live").status_code == 405
     assert client.post("/health/ready").status_code == 405
+
+
+@pytest.mark.contract
+def test_retention_http_uses_server_owned_reference_time(client: Client) -> None:
+    organization_id = uuid.uuid4()
+    actor = SimpleNamespace(organization_id=organization_id)
+    completed_at = datetime(2026, 8, 4, tzinfo=UTC)
+    run_record = SimpleNamespace(
+        id=uuid.uuid4(),
+        kind="SCHEDULED_RETENTION",
+        state="COMPLETED",
+        dry_run=True,
+        cutoff_at=completed_at,
+        summary={},
+        completed_at=completed_at,
+    )
+
+    with (
+        patch("anva.core.views._actor", return_value=actor),
+        patch("anva.core.views.run_retention", return_value=run_record) as run_retention,
+    ):
+        rejected = client.post(
+            f"/api/v1/organizations/{organization_id}/retention-runs",
+            data=json.dumps(
+                {
+                    "dry_run": True,
+                    "reference_time": "2099-01-01T00:00:00Z",
+                }
+            ),
+            content_type="application/json",
+        )
+        accepted = client.post(
+            f"/api/v1/organizations/{organization_id}/retention-runs",
+            data=json.dumps({"dry_run": True}),
+            content_type="application/json",
+        )
+
+    assert rejected.status_code == 400
+    assert accepted.status_code == 201
+    run_retention.assert_called_once_with(actor=actor, dry_run=True)
 
 
 def call_mcp(path: str, method: str = "GET") -> tuple[int, dict[str, object]]:

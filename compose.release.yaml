@@ -1,0 +1,39 @@
+services:
+  release-builder:
+    build:
+      context: .
+      target: test
+    profiles: ["release"]
+    working_dir: /workspace
+    user: "${ANVA_HOST_UID:-1000}:${ANVA_HOST_GID:-1000}"
+    environment:
+      HOME: /tmp
+      PYTHONPATH: /workspace/src
+      SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH:-1756684800}
+    volumes:
+      - .:/workspace:ro
+      - ./release:/release
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+
+  release-scanner:
+    image: aquasec/trivy:0.64.1@sha256:a8ca29078522f30393bdb34225e4c0994d38f37083be81a42da3a2a7e1488e9e
+    profiles: ["release"]
+    user: "${ANVA_HOST_UID:-1000}:${ANVA_HOST_GID:-1000}"
+    group_add: ["${ANVA_DOCKER_GID:?set ANVA_DOCKER_GID to the Docker socket group ID}"]
+    environment:
+      HOME: /tmp
+      TRIVY_CACHE_DIR: /cache
+    volumes:
+      - .:/workspace:ro
+      - ./release:/release
+      - ./release/.trivy-cache:/cache
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=1g,mode=1777

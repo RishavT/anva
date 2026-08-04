@@ -199,6 +199,7 @@ def authenticate_bearer(authorization_header: str) -> ActorContext:
         or token.expires_at <= now
         or token.issuer != settings.TOKEN_ISSUER
         or token.audience != settings.TOKEN_AUDIENCE
+        or token.organization.lifecycle_state != Organization.LifecycleState.ACTIVE
         or not token.repository.is_active
         or not token.service_identity.is_active
     ):

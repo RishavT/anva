@@ -10,13 +10,21 @@ import pytest
 from anva.foundation.services import DependencyStatus
 
 
+@pytest.fixture(autouse=True)
+def disable_operational_rate_limits(settings: object) -> None:
+    """Keep unrelated tests database-independent; operations tests opt back in."""
+    settings.ANVA_RATE_LIMIT_ENABLED = False  # type: ignore[attr-defined]
+
+
 @pytest.fixture
 def ready_dependencies() -> Iterator[None]:
     """Make request-level tests independent of infrastructure."""
     database = DependencyStatus("database", True, "available")
+    migrations = DependencyStatus("migrations", True, "current")
     object_storage = DependencyStatus("object_storage", True, "available")
     with (
         patch("anva.foundation.services.check_database", return_value=database),
+        patch("anva.foundation.services.check_migrations", return_value=migrations),
         patch("anva.foundation.services.check_object_storage", return_value=object_storage),
     ):
         yield

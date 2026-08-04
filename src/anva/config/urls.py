@@ -113,12 +113,23 @@ urlpatterns = [
     path("app/audit", product_views.audit, name="product-audit"),
     path("health/live", views.liveness, name="liveness"),
     path("health/ready", views.readiness, name="readiness"),
+    path("metrics", views.metrics, name="metrics"),
     path("webhooks/github", core_views.github_webhook, name="github-webhook"),
     path("api/v1/bootstrap", core_views.bootstrap, name="api-v1-bootstrap"),
     path(
         "api/v1/organizations/<uuid:organization_id>",
         core_views.organization_detail,
         name="api-v1-organization",
+    ),
+    path(
+        "api/v1/organizations/<uuid:organization_id>/retention-runs",
+        core_views.organization_retention_run,
+        name="api-v1-organization-retention-runs",
+    ),
+    path(
+        "api/v1/organizations/<uuid:organization_id>/decommission",
+        core_views.organization_decommission,
+        name="api-v1-organization-decommission",
     ),
     path(
         "api/v1/organizations/<uuid:organization_id>/members",

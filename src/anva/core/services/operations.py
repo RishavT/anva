@@ -1,0 +1,434 @@
+"""Production operations: tenant rate limits, retention, and decommissioning."""
+
+from __future__ import annotations
+
+import hashlib
+import hmac
+import uuid
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
+
+from django.conf import settings
+from django.db import transaction
+from django.db.models import F, OuterRef, Subquery
+from django.utils import timezone
+
+from anva.core.exceptions import RateLimitExceededError, ResourceNotFoundError
+from anva.core.models import (
+    AccessScope,
+    Evidence,
+    EvidenceRetentionEvent,
+    Membership,
+    Organization,
+    OrganizationProductSettings,
+    RateLimitBucket,
+    Repository,
+    RepositoryAccessToken,
+    RetentionRun,
+    ServiceIdentity,
+    content_hash,
+)
+from anva.core.services.authorization import Action, authorize_action
+from anva.core.services.context import ActorContext
+from anva.core.services.events import record_transition
+from anva.core.services.scopes import revoke_source_connection
+
+MAX_DECOMMISSION_SOURCES = 1_000
+MAX_PREAUTH_RATE_BUCKET_PURGE = 1_000
+
+
+@dataclass(frozen=True, slots=True)
+class RateLimitDecision:
+    """Non-secret fixed-window decision safe for response metadata."""
+
+    limit: int
+    remaining: int
+    retry_after_seconds: int
+
+
+def _rate_limit(channel: str) -> int:
+    limits = {
+        "api": settings.ANVA_RATE_LIMIT_API_REQUESTS,
+        "mcp": settings.ANVA_RATE_LIMIT_MCP_REQUESTS,
+        "web": settings.ANVA_RATE_LIMIT_WEB_REQUESTS,
+        "preauth": settings.ANVA_RATE_LIMIT_PREAUTH_REQUESTS,
+    }
+    try:
+        return int(limits[channel])
+    except KeyError:
+        raise ValueError("Unknown rate-limit channel") from None
+
+
+def _identity_hash(actor: ActorContext) -> str:
+    material = ":".join(
+        (
+            str(actor.organization_id),
+            actor.actor_type,
+            actor.actor_id,
+            str(actor.credential_id or "human-session"),
+        )
+    )
+    return hmac.new(
+        str(settings.SECRET_KEY).encode(),
+        material.encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def enforce_rate_limit(
+    *,
+    actor: ActorContext,
+    channel: str,
+    now: datetime | None = None,
+) -> RateLimitDecision:
+    """Atomically enforce one tenant-and-principal fixed window."""
+    return _enforce_rate_limit(
+        organization_id=actor.organization_id,
+        identity_hash=_identity_hash(actor),
+        channel=channel,
+        now=now,
+    )
+
+
+def enforce_pre_auth_rate_limit(
+    *,
+    client_key: str,
+    now: datetime | None = None,
+) -> RateLimitDecision:
+    """Bound anonymous/auth-failure traffic using a non-reversible client key."""
+    identity_hash = hmac.new(
+        str(settings.SECRET_KEY).encode(),
+        f"preauth:{client_key}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    return _enforce_rate_limit(
+        organization_id=None,
+        identity_hash=identity_hash,
+        channel="preauth",
+        now=now,
+    )
+
+
+def _enforce_rate_limit(
+    *,
+    organization_id: uuid.UUID | None,
+    identity_hash: str,
+    channel: str,
+    now: datetime | None,
+) -> RateLimitDecision:
+    """Persist one fixed-window decision for a pre-hashed identity."""
+    limit = _rate_limit(channel)
+    window_seconds = int(settings.ANVA_RATE_LIMIT_WINDOW_SECONDS)
+    current = now or timezone.now()
+    epoch = int(current.timestamp())
+    window_epoch = epoch - (epoch % window_seconds)
+    window_start = datetime.fromtimestamp(window_epoch, tz=UTC)
+    expires_at = window_start + timedelta(seconds=window_seconds * 2)
+    retry_after = max(1, window_seconds - (epoch - window_epoch))
+    if not settings.ANVA_RATE_LIMIT_ENABLED:
+        return RateLimitDecision(limit=limit, remaining=limit, retry_after_seconds=retry_after)
+
+    with transaction.atomic():
+        bucket, _created = RateLimitBucket.objects.select_for_update().get_or_create(
+            organization_id=organization_id,
+            identity_hash=identity_hash,
+            channel=channel,
+            window_started_at=window_start,
+            defaults={
+                "request_count": 0,
+                "denied_count": 0,
+                "expires_at": expires_at,
+            },
+        )
+        bucket.request_count += 1
+        denied = bucket.request_count > limit
+        if denied:
+            bucket.denied_count += 1
+        bucket.save(update_fields=["request_count", "denied_count"])
+    if denied:
+        raise RateLimitExceededError(retry_after)
+    return RateLimitDecision(
+        limit=limit,
+        remaining=max(0, limit - bucket.request_count),
+        retry_after_seconds=retry_after,
+    )
+
+
+def purge_expired_rate_buckets(
+    *,
+    organization: Organization,
+    now: datetime | None = None,
+) -> int:
+    """Delete one tenant's expired counters; no governed record is affected."""
+    deleted, _details = RateLimitBucket.objects.filter(
+        organization=organization, expires_at__lte=now or timezone.now()
+    ).delete()
+    return deleted
+
+
+def purge_expired_pre_auth_rate_buckets(
+    *,
+    now: datetime | None = None,
+    limit: int = MAX_PREAUTH_RATE_BUCKET_PURGE,
+) -> int:
+    """Delete one bounded oldest-first batch of expired system pre-auth counters."""
+    if isinstance(limit, bool) or not 1 <= limit <= MAX_PREAUTH_RATE_BUCKET_PURGE:
+        raise ValueError("Pre-auth rate-bucket cleanup limit must be between 1 and 1000")
+    cutoff = now or timezone.now()
+    with transaction.atomic():
+        bucket_ids = list(
+            RateLimitBucket.objects.select_for_update(skip_locked=True)
+            .filter(
+                organization__isnull=True,
+                channel="preauth",
+                expires_at__lte=cutoff,
+            )
+            .order_by("expires_at", "id")
+            .values_list("id", flat=True)[:limit]
+        )
+        if not bucket_ids:
+            return 0
+        deleted, _details = RateLimitBucket.objects.filter(
+            id__in=bucket_ids,
+            organization__isnull=True,
+            channel="preauth",
+            expires_at__lte=cutoff,
+        ).delete()
+    return deleted
+
+
+def run_retention(
+    *,
+    actor: ActorContext,
+    reference_time: datetime | None = None,
+    dry_run: bool = False,
+) -> RetentionRun:
+    """Apply due evidence expiry and record exactly what was retained."""
+    now = reference_time or timezone.now()
+    authorize_action(
+        actor=actor,
+        action=Action.RETENTION_MANAGE,
+        repository_id=actor.repository_id,
+    )
+    organization = Organization.objects.filter(
+        id=actor.organization_id,
+        lifecycle_state=Organization.LifecycleState.ACTIVE,
+    ).first()
+    if organization is None:
+        raise ResourceNotFoundError("Governed record was not found")
+    product_settings = OrganizationProductSettings.objects.filter(organization=organization).first()
+    retention_days = product_settings.retention_days if product_settings is not None else 365
+    cutoff = now - timedelta(days=retention_days)
+    request_hash = content_hash(
+        {
+            "organization_id": str(organization.id),
+            "kind": RetentionRun.Kind.SCHEDULED_RETENTION,
+            "reference_time": now.isoformat(),
+            "dry_run": dry_run,
+        }
+    )
+    with transaction.atomic():
+        existing = RetentionRun.objects.filter(
+            organization=organization,
+            kind=RetentionRun.Kind.SCHEDULED_RETENTION,
+            request_hash=request_hash,
+        ).first()
+        if existing is not None:
+            return existing
+        run = RetentionRun.objects.create(
+            organization=organization,
+            kind=RetentionRun.Kind.SCHEDULED_RETENTION,
+            state=RetentionRun.State.RUNNING,
+            cutoff_at=cutoff,
+            dry_run=dry_run,
+            request_hash=request_hash,
+            actor_type=actor.actor_type,
+            actor_id=actor.actor_id,
+        )
+        latest_retention_state = EvidenceRetentionEvent.objects.filter(
+            organization=organization,
+            evidence_id=OuterRef("pk"),
+            occurred_at__lte=now,
+        ).order_by("-occurred_at", "-id")
+        active_evidence_ids = list(
+            Evidence.objects.filter(
+                organization=organization,
+                completed_at__lte=cutoff,
+                retention_expires_at__isnull=False,
+                retention_expires_at__lte=now,
+            )
+            .annotate(latest_retention_state=Subquery(latest_retention_state.values("state")[:1]))
+            .filter(latest_retention_state=Evidence.RetentionState.ACTIVE)
+            .order_by("id")
+            .values_list("id", flat=True)[:10_001]
+        )
+        if len(active_evidence_ids) > 10_000:
+            raise ValueError("Retention run exceeds the 10,000-record safety bound")
+        if not dry_run:
+            EvidenceRetentionEvent.objects.bulk_create(
+                [
+                    EvidenceRetentionEvent(
+                        organization=organization,
+                        evidence_id=evidence_id,
+                        state=Evidence.RetentionState.EXPIRED,
+                        reason="Configured retention period elapsed",
+                        actor_type=actor.actor_type,
+                        actor_id=actor.actor_id,
+                        occurred_at=now,
+                    )
+                    for evidence_id in active_evidence_ids
+                ]
+            )
+        expired_rate_buckets = RateLimitBucket.objects.filter(
+            organization=organization,
+            expires_at__lte=now,
+        ).count()
+        if not dry_run:
+            purge_expired_rate_buckets(organization=organization, now=now)
+        run.summary = {
+            "evidence_expired": len(active_evidence_ids),
+            "rate_buckets_deleted": expired_rate_buckets,
+            "governed_history_retained": True,
+            "source_content_deleted": 0,
+        }
+        run.state = RetentionRun.State.COMPLETED
+        run.completed_at = now
+        run.save(update_fields=["summary", "state", "completed_at"])
+        record_transition(
+            organization=organization,
+            actor=actor,
+            target_type="retentionrun",
+            target_id=run.id,
+            from_state=RetentionRun.State.RUNNING,
+            to_state=RetentionRun.State.COMPLETED,
+            revision=1,
+        )
+        return run
+
+
+def decommission_organization(
+    *,
+    actor: ActorContext,
+    confirmation: str,
+    acknowledgement: str,
+    reference_time: datetime | None = None,
+) -> RetentionRun:
+    """Irreversibly revoke tenant access while retaining required audit evidence."""
+    now = reference_time or timezone.now()
+    if actor.actor_type != "USER" or actor.credential_id is not None:
+        raise ResourceNotFoundError("Governed record was not found")
+    authorize_action(
+        actor=actor,
+        action=Action.RETENTION_MANAGE,
+        repository_id=actor.repository_id,
+    )
+    with transaction.atomic():
+        organization = (
+            Organization.objects.select_for_update().filter(id=actor.organization_id).first()
+        )
+        if (
+            organization is None
+            or not hmac.compare_digest(confirmation, organization.slug)
+            or not hmac.compare_digest(
+                acknowledgement,
+                f"DECOMMISSION {organization.slug}",
+            )
+        ):
+            raise ResourceNotFoundError("Governed record was not found")
+        request_hash = content_hash(
+            {
+                "organization_id": str(organization.id),
+                "kind": RetentionRun.Kind.ORGANIZATION_DECOMMISSION,
+                "confirmation": confirmation,
+                "acknowledgement": acknowledgement,
+            }
+        )
+        existing = RetentionRun.objects.filter(
+            organization=organization,
+            kind=RetentionRun.Kind.ORGANIZATION_DECOMMISSION,
+            request_hash=request_hash,
+        ).first()
+        if existing is not None:
+            return existing
+        if organization.lifecycle_state != Organization.LifecycleState.ACTIVE:
+            raise ResourceNotFoundError("Governed record was not found")
+        run = RetentionRun.objects.create(
+            organization=organization,
+            kind=RetentionRun.Kind.ORGANIZATION_DECOMMISSION,
+            state=RetentionRun.State.RUNNING,
+            cutoff_at=now,
+            dry_run=False,
+            request_hash=request_hash,
+            actor_type=actor.actor_type,
+            actor_id=actor.actor_id,
+        )
+
+        from anva.core.models import SourceConnection
+
+        sources = list(
+            SourceConnection.objects.filter(organization=organization)
+            .exclude(state=SourceConnection.State.REVOKED)
+            .order_by("id")[: MAX_DECOMMISSION_SOURCES + 1]
+        )
+        if len(sources) > MAX_DECOMMISSION_SOURCES:
+            raise ValueError("Organization source count exceeds the decommission safety bound")
+        for source in sources:
+            revoke_source_connection(
+                actor=actor,
+                source_connection_id=source.id,
+                expected_revision=source.revision,
+            )
+
+        audit_actor = replace(actor, authorization_path="retention:organization-decommission")
+        record_transition(
+            organization=organization,
+            actor=audit_actor,
+            target_type="organization",
+            target_id=organization.id,
+            from_state=Organization.LifecycleState.ACTIVE,
+            to_state=Organization.LifecycleState.DELETION_REQUESTED,
+            revision=1,
+        )
+        organization.lifecycle_state = Organization.LifecycleState.DELETION_REQUESTED
+        organization.deletion_requested_at = now
+        organization.save(update_fields=["lifecycle_state", "deletion_requested_at", "updated_at"])
+
+        counts = {
+            "memberships_deactivated": Membership.objects.filter(
+                organization=organization, is_active=True
+            ).update(is_active=False, revision=F("revision") + 1, updated_at=now),
+            "service_identities_deactivated": ServiceIdentity.objects.filter(
+                organization=organization, is_active=True
+            ).update(is_active=False, revision=F("revision") + 1, updated_at=now),
+            "repositories_deactivated": Repository.objects.filter(
+                organization=organization, is_active=True
+            ).update(is_active=False),
+            "tokens_revoked": RepositoryAccessToken.objects.filter(
+                organization=organization, revoked_at__isnull=True
+            ).update(revoked_at=now),
+            "access_scopes_deactivated": AccessScope.objects.filter(
+                organization=organization, is_active=True
+            ).update(is_active=False, revision=F("revision") + 1, updated_at=now),
+            "sources_revoked": len(sources),
+        }
+        record_transition(
+            organization=organization,
+            actor=audit_actor,
+            target_type="organization",
+            target_id=organization.id,
+            from_state=Organization.LifecycleState.DELETION_REQUESTED,
+            to_state=Organization.LifecycleState.DECOMMISSIONED,
+            revision=2,
+        )
+        organization.lifecycle_state = Organization.LifecycleState.DECOMMISSIONED
+        organization.decommissioned_at = now
+        organization.save(update_fields=["lifecycle_state", "decommissioned_at", "updated_at"])
+        run.summary = {
+            **counts,
+            "governed_history_retained": True,
+            "restoration_requires_operator_backup": True,
+        }
+        run.state = RetentionRun.State.COMPLETED
+        run.completed_at = now
+        run.save(update_fields=["summary", "state", "completed_at"])
+        return run

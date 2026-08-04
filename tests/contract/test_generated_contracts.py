@@ -59,7 +59,16 @@ def test_openapi_and_mcp_share_the_canonical_schemas() -> None:
             "type": "http",
             "scheme": "bearer",
             "bearerFormat": "AnvaRepositoryToken",
-        }
+        },
+        "browserSession": {
+            "type": "apiKey",
+            "in": "cookie",
+            "name": "sessionid",
+            "description": (
+                "Recently authenticated human browser session; unsafe requests also "
+                "require Django's X-CSRFToken header."
+            ),
+        },
     }
     assert mcp["contract_version"] == "1"
     assert [tool["name"] for tool in tools] == [
@@ -151,6 +160,8 @@ def test_openapi_exposes_versioned_tenancy_and_authorization_boundaries() -> Non
     assert {
         "/bootstrap",
         "/organizations/{organization_id}",
+        "/organizations/{organization_id}/retention-runs",
+        "/organizations/{organization_id}/decommission",
         "/organizations/{organization_id}/members",
         "/organizations/{organization_id}/members/{resource_id}",
         "/repositories/{repository_id}/tokens",
@@ -207,6 +218,13 @@ def test_openapi_exposes_versioned_tenancy_and_authorization_boundaries() -> Non
     bootstrap = cast(dict[str, object], paths["/bootstrap"])
     bootstrap_post = cast(dict[str, object], bootstrap["post"])
     assert bootstrap_post["security"] == []
+
+    decommission = cast(dict[str, object], paths["/organizations/{organization_id}/decommission"])
+    decommission_post = cast(dict[str, object], decommission["post"])
+    decommission_responses = cast(dict[str, object], decommission_post["responses"])
+    assert decommission_responses["403"] == {
+        "description": "CSRF validation failed before domain dispatch."
+    }
 
     for path in (
         "/work-item-revisions/{resource_id}/approvals",

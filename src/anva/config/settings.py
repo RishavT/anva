@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from ipaddress import ip_address
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -22,6 +23,18 @@ def env_bool(name: str, *, default: bool) -> bool:
     if normalized in {"0", "false", "no", "off"}:
         return False
     raise ImproperlyConfigured(f"{name} must be a boolean")
+
+
+def env_int(name: str, *, default: int, minimum: int, maximum: int) -> int:
+    """Parse a bounded integer environment variable."""
+    raw_value = os.getenv(name)
+    try:
+        value = default if raw_value is None else int(raw_value)
+    except ValueError as error:
+        raise ImproperlyConfigured(f"{name} must be an integer") from error
+    if not minimum <= value <= maximum:
+        raise ImproperlyConfigured(f"{name} must be between {minimum} and {maximum}")
+    return value
 
 
 def database_settings(url: str) -> dict[str, str | int]:
@@ -48,6 +61,8 @@ def database_settings(url: str) -> dict[str, str | int]:
 
 ENVIRONMENT = os.getenv("ANVA_ENV", "development")
 DEBUG = env_bool("ANVA_DEBUG", default=ENVIRONMENT == "development")
+if ENVIRONMENT == "production" and DEBUG:
+    raise ImproperlyConfigured("ANVA_DEBUG cannot be enabled in production")
 SECRET_KEY = os.getenv("ANVA_SECRET_KEY", "local-only-change-me")
 if ENVIRONMENT == "production" and SECRET_KEY == "local-only-change-me":
     raise ImproperlyConfigured("ANVA_SECRET_KEY must be changed in production")
@@ -135,11 +150,13 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "anva.core.middleware.TrustedProxyHeadersMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
+    "anva.core.middleware.OperationalTelemetryMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
-    "django.middleware.csrf.CsrfViewMiddleware",
+    "anva.core.middleware.BrowserCsrfViewMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "anva.core.middleware.ProductSecurityHeadersMiddleware",
 ]
@@ -204,10 +221,83 @@ CSRF_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SECURE = ENVIRONMENT == "production"
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_REFERRER_POLICY = "same-origin"
+SECURE_SSL_REDIRECT = ENVIRONMENT == "production"
+SECURE_REDIRECT_EXEMPT = [r"^health/"]
+SECURE_HSTS_SECONDS = 31_536_000 if ENVIRONMENT == "production" else 0
+SECURE_HSTS_INCLUDE_SUBDOMAINS = ENVIRONMENT == "production"
+SECURE_HSTS_PRELOAD = ENVIRONMENT == "production"
 ANVA_WEB_READ_ONLY = env_bool("ANVA_WEB_READ_ONLY", default=False)
+ANVA_RATE_LIMIT_ENABLED = env_bool("ANVA_RATE_LIMIT_ENABLED", default=True)
+if ENVIRONMENT == "production" and not ANVA_RATE_LIMIT_ENABLED:
+    raise ImproperlyConfigured("ANVA_RATE_LIMIT_ENABLED cannot be disabled in production")
+ANVA_RATE_LIMIT_WINDOW_SECONDS = env_int(
+    "ANVA_RATE_LIMIT_WINDOW_SECONDS",
+    default=60,
+    minimum=1,
+    maximum=3600,
+)
+ANVA_RATE_LIMIT_API_REQUESTS = env_int(
+    "ANVA_RATE_LIMIT_API_REQUESTS",
+    default=600,
+    minimum=1,
+    maximum=100_000,
+)
+ANVA_RATE_LIMIT_MCP_REQUESTS = env_int(
+    "ANVA_RATE_LIMIT_MCP_REQUESTS",
+    default=300,
+    minimum=1,
+    maximum=100_000,
+)
+ANVA_RATE_LIMIT_WEB_REQUESTS = env_int(
+    "ANVA_RATE_LIMIT_WEB_REQUESTS",
+    default=600,
+    minimum=1,
+    maximum=100_000,
+)
+ANVA_RATE_LIMIT_PREAUTH_REQUESTS = env_int(
+    "ANVA_RATE_LIMIT_PREAUTH_REQUESTS",
+    default=1_200,
+    minimum=1,
+    maximum=100_000,
+)
+ANVA_TRUSTED_PROXY_IPS = tuple(
+    value.strip() for value in os.getenv("ANVA_TRUSTED_PROXY_IPS", "").split(",") if value.strip()
+)
+try:
+    for _trusted_proxy_ip in ANVA_TRUSTED_PROXY_IPS:
+        ip_address(_trusted_proxy_ip)
+except ValueError as error:
+    raise ImproperlyConfigured("ANVA_TRUSTED_PROXY_IPS must contain exact IP addresses") from error
+ANVA_METRICS_TOKEN = os.getenv("ANVA_METRICS_TOKEN", "")
+if ENVIRONMENT == "production" and not ANVA_METRICS_TOKEN:
+    raise ImproperlyConfigured("ANVA_METRICS_TOKEN must be set in production")
 
 OBJECT_STORAGE_ENDPOINT = os.getenv("ANVA_OBJECT_STORAGE_ENDPOINT", "http://minio:9000")
 OBJECT_STORAGE_BUCKET = os.getenv("ANVA_OBJECT_STORAGE_BUCKET", "anva")
+OBJECT_STORAGE_ACCESS_KEY = os.getenv("ANVA_OBJECT_STORAGE_ACCESS_KEY", "anva-local")
+OBJECT_STORAGE_SECRET_KEY = os.getenv("ANVA_OBJECT_STORAGE_SECRET_KEY", "anva-local-only")
+OBJECT_STORAGE_REGION = os.getenv("ANVA_OBJECT_STORAGE_REGION", "us-east-1")
+_object_storage_endpoint = urlparse(OBJECT_STORAGE_ENDPOINT)
+if not all(
+    (
+        OBJECT_STORAGE_BUCKET,
+        OBJECT_STORAGE_ACCESS_KEY,
+        OBJECT_STORAGE_SECRET_KEY,
+        OBJECT_STORAGE_REGION,
+    )
+):
+    raise ImproperlyConfigured("Object-storage settings must not be empty")
+if (
+    _object_storage_endpoint.scheme not in {"http", "https"}
+    or not _object_storage_endpoint.hostname
+    or _object_storage_endpoint.username is not None
+    or _object_storage_endpoint.password is not None
+    or _object_storage_endpoint.query
+    or _object_storage_endpoint.fragment
+):
+    raise ImproperlyConfigured("ANVA_OBJECT_STORAGE_ENDPOINT must be a credential-free HTTP(S) URL")
+if ENVIRONMENT == "production" and OBJECT_STORAGE_SECRET_KEY == "anva-local-only":
+    raise ImproperlyConfigured("ANVA_OBJECT_STORAGE_SECRET_KEY must be changed in production")
 
 LOGGING = {
     "version": 1,

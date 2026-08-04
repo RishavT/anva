@@ -57,8 +57,44 @@ class TimeStampedModel(UUIDModel):
 class Organization(TimeStampedModel):
     """Root tenant record."""
 
+    class LifecycleState(models.TextChoices):
+        ACTIVE = "ACTIVE"
+        DELETION_REQUESTED = "DELETION_REQUESTED"
+        DECOMMISSIONED = "DECOMMISSIONED"
+
     slug = models.SlugField(max_length=80, unique=True)
     name = models.CharField(max_length=300)
+    lifecycle_state = models.CharField(
+        max_length=24,
+        choices=LifecycleState,
+        default=LifecycleState.ACTIVE,
+    )
+    deletion_requested_at = models.DateTimeField(null=True, blank=True)
+    decommissioned_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        lifecycle_state="ACTIVE",
+                        deletion_requested_at__isnull=True,
+                        decommissioned_at__isnull=True,
+                    )
+                    | Q(
+                        lifecycle_state="DELETION_REQUESTED",
+                        deletion_requested_at__isnull=False,
+                        decommissioned_at__isnull=True,
+                    )
+                    | Q(
+                        lifecycle_state="DECOMMISSIONED",
+                        deletion_requested_at__isnull=False,
+                        decommissioned_at__isnull=False,
+                    )
+                ),
+                name="core_organization_lifecycle_coherent",
+            )
+        ]
 
     def __str__(self) -> str:
         return self.slug
@@ -4613,6 +4649,98 @@ class EvidenceRetentionEvent(UUIDModel):
                 fields=["organization", "id"],
                 name="core_evidence_retention_org_id_unique",
             )
+        ]
+
+
+class RetentionRun(UUIDModel):
+    """Auditable, bounded retention or tenant-decommission execution."""
+
+    class Kind(models.TextChoices):
+        SCHEDULED_RETENTION = "SCHEDULED_RETENTION"
+        ORGANIZATION_DECOMMISSION = "ORGANIZATION_DECOMMISSION"
+
+    class State(models.TextChoices):
+        RUNNING = "RUNNING"
+        COMPLETED = "COMPLETED"
+        FAILED = "FAILED"
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    kind = models.CharField(max_length=32, choices=Kind)
+    state = models.CharField(max_length=16, choices=State)
+    cutoff_at = models.DateTimeField()
+    dry_run = models.BooleanField(default=False)
+    request_hash = models.CharField(max_length=64)
+    actor_type = models.CharField(max_length=20)
+    actor_id = models.CharField(max_length=200)
+    summary = models.JSONField(default=dict)
+    error_code = models.CharField(max_length=100, blank=True)
+    started_at = models.DateTimeField(default=timezone.now, editable=False)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "kind", "request_hash"],
+                name="core_retention_run_request_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(request_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_retention_run_request_sha256",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(state="RUNNING", completed_at__isnull=True, error_code="")
+                    | Q(state="COMPLETED", completed_at__isnull=False, error_code="")
+                    | (Q(state="FAILED", completed_at__isnull=False) & ~Q(error_code=""))
+                ),
+                name="core_retention_run_state_coherent",
+            ),
+        ]
+
+
+class RateLimitBucket(UUIDModel):
+    """Durable fixed-window counter keyed by a one-way principal digest."""
+
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+    )
+    identity_hash = models.CharField(max_length=64)
+    channel = models.CharField(max_length=32)
+    window_started_at = models.DateTimeField()
+    request_count = models.PositiveIntegerField(default=0)
+    denied_count = models.PositiveIntegerField(default=0)
+    expires_at = models.DateTimeField()
+
+    class Meta:
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(fields=["expires_at"], name="core_rate_bucket_expiry_idx"),
+            models.Index(
+                fields=["expires_at", "id"],
+                name="core_rate_preauth_expiry_idx",
+                condition=Q(organization__isnull=True),
+            ),
+        ]
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "identity_hash", "channel", "window_started_at"],
+                name="core_rate_bucket_window_unique",
+                nulls_distinct=False,
+            ),
+            models.CheckConstraint(
+                condition=Q(identity_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_rate_bucket_identity_sha256",
+            ),
+            models.CheckConstraint(
+                condition=Q(expires_at__gt=F("window_started_at")),
+                name="core_rate_bucket_expiry_after_start",
+            ),
+            models.CheckConstraint(
+                condition=Q(denied_count__lte=F("request_count")),
+                name="core_rate_bucket_denied_lte_requests",
+            ),
         ]
 
 

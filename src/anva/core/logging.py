@@ -9,6 +9,12 @@ from datetime import UTC, datetime
 
 from django.conf import settings
 
+from anva.foundation.telemetry import (
+    correlation_id_context,
+    span_id_context,
+    trace_id_context,
+)
+
 REDACTED = "[REDACTED]"
 SECRET_PATTERNS = (
     re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+"),
@@ -58,6 +64,8 @@ def redact_text(value: object) -> str:
         str(settings.SECRET_KEY),
         str(settings.TOKEN_PEPPER),
         str(settings.BOOTSTRAP_SECRET),
+        str(settings.ANVA_METRICS_TOKEN),
+        str(settings.OBJECT_STORAGE_SECRET_KEY),
         *(str(secret) for secret in settings.ANVA_GITHUB_WEBHOOK_SECRETS),
     }
     for secret in configured_secrets:
@@ -79,12 +87,32 @@ class StructuredJsonFormatter(logging.Formatter):
     """Render valid single-line JSON without interpolating unsafe structure."""
 
     def format(self, record: logging.LogRecord) -> str:
-        payload = {
+        payload: dict[str, object] = {
             "timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": redact_text(record.getMessage()),
         }
+        context_fields = {
+            "correlation_id": correlation_id_context.get(),
+            "trace_id": trace_id_context.get(),
+            "span_id": span_id_context.get(),
+        }
+        payload.update({key: value for key, value in context_fields.items() if value})
+        for name in (
+            "http_method",
+            "http_path",
+            "http_status",
+            "duration_ms",
+            "job_id",
+            "job_kind",
+            "worker_id",
+            "signal",
+            "error_code",
+        ):
+            value = getattr(record, name, None)
+            if isinstance(value, str | int | float):
+                payload[name] = redact_text(value) if isinstance(value, str) else value
         if record.exc_info is not None and record.exc_info[0] is not None:
             payload["exception_type"] = record.exc_info[0].__name__
         return json.dumps(payload, separators=(",", ":"), sort_keys=True)
