@@ -488,6 +488,34 @@ incident_semantics AS MATERIALIZED (
       AND source_entity.is_active
       AND target_entity.is_active
       AND assertion.valid_until IS NULL
+      AND (
+          cardinality(%(related_entity_types)s::text[]) = 0
+          OR CASE
+              WHEN relationship.source_entity_id = %(entity_id)s
+              THEN relationship.target_entity_type
+              ELSE relationship.source_entity_type
+          END = ANY(%(related_entity_types)s::text[])
+      )
+      AND (
+          cardinality(%(status_filtered_entity_types)s::text[]) = 0
+          OR NOT (
+              CASE
+                  WHEN relationship.source_entity_id = %(entity_id)s
+                  THEN relationship.target_entity_type
+                  ELSE relationship.source_entity_type
+              END = ANY(%(status_filtered_entity_types)s::text[])
+          )
+          OR UPPER(
+              COALESCE(
+                  CASE
+                      WHEN relationship.source_entity_id = %(entity_id)s
+                      THEN target_entity.attributes ->> 'status'
+                      ELSE source_entity.attributes ->> 'status'
+                  END,
+                  'UNKNOWN'
+              )
+          ) <> ALL(%(excluded_related_statuses)s::text[])
+      )
 ),
 scoped_incidents AS MATERIALIZED (
     SELECT
@@ -810,6 +838,68 @@ authorized_edges AS MATERIALIZED (
             )
             AND governed_source.state IN ('REVOKED', 'DISABLED')
       )
+),
+partitioned_edges AS MATERIALIZED (
+    SELECT
+        edge.*,
+        CASE
+            WHEN edge.source_entity_id = %(entity_id)s THEN edge.target_entity_type
+            ELSE edge.source_entity_type
+        END AS related_entity_type,
+        CASE
+            WHEN edge.source_entity_id = %(entity_id)s THEN edge.target_name
+            ELSE edge.source_name
+        END AS related_entity_name,
+        CASE
+            WHEN edge.source_entity_id = %(entity_id)s THEN edge.target_entity_id
+            ELSE edge.source_entity_id
+        END AS related_entity_id,
+        CASE
+            WHEN cardinality(%(partition_related_entity_types)s::text[]) = 0 THEN 0
+            WHEN CASE
+                WHEN edge.source_entity_id = %(entity_id)s THEN edge.target_entity_type
+                ELSE edge.source_entity_type
+            END = ANY(%(partition_related_entity_types)s::text[])
+            THEN 1
+            ELSE 0
+        END AS section_partition
+    FROM authorized_edges edge
+),
+ranked_edges AS MATERIALIZED (
+    SELECT
+        edge.*,
+        ROW_NUMBER() OVER (
+            PARTITION BY edge.section_partition
+            ORDER BY
+                CASE
+                    WHEN %(section_order)s = 'WORK'
+                     AND edge.section_partition = 1
+                    THEN edge.observed_at
+                END DESC NULLS LAST,
+                CASE
+                    WHEN %(section_order)s IN ('CONTEXT', 'WORK')
+                     AND (%(section_order)s <> 'WORK' OR edge.section_partition = 0)
+                    THEN edge.related_entity_type
+                END ASC NULLS LAST,
+                CASE
+                    WHEN %(section_order)s IN ('CONTEXT', 'WORK')
+                     AND (%(section_order)s <> 'WORK' OR edge.section_partition = 0)
+                    THEN LOWER(edge.related_entity_name)
+                END ASC NULLS LAST,
+                CASE
+                    WHEN %(section_order)s IN ('CONTEXT', 'WORK')
+                     AND (%(section_order)s <> 'WORK' OR edge.section_partition = 0)
+                    THEN edge.related_entity_id
+                END ASC NULLS LAST,
+                CASE
+                    WHEN %(section_order)s = 'WORK'
+                     AND edge.section_partition = 1
+                    THEN edge.relationship_id
+                END DESC NULLS LAST,
+                edge.relationship_id,
+                edge.repository_id
+        ) AS section_row
+    FROM partitioned_edges edge
 )
 SELECT
     repository_id,
@@ -830,9 +920,9 @@ SELECT
     observed_at,
     confidence,
     1 AS depth
-FROM authorized_edges
-ORDER BY relationship_id, repository_id
-LIMIT %(edge_limit)s
+FROM ranked_edges
+WHERE section_row <= %(edge_limit)s
+ORDER BY section_partition, section_row
 """
 
 
@@ -984,8 +1074,13 @@ def authorized_incident_graph_edges_batch(
     authorization: AuthorizedRepositoryScopes,
     entity_id: uuid.UUID,
     edge_limit: int = MAX_CANVAS_GRAPH_EDGES,
+    related_entity_types: tuple[str, ...] = (),
+    status_filtered_entity_types: tuple[str, ...] = (),
+    excluded_related_statuses: tuple[str, ...] = (),
+    partition_related_entity_types: tuple[str, ...] = (),
+    section_order: str = "RELATIONSHIP",
 ) -> tuple[tuple[RepositoryGraphEdge, ...], bool]:
-    """List incident edges from one actor-bound repository authorization snapshot."""
+    """List a bounded incident section from one actor-bound authorization snapshot."""
     ordered_repository_ids = authorization.repository_ids_for(Action.CANVAS_VIEW)
     boundary_repository_ids = tuple(repository.id for repository in authorization.repositories)
     if (
@@ -998,6 +1093,32 @@ def authorized_incident_graph_edges_batch(
         raise ValueError("repository_ids must contain between 1 and 100 repositories")
     if edge_limit < 1 or edge_limit > MAX_CANVAS_GRAPH_EDGES:
         raise ValueError("Canvas edge_limit must be between 1 and 600")
+    if any(not value or len(value) > 100 for value in related_entity_types):
+        raise ValueError("related entity types must be non-empty bounded strings")
+    if len(related_entity_types) > 20:
+        raise ValueError("related entity type budget exceeded")
+    if any(not value or len(value) > 100 for value in status_filtered_entity_types):
+        raise ValueError("status-filtered entity types must be non-empty bounded strings")
+    if len(status_filtered_entity_types) > 20:
+        raise ValueError("status-filtered entity type budget exceeded")
+    if status_filtered_entity_types and not related_entity_types:
+        raise ValueError("status filtering requires a related entity type filter")
+    if any(not value or len(value) > 100 for value in excluded_related_statuses):
+        raise ValueError("excluded related statuses must be non-empty bounded strings")
+    if len(excluded_related_statuses) > 20:
+        raise ValueError("excluded related status budget exceeded")
+    if any(not value or len(value) > 100 for value in partition_related_entity_types):
+        raise ValueError("partition entity types must be non-empty bounded strings")
+    if len(partition_related_entity_types) > 20:
+        raise ValueError("partition entity type budget exceeded")
+    if partition_related_entity_types and not related_entity_types:
+        raise ValueError("partitioning requires a related entity type filter")
+    if section_order not in {"RELATIONSHIP", "CONTEXT", "WORK"}:
+        raise ValueError("unknown incident section order")
+    if section_order != "RELATIONSHIP" and not related_entity_types:
+        raise ValueError("section ordering requires a related entity type filter")
+    if section_order == "WORK" and not partition_related_entity_types:
+        raise ValueError("work ordering requires a partitioned related entity type")
     if actor.repository_id is not None and ordered_repository_ids != (actor.repository_id,):
         raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
     with connection.cursor() as cursor:
@@ -1014,15 +1135,32 @@ def authorized_incident_graph_edges_batch(
                 "action": Action.CANVAS_VIEW.value,
                 "entity_id": entity_id,
                 "edge_limit": edge_limit + 1,
+                "related_entity_types": list(related_entity_types),
+                "status_filtered_entity_types": list(status_filtered_entity_types),
+                "excluded_related_statuses": list(excluded_related_statuses),
+                "partition_related_entity_types": list(partition_related_entity_types),
+                "section_order": section_order,
             },
         )
         rows = cursor.fetchall()
+    if partition_related_entity_types:
+        partition_types = set(partition_related_entity_types)
+        rows_by_partition: dict[bool, list[tuple[object, ...]]] = {False: [], True: []}
+        for row in rows:
+            related_type = row[6] if row[3] == entity_id else row[5]
+            rows_by_partition[related_type in partition_types].append(row)
+        truncated = any(
+            len(partition_rows) > edge_limit for partition_rows in rows_by_partition.values()
+        )
+        rows = [
+            row for partition in (False, True) for row in rows_by_partition[partition][:edge_limit]
+        ]
+    else:
+        truncated = len(rows) > edge_limit
+        rows = rows[:edge_limit]
     return (
-        tuple(
-            RepositoryGraphEdge(repository_id=row[0], edge=GraphEdge(*row[1:]))
-            for row in rows[:edge_limit]
-        ),
-        len(rows) > edge_limit,
+        tuple(RepositoryGraphEdge(repository_id=row[0], edge=GraphEdge(*row[1:])) for row in rows),
+        truncated,
     )
 
 

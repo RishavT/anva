@@ -12,7 +12,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, cast
 
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import Exists, F, OuterRef, Q
 from django.utils import timezone
 
@@ -80,6 +80,31 @@ CANVAS_LAYOUT_ALGORITHM = "deterministic-semantic-columns"
 CANVAS_FRESHNESS_STATES = (*KnowledgeAssertion.StalenessState.values, "UNKNOWN")
 CANVAS_DETAIL_RELATIONSHIP_LIMIT = 50
 CANVAS_DETAIL_SECTION_LIMIT = 20
+CANVAS_DETAIL_DECISION_POLICY_TYPES = (
+    KnowledgeEntity.EntityType.DECISION,
+    KnowledgeEntity.EntityType.ARCHITECTURAL_DECISION,
+    KnowledgeEntity.EntityType.POLICY,
+)
+CANVAS_DETAIL_RISK_INCIDENT_TYPES = (
+    KnowledgeEntity.EntityType.RISK,
+    KnowledgeEntity.EntityType.INCIDENT,
+)
+CANVAS_DETAIL_WORK_TYPES = (
+    KnowledgeEntity.EntityType.WORK_ITEM,
+    KnowledgeEntity.EntityType.TASK,
+    KnowledgeEntity.EntityType.PULL_REQUEST,
+)
+CANVAS_DETAIL_ACTIVE_WORK_TYPES = (
+    KnowledgeEntity.EntityType.WORK_ITEM,
+    KnowledgeEntity.EntityType.TASK,
+)
+CANVAS_DETAIL_INACTIVE_WORK_STATUSES = (
+    "CANCELLED",
+    "CLOSED",
+    "COMPLETED",
+    "DONE",
+    "REJECTED",
+)
 CANVAS_QUESTION_RELATIONSHIP_LIMIT = 100
 CANVAS_QUESTION_ASSERTION_LIMIT = 200
 CANVAS_QUESTION_LINEAGE_LIMIT = 500
@@ -101,6 +126,141 @@ SECRET_PATTERN = re.compile(
     r"(?i)(?:gh[pousr]_[a-z0-9]{20,}|bearer\s+[a-z0-9._-]{12,}|"
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----|sessionid\s*=)"
 )
+
+_AUTHORIZED_CANVAS_VIEW_IDS = """
+WITH authorized_candidates AS MATERIALIZED (
+    SELECT saved_view.id, saved_view.name
+    FROM core_canvasview saved_view
+    JOIN core_canvasviewrevision revision
+      ON revision.organization_id = saved_view.organization_id
+     AND revision.canvas_view_id = saved_view.id
+     AND revision.revision = saved_view.revision
+    WHERE saved_view.organization_id = %(organization_id)s
+      AND NOT saved_view.is_archived
+      AND jsonb_typeof(revision.semantic_query) = 'object'
+      AND (
+          saved_view.repository_id IS NULL
+          OR EXISTS (
+              SELECT 1
+              FROM core_repository bound_repository
+              WHERE bound_repository.id = saved_view.repository_id
+                AND bound_repository.organization_id = saved_view.organization_id
+                AND bound_repository.is_active
+                AND bound_repository.id = ANY(%(repository_ids)s::uuid[])
+          )
+      )
+      AND NOT EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements_text(
+              CASE
+                  WHEN NOT (revision.semantic_query ? 'repository_ids')
+                  THEN '[]'::jsonb
+                  WHEN jsonb_typeof(revision.semantic_query -> 'repository_ids') = 'array'
+                  THEN revision.semantic_query -> 'repository_ids'
+                  ELSE '["__invalid__"]'::jsonb
+              END
+          ) AS semantic_repository(repository_id)
+          WHERE NOT EXISTS (
+              SELECT 1
+              FROM core_repository current_repository
+              WHERE current_repository.organization_id = saved_view.organization_id
+                AND current_repository.is_active
+                AND current_repository.id = ANY(%(repository_ids)s::uuid[])
+                AND current_repository.id::text = semantic_repository.repository_id
+          )
+      )
+      AND (
+          saved_view.access_scope_id IS NULL
+          OR EXISTS (
+              SELECT 1
+              FROM core_accessscope view_scope
+              WHERE view_scope.id = saved_view.access_scope_id
+                AND view_scope.organization_id = saved_view.organization_id
+                AND view_scope.is_active
+                AND view_scope.id = ANY(%(scope_ids)s::uuid[])
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM core_accessscopesource scope_source
+                    JOIN core_sourceconnection governed_source
+                      ON governed_source.id = scope_source.source_connection_id
+                     AND governed_source.organization_id = scope_source.organization_id
+                    WHERE scope_source.organization_id = saved_view.organization_id
+                      AND scope_source.access_scope_id = view_scope.id
+                      AND governed_source.state IN ('REVOKED', 'DISABLED')
+                )
+                AND (
+                    view_scope.all_repositories
+                    OR EXISTS (
+                        SELECT 1
+                        FROM core_accessscoperepository scope_repository
+                        JOIN core_repository current_repository
+                          ON current_repository.id = scope_repository.repository_id
+                         AND current_repository.organization_id = scope_repository.organization_id
+                         AND current_repository.is_active
+                        WHERE scope_repository.organization_id = saved_view.organization_id
+                          AND scope_repository.access_scope_id = view_scope.id
+                          AND current_repository.id = ANY(%(repository_ids)s::uuid[])
+                          AND (
+                              saved_view.repository_id IS NULL
+                              OR current_repository.id = saved_view.repository_id
+                          )
+                    )
+                )
+          )
+      )
+      AND (
+          NOT (revision.semantic_query ? 'root_entity_id')
+          OR (
+              jsonb_typeof(revision.semantic_query -> 'root_entity_id') = 'string'
+              AND EXISTS (
+                  SELECT 1
+                  FROM core_knowledgeentity root_entity
+                  JOIN core_accessscope root_scope
+                    ON root_scope.id = root_entity.access_scope_id
+                   AND root_scope.organization_id = root_entity.organization_id
+                   AND root_scope.is_active
+                  WHERE root_entity.organization_id = saved_view.organization_id
+                    AND root_entity.is_active
+                    AND root_entity.id::text = revision.semantic_query ->> 'root_entity_id'
+                    AND root_scope.id = ANY(%(scope_ids)s::uuid[])
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM core_accessscopesource scope_source
+                        JOIN core_sourceconnection governed_source
+                          ON governed_source.id = scope_source.source_connection_id
+                         AND governed_source.organization_id = scope_source.organization_id
+                        WHERE scope_source.organization_id = saved_view.organization_id
+                          AND scope_source.access_scope_id = root_scope.id
+                          AND governed_source.state IN ('REVOKED', 'DISABLED')
+                    )
+                    AND (
+                        root_scope.all_repositories
+                        OR EXISTS (
+                            SELECT 1
+                            FROM core_accessscoperepository scope_repository
+                            JOIN core_repository current_repository
+                              ON current_repository.id = scope_repository.repository_id
+                             AND current_repository.organization_id =
+                                 scope_repository.organization_id
+                             AND current_repository.is_active
+                            WHERE scope_repository.organization_id = saved_view.organization_id
+                              AND scope_repository.access_scope_id = root_scope.id
+                              AND current_repository.id = ANY(%(repository_ids)s::uuid[])
+                              AND (
+                                  saved_view.repository_id IS NULL
+                                  OR current_repository.id = saved_view.repository_id
+                              )
+                        )
+                    )
+              )
+          )
+      )
+)
+SELECT id
+FROM authorized_candidates
+ORDER BY name, id
+LIMIT %(view_limit)s
+"""
 
 VIEW_TYPE_ENTITY_TYPES: dict[str, frozenset[str]] = {
     CanvasView.ViewType.STRATEGY: frozenset(
@@ -525,12 +685,41 @@ def get_authorized_canvas_view(
 
 
 def list_canvas_views(*, actor: ActorContext) -> tuple[CanvasView, ...]:
-    """List only saved views whose current boundaries remain visible."""
+    """List the first bounded authorized views without pre-authorization crowding."""
+    authorization = resolve_authorized_repository_scopes(
+        actor=actor,
+        actions=(Action.CANVAS_VIEW,),
+        required_action=Action.CANVAS_VIEW,
+        repository_limit=CANVAS_REPOSITORY_LIMIT,
+    )
+    repository_ids = authorization.repository_ids_for(Action.CANVAS_VIEW)
+    scope_ids = authorization.scope_ids_for(Action.CANVAS_VIEW)
+    if not repository_ids:
+        return ()
+    with connection.cursor() as cursor:
+        cursor.execute(
+            _AUTHORIZED_CANVAS_VIEW_IDS,
+            {
+                "organization_id": actor.organization_id,
+                "repository_ids": list(repository_ids),
+                "scope_ids": list(scope_ids),
+                "view_limit": CANVAS_NODE_LIMIT,
+            },
+        )
+        candidate_ids = tuple(row[0] for row in cursor.fetchall())
+    candidates = {
+        view.id: view
+        for view in CanvasView.objects.filter(
+            organization_id=actor.organization_id,
+            id__in=candidate_ids,
+            is_archived=False,
+        ).select_related("owner_membership")
+    }
     visible: list[CanvasView] = []
-    for view in CanvasView.objects.filter(
-        organization_id=actor.organization_id,
-        is_archived=False,
-    ).order_by("name", "id")[:CANVAS_NODE_LIMIT]:
+    for view_id in candidate_ids:
+        view = candidates.get(view_id)
+        if view is None:
+            continue
         try:
             get_authorized_canvas_view(actor=actor, view_id=view.id)
         except ResourceNotFoundError:
@@ -1626,15 +1815,61 @@ def canvas_entity_detail(
         entity_id=entity.id,
         edge_limit=CANVAS_DETAIL_RELATIONSHIP_LIMIT,
     )
+    decision_policy_records, decisions_policies_truncated = authorized_incident_graph_edges_batch(
+        actor=actor,
+        authorization=authorization,
+        entity_id=entity.id,
+        edge_limit=CANVAS_DETAIL_SECTION_LIMIT,
+        related_entity_types=CANVAS_DETAIL_DECISION_POLICY_TYPES,
+        section_order="CONTEXT",
+    )
+    risk_incident_records, risks_incidents_truncated = authorized_incident_graph_edges_batch(
+        actor=actor,
+        authorization=authorization,
+        entity_id=entity.id,
+        edge_limit=CANVAS_DETAIL_SECTION_LIMIT,
+        related_entity_types=CANVAS_DETAIL_RISK_INCIDENT_TYPES,
+        section_order="CONTEXT",
+    )
+    work_records, work_truncated = authorized_incident_graph_edges_batch(
+        actor=actor,
+        authorization=authorization,
+        entity_id=entity.id,
+        edge_limit=CANVAS_DETAIL_SECTION_LIMIT,
+        related_entity_types=CANVAS_DETAIL_WORK_TYPES,
+        status_filtered_entity_types=CANVAS_DETAIL_ACTIVE_WORK_TYPES,
+        excluded_related_statuses=CANVAS_DETAIL_INACTIVE_WORK_STATUSES,
+        partition_related_entity_types=(KnowledgeEntity.EntityType.PULL_REQUEST,),
+        section_order="WORK",
+    )
+
     incident_edges = [
         AuthorizedCanvasEdge(repository_id=item.repository_id, edge=item.edge)
         for item in repository_edges
+    ]
+    section_edges = {
+        "decisions_policies": [
+            AuthorizedCanvasEdge(repository_id=item.repository_id, edge=item.edge)
+            for item in decision_policy_records
+        ],
+        "risks_incidents": [
+            AuthorizedCanvasEdge(repository_id=item.repository_id, edge=item.edge)
+            for item in risk_incident_records
+        ],
+        "active_work_recent_pull_requests": [
+            AuthorizedCanvasEdge(repository_id=item.repository_id, edge=item.edge)
+            for item in work_records
+        ],
+    }
+    all_context_edges = [
+        *incident_edges,
+        *(item for values in section_edges.values() for item in values),
     ]
     related_ids = {
         item.edge.target_entity_id
         if item.edge.source_entity_id == entity.id
         else item.edge.source_entity_id
-        for item in incident_edges
+        for item in all_context_edges
     }
     related_entities = {
         related.id: related
@@ -1645,15 +1880,31 @@ def canvas_entity_detail(
         )
     }
 
-    relationships: list[dict[str, object]] = []
-    context: list[dict[str, object]] = []
-    for item in incident_edges:
+    def related_context(item: AuthorizedCanvasEdge) -> dict[str, object] | None:
         outgoing = item.edge.source_entity_id == entity.id
         related_id = item.edge.target_entity_id if outgoing else item.edge.source_entity_id
         found_related = related_entities.get(related_id)
         if found_related is None:
             # The edge CTE and entity query are both strict. Fail closed if they diverge.
+            return None
+        return {
+            "entity_id": str(found_related.id),
+            "label": found_related.display_name,
+            "type": found_related.entity_type,
+            "revision": found_related.revision,
+            "status": str(found_related.attributes.get("status", "UNKNOWN"))[:100],
+            "relationship_id": str(item.edge.relationship_id),
+            "relationship_type": item.edge.relationship_type,
+            "direction": "OUTGOING" if outgoing else "INCOMING",
+            "observed_at": item.edge.observed_at.isoformat(),
+        }
+
+    relationships: list[dict[str, object]] = []
+    for item in incident_edges:
+        related = related_context(item)
+        if related is None:
             continue
+        outgoing = item.edge.source_entity_id == entity.id
         relationship: dict[str, object] = {
             "id": str(item.edge.relationship_id),
             "type": item.edge.relationship_type,
@@ -1667,62 +1918,44 @@ def canvas_entity_detail(
             "observed_at": item.edge.observed_at.isoformat(),
         }
         relationships.append(relationship)
-        context.append(
-            {
-                "entity_id": str(found_related.id),
-                "label": found_related.display_name,
-                "type": found_related.entity_type,
-                "revision": found_related.revision,
-                "status": str(found_related.attributes.get("status", "UNKNOWN"))[:100],
-                "relationship_id": relationship["id"],
-                "relationship_type": relationship["type"],
-                "direction": relationship["direction"],
-                "observed_at": relationship["observed_at"],
-            }
-        )
 
-    section_truncated = False
+    def section_context(key: str) -> list[dict[str, object]]:
+        return [
+            found for item in section_edges[key] if (found := related_context(item)) is not None
+        ]
 
-    def section(
-        *entity_types: str,
-        active_only: bool = False,
-        recent_first: bool = False,
-    ) -> list[dict[str, object]]:
-        nonlocal section_truncated
-        matching = [item for item in context if item["type"] in entity_types]
-        if active_only:
-            matching = [
-                item
-                for item in matching
-                if str(item["status"]).upper()
-                not in {"CANCELLED", "CLOSED", "COMPLETED", "DONE", "REJECTED"}
-            ]
-        if recent_first:
-            section_truncated = section_truncated or len(matching) > CANVAS_DETAIL_SECTION_LIMIT
-            return sorted(
-                matching,
-                key=lambda item: (str(item["observed_at"]), str(item["relationship_id"])),
-                reverse=True,
-            )[:CANVAS_DETAIL_SECTION_LIMIT]
-        section_truncated = section_truncated or len(matching) > CANVAS_DETAIL_SECTION_LIMIT
-        return sorted(
-            matching,
-            key=lambda item: (
-                str(item["type"]),
-                str(item["label"]).casefold(),
-                str(item["entity_id"]),
-                str(item["relationship_id"]),
-            ),
-        )[:CANVAS_DETAIL_SECTION_LIMIT]
-
-    active_work = section(
-        KnowledgeEntity.EntityType.WORK_ITEM,
-        KnowledgeEntity.EntityType.TASK,
-        active_only=True,
+    decisions_policies = sorted(
+        section_context("decisions_policies"),
+        key=lambda item: (
+            str(item["type"]),
+            str(item["label"]).casefold(),
+            str(item["entity_id"]),
+            str(item["relationship_id"]),
+        ),
     )
-    recent_pull_requests = section(
-        KnowledgeEntity.EntityType.PULL_REQUEST,
-        recent_first=True,
+    risks_incidents = sorted(
+        section_context("risks_incidents"),
+        key=lambda item: (
+            str(item["type"]),
+            str(item["label"]).casefold(),
+            str(item["entity_id"]),
+            str(item["relationship_id"]),
+        ),
+    )
+    work_context = section_context("active_work_recent_pull_requests")
+    active_work = sorted(
+        [item for item in work_context if item["type"] in CANVAS_DETAIL_ACTIVE_WORK_TYPES],
+        key=lambda item: (
+            str(item["type"]),
+            str(item["label"]).casefold(),
+            str(item["entity_id"]),
+            str(item["relationship_id"]),
+        ),
+    )
+    recent_pull_requests = sorted(
+        [item for item in work_context if item["type"] == KnowledgeEntity.EntityType.PULL_REQUEST],
+        key=lambda item: (str(item["observed_at"]), str(item["relationship_id"])),
+        reverse=True,
     )
     predicate_by_assertion = {assertion.id: assertion.predicate for assertion in assertions}
     history_records = list(
@@ -1741,6 +1974,23 @@ def canvas_entity_detail(
         }
         for item in history_records[:CANVAS_DETAIL_SECTION_LIMIT]
     ]
+    raw_reviewers = entity.attributes.get("reviewers", [])
+    reviewer_values = (
+        [value for value in raw_reviewers if isinstance(value, str)]
+        if isinstance(raw_reviewers, list)
+        else []
+    )
+    reviewers_truncated = len(reviewer_values) > CANVAS_DETAIL_SECTION_LIMIT
+    reviewers = [value[:100] for value in reviewer_values[:CANVAS_DETAIL_SECTION_LIMIT]]
+    context_truncation = {
+        "relationships": relationship_truncated,
+        "decisions_policies": decisions_policies_truncated,
+        "risks_incidents": risks_incidents_truncated,
+        "active_work_recent_pull_requests": work_truncated,
+        "assertions": assertions_truncated,
+        "history": history_truncated,
+        "reviewers": reviewers_truncated,
+    }
     return {
         "id": str(entity.id),
         "label": entity.display_name,
@@ -1751,31 +2001,24 @@ def canvas_entity_detail(
             :2_000
         ],
         "owner": str(entity.attributes.get("owner", "Unassigned"))[:300],
-        "reviewers": list(entity.attributes.get("reviewers", []))[:20],
+        "reviewers": reviewers,
         "status": str(entity.attributes.get("status", "UNKNOWN"))[:100],
         "freshness": _freshness(assertions),
         "sources": source_details,
         "conflict_count": conflicts.count(),
         "relationships": relationships,
-        "decisions_policies": section(
-            KnowledgeEntity.EntityType.DECISION,
-            KnowledgeEntity.EntityType.ARCHITECTURAL_DECISION,
-            KnowledgeEntity.EntityType.POLICY,
-        ),
-        "risks_incidents": section(
-            KnowledgeEntity.EntityType.RISK,
-            KnowledgeEntity.EntityType.INCIDENT,
-        ),
+        "decisions_policies": decisions_policies,
+        "risks_incidents": risks_incidents,
         "active_work": active_work,
         "recent_pull_requests": recent_pull_requests,
         "history": history,
         "context_limits": {
             "relationships": CANVAS_DETAIL_RELATIONSHIP_LIMIT,
             "section_items": CANVAS_DETAIL_SECTION_LIMIT,
+            "reviewers": CANVAS_DETAIL_SECTION_LIMIT,
         },
-        "context_truncated": bool(
-            relationship_truncated or assertions_truncated or section_truncated or history_truncated
-        ),
+        "context_truncation": context_truncation,
+        "context_truncated": any(context_truncation.values()),
         "permitted_actions": {
             "view": True,
             "move_in_view": _can(actor, Action.CANVAS_MANAGE),

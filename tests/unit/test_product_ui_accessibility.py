@@ -28,6 +28,21 @@ def test_product_javascript_is_progressive_and_does_not_embed_credentials() -> N
 
 
 @pytest.mark.unit
+def test_canvas_inspector_renders_reviewers_conflicts_and_truthful_truncation() -> None:
+    template = Path("src/anva/templates/product/canvas.html").read_text()
+    script = Path("src/anva/static/anva/canvas.js").read_text()
+
+    assert "data-inspector-reviewers" in template
+    assert "data-inspector-conflicts" in template
+    assert "data-inspector-context" in template
+    assert "detail.context_truncation" in script
+    assert "Bounded permitted context omitted additional" in script
+    assert "No reviewer was returned within the bounded permitted reviewer section." in script
+    assert "additional permitted assertions were omitted" in script
+    assert "Additional permitted ${sectionName} items were omitted" in script
+
+
+@pytest.mark.unit
 def test_mobile_navigation_is_semantic_and_available_without_javascript() -> None:
     template = Path("src/anva/templates/product/base.html").read_text()
     script = Path("src/anva/static/anva/app.js").read_text()

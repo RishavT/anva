@@ -305,6 +305,10 @@
     title.textContent = node.label;
     title.dir = "auto";
     root.querySelector("[data-inspector-summary]").textContent = "Loading current permitted detail…";
+    root.querySelector("[data-inspector-reviewers]").textContent = "Loading…";
+    const contextWarning = root.querySelector("[data-inspector-context]");
+    contextWarning.hidden = true;
+    contextWarning.textContent = "";
     recordDuration("anva-canvas-select-local", selectStarted);
     const repositories = (graph.repositories || [])
       .map((repository) => `repository=${encodeURIComponent(repository.id)}`)
@@ -318,9 +322,37 @@
       const detail = await response.json();
       root.querySelector("[data-inspector-summary]").textContent = detail.summary;
       root.querySelector("[data-inspector-owner]").textContent = detail.owner;
+      const truncation = detail.context_truncation || {};
+      const reviewerText = detail.reviewers.length
+        ? detail.reviewers.join(", ")
+        : truncation.reviewers
+          ? "No reviewer was returned within the bounded permitted reviewer section."
+          : "No reviewer is currently recorded.";
+      root.querySelector("[data-inspector-reviewers]").textContent = truncation.reviewers
+        ? `${reviewerText} Additional permitted reviewers were omitted.`
+        : reviewerText;
       root.querySelector("[data-inspector-status]").textContent = detail.status;
       root.querySelector("[data-inspector-freshness]").textContent = detail.freshness;
-      root.querySelector("[data-inspector-conflicts]").textContent = String(detail.conflict_count);
+      root.querySelector("[data-inspector-conflicts]").textContent = truncation.assertions
+        ? detail.conflict_count
+          ? `${detail.conflict_count} in bounded assertion context; additional permitted assertions were omitted.`
+          : "None returned in bounded assertion context; additional permitted assertions were omitted."
+        : String(detail.conflict_count);
+      const truncatedSections = [
+        ["relationships", "relationships"],
+        ["decisions_policies", "decisions and policies"],
+        ["risks_incidents", "risks and incidents"],
+        ["active_work_recent_pull_requests", "active work and recent pull requests"],
+        ["assertions", "source assertions"],
+        ["history", "governed history"],
+        ["reviewers", "reviewers"],
+      ]
+        .filter(([key]) => truncation[key])
+        .map(([, label]) => label);
+      contextWarning.hidden = !detail.context_truncated;
+      contextWarning.textContent = detail.context_truncated
+        ? `Bounded permitted context omitted additional ${truncatedSections.join(", ")}. Hidden totals and identities are not disclosed.`
+        : "";
       const sourceList = root.querySelector("[data-inspector-sources]");
       sourceList.replaceChildren();
       if (!detail.sources.length) {
@@ -336,12 +368,19 @@
         item.textContent = `${source.predicate} · ${source.freshness} · ${source.review_state}${citation}`;
         sourceList.append(item);
       });
-      const renderDetailList = (selector, items, emptyText, describe) => {
+      if (truncation.assertions) {
+        const item = document.createElement("li");
+        item.textContent = "Additional permitted source assertions were omitted at the section bound.";
+        sourceList.append(item);
+      }
+      const renderDetailList = (selector, items, emptyText, describe, truncated, sectionName) => {
         const list = root.querySelector(selector);
         list.replaceChildren();
         if (!items.length) {
           const item = document.createElement("li");
-          item.textContent = emptyText;
+          item.textContent = truncated
+            ? `No ${sectionName} item was returned within this bounded permitted section; additional permitted context was omitted.`
+            : emptyText;
           list.append(item);
           return;
         }
@@ -350,36 +389,51 @@
           item.textContent = describe(entry);
           list.append(item);
         });
+        if (truncated) {
+          const item = document.createElement("li");
+          item.textContent = `Additional permitted ${sectionName} items were omitted at the section bound.`;
+          list.append(item);
+        }
       };
       renderDetailList(
         "[data-inspector-relationships]",
         detail.relationships,
         "No current permitted relationship is connected to this entity.",
         (entry) => `${entry.direction} · ${entry.type} · ${entry.source_label} → ${entry.target_label}`,
+        truncation.relationships,
+        "relationship",
       );
       renderDetailList(
         "[data-inspector-decisions]",
         detail.decisions_policies,
         "No connected decision or policy is currently permitted.",
         (entry) => `${entry.type} · ${entry.label} · ${entry.status}`,
+        truncation.decisions_policies,
+        "decision or policy",
       );
       renderDetailList(
         "[data-inspector-risks]",
         detail.risks_incidents,
         "No connected risk or incident is currently permitted.",
         (entry) => `${entry.type} · ${entry.label} · ${entry.status}`,
+        truncation.risks_incidents,
+        "risk or incident",
       );
       renderDetailList(
         "[data-inspector-work]",
         [...detail.active_work, ...detail.recent_pull_requests],
         "No connected active work or recent pull request is currently permitted.",
         (entry) => `${entry.type} · ${entry.label} · ${entry.status}`,
+        truncation.active_work_recent_pull_requests,
+        "active work or recent pull request",
       );
       renderDetailList(
         "[data-inspector-history]",
         detail.history,
         "No authorized assertion revision history is available.",
         (entry) => `${entry.predicate} · revision ${entry.revision} · ${entry.created_at}`,
+        truncation.history,
+        "governed history",
       );
       root.querySelector("[data-inspector-actions]").textContent = detail.permitted_actions.propose_relationship
         ? "View layout may be saved separately. Relationship changes require a review proposal. Canonical deletion is unavailable here."

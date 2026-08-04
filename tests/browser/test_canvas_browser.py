@@ -56,17 +56,33 @@ PERFORMANCE_ROOT = Path("docs/evidence/issue-012/performance")
 
 
 def _metric_summary(samples: list[float]) -> dict[str, object]:
-    ordered = sorted(samples)
+    serialized = [round(value, 3) for value in samples]
+    ordered = sorted(serialized)
     percentile_95 = ordered[math.ceil(len(ordered) * 0.95) - 1]
     middle = len(ordered) // 2
     percentile_50 = (ordered[middle - 1] + ordered[middle]) / 2
     return {
-        "raw": [round(value, 3) for value in samples],
+        "raw": serialized,
         "p50": round(percentile_50, 3),
         "p95": round(percentile_95, 3),
-        "max": round(max(samples), 3),
-        "sample_count": len(samples),
+        "max": round(max(serialized), 3),
+        "sample_count": len(serialized),
     }
+
+
+def _assert_metric_summary_integrity(value: object) -> None:
+    if isinstance(value, list):
+        for item in value:
+            _assert_metric_summary_integrity(item)
+        return
+    if not isinstance(value, dict):
+        return
+    summary_keys = {"raw", "p50", "p95", "max", "sample_count"}
+    if summary_keys <= value.keys() and isinstance(value["raw"], list):
+        expected = _metric_summary([float(item) for item in value["raw"]])
+        assert {key: value[key] for key in summary_keys} == expected
+    for item in value.values():
+        _assert_metric_summary_integrity(item)
 
 
 def _cpu_model() -> str:
@@ -426,7 +442,12 @@ def _seed_canvas(root: Path) -> tuple[CanvasView, dict[str, KnowledgeEntity]]:
             entity_type=entity_type,
             canonical_key=canonical_key,
             display_name=display_name,
-            attributes={"owner": owner, "status": status, "risk": risk},
+            attributes={
+                "owner": owner,
+                "reviewers": ["Security review", "Platform review"],
+                "status": status,
+                "risk": risk,
+            },
         )
     actor = ActorContext(
         organization_id=organization.id,
@@ -793,6 +814,24 @@ def test_organizational_canvas_interaction_no_js_and_responsive_evidence(
         wait.until(
             lambda current: current.find_element(By.ID, "canvas-inspector-title").text
             != "Select a node"
+        )
+        wait.until(
+            expected_conditions.text_to_be_present_in_element(
+                (By.CSS_SELECTOR, "[data-inspector-reviewers]"),
+                "Security review",
+            )
+        )
+        assert (
+            "Platform review"
+            in driver.find_element(By.CSS_SELECTOR, "[data-inspector-reviewers]").text
+        )
+        assert (
+            driver.find_element(By.CSS_SELECTOR, "[data-inspector-conflicts]").text
+            != "Unavailable until selected"
+        )
+        assert (
+            driver.find_element(By.CSS_SELECTOR, "[data-inspector-context]").get_attribute("hidden")
+            is not None
         )
         question_form = driver.find_element(By.CSS_SELECTOR, "[data-canvas-question]")
         question_form.find_element(By.NAME, "q").send_keys("billing-runtime")
@@ -1212,6 +1251,7 @@ def test_organizational_canvas_interaction_no_js_and_responsive_evidence(
                 ),
             ],
         }
+        _assert_metric_summary_integrity(browser_report)
         PERFORMANCE_ROOT.mkdir(parents=True, exist_ok=True)
         (PERFORMANCE_ROOT / "browser.json").write_text(
             json.dumps(browser_report, indent=2, sort_keys=True) + "\n",

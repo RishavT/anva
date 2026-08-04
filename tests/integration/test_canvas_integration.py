@@ -105,17 +105,50 @@ PERFORMANCE_ROOT = Path("docs/evidence/issue-012/performance")
 
 
 def _metric_summary(samples: list[float]) -> dict[str, object]:
-    ordered = sorted(samples)
+    serialized = [round(value, 3) for value in samples]
+    ordered = sorted(serialized)
     percentile_95 = ordered[math.ceil(len(ordered) * 0.95) - 1]
     middle = len(ordered) // 2
     percentile_50 = (ordered[middle - 1] + ordered[middle]) / 2
     return {
-        "raw": [round(value, 3) for value in samples],
+        "raw": serialized,
         "p50": round(percentile_50, 3),
         "p95": round(percentile_95, 3),
-        "max": round(max(samples), 3),
-        "sample_count": len(samples),
+        "max": round(max(serialized), 3),
+        "sample_count": len(serialized),
     }
+
+
+def _assert_metric_summary_integrity(value: object) -> None:
+    if isinstance(value, list):
+        for item in value:
+            _assert_metric_summary_integrity(item)
+        return
+    if not isinstance(value, dict):
+        return
+    summary_keys = {"raw", "p50", "p95", "max", "sample_count"}
+    if summary_keys <= value.keys() and isinstance(value["raw"], list):
+        expected = _metric_summary([float(item) for item in value["raw"]])
+        assert {key: value[key] for key in summary_keys} == expected
+    for item in value.values():
+        _assert_metric_summary_integrity(item)
+
+
+@pytest.mark.unit
+def test_committed_canvas_performance_summaries_recompute_from_serialized_samples() -> None:
+    for report_name in ("browser.json", "database.json"):
+        report = json.loads((PERFORMANCE_ROOT / report_name).read_text(encoding="utf-8"))
+        _assert_metric_summary_integrity(report)
+
+
+@pytest.mark.unit
+def test_canvas_metric_summary_uses_the_serialized_samples_for_percentiles() -> None:
+    samples = [1.0001] * 15 + [1.001] * 15
+    summary = _metric_summary(samples)
+
+    assert summary["raw"] == [1.0] * 15 + [1.001] * 15
+    assert summary["p50"] == round((1.0 + 1.001) / 2, 3)
+    assert summary["p50"] != round((1.0001 + 1.001) / 2, 3)
 
 
 def _cpu_model() -> str:
@@ -753,9 +786,9 @@ def test_canvas_detail_batches_authorization_provenance_and_related_context_quer
         }
         assert len(relationships) == repository_count
 
-    # Principal/grants/repositories, two scope-map statements, eight detail-data
-    # statements, and four organization-action checks are exactly 17 statements.
-    assert query_counts == {"1x1": 17, "2x2": 17, "5x4": 17, "20x10": 17}
+    # Principal/grants/repositories, two scope-map statements, eleven detail-data
+    # statements, and four organization-action checks are exactly 20 statements.
+    assert query_counts == {"1x1": 20, "2x2": 20, "5x4": 20, "20x10": 20}
     assert max(query_counts.values()) <= 22, query_counts
     assert max(query_counts.values()) - min(query_counts.values()) <= 2, query_counts
     materialized_cte = _AUTHORIZED_INCIDENT_EDGE_BATCH_SELECT.partition(")\nSELECT")[0]
@@ -1534,6 +1567,84 @@ def test_canvas_detail_filters_incident_edges_before_global_six_hundred_edge_cap
         target_entity=incident_target,
         **common,
     )
+    section_specs = (
+        (
+            "dependency",
+            50,
+            601,
+            KnowledgeEntity.EntityType.SERVICE,
+            KnowledgeRelationship.RelationshipType.SERVICE_DEPENDS_ON_SERVICE,
+            "ACTIVE",
+        ),
+        (
+            "policy",
+            21,
+            1_001,
+            KnowledgeEntity.EntityType.POLICY,
+            KnowledgeRelationship.RelationshipType.POLICY_APPLIES_TO_ENTITY,
+            "ACTIVE",
+        ),
+        (
+            "risk",
+            21,
+            2_001,
+            KnowledgeEntity.EntityType.RISK,
+            KnowledgeRelationship.RelationshipType.RISK_AFFECTS_ENTITY,
+            "OPEN",
+        ),
+        (
+            "cancelled-task",
+            50,
+            2_501,
+            KnowledgeEntity.EntityType.TASK,
+            KnowledgeRelationship.RelationshipType.TASK_CHANGES_ENTITY,
+            "CLOSED",
+        ),
+        (
+            "task",
+            21,
+            3_001,
+            KnowledgeEntity.EntityType.TASK,
+            KnowledgeRelationship.RelationshipType.TASK_CHANGES_ENTITY,
+            "IN_PROGRESS",
+        ),
+        (
+            "pull-request",
+            21,
+            4_001,
+            KnowledgeEntity.EntityType.PULL_REQUEST,
+            KnowledgeRelationship.RelationshipType.PULL_REQUEST_CHANGES_ENTITY,
+            "MERGED",
+        ),
+    )
+    for label, count, first_id, entity_type, relationship_type, status in section_specs:
+        for index in range(count):
+            related = KnowledgeEntity.objects.create(
+                organization=organization,
+                entity_type=entity_type,
+                canonical_key=f"{label}:selected-{index:02d}",
+                display_name=f"Selected {label} {index:02d}",
+                attributes={"status": status},
+                access_scope=scope,
+            )
+            KnowledgeRelationship.objects.create(
+                id=uuid.UUID(int=first_id + index),
+                organization=organization,
+                relationship_type=relationship_type,
+                source_entity=related,
+                target_entity=selected,
+                source_entity_type=related.entity_type,
+                target_entity_type=selected.entity_type,
+                assertion=seed_assertion,
+                source_location=seed_provenance.source_location,
+                source_observation=seed_provenance.source_observation,
+                access_snapshot=seed_provenance.access_snapshot,
+                access_scope=scope,
+                extraction_class=seed_provenance.extraction_class,
+                confidence=seed_provenance.confidence,
+                observed_at=seed_provenance.observed_at + timedelta(seconds=index),
+                review_state=KnowledgeRelationship.ReviewState.UNREVIEWED,
+            )
 
     globally_capped, globally_truncated = authorized_graph_edges(
         actor=actor,
@@ -1552,11 +1663,36 @@ def test_canvas_detail_filters_incident_edges_before_global_six_hundred_edge_cap
         repository_ids=(repository.id,),
     )
     relationships = cast(list[dict[str, object]], detail["relationships"])
-    assert [item["id"] for item in relationships] == [str(incident_id)]
-    assert [item["type"] for item in relationships] == [
+    assert len(relationships) == 50
+    assert {item["type"] for item in relationships} == {
         KnowledgeRelationship.RelationshipType.SERVICE_DEPENDS_ON_SERVICE
-    ]
-    assert [item["target_id"] for item in relationships] == [str(incident_target.id)]
+    }
+    assert str(incident_id) not in {item["id"] for item in relationships}
+    decisions = cast(list[dict[str, object]], detail["decisions_policies"])
+    risks = cast(list[dict[str, object]], detail["risks_incidents"])
+    active_work = cast(list[dict[str, object]], detail["active_work"])
+    pull_requests = cast(list[dict[str, object]], detail["recent_pull_requests"])
+    assert len(decisions) == len(risks) == len(active_work) == len(pull_requests) == 20
+    assert {item["type"] for item in decisions} == {KnowledgeEntity.EntityType.POLICY}
+    assert {item["type"] for item in risks} == {KnowledgeEntity.EntityType.RISK}
+    assert {item["type"] for item in active_work} == {KnowledgeEntity.EntityType.TASK}
+    assert {item["type"] for item in pull_requests} == {KnowledgeEntity.EntityType.PULL_REQUEST}
+    assert {item["label"] for item in active_work} == {
+        f"Selected task {index:02d}" for index in range(20)
+    }
+    pull_request_labels = {item["label"] for item in pull_requests}
+    assert "Selected pull-request 20" in pull_request_labels
+    assert "Selected pull-request 00" not in pull_request_labels
+    assert detail["context_truncation"] == {
+        "relationships": True,
+        "decisions_policies": True,
+        "risks_incidents": True,
+        "active_work_recent_pull_requests": True,
+        "assertions": False,
+        "history": False,
+        "reviewers": False,
+    }
+    assert detail["context_truncated"] is True
 
 
 @pytest.mark.integration
@@ -1632,6 +1768,90 @@ def test_saved_canvas_boundaries_are_reauthorized_before_persist_or_exposure() -
         actor_id=str(service.id),
         authorization_path="test:limited-canvas-service",
         request_id=uuid.uuid4(),
+    )
+    owner_membership = Membership.objects.get(
+        organization=organization,
+        user_id=admin.actor_id,
+    )
+    crowding_views = [
+        CanvasView(
+            organization=organization,
+            repository=hidden_repository,
+            owner_membership=owner_membership,
+            name=f"AAA inaccessible saved view {index:03d}",
+            view_type=CanvasView.ViewType.CUSTOM,
+            created_by_type=admin.actor_type,
+            created_by_id=admin.actor_id,
+            idempotency_key=hashlib.sha256(f"crowder-view-{index}".encode()).hexdigest(),
+            request_hash=hashlib.sha256(f"crowder-request-{index}".encode()).hexdigest(),
+        )
+        for index in range(301)
+    ]
+    malformed_views = [
+        CanvasView(
+            organization=organization,
+            repository=repository,
+            owner_membership=owner_membership,
+            name="AAB malformed semantic repositories",
+            view_type=CanvasView.ViewType.CUSTOM,
+            created_by_type=admin.actor_type,
+            created_by_id=admin.actor_id,
+            idempotency_key=hashlib.sha256(b"malformed-repositories-view").hexdigest(),
+            request_hash=hashlib.sha256(b"malformed-repositories-request").hexdigest(),
+        ),
+        CanvasView(
+            organization=organization,
+            repository=repository,
+            owner_membership=owner_membership,
+            name="AAC malformed semantic root",
+            view_type=CanvasView.ViewType.CUSTOM,
+            created_by_type=admin.actor_type,
+            created_by_id=admin.actor_id,
+            idempotency_key=hashlib.sha256(b"malformed-root-view").hexdigest(),
+            request_hash=hashlib.sha256(b"malformed-root-request").hexdigest(),
+        ),
+    ]
+    CanvasView.objects.bulk_create([*crowding_views, *malformed_views])
+
+    def raw_revision(
+        saved_view: CanvasView,
+        semantic_query: dict[str, object],
+    ) -> CanvasViewRevision:
+        revision_payload = {
+            "schema_version": "1",
+            "semantic_query": semantic_query,
+            "presentation": {},
+            "layout_algorithm": "deterministic-semantic-columns",
+            "layout_version": "anva-layered-v1",
+            "revision": 1,
+        }
+        return CanvasViewRevision(
+            organization=organization,
+            canvas_view=saved_view,
+            revision=1,
+            semantic_query=semantic_query,
+            presentation={},
+            layout_algorithm="deterministic-semantic-columns",
+            layout_version="anva-layered-v1",
+            content_hash=content_hash(revision_payload),
+            created_by_type=admin.actor_type,
+            created_by_id=admin.actor_id,
+            idempotency_key=hashlib.sha256(f"revision:{saved_view.id}".encode()).hexdigest(),
+            request_hash=saved_view.request_hash,
+        )
+
+    CanvasViewRevision.objects.bulk_create(
+        [
+            *[
+                raw_revision(
+                    saved_view,
+                    {"repository_ids": [str(hidden_repository.id)]},
+                )
+                for saved_view in crowding_views
+            ],
+            raw_revision(malformed_views[0], {"repository_ids": "not-an-array"}),
+            raw_revision(malformed_views[1], {"root_entity_id": "not-a-uuid"}),
+        ]
     )
     Repository.objects.bulk_create(
         [
@@ -1907,6 +2127,7 @@ def test_canvas_performance_report_has_30_warm_strict_samples(
             ),
         ],
     }
+    _assert_metric_summary_integrity(report)
     PERFORMANCE_ROOT.mkdir(parents=True, exist_ok=True)
     (PERFORMANCE_ROOT / "database.json").write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n",
