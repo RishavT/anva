@@ -51,7 +51,16 @@ tool, dynamic module download, cross-origin script, or browser persistence.
   JSON.
 - Explicit semantic repository UUIDs are same-organization and authorization
   checked before persistence and again at list, detail, replay, share, and
-  revoke boundaries. Default discovery caps only after authorization.
+  revoke boundaries. Default repository discovery caps only after
+  authorization. Saved-view discovery also checks the current revision's live
+  relational and semantic repository, scope/source, and root boundaries before
+  its 300-row cap; malformed legacy JSON fails closed and bounded candidates
+  still receive ordinary per-view reauthorization.
+- Inspector relationships, decisions/policies, risks/incidents, active work,
+  and recent pull requests are filtered and independently `+1` bounded inside
+  four fixed strict edge statements over one authorization snapshot. The UI
+  renders reviewers and conflict state and names every truncated permitted
+  section without claiming categorical absence or disclosing omitted totals.
 - The hidden-canary integration test proves that adding inaccessible ingested
   data does not change visible nodes, edges, counts, truncation, limitations, or
   layout and that path lookup cannot probe the hidden UUID.
@@ -74,13 +83,13 @@ tool, dynamic module download, cross-origin script, or browser persistence.
 
 | # | Closure | Direct regression evidence |
 | ---: | --- | --- |
-| 1 | Detail now returns bounded active relationships, decisions/policies, risks/incidents, active work/recent pull requests, and history with current authorization and no hidden totals. | `test_canvas_detail_and_as_of_use_only_bounded_authorized_graph_context`; Chromium inspector journey |
+| 1 | Detail independently pre-filters and bounds active relationships, decisions/policies, risks/incidents, active work, and recent pull requests with current authorization, stable semantics, and no hidden totals; reviewers/conflicts and per-section truncation render truthfully. | `test_canvas_detail_filters_incident_edges_before_global_six_hundred_edge_cap`; `test_canvas_detail_batches_authorization_provenance_and_related_context_queries`; Chromium inspector journey |
 | 2 | Semantic repository UUIDs are validated as same-organization and authorized before create/save, then re-authorized on replay. | `test_saved_canvas_boundaries_are_reauthorized_before_persist_or_exposure` |
 | 3 | The default repository cap is applied to the authorized sequence, not the tenant's pre-authorization rows. | `test_saved_canvas_boundaries_are_reauthorized_before_persist_or_exposure` with 101 earlier inaccessible repositories |
 | 4 | Provenance-only selection has no all-edge fallthrough. | `test_canvas_unions_only_strict_per_repository_authorized_graphs` |
 | 5 | Secret detection traverses every supported nested JSON child. | `test_canvas_filter_values_recursively_reject_secret_shaped_strings` |
 | 6 | Focus root/depth and progressive one-hop expansion exist in the service, interactive product, and no-JS controls. | `test_canvas_focus_walk_is_undirected_deterministic_and_depth_bounded`; Chromium focus journey; accessibility assertions |
-| 7 | List/get/share/save re-authorize revision-embedded repository UUIDs before exposing metadata or projection data. | `test_saved_canvas_boundaries_are_reauthorized_before_persist_or_exposure`; bearer/session integration journeys |
+| 7 | List/get/share/save re-authorize revision-embedded repository UUIDs before exposing metadata or projection data; listing authorizes candidates before its 300-view cap so inaccessible or malformed earlier rows cannot crowd out a later visible view. | `test_saved_canvas_boundaries_are_reauthorized_before_persist_or_exposure`; bearer/session integration journeys |
 | 8 | Share revocation is authenticated, CSRF-protected for humans, optimistic, request-idempotent, immediate, and history-preserving. | `test_canvas_revisions_are_append_only_idempotent_and_tenant_safe`; session and bearer HTTP integration journeys |
 | 9 | Presentation child schemas are closed at runtime and in OpenAPI; detail annotations and scoped questions are bounded and authorized. | strict presentation unit tests; `test_canvas_openapi_surfaces_are_authenticated_bounded_and_closed`; session integration and Chromium journeys |
 | 10 | The 750 KiB response gate measures compact unescaped Unicode response bytes and trims deterministically. | `test_canvas_http_wire_budget_is_compact_utf8_and_deterministically_trimmed` |
@@ -106,10 +115,11 @@ tool, dynamic module download, cross-origin script, or browser persistence.
   `docs/evidence/issue-012/README.md`. Capture-time regressions assert the
   horizontal bounds of the actual shell, main, sidebar, title, semantic
   controls, and focus control rather than relying on scroll state alone.
-- Schema migration has no model drift and applies in clean browser/integration
-  databases. OpenAPI generation emits the exact Canvas v3 enums, closed
-  request schemas, routes, and limits.
-- The full repository gate passed with 673 tests, four expected skips, and 86%
+- Schema migration has no model drift, applies in clean browser/integration
+  databases, and the exact production wheel reverses from migration 0018 to
+  0017 then reapplies 0018 successfully. OpenAPI generation emits the exact
+  Canvas v3 enums, closed request schemas, routes, and limits.
+- The full repository gate passed with 677 tests, four expected skips, and 86%
   aggregate branch coverage. Canvas service coverage is 90%.
 - The production wheel contains the migration, Canvas template, JS, CSS, and
   vendored Dagre asset. Its non-root runtime image passes `collectstatic`,
@@ -118,7 +128,9 @@ tool, dynamic module download, cross-origin script, or browser persistence.
   proxy-owned SSL redirect/HSTS warnings.
 - Both database and browser performance reports preserve all 30 post-warm raw
   samples, environment/fixture metadata, query counts, exact thresholds, and
-  source/test commit `fb5ce5d8c2d97f895802be3b2e4bdba479510925`.
+  source/test commit `662460ae2718cf44d07d2b83e7709e254a000ef5`.
+  Recursive report checks recompute p50, p95, max, and sample count from the
+  exact rounded values that are serialized in every nested raw sample array.
 - Hosted GitHub Actions remains disabled because the repository account's
   billing state cannot safely run workflows. All reported gates were executed
   locally in the isolated Docker Compose profiles; no workflow was enabled as

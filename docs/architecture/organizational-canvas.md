@@ -55,18 +55,31 @@ change. Presentation input is recursively validated as closed JSON; unknown
 children, scalar coercions, non-JSON values, non-finite coordinates, and
 secret-shaped text at any supported nesting depth are rejected.
 
+Saved-view discovery applies its 300-view cap only after a parameterized
+PostgreSQL candidate query has checked the current revision and its live
+repository, scope, governed-source, semantic-repository, and root-entity
+boundaries against one resolved authorization snapshot. Legacy semantic JSON
+is inspected by JSON type and UUID text equality rather than an unsafe cast, so
+malformed values fail closed. The bounded candidates still pass through the
+ordinary per-view service authorization before any metadata is returned.
+
 The same strict edge CTE is used by the Canvas projection and path service. A
 path is bounded to six hops and can contain only nodes and edges visible through
 the selected repository set. Missing, foreign, revoked, and inaccessible
 identifiers all use the same unavailable response.
 
-Inspector detail uses a strict incident-edge variant of that CTE: the selected
-entity predicate is applied before the 50-edge detail cap, rather than filtering
-a globally capped 600-edge export. Selection-scoped questions and their
-server-rendered Explorer fallback share one scope resolver. It authorizes the
-selected entity, its bounded one-hop endpoints, and their assertions, then maps
-claim locations to distinct current indexed root locations by source
-observation. Search receives only that bounded root-location set.
+Inspector detail uses four fixed invocations of a strict incident-edge variant
+of that CTE against the same resolved authorization snapshot. The selected
+entity and section type/status predicates are applied before independent `+1`
+sentinel bounds: 50 relationships, 20 decisions/policies, 20 risks/incidents,
+and separate 20-item active-work and recent-pull-request partitions. Pull
+requests retain descending observation-time order and inactive work is removed
+before ranking. The permitted endpoints from those sections are unioned for one
+bounded hydration query. Selection-scoped questions and their server-rendered
+Explorer fallback share one scope resolver. It authorizes the selected entity,
+its bounded one-hop endpoints, and their assertions, then maps claim locations
+to distinct current indexed root locations by source observation. Search
+receives only that bounded root-location set.
 
 Shares re-run this pipeline against the viewer's current permissions. A share
 can therefore lose nodes or become unavailable as authorization changes. The
@@ -139,6 +152,9 @@ layout, annotation, share, or proposal changed canonical knowledge.
 Entity detail is a bounded, authorization-filtered view over source citations,
 active relationships, decisions and policies, risks and incidents, active work
 and recent pull requests, and recent history. Each section is independently
-bounded and reports truncation without disclosing hidden totals. A selected
-entity can also drive a bounded, repository-authorized organizational question;
-the answer is scoped to its permitted one-hop context and Explorer results.
+bounded and reports its own truncation plus one aggregate signal without
+disclosing hidden totals or identities. Reviewers and conflict state are
+rendered explicitly, and empty-state copy does not claim categorical absence
+when a permitted section was truncated. A selected entity can also drive a
+bounded, repository-authorized organizational question; the answer is scoped
+to its permitted one-hop context and Explorer results.

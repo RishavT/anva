@@ -41,13 +41,26 @@ after authorization, so a run of inaccessible repositories cannot crowd out a
 later visible repository. Provenance-only mode has no permissive all-edge
 fallthrough. Entity detail and questions use bounded authorized sections and do
 not expose hidden section totals. Inspector lookup applies the entity-incident
-predicate inside the strict authorized edge CTE before its local cap, so a
-large unrelated authorized graph cannot starve the selected entity's context.
+predicate plus each section's type/status predicate inside the strict
+authorized edge CTE before independent `+1` sentinel caps, so a large generic
+relationship prefix cannot starve decisions/policies, risks/incidents, active
+work, or recent pull requests. The four fixed edge statements reuse the same
+actor-bound authorization snapshot, keep query count independent of result
+cardinality, and hydrate the union of already-permitted endpoints once.
 Question and no-JavaScript Explorer retrieval bridge only the selected entity
 and authorized one-hop entities from claim locations to current indexed root
 chunks through their shared observation; unrelated same-repository chunks,
 stale observations, revoked snapshots, and duplicate chunk roots cannot consume
 the evidence cap.
+
+Saved-view listing likewise applies its 300-row cap after a parameterized
+candidate query checks the current tenant revision and live relational and
+semantic repository, scope/source, and root-entity boundaries. JSON types and
+UUID text equality make malformed legacy semantic values fail closed without a
+cast exception. Every bounded candidate is then re-authorized through the
+ordinary view service, preserving saved ownership metadata and service-actor
+visibility; share resolution remains on its separate exact-revision path.
+Inaccessible earlier names therefore cannot crowd out a later visible view.
 
 ### Share used as an access capability
 
@@ -111,8 +124,9 @@ files are committed with reviewed SHA-256 checksums.
 
 Freshness comes from currently authorized assertions and reports unknown when
 only identity is available. Connection explanations use the same bounded
-authorized edge set as projection. Truncated responses say so; the UI does not
-imply absence beyond the displayed authorized and bounded result.
+authorized edge set as projection. Detail responses carry per-section and
+aggregate truncation signals; the UI names affected permitted sections and
+does not imply absence beyond the displayed authorized and bounded result.
 
 An `as_of` query is explicitly an observation-time boundary. It filters entity
 creation and assertion/relationship observations, while current authorized

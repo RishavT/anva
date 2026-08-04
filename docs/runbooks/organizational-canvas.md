@@ -13,7 +13,9 @@ product navigation or visit `/app/canvas`.
   permissions and source state.
 - Select a node to inspect ownership, provenance, freshness, conflicts, and
   bounded permitted relationships, decisions/policies, risks/incidents, active
-  work/recent pull requests, history, annotations, and contextual actions.
+  work/recent pull requests, history, reviewers, annotations, and contextual
+  actions. A section-level bounded-context notice means additional permitted
+  items were omitted; it never reveals their count or identity.
 - Use **Fit**, zoom, pan, minimap, arrow keys, or drag nodes. **Save layout**
   appends a new presentation revision; it does not change canonical knowledge.
 - Use **Focus here** or **Expand one hop** for progressive disclosure. The focus
@@ -47,6 +49,13 @@ path depth is six. A response that hits a limit reports truncation. Narrow the
 repository boundary, entity types, owner, risk, freshness, layers, or focus root
 before treating a bounded view as exhaustive.
 
+Inspector detail separately caps relationships at 50 and each contextual
+subgroup at 20. Active work excludes the documented inactive statuses before
+ranking, while recent pull requests retain descending observation-time order.
+Saved-view listing returns at most 300 currently authorized candidates; an
+inaccessible or malformed legacy saved view is omitted before that cap and does
+not crowd out a later visible view.
+
 ## Verification
 
 Run the ordinary gates in the isolated test profile:
@@ -55,6 +64,8 @@ Run the ordinary gates in the isolated test profile:
 docker compose -p anva-canvas --profile test run --rm test ruff check .
 docker compose -p anva-canvas --profile test run --rm test mypy src tests
 docker compose -p anva-canvas --profile test run --rm test pytest
+docker compose -p anva-canvas --profile test run --rm test pytest -q \
+  tests/integration/test_canvas_integration.py::test_committed_canvas_performance_summaries_recompute_from_serialized_samples
 ```
 
 Run the separate Chromium evidence stage:
@@ -90,7 +101,13 @@ the production static manifest does not require a development-only source map.
 - Empty view: confirm successful source ingestion and repository/scope access,
   then broaden typed filters. An empty result is not evidence that hidden data
   exists or does not exist.
+- Missing saved view in the selector: confirm that its current revision still
+  contains well-formed semantic JSON and that every relational and semantic
+  repository, scope/source, and root boundary remains currently authorized.
 - Truncated view: reduce repositories or filters/focus before investigation.
+- Truncated inspector section: treat only the rendered items as known. Do not
+  translate a bounded empty section into “none exists”; narrow the repository
+  boundary or inspect a more specific semantic view.
 - Truncated selection-scoped evidence: the permitted one-hop edge, assertion,
   or source-lineage budget was reached. Narrow the repository or question; do
   not treat omitted excerpts as proof of absence.
