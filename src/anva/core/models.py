@@ -1312,7 +1312,11 @@ class CanvasView(RevisionedTenantModel):
             models.Index(
                 fields=["organization", "repository", "is_archived", "name"],
                 name="core_canvas_view_repo_idx",
-            )
+            ),
+            models.Index(
+                fields=["organization", "is_archived", "name", "id"],
+                name="core_canvas_view_list_idx",
+            ),
         ]
         constraints: ClassVar[list[models.BaseConstraint]] = [
             *RevisionedTenantModel.Meta.constraints,

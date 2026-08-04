@@ -70,6 +70,7 @@ from anva.core.services.authorization import (
     resolve_authorized_repository_scopes,
 )
 from anva.core.services.canvas import (
+    _AUTHORIZED_CANVAS_VIEW_IDS,
     CanvasQuery,
     _batch_authorized_assertions,
     _batch_authorized_entities,
@@ -1887,6 +1888,160 @@ def test_saved_canvas_boundaries_are_reauthorized_before_persist_or_exposure() -
             idempotency_key="inaccessible-save-boundary",
         )
     assert CanvasViewRevision.objects.filter(canvas_view=view).count() == 1
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_saved_canvas_list_has_fixed_queries_and_an_ordered_authorized_plan() -> None:
+    organization, visible_repository, admin, user = _tenant(slug="canvas-list-plan")
+    hidden_repository = Repository.objects.create(
+        organization=organization,
+        external_id="filesystem:canvas-list-plan:hidden",
+        name="hidden repository",
+    )
+    service = ServiceIdentity.objects.create(
+        organization=organization,
+        name="bounded canvas list service",
+        issuer="anva-test",
+        audience="anva-test-api",
+    )
+    AccessGrant.objects.create(
+        organization=organization,
+        service_identity=service,
+        repository=visible_repository,
+        action=Action.CANVAS_VIEW.value,
+    )
+    service_actor = ActorContext(
+        organization_id=organization.id,
+        actor_type="SERVICE",
+        actor_id=str(service.id),
+        authorization_path="test:bounded-canvas-list",
+        request_id=uuid.uuid4(),
+    )
+    owner = Membership.objects.get(organization=organization, user=user)
+
+    def add_views(
+        *, repository: Repository, name_prefix: str, key_prefix: str, count: int, start: int = 0
+    ) -> list[CanvasView]:
+        views = [
+            CanvasView(
+                organization=organization,
+                repository=repository,
+                owner_membership=owner,
+                name=f"{name_prefix} {index:03d}",
+                view_type=CanvasView.ViewType.CUSTOM,
+                created_by_type=admin.actor_type,
+                created_by_id=admin.actor_id,
+                idempotency_key=content_hash({"view": key_prefix, "index": index}),
+                request_hash=content_hash({"request": key_prefix, "index": index}),
+            )
+            for index in range(start, start + count)
+        ]
+        CanvasView.objects.bulk_create(views)
+        semantic_query = {"repository_ids": [str(repository.id)]}
+        revisions = []
+        for view in views:
+            revision_payload = {
+                "schema_version": "1",
+                "semantic_query": semantic_query,
+                "presentation": {},
+                "layout_algorithm": "deterministic-semantic-columns",
+                "layout_version": "anva-layered-v1",
+                "revision": 1,
+            }
+            revisions.append(
+                CanvasViewRevision(
+                    organization=organization,
+                    canvas_view=view,
+                    revision=1,
+                    semantic_query=semantic_query,
+                    presentation={},
+                    layout_algorithm="deterministic-semantic-columns",
+                    layout_version="anva-layered-v1",
+                    content_hash=content_hash(revision_payload),
+                    created_by_type=admin.actor_type,
+                    created_by_id=admin.actor_id,
+                    idempotency_key=content_hash({"revision": str(view.id)}),
+                    request_hash=view.request_hash,
+                )
+            )
+        CanvasViewRevision.objects.bulk_create(revisions)
+        return views
+
+    visible_views = add_views(
+        repository=visible_repository,
+        name_prefix="ZZZ visible saved view",
+        key_prefix="visible",
+        count=1,
+    )
+    with CaptureQueriesContext(connection) as one_queries:
+        started = time.perf_counter()
+        one_result = list_canvas_views(actor=service_actor)
+        one_elapsed_ms = (time.perf_counter() - started) * 1_000
+    assert [view.id for view in one_result] == [visible_views[0].id]
+
+    visible_views.extend(
+        add_views(
+            repository=visible_repository,
+            name_prefix="ZZZ visible saved view",
+            key_prefix="visible",
+            count=299,
+            start=1,
+        )
+    )
+    add_views(
+        repository=hidden_repository,
+        name_prefix="AAA inaccessible saved view",
+        key_prefix="hidden",
+        count=301,
+    )
+    with CaptureQueriesContext(connection) as many_queries:
+        started = time.perf_counter()
+        many_result = list_canvas_views(actor=service_actor)
+        many_elapsed_ms = (time.perf_counter() - started) * 1_000
+
+    assert [view.id for view in many_result] == [view.id for view in visible_views]
+    assert len(one_queries) == len(many_queries) == 6
+    assert many_elapsed_ms < max(one_elapsed_ms * 50, 1_000.0)
+
+    authorization = resolve_authorized_repository_scopes(
+        actor=service_actor,
+        actions=(Action.CANVAS_VIEW,),
+        required_action=Action.CANVAS_VIEW,
+        repository_limit=100,
+    )
+    with connection.cursor() as cursor:
+        cursor.execute("ANALYZE core_canvasview")
+        cursor.execute("ANALYZE core_canvasviewrevision")
+        cursor.execute(
+            "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + _AUTHORIZED_CANVAS_VIEW_IDS,
+            {
+                "organization_id": organization.id,
+                "repository_ids": list(authorization.repository_ids_for(Action.CANVAS_VIEW)),
+                "scope_ids": list(authorization.scope_ids_for(Action.CANVAS_VIEW)),
+                "view_limit": 300,
+            },
+        )
+        explain = cursor.fetchone()[0][0]
+
+    def flatten_plan(node: dict[str, object]) -> list[dict[str, object]]:
+        flattened = [node]
+        for child in cast(list[dict[str, object]], node.get("Plans", [])):
+            flattened.extend(flatten_plan(child))
+        return flattened
+
+    plan_nodes = flatten_plan(explain["Plan"])
+    assert explain["Plan"]["Node Type"] == "Limit"
+    assert not {"Sort", "CTE Scan"} & {node["Node Type"] for node in plan_nodes}
+    list_scans = [
+        node for node in plan_nodes if node.get("Index Name") == "core_canvas_view_list_idx"
+    ]
+    assert len(list_scans) == 1
+    assert (
+        cast(int, list_scans[0]["Actual Rows"]) + cast(int, list_scans[0]["Rows Removed by Filter"])
+        <= 601
+    )
+    assert explain["Execution Time"] < 1_000
 
 
 @pytest.mark.integration

@@ -128,13 +128,19 @@ SECRET_PATTERN = re.compile(
 )
 
 _AUTHORIZED_CANVAS_VIEW_IDS = """
-WITH authorized_candidates AS MATERIALIZED (
-    SELECT saved_view.id, saved_view.name
+SELECT saved_view.id
     FROM core_canvasview saved_view
-    JOIN core_canvasviewrevision revision
-      ON revision.organization_id = saved_view.organization_id
-     AND revision.canvas_view_id = saved_view.id
-     AND revision.revision = saved_view.revision
+    -- Preserve the saved-view index order through the authorization predicates so LIMIT
+    -- stops after the first bounded authorized rows instead of sorting every candidate.
+    JOIN LATERAL (
+        SELECT current_revision.semantic_query
+        FROM core_canvasviewrevision current_revision
+        WHERE current_revision.organization_id = saved_view.organization_id
+          AND current_revision.canvas_view_id = saved_view.id
+          AND current_revision.revision = saved_view.revision
+        LIMIT 1
+        OFFSET 0
+    ) revision ON TRUE
     WHERE saved_view.organization_id = %(organization_id)s
       AND NOT saved_view.is_archived
       AND jsonb_typeof(revision.semantic_query) = 'object'
@@ -255,10 +261,7 @@ WITH authorized_candidates AS MATERIALIZED (
               )
           )
       )
-)
-SELECT id
-FROM authorized_candidates
-ORDER BY name, id
+ORDER BY saved_view.name, saved_view.id
 LIMIT %(view_limit)s
 """
 
@@ -715,17 +718,7 @@ def list_canvas_views(*, actor: ActorContext) -> tuple[CanvasView, ...]:
             is_archived=False,
         ).select_related("owner_membership")
     }
-    visible: list[CanvasView] = []
-    for view_id in candidate_ids:
-        view = candidates.get(view_id)
-        if view is None:
-            continue
-        try:
-            get_authorized_canvas_view(actor=actor, view_id=view.id)
-        except ResourceNotFoundError:
-            continue
-        visible.append(view)
-    return tuple(visible)
+    return tuple(candidates[view_id] for view_id in candidate_ids if view_id in candidates)
 
 
 def _authorized_entity_union(

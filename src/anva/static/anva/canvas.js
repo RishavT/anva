@@ -59,6 +59,8 @@
   let proposalTargetId = null;
   let proposalDrawing = null;
   let suppressNodeClick = false;
+  let inspectorGeneration = 0;
+  let inspectorController = null;
   const annotations = Array.isArray(graph.annotations) ? [...graph.annotations] : [];
   let saveIdempotencyKey = crypto.randomUUID();
   let shareIdempotencyKey = crypto.randomUUID();
@@ -285,11 +287,47 @@
     button.append(span);
   };
 
+  const inspectorListSelectors = [
+    "[data-inspector-sources]",
+    "[data-inspector-relationships]",
+    "[data-inspector-decisions]",
+    "[data-inspector-risks]",
+    "[data-inspector-work]",
+    "[data-inspector-history]",
+  ];
+
+  const resetInspectorDetail = ({ summary, fieldText, listText, actionsText }) => {
+    root.querySelector("[data-inspector-summary]").textContent = summary;
+    [
+      "[data-inspector-owner]",
+      "[data-inspector-reviewers]",
+      "[data-inspector-status]",
+      "[data-inspector-freshness]",
+      "[data-inspector-conflicts]",
+    ].forEach((selector) => {
+      root.querySelector(selector).textContent = fieldText;
+    });
+    const contextWarning = root.querySelector("[data-inspector-context]");
+    contextWarning.hidden = true;
+    contextWarning.textContent = "";
+    inspectorListSelectors.forEach((selector) => {
+      const list = root.querySelector(selector);
+      const item = document.createElement("li");
+      item.textContent = listText;
+      list.replaceChildren(item);
+    });
+    root.querySelector("[data-inspector-actions]").textContent = actionsText;
+  };
+
   const selectNode = async (id, { focus = false } = {}) => {
     const selectStarted = performance.now();
     const node = nodeById.get(id);
     const button = buttonById.get(id);
     if (!node || !button) return;
+    const generation = ++inspectorGeneration;
+    inspectorController?.abort();
+    const controller = new AbortController();
+    inspectorController = controller;
     if (selectedId && buttonById.get(selectedId)) {
       buttonById.get(selectedId).setAttribute("aria-pressed", "false");
     }
@@ -304,11 +342,12 @@
     const title = root.querySelector("#canvas-inspector-title");
     title.textContent = node.label;
     title.dir = "auto";
-    root.querySelector("[data-inspector-summary]").textContent = "Loading current permitted detail…";
-    root.querySelector("[data-inspector-reviewers]").textContent = "Loading…";
-    const contextWarning = root.querySelector("[data-inspector-context]");
-    contextWarning.hidden = true;
-    contextWarning.textContent = "";
+    resetInspectorDetail({
+      summary: "Loading current permitted detail…",
+      fieldText: "Loading current permitted detail…",
+      listText: "Loading current permitted detail…",
+      actionsText: "Loading current permitted actions…",
+    });
     recordDuration("anva-canvas-select-local", selectStarted);
     const repositories = (graph.repositories || [])
       .map((repository) => `repository=${encodeURIComponent(repository.id)}`)
@@ -317,12 +356,15 @@
       const response = await fetch(`${root.dataset.detailEndpoint}${encodeURIComponent(id)}?${repositories}`, {
         credentials: "same-origin",
         headers: { Accept: "application/json" },
+        signal: controller.signal,
       });
       if (!response.ok) throw new Error("detail unavailable");
       const detail = await response.json();
+      if (generation !== inspectorGeneration || selectedId !== id || controller.signal.aborted) return;
       root.querySelector("[data-inspector-summary]").textContent = detail.summary;
       root.querySelector("[data-inspector-owner]").textContent = detail.owner;
       const truncation = detail.context_truncation || {};
+      const contextWarning = root.querySelector("[data-inspector-context]");
       const reviewerText = detail.reviewers.length
         ? detail.reviewers.join(", ")
         : truncation.reviewers
@@ -440,9 +482,16 @@
         : "Current role can inspect this entity. Canonical mutation and deletion are unavailable here.";
       announce(`${detail.label} detail loaded. Freshness ${detail.freshness}.`);
     } catch (_error) {
-      root.querySelector("[data-inspector-summary]").textContent =
-        "Current detail is unavailable. Access may have changed; no stale detail was retained.";
+      if (generation !== inspectorGeneration || selectedId !== id) return;
+      resetInspectorDetail({
+        summary: "Current detail is unavailable. Access may have changed; no stale detail was retained.",
+        fieldText: "Current detail unavailable.",
+        listText: "Current permitted detail unavailable.",
+        actionsText: "Current permitted actions unavailable.",
+      });
       announce("Current permitted detail is unavailable.");
+    } finally {
+      if (generation === inspectorGeneration) inspectorController = null;
     }
   };
 

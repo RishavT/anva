@@ -833,6 +833,118 @@ def test_organizational_canvas_interaction_no_js_and_responsive_evidence(
             driver.find_element(By.CSS_SELECTOR, "[data-inspector-context]").get_attribute("hidden")
             is not None
         )
+        inspector_race = driver.execute_async_script(
+            """
+            const done = arguments[0];
+            const originalFetch = window.fetch;
+            const pause = () => new Promise((resolve) => setTimeout(resolve, 0));
+            const waitFor = async (predicate, message) => {
+              for (let index = 0; index < 200; index += 1) {
+                if (predicate()) return;
+                await pause();
+              }
+              throw new Error(message);
+            };
+            const detail = (label) => ({
+              label,
+              summary: `Summary ${label}`,
+              owner: `Owner ${label}`,
+              reviewers: [`Reviewer ${label}`],
+              status: `Status ${label}`,
+              freshness: `Freshness ${label}`,
+              conflict_count: 0,
+              context_truncation: {},
+              context_truncated: false,
+              sources: [],
+              relationships: [],
+              decisions_policies: [],
+              risks_incidents: [],
+              active_work: [],
+              recent_pull_requests: [],
+              history: [],
+              permitted_actions: { propose_relationship: false },
+            });
+            (async () => {
+              try {
+                const nodes = [...document.querySelectorAll(".canvas-node")];
+                const pending = [];
+                window.fetch = (_url, _options) => new Promise((resolve, reject) => {
+                  pending.push({ resolve, reject });
+                });
+                nodes[0].click();
+                nodes[1].click();
+                await waitFor(() => pending.length === 2, "selection requests were not issued");
+                pending[1].resolve({ ok: true, json: async () => detail("B") });
+                await waitFor(
+                  () => document.querySelector("[data-inspector-summary]").textContent
+                    === "Summary B",
+                  "newer selection did not render",
+                );
+                pending[0].resolve({ ok: true, json: async () => detail("A") });
+                await pause();
+                await pause();
+                const reverseSummary = document.querySelector(
+                  "[data-inspector-summary]",
+                ).textContent;
+                const reverseOwner = document.querySelector(
+                  "[data-inspector-owner]",
+                ).textContent;
+
+                window.fetch = () => Promise.reject(new Error("forced current failure"));
+                nodes[2].click();
+                await waitFor(
+                  () => document.querySelector("[data-inspector-summary]").textContent
+                    .includes("unavailable"),
+                  "current selection failure did not render",
+                );
+                const selectors = [
+                  "[data-inspector-summary]",
+                  "[data-inspector-owner]",
+                  "[data-inspector-reviewers]",
+                  "[data-inspector-status]",
+                  "[data-inspector-freshness]",
+                  "[data-inspector-conflicts]",
+                  "[data-inspector-sources]",
+                  "[data-inspector-relationships]",
+                  "[data-inspector-decisions]",
+                  "[data-inspector-risks]",
+                  "[data-inspector-work]",
+                  "[data-inspector-history]",
+                  "[data-inspector-actions]",
+                ];
+                const failedText = selectors.map(
+                  (selector) => document.querySelector(selector).textContent,
+                );
+                const context = document.querySelector("[data-inspector-context]");
+                done({
+                  reverseSummary,
+                  reverseOwner,
+                  failedText,
+                  failureContextHidden: context.hidden,
+                  failureContextText: context.textContent,
+                });
+              } finally {
+                window.fetch = originalFetch;
+              }
+            })().catch((error) => done({ error: String(error) }));
+            """
+        )
+        assert "error" not in inspector_race
+        assert inspector_race["reverseSummary"] == "Summary B"
+        assert inspector_race["reverseOwner"] == "Owner B"
+        assert all("B" not in value for value in inspector_race["failedText"])
+        assert all("Loading" not in value for value in inspector_race["failedText"])
+        assert all("unavailable" in value.lower() for value in inspector_race["failedText"])
+        assert inspector_race["failureContextHidden"] is True
+        assert inspector_race["failureContextText"] == ""
+
+        first_node.click()
+        wait.until(
+            expected_conditions.text_to_be_present_in_element(
+                (By.CSS_SELECTOR, "[data-inspector-reviewers]"),
+                "Security review",
+            )
+        )
         question_form = driver.find_element(By.CSS_SELECTOR, "[data-canvas-question]")
         question_form.find_element(By.NAME, "q").send_keys("billing-runtime")
         question_form.find_element(By.CSS_SELECTOR, 'button[type="submit"]').click()
