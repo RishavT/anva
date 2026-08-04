@@ -50,6 +50,7 @@ from anva.core.models import (
     Organization,
     ParsedSource,
     Repository,
+    RepositoryAccessToken,
     Role,
     ServiceIdentity,
     SourceChunkVisibility,
@@ -72,6 +73,7 @@ from anva.core.services.authorization import (
 from anva.core.services.canvas import (
     _AUTHORIZED_CANVAS_VIEW_IDS,
     CanvasQuery,
+    _authorized_canvas_view_query_parameters,
     _batch_authorized_assertions,
     _batch_authorized_entities,
     _canvas_payload_size,
@@ -1892,6 +1894,116 @@ def test_saved_canvas_boundaries_are_reauthorized_before_persist_or_exposure() -
 
 @pytest.mark.integration
 @pytest.mark.django_db
+@pytest.mark.parametrize("revocation", ("grant", "token", "scope_binding"))
+def test_saved_canvas_list_rechecks_authorization_after_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+    revocation: str,
+) -> None:
+    organization, repository, admin, _user = _tenant(
+        slug=f"canvas-list-race-{revocation.replace('_', '-')}"
+    )
+    scope = AccessScope.objects.create(
+        organization=organization,
+        name="saved view race scope",
+        all_memberships=True,
+        all_repositories=True,
+    )
+    view, _created = create_canvas_view(
+        actor=admin,
+        name="Race protected saved view",
+        description="",
+        view_type=CanvasView.ViewType.CUSTOM,
+        semantic_query={"repository_ids": [str(repository.id)]},
+        repository_id=repository.id,
+        access_scope_id=scope.id,
+        idempotency_key=f"saved-view-race-{revocation}",
+    )
+    service = ServiceIdentity.objects.create(
+        organization=organization,
+        name=f"saved view race service {revocation}",
+        issuer="anva-test",
+        audience="anva-test-api",
+    )
+    grant = AccessGrant.objects.create(
+        organization=organization,
+        service_identity=service,
+        repository=repository,
+        action=Action.CANVAS_VIEW.value,
+    )
+    scope_binding = AccessScopeServiceIdentity.objects.create(
+        organization=organization,
+        access_scope=scope,
+        service_identity=service,
+    )
+    actor = ActorContext(
+        organization_id=organization.id,
+        actor_type="SERVICE",
+        actor_id=str(service.id),
+        authorization_path="test:saved-view-race",
+        request_id=uuid.uuid4(),
+    )
+    token = None
+    if revocation == "token":
+        issued = issue_bootstrap_repository_token(
+            organization=organization,
+            repository=repository,
+            service_identity=service,
+            actions=frozenset({Action.CANVAS_VIEW}),
+            expires_at=timezone.now() + timedelta(days=1),
+        )
+        token = issued.record
+        actor = replace(
+            actor,
+            repository_id=repository.id,
+            credential_id=token.id,
+            credential_actions=frozenset({Action.CANVAS_VIEW.value}),
+        )
+
+    assert [item.id for item in list_canvas_views(actor=actor)] == [view.id]
+    original_resolver = resolve_authorized_repository_scopes
+
+    def resolve_then_revoke(
+        *,
+        actor: ActorContext,
+        actions: tuple[Action, ...],
+        required_action: Action,
+        repository_limit: int,
+    ) -> AuthorizedRepositoryScopes:
+        authorization = original_resolver(
+            actor=actor,
+            actions=actions,
+            required_action=required_action,
+            repository_limit=repository_limit,
+        )
+        if revocation == "grant":
+            AccessGrant.objects.filter(id=grant.id).update(revoked_at=timezone.now())
+        elif revocation == "token":
+            assert token is not None
+            RepositoryAccessToken.objects.filter(id=token.id).update(revoked_at=timezone.now())
+        else:
+            AccessScopeServiceIdentity.objects.filter(id=scope_binding.id).delete()
+        return authorization
+
+    monkeypatch.setattr(
+        "anva.core.services.canvas.resolve_authorized_repository_scopes",
+        resolve_then_revoke,
+    )
+    with CaptureQueriesContext(connection) as captured:
+        assert list_canvas_views(actor=actor) == ()
+
+    candidate_queries = [
+        query["sql"]
+        for query in captured.captured_queries
+        if "CROSS JOIN core_canvasview saved_view" in query["sql"]
+    ]
+    assert len(candidate_queries) == 1
+    assert "current_repositories" in candidate_queries[0]
+    assert "current_scopes" in candidate_queries[0]
+    assert len(captured) == {"grant": 6, "token": 7, "scope_binding": 6}[revocation]
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
 def test_saved_canvas_list_has_fixed_queries_and_an_ordered_authorized_plan() -> None:
     organization, visible_repository, admin, user = _tenant(slug="canvas-list-plan")
     hidden_repository = Repository.objects.create(
@@ -1928,7 +2040,7 @@ def test_saved_canvas_list_has_fixed_queries_and_an_ordered_authorized_plan() ->
                 organization=organization,
                 repository=repository,
                 owner_membership=owner,
-                name=f"{name_prefix} {index:03d}",
+                name=f"{name_prefix} {index:04d}",
                 view_type=CanvasView.ViewType.CUSTOM,
                 created_by_type=admin.actor_type,
                 created_by_id=admin.actor_id,
@@ -1970,7 +2082,7 @@ def test_saved_canvas_list_has_fixed_queries_and_an_ordered_authorized_plan() ->
 
     visible_views = add_views(
         repository=visible_repository,
-        name_prefix="ZZZ visible saved view",
+        name_prefix="MMM visible saved view",
         key_prefix="visible",
         count=1,
     )
@@ -1983,9 +2095,9 @@ def test_saved_canvas_list_has_fixed_queries_and_an_ordered_authorized_plan() ->
     visible_views.extend(
         add_views(
             repository=visible_repository,
-            name_prefix="ZZZ visible saved view",
+            name_prefix="MMM visible saved view",
             key_prefix="visible",
-            count=299,
+            count=3_299,
             start=1,
         )
     )
@@ -1995,12 +2107,20 @@ def test_saved_canvas_list_has_fixed_queries_and_an_ordered_authorized_plan() ->
         key_prefix="hidden",
         count=301,
     )
+    add_views(
+        repository=hidden_repository,
+        name_prefix="ZZZ inaccessible saved view",
+        key_prefix="hidden-tail",
+        count=301,
+    )
     with CaptureQueriesContext(connection) as many_queries:
         started = time.perf_counter()
         many_result = list_canvas_views(actor=service_actor)
         many_elapsed_ms = (time.perf_counter() - started) * 1_000
 
-    assert [view.id for view in many_result] == [view.id for view in visible_views]
+    assert [view.id for view in many_result] == [view.id for view in visible_views[:300]]
+    assert CanvasView.objects.filter(organization=organization).count() == 3_902
+    assert len(visible_views) == 3_300
     assert len(one_queries) == len(many_queries) == 6
     assert many_elapsed_ms < max(one_elapsed_ms * 50, 1_000.0)
 
@@ -2015,12 +2135,10 @@ def test_saved_canvas_list_has_fixed_queries_and_an_ordered_authorized_plan() ->
         cursor.execute("ANALYZE core_canvasviewrevision")
         cursor.execute(
             "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + _AUTHORIZED_CANVAS_VIEW_IDS,
-            {
-                "organization_id": organization.id,
-                "repository_ids": list(authorization.repository_ids_for(Action.CANVAS_VIEW)),
-                "scope_ids": list(authorization.scope_ids_for(Action.CANVAS_VIEW)),
-                "view_limit": 300,
-            },
+            _authorized_canvas_view_query_parameters(
+                authorization=authorization,
+                view_limit=300,
+            ),
         )
         explain = cursor.fetchone()[0][0]
 
@@ -2037,10 +2155,11 @@ def test_saved_canvas_list_has_fixed_queries_and_an_ordered_authorized_plan() ->
         node for node in plan_nodes if node.get("Index Name") == "core_canvas_view_list_idx"
     ]
     assert len(list_scans) == 1
-    assert (
-        cast(int, list_scans[0]["Actual Rows"]) + cast(int, list_scans[0]["Rows Removed by Filter"])
-        <= 601
+    scanned_rows = cast(int, list_scans[0]["Actual Rows"]) + cast(
+        int, list_scans[0].get("Rows Removed by Filter", 0)
     )
+    assert scanned_rows <= 601
+    assert scanned_rows < CanvasView.objects.filter(organization=organization).count() - 3_000
     assert explain["Execution Time"] < 1_000
 
 

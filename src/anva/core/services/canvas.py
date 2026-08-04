@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, cast
 
+from django.conf import settings
 from django.db import connection, transaction
 from django.db.models import Exists, F, OuterRef, Q
 from django.utils import timezone
@@ -49,6 +50,7 @@ from anva.core.models import (
 )
 from anva.core.services.authorization import (
     NOT_FOUND_MESSAGE,
+    ROLE_ACTIONS,
     Action,
     AuthorizedRepositoryScopes,
     authorize_action,
@@ -126,10 +128,173 @@ SECRET_PATTERN = re.compile(
     r"(?i)(?:gh[pousr]_[a-z0-9]{20,}|bearer\s+[a-z0-9._-]{12,}|"
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----|sessionid\s*=)"
 )
+_CANVAS_VIEW_ROLE_CODES = tuple(
+    sorted(
+        role_code for role_code, actions in ROLE_ACTIONS.items() if Action.CANVAS_VIEW in actions
+    )
+)
 
 _AUTHORIZED_CANVAS_VIEW_IDS = """
 SELECT saved_view.id
-    FROM core_canvasview saved_view
+    FROM (
+        SELECT COALESCE(array_agg(live_repository.id), ARRAY[]::uuid[]) AS ids
+        FROM core_repository live_repository
+        WHERE live_repository.organization_id = %(organization_id)s
+          AND live_repository.is_active
+          AND live_repository.id = ANY(%(repository_ids)s::uuid[])
+          AND (
+              %(actor_repository_id)s::uuid IS NULL
+              OR live_repository.id = %(actor_repository_id)s::uuid
+          )
+          AND %(credential_action_allowed)s
+          AND (
+              (
+                  %(actor_type)s = 'USER'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM core_membership principal_membership
+                      JOIN core_user principal_user
+                        ON principal_user.id = principal_membership.user_id
+                       AND principal_user.is_active
+                      JOIN core_role principal_role
+                        ON principal_role.id = principal_membership.role_id
+                       AND principal_role.organization_id = principal_membership.organization_id
+                      WHERE principal_membership.organization_id = %(organization_id)s
+                        AND principal_membership.user_id = %(principal_id)s
+                        AND principal_membership.is_active
+                        AND (
+                            principal_role.code = ANY(%(allowed_role_codes)s::text[])
+                            OR EXISTS (
+                                SELECT 1
+                                FROM core_accessgrant current_grant
+                                WHERE current_grant.organization_id = %(organization_id)s
+                                  AND current_grant.membership_id = principal_membership.id
+                                  AND current_grant.service_identity_id IS NULL
+                                  AND current_grant.action = %(action)s
+                                  AND current_grant.source_connection_id IS NULL
+                                  AND current_grant.revoked_at IS NULL
+                                  AND (
+                                      current_grant.expires_at IS NULL
+                                      OR current_grant.expires_at > statement_timestamp()
+                                  )
+                                  AND (
+                                      current_grant.repository_id IS NULL
+                                      OR current_grant.repository_id = live_repository.id
+                                  )
+                            )
+                        )
+                  )
+              )
+              OR (
+                  %(actor_type)s = 'SERVICE'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM core_serviceidentity principal_service
+                      WHERE principal_service.organization_id = %(organization_id)s
+                        AND principal_service.id = %(principal_id)s
+                        AND principal_service.is_active
+                        AND EXISTS (
+                            SELECT 1
+                            FROM core_accessgrant current_grant
+                            WHERE current_grant.organization_id = %(organization_id)s
+                              AND current_grant.membership_id IS NULL
+                              AND current_grant.service_identity_id = principal_service.id
+                              AND current_grant.action = %(action)s
+                              AND current_grant.source_connection_id IS NULL
+                              AND current_grant.revoked_at IS NULL
+                              AND (
+                                  current_grant.expires_at IS NULL
+                                  OR current_grant.expires_at > statement_timestamp()
+                              )
+                              AND (
+                                  current_grant.repository_id IS NULL
+                                  OR current_grant.repository_id = live_repository.id
+                              )
+                        )
+                  )
+              )
+          )
+          AND (
+              %(credential_id)s::uuid IS NULL
+              OR EXISTS (
+                  SELECT 1
+                  FROM core_repositoryaccesstoken current_token
+                  WHERE current_token.id = %(credential_id)s::uuid
+                    AND current_token.organization_id = %(organization_id)s
+                    AND current_token.repository_id = live_repository.id
+                    AND current_token.service_identity_id = %(principal_id)s
+                    AND current_token.revoked_at IS NULL
+                    AND current_token.expires_at > statement_timestamp()
+                    AND current_token.issuer = %(token_issuer)s
+                    AND current_token.audience = %(token_audience)s
+                    AND current_token.allowed_actions ? %(action)s
+              )
+          )
+    ) current_repositories
+    CROSS JOIN (
+        SELECT COALESCE(array_agg(live_scope.id), ARRAY[]::uuid[]) AS ids
+        FROM core_accessscope live_scope
+        WHERE live_scope.organization_id = %(organization_id)s
+          AND live_scope.is_active
+          AND live_scope.id = ANY(%(scope_ids)s::uuid[])
+          AND NOT EXISTS (
+              SELECT 1
+              FROM core_accessscopesource current_scope_source
+              JOIN core_sourceconnection current_governed_source
+                ON current_governed_source.id = current_scope_source.source_connection_id
+               AND current_governed_source.organization_id =
+                   current_scope_source.organization_id
+              WHERE current_scope_source.organization_id = %(organization_id)s
+                AND current_scope_source.access_scope_id = live_scope.id
+                AND current_governed_source.state IN ('REVOKED', 'DISABLED')
+          )
+          AND (
+              (
+                  %(actor_type)s = 'USER'
+                  AND (
+                      live_scope.all_memberships
+                      OR EXISTS (
+                          SELECT 1
+                          FROM core_accessscopemembership current_scope_membership
+                          JOIN core_membership current_membership
+                            ON current_membership.id =
+                                current_scope_membership.membership_id
+                           AND current_membership.organization_id =
+                                current_scope_membership.organization_id
+                           AND current_membership.is_active
+                          JOIN core_user current_principal_user
+                            ON current_principal_user.id = current_membership.user_id
+                           AND current_principal_user.is_active
+                          WHERE current_scope_membership.organization_id =
+                                %(organization_id)s
+                            AND current_scope_membership.access_scope_id = live_scope.id
+                            AND current_membership.user_id = %(principal_id)s
+                      )
+                  )
+              )
+              OR (
+                  %(actor_type)s = 'SERVICE'
+                  AND (
+                      live_scope.all_service_identities
+                      OR EXISTS (
+                          SELECT 1
+                          FROM core_accessscopeserviceidentity current_scope_service
+                          JOIN core_serviceidentity current_service
+                            ON current_service.id =
+                                current_scope_service.service_identity_id
+                           AND current_service.organization_id =
+                                current_scope_service.organization_id
+                           AND current_service.is_active
+                          WHERE current_scope_service.organization_id =
+                                %(organization_id)s
+                            AND current_scope_service.access_scope_id = live_scope.id
+                            AND current_service.id = %(principal_id)s
+                      )
+                  )
+              )
+          )
+    ) current_scopes
+    CROSS JOIN core_canvasview saved_view
     -- Preserve the saved-view index order through the authorization predicates so LIMIT
     -- stops after the first bounded authorized rows instead of sorting every candidate.
     JOIN LATERAL (
@@ -143,6 +308,7 @@ SELECT saved_view.id
     ) revision ON TRUE
     WHERE saved_view.organization_id = %(organization_id)s
       AND NOT saved_view.is_archived
+      AND cardinality(current_repositories.ids) > 0
       AND jsonb_typeof(revision.semantic_query) = 'object'
       AND (
           saved_view.repository_id IS NULL
@@ -152,7 +318,7 @@ SELECT saved_view.id
               WHERE bound_repository.id = saved_view.repository_id
                 AND bound_repository.organization_id = saved_view.organization_id
                 AND bound_repository.is_active
-                AND bound_repository.id = ANY(%(repository_ids)s::uuid[])
+                AND bound_repository.id = ANY(current_repositories.ids)
           )
       )
       AND NOT EXISTS (
@@ -171,7 +337,7 @@ SELECT saved_view.id
               FROM core_repository current_repository
               WHERE current_repository.organization_id = saved_view.organization_id
                 AND current_repository.is_active
-                AND current_repository.id = ANY(%(repository_ids)s::uuid[])
+                AND current_repository.id = ANY(current_repositories.ids)
                 AND current_repository.id::text = semantic_repository.repository_id
           )
       )
@@ -183,7 +349,7 @@ SELECT saved_view.id
               WHERE view_scope.id = saved_view.access_scope_id
                 AND view_scope.organization_id = saved_view.organization_id
                 AND view_scope.is_active
-                AND view_scope.id = ANY(%(scope_ids)s::uuid[])
+                AND view_scope.id = ANY(current_scopes.ids)
                 AND NOT EXISTS (
                     SELECT 1
                     FROM core_accessscopesource scope_source
@@ -205,7 +371,7 @@ SELECT saved_view.id
                          AND current_repository.is_active
                         WHERE scope_repository.organization_id = saved_view.organization_id
                           AND scope_repository.access_scope_id = view_scope.id
-                          AND current_repository.id = ANY(%(repository_ids)s::uuid[])
+                          AND current_repository.id = ANY(current_repositories.ids)
                           AND (
                               saved_view.repository_id IS NULL
                               OR current_repository.id = saved_view.repository_id
@@ -228,7 +394,7 @@ SELECT saved_view.id
                   WHERE root_entity.organization_id = saved_view.organization_id
                     AND root_entity.is_active
                     AND root_entity.id::text = revision.semantic_query ->> 'root_entity_id'
-                    AND root_scope.id = ANY(%(scope_ids)s::uuid[])
+                    AND root_scope.id = ANY(current_scopes.ids)
                     AND NOT EXISTS (
                         SELECT 1
                         FROM core_accessscopesource scope_source
@@ -251,7 +417,7 @@ SELECT saved_view.id
                              AND current_repository.is_active
                             WHERE scope_repository.organization_id = saved_view.organization_id
                               AND scope_repository.access_scope_id = root_scope.id
-                              AND current_repository.id = ANY(%(repository_ids)s::uuid[])
+                              AND current_repository.id = ANY(current_repositories.ids)
                               AND (
                                   saved_view.repository_id IS NULL
                                   OR current_repository.id = saved_view.repository_id
@@ -264,6 +430,33 @@ SELECT saved_view.id
 ORDER BY saved_view.name, saved_view.id
 LIMIT %(view_limit)s
 """
+
+
+def _authorized_canvas_view_query_parameters(
+    *,
+    authorization: AuthorizedRepositoryScopes,
+    view_limit: int,
+) -> dict[str, Any]:
+    """Bind the candidate statement to the exact principal and credential boundary."""
+    return {
+        "organization_id": authorization.organization_id,
+        "actor_type": authorization.actor_type,
+        "principal_id": authorization.principal_id,
+        "actor_repository_id": authorization.actor_repository_id,
+        "credential_id": authorization.credential_id,
+        "credential_action_allowed": (
+            not authorization.credential_actions
+            or Action.CANVAS_VIEW.value in authorization.credential_actions
+        ),
+        "action": Action.CANVAS_VIEW.value,
+        "allowed_role_codes": list(_CANVAS_VIEW_ROLE_CODES),
+        "token_issuer": settings.TOKEN_ISSUER,
+        "token_audience": settings.TOKEN_AUDIENCE,
+        "repository_ids": list(authorization.repository_ids_for(Action.CANVAS_VIEW)),
+        "scope_ids": list(authorization.scope_ids_for(Action.CANVAS_VIEW)),
+        "view_limit": view_limit,
+    }
+
 
 VIEW_TYPE_ENTITY_TYPES: dict[str, frozenset[str]] = {
     CanvasView.ViewType.STRATEGY: frozenset(
@@ -696,18 +889,15 @@ def list_canvas_views(*, actor: ActorContext) -> tuple[CanvasView, ...]:
         repository_limit=CANVAS_REPOSITORY_LIMIT,
     )
     repository_ids = authorization.repository_ids_for(Action.CANVAS_VIEW)
-    scope_ids = authorization.scope_ids_for(Action.CANVAS_VIEW)
     if not repository_ids:
         return ()
     with connection.cursor() as cursor:
         cursor.execute(
             _AUTHORIZED_CANVAS_VIEW_IDS,
-            {
-                "organization_id": actor.organization_id,
-                "repository_ids": list(repository_ids),
-                "scope_ids": list(scope_ids),
-                "view_limit": CANVAS_NODE_LIMIT,
-            },
+            _authorized_canvas_view_query_parameters(
+                authorization=authorization,
+                view_limit=CANVAS_NODE_LIMIT,
+            ),
         )
         candidate_ids = tuple(row[0] for row in cursor.fetchall())
     candidates = {
