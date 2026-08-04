@@ -60,8 +60,12 @@ PostgreSQL candidate query has checked the current revision and its live
 repository, scope, governed-source, semantic-repository, and root-entity
 boundaries against one resolved authorization snapshot. Legacy semantic JSON
 is inspected by JSON type and UUID text equality rather than an unsafe cast, so
-malformed values fail closed. The bounded candidates still pass through the
-ordinary per-view service authorization before any metadata is returned.
+malformed values fail closed. A correlated current-revision lookup preserves
+the `(organization, is_archived, name, id)` index order through those strict
+predicates, so the database can stop when it has 300 authorized rows without
+materializing or sorting the complete candidate set. The same authoritative
+statement returns only bounded permitted IDs, which are hydrated with ownership
+metadata in one fixed query; list query count is independent of result count.
 
 The same strict edge CTE is used by the Canvas projection and path service. A
 path is bounded to six hops and can contain only nodes and edges visible through
@@ -129,6 +133,13 @@ drag-or-keyboard drawn-edge proposal gesture. Drawing never mutates a canonical
 edge: its only result is a governed proposal form with typed endpoints. The
 document remains useful without JavaScript through the canonical tables and
 forms, including a bounded Explorer-backed question fallback.
+
+Inspector selection owns a monotonically increasing generation and an
+`AbortController`. Starting a selection aborts the prior request and clears all
+detail fields, bounded lists, reviewer/conflict text, actions, and truncation
+state. Only the response matching both the current generation and selected
+entity may update the DOM; a current failure resets the same complete state, so
+neither a late response nor an error can retain stale permitted detail.
 
 Dagre runs only on the edge-connected subgraph. Permitted disconnected nodes
 are not dropped: unpinned nodes use a deterministic compact grid outside the

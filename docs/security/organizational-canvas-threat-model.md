@@ -57,10 +57,13 @@ Saved-view listing likewise applies its 300-row cap after a parameterized
 candidate query checks the current tenant revision and live relational and
 semantic repository, scope/source, and root-entity boundaries. JSON types and
 UUID text equality make malformed legacy semantic values fail closed without a
-cast exception. Every bounded candidate is then re-authorized through the
-ordinary view service, preserving saved ownership metadata and service-actor
-visibility; share resolution remains on its separate exact-revision path.
-Inaccessible earlier names therefore cannot crowd out a later visible view.
+cast exception. The authoritative query uses an ordered tenant/archive/name/ID
+index and a correlated current-revision boundary, so its limit stops after 300
+authorized rows without a materialized candidate set or full sort. One bounded
+hydration query preserves ownership metadata; service actors use the same
+resolved authorization snapshot, while share resolution remains on its
+separate exact-revision path. Inaccessible earlier names therefore cannot crowd
+out a later visible view, and list query count does not grow with result count.
 
 ### Share used as an access capability
 
@@ -120,6 +123,12 @@ overrides. Canvas JavaScript uses no cookies, authorization headers, browser
 storage, `eval`, Node/npm, CDN, or cross-origin fetch. Dagre 2.0.0 and its legal
 files are committed with reviewed SHA-256 checksums.
 
+Each inspector selection clears every prior detail field, list, conflict,
+reviewer, action, and truncation signal before issuing a generation-bound fetch.
+The previous fetch is aborted, and both success and failure handlers verify the
+current generation and entity before writing. A late response cannot overwrite
+a newer selection, and a current failure cannot leave stale permitted detail.
+
 ### Misleading freshness or connectivity
 
 Freshness comes from currently authorized assertions and reports unknown when
@@ -165,10 +174,12 @@ constraints while omitted controls retain the saved constraint.
   CSRF, session HTML, and bearer API boundaries. Adversarial cases include
   selected-evidence/decoy isolation across JSON and no-JavaScript paths, stale
   and duplicate root-chunk lineage, an incident edge ordered after 600
-  unrelated edges, explicit saved-filter clearing, and rejected scalar/null
-  coercions.
+  unrelated edges, explicit saved-filter clearing, 301 inaccessible saved-view
+  names before 300 visible names, fixed one-versus-300 list query count with an
+  ordered no-sort plan, and rejected scalar/null coercions.
 - Browser: keyboard selection, inspector, drag/save, exact-revision sharing,
   revocation, actual drag-drawn proposal, annotations, scoped questions,
   required organizational traces, dense topology/focus, source-backed edge
   rendering, minimap/zoom, 320-pixel no-JS table, 200% zoom, no document
-  overflow, and no unexpected severe console entry.
+  overflow, reverse-completion inspector selection, error-after-loaded stale
+  state clearing, and no unexpected severe console entry.
