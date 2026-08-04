@@ -23,11 +23,16 @@ COPY pyproject.toml uv.lock README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-dev
 
-FROM base AS wheel-builder
+FROM base AS release-builder
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-install-project --no-default-groups --group release
+
+FROM release-builder AS wheel-builder
 COPY src ./src
 COPY packages/anva-skills ./packages/anva-skills
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv build --wheel --out-dir /dist
+    uv build --python /app/.venv/bin/python --no-build-isolation --offline \
+    --wheel --out-dir /dist
 
 FROM base AS runtime
 ARG ANVA_VERSION=0.1.0

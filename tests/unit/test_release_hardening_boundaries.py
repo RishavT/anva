@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 from typing import cast
 
 import pytest
 import yaml
+from packaging.requirements import Requirement
 
 
 def _service(name: str) -> dict[str, object]:
@@ -128,3 +130,69 @@ def test_docker_context_excludes_runtime_artifacts_but_keeps_release_inputs() ->
     assert "docs/**" in entries
     assert "!docs/releases/mvp-013.md" in entries
     assert "!docs/security/vulnerability-exceptions.json" in entries
+
+
+@pytest.mark.unit
+def test_release_builder_locks_build_backends_and_packages_offline() -> None:
+    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    build_requires = cast(list[str], project["build-system"]["requires"])
+    release_requires = cast(list[str], project["dependency-groups"]["release"])
+    assert release_requires == build_requires
+
+    lock = tomllib.loads(Path("uv.lock").read_text(encoding="utf-8"))
+    packages = cast(list[dict[str, object]], lock["package"])
+    root = next(package for package in packages if package["name"] == "anva")
+    dev_dependencies = cast(dict[str, list[dict[str, str]]], root["dev-dependencies"])
+    metadata = cast(dict[str, dict[str, list[dict[str, str]]]], root["metadata"])
+    locked_release = dev_dependencies["release"]
+    metadata_release = metadata["requires-dev"]["release"]
+    requirements = [Requirement(value) for value in build_requires]
+    assert [dependency["name"] for dependency in locked_release] == [
+        requirement.name for requirement in requirements
+    ]
+    assert [
+        f"{dependency['name']}{dependency['specifier']}" for dependency in metadata_release
+    ] == (build_requires)
+    locked_packages = {cast(str, package["name"]): package for package in packages}
+    for requirement in requirements:
+        locked_version = cast(str, locked_packages[requirement.name]["version"])
+        assert requirement.specifier.contains(locked_version, prereleases=True)
+
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+    release_builder = dockerfile[
+        dockerfile.index("FROM base AS release-builder") : dockerfile.index(
+            "FROM release-builder AS wheel-builder"
+        )
+    ]
+    wheel_builder = dockerfile[
+        dockerfile.index("FROM release-builder AS wheel-builder") : dockerfile.index(
+            "FROM base AS runtime"
+        )
+    ]
+    runtime = dockerfile[
+        dockerfile.index("FROM base AS runtime") : dockerfile.index("FROM base AS test")
+    ]
+    assert "uv sync --frozen --no-install-project --no-default-groups --group release" in (
+        release_builder
+    )
+    assert "uv build --python /app/.venv/bin/python --no-build-isolation --offline" in (
+        wheel_builder.replace("\\\n    ", "")
+    )
+    assert "FROM base AS runtime" in runtime
+    assert "release-builder" not in runtime
+
+    release_compose = cast(
+        dict[str, object], yaml.safe_load(Path("compose.release.yaml").read_text())
+    )
+    services = cast(dict[str, dict[str, object]], release_compose["services"])
+    service = services["release-builder"]
+    build = cast(dict[str, str], service["build"])
+    assert build["target"] == "release-builder"
+    assert service["network_mode"] == "none"
+
+    makefile = Path("Makefile").read_text(encoding="utf-8")
+    release_build = makefile.split("\nrelease-build: release-clean\n", 1)[1].split(
+        "\nrelease-scan:\n", 1
+    )[0]
+    assert "uv build --python /app/.venv/bin/python" in release_build
+    assert "--no-build-isolation --offline --wheel --out-dir /release" in release_build

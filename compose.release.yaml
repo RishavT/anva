@@ -2,8 +2,9 @@ services:
   release-builder:
     build:
       context: .
-      target: test
+      target: release-builder
     profiles: ["release"]
+    network_mode: none
     working_dir: /workspace
     user: "${ANVA_HOST_UID:-1000}:${ANVA_HOST_GID:-1000}"
     environment:
