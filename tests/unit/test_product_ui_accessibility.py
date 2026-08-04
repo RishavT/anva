@@ -82,11 +82,24 @@ def test_compose_forwards_product_runtime_configuration() -> None:
 @pytest.mark.unit
 def test_runtime_image_installs_a_wheel_without_project_source() -> None:
     dockerfile = Path("Dockerfile").read_text()
+    wheel_builder = dockerfile[
+        dockerfile.index("FROM release-builder AS wheel-builder") : dockerfile.index(
+            "FROM base AS runtime"
+        )
+    ]
     runtime = dockerfile[
         dockerfile.index("FROM base AS runtime") : dockerfile.index("FROM base AS test")
     ]
 
-    assert "uv build --wheel" in dockerfile
-    assert "uv pip install --no-deps" in runtime
+    for required_argument in (
+        "uv build",
+        "--python /app/.venv/bin/python",
+        "--wheel",
+        "--no-build-isolation",
+        "--offline",
+    ):
+        assert required_argument in wheel_builder
+    assert "COPY --from=wheel-builder /dist /dist" in runtime
+    assert "uv pip install --no-deps /dist/*.whl" in runtime
     assert "COPY src" not in runtime
     assert "uv sync" not in runtime
