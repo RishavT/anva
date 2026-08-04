@@ -10,8 +10,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, NoReturn, cast
 
-from django.db import transaction
-from django.db.models import F, QuerySet
+from django.db import connection, transaction
+from django.db.models import Case, F, QuerySet, TextField, Value, When
+from django.db.models.functions import Cast, Concat
 from django.utils import timezone
 
 from anva.core.exceptions import RequiredPolicyBudgetError, ResourceNotFoundError
@@ -38,7 +39,10 @@ from anva.core.models import (
 from anva.core.services.authorization import (
     NOT_FOUND_MESSAGE,
     Action,
+    AuthorizedRepositoryScopes,
     authorize_action,
+    current_authorized_scope_filter,
+    resolve_authorized_repository_scopes,
     resolve_principal,
 )
 from anva.core.services.context import ActorContext
@@ -224,23 +228,21 @@ def _assertion_summary(assertion: KnowledgeAssertion) -> str:
     return f"{assertion.subject_key} {assertion.predicate} {rendered}"
 
 
-def _authorized_provenance(
+def _authorized_provenance_for_authorization(
     *,
     actor: ActorContext,
-    repository_id: uuid.UUID,
+    authorization: AuthorizedRepositoryScopes,
     assertion_ids: list[uuid.UUID] | set[uuid.UUID],
 ) -> QuerySet[AssertionProvenance]:
-    """Filter every provenance row through its current source authorization lineage."""
-    visible_scope_ids = authorized_scope_ids(
-        actor=actor,
-        repository_id=repository_id,
-        action=Action.SEARCH,
-    )
-    return (
+    """Apply the relational repository/scope boundary to current provenance."""
+    if not authorization.repository_ids_for(Action.SEARCH) or not authorization.scope_ids_for(
+        Action.SEARCH
+    ):
+        return AssertionProvenance.objects.none()
+    queryset = (
         AssertionProvenance.objects.filter(
             organization_id=actor.organization_id,
             assertion_id__in=assertion_ids,
-            access_snapshot__access_scope_id__in=visible_scope_ids,
             access_snapshot__revoked_at__isnull=True,
             access_snapshot__source_connection_id=F(
                 "source_observation__source_document__source_container__source_connection_id"
@@ -250,9 +252,6 @@ def _authorized_provenance(
             ),
             source_observation__status="PRESENT",
             source_observation__source_document__state="PRESENT",
-            source_observation__source_document__source_container__source_connection__repository_id=(
-                repository_id
-            ),
             source_observation__source_document__source_container__source_connection__state__in=(
                 "ACTIVE",
                 "DEGRADED",
@@ -270,6 +269,30 @@ def _authorized_provenance(
             assertion__assertionvalidityinterval__valid_until__isnull=True,
             assertion__assertionvalidityinterval__source_observation_id=F("source_observation_id"),
         )
+        .filter(
+            current_authorized_scope_filter(
+                actor=actor,
+                authorization=authorization,
+                action=Action.SEARCH,
+                scope_id_path="assertion__access_scope_id",
+            )
+        )
+        .filter(
+            current_authorized_scope_filter(
+                actor=actor,
+                authorization=authorization,
+                action=Action.SEARCH,
+                scope_id_path="access_snapshot__access_scope_id",
+                repository_id_path=(
+                    "source_observation__source_document__source_container__"
+                    "source_connection__repository_id"
+                ),
+                repository_relation_path=(
+                    "source_observation__source_document__source_container__"
+                    "source_connection__repository"
+                ),
+            )
+        )
         .select_related(
             "source_location",
             "source_observation__source_document",
@@ -278,6 +301,28 @@ def _authorized_provenance(
         )
         .order_by("assertion_id", "observed_at", "id")
         .distinct()
+    )
+    return queryset
+
+
+def _authorized_provenance(
+    *,
+    actor: ActorContext,
+    repository_id: uuid.UUID,
+    assertion_ids: list[uuid.UUID] | set[uuid.UUID],
+) -> QuerySet[AssertionProvenance]:
+    """Filter every provenance row through its current source authorization lineage."""
+    authorization = resolve_authorized_repository_scopes(
+        actor=actor,
+        actions=(Action.SEARCH,),
+        required_action=Action.SEARCH,
+        repository_ids=(repository_id,),
+        repository_limit=1,
+    )
+    return _authorized_provenance_for_authorization(
+        actor=actor,
+        authorization=authorization,
+        assertion_ids=assertion_ids,
     )
 
 
@@ -316,18 +361,109 @@ def authorized_assertion_citations(
         repository_id=repository_id,
         assertion_ids=[assertion_id],
     )
-    return tuple(
-        {
-            "source_location_id": str(candidate.source_location_id),
-            "source_observation_id": str(candidate.source_observation_id),
-            "access_snapshot_id": str(candidate.access_snapshot_id),
-            "canonical_url": candidate.canonical_url,
-            "locator": candidate.locator,
-            "source_content_hash": candidate.source_content_hash,
-            "observed_at": candidate.observed_at.isoformat(),
-        }
-        for candidate in (_citation_from_provenance(row) for row in provenance_rows)
+    return tuple(_citation_from_provenance(provenance).as_dict() for provenance in provenance_rows)
+
+
+def authorized_assertion_citations_batch(
+    *,
+    actor: ActorContext,
+    authorization: AuthorizedRepositoryScopes,
+    assertion_ids: tuple[uuid.UUID, ...],
+    per_assertion_limit: int,
+) -> dict[uuid.UUID, tuple[dict[str, object], ...]]:
+    """Group bounded current citations for many assertions and repositories."""
+    if not 1 <= per_assertion_limit <= 100:
+        raise ValueError("per_assertion_limit must be between 1 and 100")
+    if len(assertion_ids) > MAX_ASSERTION_CANDIDATES:
+        raise ValueError("assertion citation batch budget exceeded")
+    ordered_assertion_ids = tuple(sorted(set(assertion_ids), key=str))
+    if not authorization.is_bound_to(actor):
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    grouped: dict[uuid.UUID, list[dict[str, object]]] = {
+        assertion_id: [] for assertion_id in ordered_assertion_ids
+    }
+    if not ordered_assertion_ids:
+        return {assertion_id: tuple(items) for assertion_id, items in grouped.items()}
+    authorized_candidates = _authorized_provenance_for_authorization(
+        actor=actor,
+        authorization=authorization,
+        assertion_ids=set(ordered_assertion_ids),
     )
+    candidate_rows = (
+        authorized_candidates.annotate(
+            citation_locator=Case(
+                When(
+                    source_location__start_line__isnull=False,
+                    then=Concat(
+                        F("source_location__pointer"),
+                        Value("#L"),
+                        Cast("source_location__start_line", output_field=TextField()),
+                        Value("-L"),
+                        Cast("source_location__end_line", output_field=TextField()),
+                        output_field=TextField(),
+                    ),
+                ),
+                default=F("source_location__pointer"),
+                output_field=TextField(),
+            )
+        )
+        .order_by()
+        .values("id", "assertion_id", "observed_at", "citation_locator")
+        .distinct()
+    )
+    candidate_sql, candidate_params = candidate_rows.query.sql_with_params()
+    # ``candidate_sql`` is generated exclusively by Django's compiler; all
+    # dynamic values remain in ``candidate_params`` below.
+    bounded_sql = "\n".join(
+        (
+            "WITH authorized AS MATERIALIZED (",
+            candidate_sql,
+            """),
+deduplicated AS MATERIALIZED (
+    SELECT DISTINCT ON (assertion_id, citation_locator, observed_at)
+        id AS provenance_id,
+        assertion_id,
+        observed_at
+    FROM authorized
+    ORDER BY assertion_id, citation_locator, observed_at, id
+),
+ranked AS (
+    SELECT
+        provenance_id,
+        assertion_id,
+        ROW_NUMBER() OVER (
+            PARTITION BY assertion_id
+            ORDER BY observed_at, provenance_id
+        ) AS citation_rank
+    FROM deduplicated
+)
+SELECT provenance_id
+FROM ranked
+WHERE citation_rank <= %s
+ORDER BY assertion_id, citation_rank
+""",
+        )
+    )
+    with connection.cursor() as cursor:
+        cursor.execute(bounded_sql, (*candidate_params, per_assertion_limit))
+        selected_ids = tuple(row[0] for row in cursor.fetchall())
+
+    # Rebuild the authorization predicate so revocation or expiry between the
+    # candidate and hydration statements fails closed.
+    current_rows_by_id = {
+        provenance.id: provenance
+        for provenance in _authorized_provenance_for_authorization(
+            actor=actor,
+            authorization=authorization,
+            assertion_ids=set(ordered_assertion_ids),
+        ).filter(id__in=selected_ids)
+    }
+    for provenance_id in selected_ids:
+        provenance = current_rows_by_id.get(provenance_id)
+        if provenance is None:
+            continue
+        grouped[provenance.assertion_id].append(_citation_from_provenance(provenance).as_dict())
+    return {assertion_id: tuple(grouped[assertion_id]) for assertion_id in ordered_assertion_ids}
 
 
 def _assertion_candidates(

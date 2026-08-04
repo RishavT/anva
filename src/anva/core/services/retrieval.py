@@ -171,11 +171,12 @@ def authorized_entities(
     *,
     actor: ActorContext,
     repository_id: uuid.UUID,
+    action: Action = Action.KNOWLEDGE_VIEW,
 ) -> QuerySet[KnowledgeEntity]:
     """Return active entities only through currently visible access scopes."""
     authorize_action(
         actor=actor,
-        action=Action.KNOWLEDGE_VIEW,
+        action=action,
         repository_id=repository_id,
     )
     scopes = visible_scope_ids(actor=actor, repository_id=repository_id)

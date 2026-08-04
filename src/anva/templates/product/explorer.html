@@ -5,6 +5,7 @@
     <div><p class="eyebrow">Permission-aware discovery</p><h1>Anva Explorer</h1><p class="page-intro">Find entities and source-backed context. Filtering happens inside your repository and source boundary before results are ranked.</p></div>
   </header>
   <form method="get" class="search-bar" role="search" aria-label="Search organizational context">
+    {% if page.start_entity %}<input type="hidden" name="start_entity" value="{{ page.start_entity.id }}">{% endif %}
     <label class="search-input"><span class="sr-only">Search entities and sources</span><span aria-hidden="true">⌕</span><input type="search" name="q" value="{{ page.query }}" maxlength="500" placeholder="Search a system, decision, owner, requirement…"></label>
     <label><span>Repository</span><select name="repository">{% for repository in shell.repositories %}<option value="{{ repository.id }}" {% if page.selected_repository.id == repository.id %}selected{% endif %}>{{ repository.name }}</option>{% endfor %}</select></label>
     <label><span>Entity type</span><select name="type"><option value="">All types</option>{% for value,label in page.entity_types %}<option value="{{ value }}" {% if page.entity_type == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
@@ -12,6 +13,7 @@
     <button class="button button--primary" type="submit">Search</button>
   </form>
   {% if page.selected_repository %}
+    {% if page.start_entity %}<p class="limitation">Evidence and entities are constrained to {{ page.start_entity.label }} and its currently authorized one-hop context.</p>{% endif %}
     <div class="result-grid">
       <section class="panel" aria-labelledby="entity-results-title">
         <div class="panel-heading"><div><p class="eyebrow">Knowledge model</p><h2 id="entity-results-title">Entities</h2></div><span class="item-count">{{ page.entities|length }}</span></div>
@@ -29,7 +31,7 @@
         <div class="panel-heading"><div><p class="eyebrow">Source records</p><h2 id="source-results-title">Excerpts</h2></div><span class="item-count">{{ page.source_results|length }}</span></div>
         {% if page.source_results %}
           <ol class="excerpt-list">{% for result in page.source_results %}<li><p>{{ result.text }}</p><div><span>Source-backed</span><code>{{ result.content_hash|slice:":12" }}</code><small>{{ result.canonical_url }}</small></div></li>{% endfor %}</ol>
-        {% else %}<p class="limitation">{% if page.query %}No authorized source excerpts match this search. Try a broader term or remove a filter.{% else %}Enter a search term to retrieve authorized source excerpts. Natural-language answers remain unavailable until cited context can be constructed safely.{% endif %}</p>{% endif %}
+        {% else %}<p class="limitation">{% if page.query %}{% if page.start_entity %}No authorized source excerpts match this selection-scoped search.{% else %}No authorized source excerpts match this search.{% endif %} Try a broader term or remove a filter.{% else %}Enter a search term to retrieve authorized source excerpts. Natural-language answers remain unavailable until cited context can be constructed safely.{% endif %}</p>{% endif %}
       </section>
     </div>
     {% if page.freshness_assertions %}

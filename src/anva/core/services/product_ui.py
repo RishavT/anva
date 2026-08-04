@@ -27,6 +27,9 @@ from anva.core.models import (
     AssuranceReport,
     AssuranceRun,
     AuditEvent,
+    CanvasShare,
+    CanvasView,
+    CanvasViewRevision,
     ContextPacketRecord,
     CriterionEvidence,
     Decision,
@@ -38,6 +41,7 @@ from anva.core.models import (
     KnowledgeEntity,
     KnowledgeProposal,
     KnowledgeProposalScope,
+    KnowledgeRelationship,
     Membership,
     NonRequirement,
     Organization,
@@ -65,6 +69,22 @@ from anva.core.services.authorization import (
     get_tenant_record_for_update,
 )
 from anva.core.services.bootstrap import BootstrapResult, bootstrap_local_organization
+from anva.core.services.canvas import (
+    DEFAULT_LAYERS,
+    RELATIONSHIP_ENDPOINTS,
+    CanvasQuery,
+    canvas_entity_detail,
+    canvas_path,
+    canvas_projection,
+    canvas_selection_scope,
+    create_canvas_share,
+    create_canvas_view,
+    list_canvas_views,
+    propose_canvas_relationship,
+    resolve_canvas_share,
+    revoke_canvas_share,
+    save_canvas_revision,
+)
 from anva.core.services.context import ActorContext
 from anva.core.services.context_packets import authorized_assertion_citations
 from anva.core.services.creation import submit_knowledge_proposal
@@ -725,6 +745,7 @@ class ProductUIFacade:
         self,
         *,
         repository_id: uuid.UUID | None,
+        start_entity_id: uuid.UUID | None,
         query: str,
         entity_type: str,
         freshness: str,
@@ -743,8 +764,34 @@ class ProductUIFacade:
                 "query": query,
                 "entity_type": entity_type,
                 "freshness": freshness,
+                "start_entity": None,
+                "selection_context": None,
             }
+        selection_scope: dict[str, object] | None = None
+        scoped_entity_ids: set[uuid.UUID] | None = None
+        scoped_subject_keys: set[str] | None = None
+        scoped_source_locations: tuple[uuid.UUID, ...] | None = None
+        if start_entity_id is not None:
+            selection_scope = canvas_selection_scope(
+                actor=self.actor,
+                entity_id=start_entity_id,
+                repository_id=selected.id,
+            )
+            selection_context = cast(dict[str, object], selection_scope["selection_context"])
+            scoped_entity_ids = {
+                uuid.UUID(cast(str, item["id"]))
+                for item in cast(list[dict[str, object]], selection_context["nodes"])
+            }
+            scoped_subject_keys = {
+                cast(str, item["canonical_key"])
+                for item in cast(list[dict[str, object]], selection_context["nodes"])
+            }
+            scoped_source_locations = cast(
+                tuple[uuid.UUID, ...], selection_scope["source_location_ids"]
+            )
         entities = authorized_entities(actor=self.actor, repository_id=selected.id)
+        if scoped_entity_ids is not None:
+            entities = entities.filter(id__in=scoped_entity_ids)
         if query:
             entities = entities.filter(
                 Q(display_name__icontains=query) | Q(canonical_key__icontains=query)
@@ -760,19 +807,19 @@ class ProductUIFacade:
                     repository_id=selected.id,
                     query=query[:500],
                     limit=15,
+                    source_location_ids=scoped_source_locations,
                 ).results
             )
         assertions: list[KnowledgeAssertion] = []
         if freshness in KnowledgeAssertion.StalenessState.values:
-            assertions = list(
-                authorized_assertions(
-                    actor=self.actor,
-                    repository_id=selected.id,
-                    action=Action.KNOWLEDGE_VIEW,
-                )
-                .filter(staleness_state=freshness)
-                .order_by("-observed_at")[:SEARCH_LIMIT]
-            )
+            assertion_query = authorized_assertions(
+                actor=self.actor,
+                repository_id=selected.id,
+                action=Action.KNOWLEDGE_VIEW,
+            ).filter(staleness_state=freshness)
+            if scoped_subject_keys is not None:
+                assertion_query = assertion_query.filter(subject_key__in=scoped_subject_keys)
+            assertions = list(assertion_query.order_by("-observed_at")[:SEARCH_LIMIT])
         return {
             "selected_repository": selected,
             "entities": entity_rows,
@@ -781,6 +828,10 @@ class ProductUIFacade:
             "query": query,
             "entity_type": entity_type,
             "freshness": freshness,
+            "start_entity": selection_scope["entity"] if selection_scope else None,
+            "selection_context": (
+                selection_scope["selection_context"] if selection_scope else None
+            ),
             "entity_types": KnowledgeEntity.EntityType.choices,
             "freshness_states": KnowledgeAssertion.StalenessState.choices,
         }
@@ -847,6 +898,222 @@ class ProductUIFacade:
             "conflicts": conflicts,
             "revisions": revisions,
         }
+
+    def canvas(
+        self,
+        *,
+        query: CanvasQuery,
+        path_source_id: uuid.UUID | None = None,
+        path_target_id: uuid.UUID | None = None,
+    ) -> dict[str, object]:
+        """Return a visual projection and the complete server-rendered equivalent."""
+        graph = canvas_projection(actor=self.actor, query=query)
+        labels = {
+            cast(str, node["id"]): cast(str, node["label"])
+            for node in cast(list[dict[str, object]], graph["nodes"])
+        }
+        relationship_rows = [
+            {
+                **edge,
+                "source_label": labels[cast(str, edge["source"])],
+                "target_label": labels[cast(str, edge["target"])],
+            }
+            for edge in cast(list[dict[str, object]], graph["edges"])
+        ]
+        path_result: dict[str, object] | None = None
+        if path_source_id and path_target_id:
+            path_result = canvas_path(
+                actor=self.actor,
+                source_id=path_source_id,
+                target_id=path_target_id,
+                repository_ids=query.repository_ids,
+            )
+        can_manage = not settings.ANVA_WEB_READ_ONLY
+        can_propose = not settings.ANVA_WEB_READ_ONLY
+        try:
+            authorize_action(actor=self.actor, action=Action.CANVAS_MANAGE)
+        except ResourceNotFoundError:
+            can_manage = False
+        try:
+            authorize_action(actor=self.actor, action=Action.KNOWLEDGE_PROPOSE)
+        except ResourceNotFoundError:
+            can_propose = False
+        return {
+            "graph": graph,
+            "resolved_query": cast(dict[str, object], graph["semantic_query"]),
+            "resolved_repository_ids": tuple(
+                uuid.UUID(str(repository["id"]))
+                for repository in cast(list[dict[str, object]], graph["repositories"])
+            ),
+            "relationship_rows": relationship_rows,
+            "saved_views": list_canvas_views(actor=self.actor),
+            "entity_types": KnowledgeEntity.EntityType.choices,
+            "relationship_types": [
+                choice
+                for choice in KnowledgeRelationship.RelationshipType.choices
+                if choice[0] in RELATIONSHIP_ENDPOINTS
+            ],
+            "layers": DEFAULT_LAYERS,
+            "query": query,
+            "path": path_result,
+            "can_manage": can_manage,
+            "can_propose": can_propose,
+            "read_only": settings.ANVA_WEB_READ_ONLY,
+            "idempotency_key": str(uuid.uuid4()),
+        }
+
+    def canvas_detail(
+        self,
+        *,
+        entity_id: uuid.UUID,
+        repository_ids: tuple[uuid.UUID, ...] = (),
+    ) -> dict[str, object]:
+        return canvas_entity_detail(
+            actor=self.actor,
+            entity_id=entity_id,
+            repository_ids=repository_ids,
+        )
+
+    def canvas_question(
+        self,
+        *,
+        entity_id: uuid.UUID,
+        repository_id: uuid.UUID,
+        question: str,
+    ) -> dict[str, object]:
+        """Return cited retrieval scoped to one currently authorized Canvas selection."""
+        question = question.strip()
+        if not question or len(question) > 500:
+            raise ValueError("Canvas question is outside its size budget")
+        selection_scope = canvas_selection_scope(
+            actor=self.actor,
+            entity_id=entity_id,
+            repository_id=repository_id,
+        )
+        response = search_chunks(
+            actor=self.actor,
+            repository_id=repository_id,
+            query=question,
+            limit=10,
+            source_location_ids=cast(tuple[uuid.UUID, ...], selection_scope["source_location_ids"]),
+        )
+        return {
+            "entity": selection_scope["entity"],
+            "selection_context": selection_scope["selection_context"],
+            "results": [result.as_dict() for result in response.results],
+            "limitation": (
+                "No authorized source excerpt matched this selection-scoped question."
+                if not response.results
+                else "Answers are limited to these authorized source excerpts."
+            ),
+        }
+
+    def canvas_share_query(self, share_id: uuid.UUID) -> CanvasQuery:
+        view, revision = resolve_canvas_share(actor=self.actor, share_id=share_id)
+        return CanvasQuery(view_id=view.id, view_revision=revision.revision)
+
+    def create_canvas(
+        self,
+        *,
+        name: str,
+        description: str,
+        view_type: str,
+        semantic_query: dict[str, object],
+        repository_id: uuid.UUID | None,
+        idempotency_key: str,
+    ) -> tuple[CanvasView, bool]:
+        if settings.ANVA_WEB_READ_ONLY:
+            raise ResourceNotFoundError("Web mutations are disabled")
+        return create_canvas_view(
+            actor=self.actor,
+            name=name,
+            description=description,
+            view_type=view_type,
+            semantic_query=semantic_query,
+            repository_id=repository_id,
+            access_scope_id=None,
+            idempotency_key=idempotency_key,
+        )
+
+    def save_canvas(
+        self,
+        *,
+        view_id: uuid.UUID,
+        expected_revision: int,
+        semantic_query: dict[str, object],
+        presentation: dict[str, list[dict[str, object]]],
+        idempotency_key: str,
+    ) -> tuple[CanvasViewRevision, bool]:
+        if settings.ANVA_WEB_READ_ONLY:
+            raise ResourceNotFoundError("Web mutations are disabled")
+        return save_canvas_revision(
+            actor=self.actor,
+            view_id=view_id,
+            expected_revision=expected_revision,
+            semantic_query=semantic_query,
+            placements=presentation["placements"],
+            filters=presentation["filters"],
+            layers=presentation["layers"],
+            groups=presentation["groups"],
+            annotations=presentation["annotations"],
+            idempotency_key=idempotency_key,
+        )
+
+    def share_canvas(
+        self,
+        *,
+        view_id: uuid.UUID,
+        idempotency_key: str,
+    ) -> tuple[CanvasShare, bool]:
+        if settings.ANVA_WEB_READ_ONLY:
+            raise ResourceNotFoundError("Web mutations are disabled")
+        return create_canvas_share(
+            actor=self.actor,
+            view_id=view_id,
+            idempotency_key=idempotency_key,
+        )
+
+    def revoke_canvas_share(
+        self,
+        *,
+        share_id: uuid.UUID,
+        expected_view_revision: int,
+        idempotency_key: str,
+    ) -> tuple[CanvasShare, bool]:
+        if settings.ANVA_WEB_READ_ONLY:
+            raise ResourceNotFoundError("Web mutations are disabled")
+        return revoke_canvas_share(
+            actor=self.actor,
+            share_id=share_id,
+            expected_view_revision=expected_view_revision,
+            idempotency_key=idempotency_key,
+        )
+
+    def propose_canvas_relationship(
+        self,
+        *,
+        source_id: uuid.UUID,
+        target_id: uuid.UUID,
+        relationship_type: str,
+        repository_id: uuid.UUID,
+        expected_source_revision: int,
+        expected_target_revision: int,
+        rationale: str,
+        idempotency_key: str,
+    ) -> tuple[KnowledgeProposal, bool]:
+        if settings.ANVA_WEB_READ_ONLY:
+            raise ResourceNotFoundError("Web mutations are disabled")
+        return propose_canvas_relationship(
+            actor=self.actor,
+            source_id=source_id,
+            target_id=target_id,
+            relationship_type=relationship_type,
+            repository_id=repository_id,
+            expected_source_revision=expected_source_revision,
+            expected_target_revision=expected_target_revision,
+            rationale=rationale,
+            idempotency_key=idempotency_key,
+        )
 
     def sources(self) -> dict[str, object]:
         repositories = self._repositories()

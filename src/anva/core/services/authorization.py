@@ -5,10 +5,11 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import cast
 
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
-from django.db.models import Model, Q, QuerySet
+from django.db.models import Exists, Model, OuterRef, Q, QuerySet
 from django.utils import timezone
 
 from anva.core.exceptions import AuthenticationError, ResourceNotFoundError
@@ -59,6 +60,7 @@ class Action(StrEnum):
     EVIDENCE_SUBMIT = "evidence.submit"
     SEARCH = "search.query"
     CANVAS_VIEW = "canvas.view"
+    CANVAS_MANAGE = "canvas.manage"
     MCP_CONTEXT = "mcp.context"
     ARTIFACT_VIEW = "artifact.view"
     ARTIFACT_CREATE = "artifact.create"
@@ -89,6 +91,7 @@ ROLE_ACTIONS: dict[str, frozenset[Action]] = {
         {
             Action.KNOWLEDGE_PROPOSE,
             Action.KNOWLEDGE_REVIEW,
+            Action.CANVAS_MANAGE,
             Action.ARTIFACT_CREATE,
             Action.SCOPE_MANAGE,
             Action.WORK_MANAGE,
@@ -100,6 +103,7 @@ ROLE_ACTIONS: dict[str, frozenset[Action]] = {
         {
             Action.KNOWLEDGE_PROPOSE,
             Action.KNOWLEDGE_REVIEW,
+            Action.CANVAS_MANAGE,
             Action.SOURCE_SYNC,
             Action.ASSURANCE_EXECUTE,
             Action.ARTIFACT_CREATE,
@@ -115,19 +119,28 @@ ROLE_ACTIONS: dict[str, frozenset[Action]] = {
             Action.KNOWLEDGE_REVIEW,
             Action.WORK_MANAGE,
             Action.WORK_APPROVE,
+            Action.CANVAS_MANAGE,
         }
     ),
     Role.Code.DEVELOPER: VIEW_ACTIONS
     | frozenset(
         {
             Action.KNOWLEDGE_PROPOSE,
+            Action.CANVAS_MANAGE,
             Action.ASSURANCE_EXECUTE,
             Action.ARTIFACT_CREATE,
             Action.EVIDENCE_SUBMIT,
         }
     ),
     Role.Code.REVIEWER: VIEW_ACTIONS
-    | frozenset({Action.KNOWLEDGE_PROPOSE, Action.KNOWLEDGE_REVIEW, Action.WORK_APPROVE}),
+    | frozenset(
+        {
+            Action.KNOWLEDGE_PROPOSE,
+            Action.KNOWLEDGE_REVIEW,
+            Action.WORK_APPROVE,
+            Action.CANVAS_MANAGE,
+        }
+    ),
     Role.Code.SECURITY_REVIEWER: VIEW_ACTIONS
     | frozenset(
         {
@@ -159,6 +172,277 @@ class AuthorizationDecision:
 
     action: Action
     authorization_path: str
+
+
+MAX_BATCH_AUTHORIZATION_REPOSITORIES = 100
+MAX_BATCH_AUTHORIZATION_SCOPES = 1_000
+MAX_BATCH_AUTHORIZATION_SCOPE_BINDINGS = 100_000
+_AUTHORIZED_REPOSITORY_SCOPES_PROOF = object()
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class AuthorizedRepositoryScopes:
+    """One bounded, current authorization snapshot shared by batched reads."""
+
+    organization_id: uuid.UUID
+    actor_type: str
+    principal_id: uuid.UUID
+    actor_repository_id: uuid.UUID | None
+    credential_id: uuid.UUID | None
+    credential_actions: tuple[str, ...]
+    repositories: tuple[Repository, ...]
+    repository_ids_by_action: tuple[tuple[Action, tuple[uuid.UUID, ...]], ...]
+    scope_ids_by_repository: tuple[tuple[uuid.UUID, tuple[uuid.UUID, ...]], ...]
+    _proof: object
+
+    def __init__(self) -> None:
+        raise TypeError("AuthorizedRepositoryScopes can only be resolved by authorization")
+
+    @classmethod
+    def _create(
+        cls,
+        *,
+        actor: ActorContext,
+        principal_id: uuid.UUID,
+        repositories: tuple[Repository, ...],
+        repository_ids_by_action: tuple[tuple[Action, tuple[uuid.UUID, ...]], ...],
+        scope_ids_by_repository: tuple[tuple[uuid.UUID, tuple[uuid.UUID, ...]], ...],
+    ) -> AuthorizedRepositoryScopes:
+        instance = object.__new__(cls)
+        object.__setattr__(instance, "organization_id", actor.organization_id)
+        object.__setattr__(instance, "actor_type", actor.actor_type)
+        object.__setattr__(instance, "principal_id", principal_id)
+        object.__setattr__(instance, "actor_repository_id", actor.repository_id)
+        object.__setattr__(instance, "credential_id", actor.credential_id)
+        object.__setattr__(
+            instance,
+            "credential_actions",
+            tuple(sorted(actor.credential_actions)),
+        )
+        object.__setattr__(instance, "repositories", repositories)
+        object.__setattr__(instance, "repository_ids_by_action", repository_ids_by_action)
+        object.__setattr__(instance, "scope_ids_by_repository", scope_ids_by_repository)
+        object.__setattr__(instance, "_proof", _AUTHORIZED_REPOSITORY_SCOPES_PROOF)
+        return instance
+
+    def is_bound_to(self, actor: ActorContext) -> bool:
+        """Reject fabricated, mutated, or replayed boundaries before any governed read."""
+        try:
+            principal_id = uuid.UUID(actor.actor_id)
+            repository_ids = tuple(repository.id for repository in self.repositories)
+            action_rows_valid = len(
+                {action for action, _ids in self.repository_ids_by_action}
+            ) == len(self.repository_ids_by_action) and all(
+                ids == tuple(sorted(set(ids), key=str)) and set(ids).issubset(repository_ids)
+                for _action, ids in self.repository_ids_by_action
+            )
+            scope_rows_valid = (
+                tuple(repository_id for repository_id, _ids in self.scope_ids_by_repository)
+                == repository_ids
+                and all(
+                    ids == tuple(sorted(set(ids), key=str))
+                    and len(ids) <= MAX_BATCH_AUTHORIZATION_SCOPES
+                    for _repository_id, ids in self.scope_ids_by_repository
+                )
+                and sum(len(ids) for _repository_id, ids in self.scope_ids_by_repository)
+                <= MAX_BATCH_AUTHORIZATION_SCOPE_BINDINGS
+            )
+            return (
+                self._proof is _AUTHORIZED_REPOSITORY_SCOPES_PROOF
+                and self.organization_id == actor.organization_id
+                and self.actor_type == actor.actor_type
+                and self.principal_id == principal_id
+                and self.actor_repository_id == actor.repository_id
+                and self.credential_id == actor.credential_id
+                and self.credential_actions == tuple(sorted(actor.credential_actions))
+                and 0 < len(repository_ids) <= MAX_BATCH_AUTHORIZATION_REPOSITORIES
+                and repository_ids == tuple(sorted(set(repository_ids), key=str))
+                and action_rows_valid
+                and scope_rows_valid
+            )
+        except (AttributeError, TypeError, ValueError):
+            return False
+
+    def repository_ids_for(self, action: Action) -> tuple[uuid.UUID, ...]:
+        return next(
+            (
+                repository_ids
+                for candidate_action, repository_ids in self.repository_ids_by_action
+                if candidate_action == action
+            ),
+            (),
+        )
+
+    def scope_pairs_for(
+        self,
+        action: Action,
+    ) -> tuple[tuple[uuid.UUID, tuple[uuid.UUID, ...]], ...]:
+        scope_map = dict(self.scope_ids_by_repository)
+        return tuple(
+            (repository_id, scope_map.get(repository_id, ()))
+            for repository_id in self.repository_ids_for(action)
+        )
+
+    def scope_ids_for(self, action: Action) -> tuple[uuid.UUID, ...]:
+        return tuple(
+            sorted(
+                {
+                    scope_id
+                    for _repository_id, scope_ids in self.scope_pairs_for(action)
+                    for scope_id in scope_ids
+                },
+                key=str,
+            )
+        )
+
+
+def current_authorized_scope_filter(
+    *,
+    actor: ActorContext,
+    authorization: AuthorizedRepositoryScopes,
+    action: Action,
+    scope_id_path: str,
+    repository_id_path: str | None = None,
+    repository_relation_path: str | None = None,
+) -> Q:
+    """Build one in-statement recheck for an exact resolved repository/scope pair."""
+    if not authorization.is_bound_to(actor):
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    if actor.credential_actions and action.value not in actor.credential_actions:
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    if (repository_id_path is None) != (repository_relation_path is None):
+        raise ValueError("repository id and relation paths must be supplied together")
+    repository_ids = authorization.repository_ids_for(action)
+    scope_ids = authorization.scope_ids_for(action)
+    if not repository_ids or not scope_ids:
+        return Q(**{f"{scope_id_path}__isnull": True}) & Q(**{f"{scope_id_path}__isnull": False})
+
+    principal_id = authorization.principal_id
+    allowed_role_codes = tuple(
+        role_code for role_code, actions in ROLE_ACTIONS.items() if action in actions
+    )
+    active_memberships = Membership.objects.filter(
+        organization_id=actor.organization_id,
+        user_id=principal_id,
+        user__is_active=True,
+        is_active=True,
+    )
+    active_service_identities = ServiceIdentity.objects.filter(
+        organization_id=actor.organization_id,
+        id=principal_id,
+        is_active=True,
+    )
+    grant_queryset = AccessGrant.objects.filter(
+        organization_id=actor.organization_id,
+        action=action.value,
+        source_connection__isnull=True,
+        revoked_at__isnull=True,
+    ).filter(Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now()))
+    scope_queryset = (
+        AccessScope.objects.filter(
+            id=OuterRef(scope_id_path),
+            organization_id=actor.organization_id,
+            is_active=True,
+        )
+        .exclude(
+            accessscopesource__source_connection__state__in=(
+                SourceConnection.State.REVOKED,
+                SourceConnection.State.DISABLED,
+            )
+        )
+        .order_by()
+    )
+    if actor.actor_type == "USER":
+        principal_active = Q(Exists(active_memberships))
+        principal_scope = Q(all_memberships=True) | Q(
+            accessscopemembership__organization_id=actor.organization_id,
+            accessscopemembership__membership__organization_id=actor.organization_id,
+            accessscopemembership__membership__user_id=principal_id,
+            accessscopemembership__membership__user__is_active=True,
+            accessscopemembership__membership__is_active=True,
+        )
+        role_allowed = Q(Exists(active_memberships.filter(role__code__in=allowed_role_codes)))
+        grant_queryset = grant_queryset.filter(
+            membership__organization_id=actor.organization_id,
+            membership__user_id=principal_id,
+            membership__user__is_active=True,
+            membership__is_active=True,
+        )
+    elif actor.actor_type == "SERVICE":
+        principal_active = Q(Exists(active_service_identities))
+        principal_scope = Q(all_service_identities=True) | Q(
+            accessscopeserviceidentity__organization_id=actor.organization_id,
+            accessscopeserviceidentity__service_identity_id=principal_id,
+            accessscopeserviceidentity__service_identity__is_active=True,
+        )
+        role_allowed = Q(pk__isnull=True) & Q(pk__isnull=False)
+        grant_queryset = grant_queryset.filter(
+            service_identity_id=principal_id,
+            service_identity__is_active=True,
+        )
+    else:
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    scope_queryset = scope_queryset.filter(principal_active).filter(principal_scope)
+
+    def current_action_filter(repository_id: uuid.UUID | OuterRef) -> Q:
+        typed_repository_id = cast(uuid.UUID, repository_id)
+        grants = grant_queryset.filter(
+            Q(repository__isnull=True) | Q(repository_id=typed_repository_id)
+        )
+        action_filter = role_allowed | Q(Exists(grants))
+        if actor.credential_id is not None:
+            tokens = RepositoryAccessToken.objects.filter(
+                id=actor.credential_id,
+                organization_id=actor.organization_id,
+                repository_id=typed_repository_id,
+                service_identity_id=principal_id,
+                revoked_at__isnull=True,
+                expires_at__gt=timezone.now(),
+                issuer=settings.TOKEN_ISSUER,
+                audience=settings.TOKEN_AUDIENCE,
+                repository__is_active=True,
+                service_identity__is_active=True,
+                allowed_actions__has_key=action.value,
+            )
+            action_filter &= Q(Exists(tokens))
+        return action_filter
+
+    current_repositories = Repository.objects.filter(
+        id__in=repository_ids,
+        organization_id=actor.organization_id,
+        is_active=True,
+    ).filter(current_action_filter(OuterRef("id")))
+    if repository_id_path is not None and repository_relation_path is not None:
+        current_repository_filter = Q(
+            **{
+                f"{repository_id_path}__in": repository_ids,
+                f"{repository_relation_path}__organization_id": actor.organization_id,
+                f"{repository_relation_path}__is_active": True,
+            }
+        )
+        current_scope = scope_queryset.filter(id__in=scope_ids).filter(
+            Q(all_repositories=True)
+            | Q(
+                accessscoperepository__organization_id=actor.organization_id,
+                accessscoperepository__repository_id=OuterRef(repository_id_path),
+                accessscoperepository__repository__is_active=True,
+            )
+        )
+        return (
+            Q(**{f"{scope_id_path}__in": scope_ids})
+            & current_repository_filter
+            & Q(Exists(current_scope))
+            & current_action_filter(OuterRef(repository_id_path))
+        )
+    current_scope = scope_queryset.filter(id__in=scope_ids).filter(
+        Q(all_repositories=True)
+        | Q(
+            accessscoperepository__organization_id=actor.organization_id,
+            accessscoperepository__repository_id__in=current_repositories.values("id"),
+            accessscoperepository__repository__is_active=True,
+        )
+    )
+    return Q(Exists(current_repositories)) & Q(Exists(current_scope))
 
 
 def get_tenant_record[GovernedModel: Model](
@@ -390,6 +674,228 @@ def authorize_action(
     if source_connection_id is not None:
         path_parts.append(f"source:{source_connection_id}")
     return AuthorizationDecision(action, ">".join(path_parts))
+
+
+def resolve_authorized_repository_scopes(
+    *,
+    actor: ActorContext,
+    actions: tuple[Action, ...],
+    required_action: Action,
+    repository_ids: tuple[uuid.UUID, ...] = (),
+    repository_limit: int = MAX_BATCH_AUTHORIZATION_REPOSITORIES,
+) -> AuthorizedRepositoryScopes:
+    """Resolve repositories, actions, and principal-visible scopes in fixed queries.
+
+    Repository/action pairs remain explicit in the returned object so callers cannot
+    turn a union of visible scopes into authorization for a different repository.
+    """
+    if len(actions) > len(Action):
+        raise ValueError("authorization action budget exceeded")
+    ordered_actions = tuple(dict.fromkeys(actions))
+    if not ordered_actions or required_action not in ordered_actions:
+        raise ValueError("required_action must be included in actions")
+    if not 1 <= repository_limit <= MAX_BATCH_AUTHORIZATION_REPOSITORIES:
+        raise ValueError("repository_limit must be between 1 and 100")
+    if len(repository_ids) > repository_limit:
+        raise ValueError("repository authorization budget exceeded")
+    requested_ids = tuple(sorted(set(repository_ids), key=str))
+
+    principal = resolve_principal(actor)
+    role_actions = (
+        ROLE_ACTIONS.get(principal.membership.role.code, frozenset())
+        if principal.membership is not None
+        else frozenset()
+    )
+    principal_filter = (
+        Q(membership=principal.membership)
+        if principal.membership is not None
+        else Q(service_identity=principal.service_identity)
+    )
+    grant_queryset = (
+        AccessGrant.objects.filter(
+            organization_id=actor.organization_id,
+            action__in=[action.value for action in ordered_actions],
+            revoked_at__isnull=True,
+            source_connection__isnull=True,
+        )
+        .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now()))
+        .filter(principal_filter)
+    )
+    token_repository_id: uuid.UUID | None = None
+    token_actions: frozenset[str] | None = None
+    if actor.credential_id is not None:
+        if actor.repository_id is None:
+            raise AuthenticationError(INVALID_CREDENTIAL_MESSAGE)
+        token_row = (
+            RepositoryAccessToken.objects.filter(
+                id=actor.credential_id,
+                organization_id=actor.organization_id,
+                repository_id=actor.repository_id,
+                service_identity_id=principal.principal_id,
+                revoked_at__isnull=True,
+                expires_at__gt=timezone.now(),
+                issuer=settings.TOKEN_ISSUER,
+                audience=settings.TOKEN_AUDIENCE,
+                repository__is_active=True,
+                service_identity__is_active=True,
+            )
+            .values_list("repository_id", "allowed_actions")
+            .first()
+        )
+        if (
+            token_row is None
+            or not isinstance(token_row[1], list)
+            or not all(isinstance(value, str) for value in token_row[1])
+        ):
+            raise AuthenticationError(INVALID_CREDENTIAL_MESSAGE)
+        token_repository_id = token_row[0]
+        token_actions = frozenset(token_row[1])
+
+    repository_queryset = Repository.objects.filter(
+        organization_id=actor.organization_id,
+        is_active=True,
+    )
+    if requested_ids:
+        repository_queryset = repository_queryset.filter(id__in=requested_ids)
+    elif actor.repository_id is not None:
+        repository_queryset = repository_queryset.filter(id=actor.repository_id)
+    elif required_action not in role_actions:
+        required_grants = grant_queryset.filter(action=required_action.value).filter(
+            Q(repository__isnull=True) | Q(repository_id=OuterRef("id"))
+        )
+        repository_queryset = repository_queryset.filter(Exists(required_grants))
+    repositories = tuple(repository_queryset.order_by("id")[:repository_limit])
+    candidate_repository_ids = {repository.id for repository in repositories}
+    grant_rows = tuple(
+        grant_queryset.filter(
+            Q(repository__isnull=True) | Q(repository_id__in=candidate_repository_ids)
+        )
+        .order_by("action", "repository_id")
+        .values_list("action", "repository_id")
+        .distinct()
+    )
+    global_grants = {
+        Action(action) for action, repository_id in grant_rows if repository_id is None
+    }
+    repository_grants: dict[Action, set[uuid.UUID]] = {action: set() for action in ordered_actions}
+    for action_value, repository_id in grant_rows:
+        if repository_id is not None:
+            repository_grants[Action(action_value)].add(repository_id)
+
+    def action_allowed_for_repository(action: Action, repository_id: uuid.UUID) -> bool:
+        if actor.repository_id is not None and repository_id != actor.repository_id:
+            return False
+        if actor.credential_actions and action.value not in actor.credential_actions:
+            return False
+        if token_actions is not None and (
+            repository_id != token_repository_id or action.value not in token_actions
+        ):
+            return False
+        return (
+            action in role_actions
+            or action in global_grants
+            or repository_id in repository_grants[action]
+        )
+
+    permitted_repository_ids_by_action = {
+        action: tuple(
+            repository.id
+            for repository in repositories
+            if action_allowed_for_repository(action, repository.id)
+        )
+        for action in ordered_actions
+    }
+    required_repository_ids = set(permitted_repository_ids_by_action[required_action])
+    if requested_ids and (
+        {repository.id for repository in repositories} != set(requested_ids)
+        or required_repository_ids != set(requested_ids)
+    ):
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    repositories = tuple(
+        repository for repository in repositories if repository.id in required_repository_ids
+    )
+    retained_repository_ids = {repository.id for repository in repositories}
+    permitted_repository_ids_by_action = {
+        action: tuple(
+            repository_id
+            for repository_id in repository_ids_for_action
+            if repository_id in retained_repository_ids
+        )
+        for action, repository_ids_for_action in permitted_repository_ids_by_action.items()
+    }
+
+    scope_ids_by_repository: dict[uuid.UUID, set[uuid.UUID]] = {
+        repository.id: set() for repository in repositories
+    }
+    if repositories:
+        scope_queryset = AccessScope.objects.filter(
+            organization_id=actor.organization_id,
+            is_active=True,
+        ).exclude(
+            accessscopesource__source_connection__state__in=(
+                SourceConnection.State.REVOKED,
+                SourceConnection.State.DISABLED,
+            )
+        )
+        if principal.membership is not None:
+            scope_queryset = scope_queryset.filter(
+                Q(all_memberships=True) | Q(accessscopemembership__membership=principal.membership)
+            )
+        else:
+            scope_queryset = scope_queryset.filter(
+                Q(all_service_identities=True)
+                | Q(accessscopeserviceidentity__service_identity=principal.service_identity)
+            )
+        scope_rows = tuple(
+            scope_queryset.filter(
+                Q(all_repositories=True)
+                | Q(accessscoperepository__repository_id__in=retained_repository_ids)
+            )
+            .order_by("id")
+            .values_list("id", "all_repositories")
+            .distinct()[: MAX_BATCH_AUTHORIZATION_SCOPES + 1]
+        )
+        if len(scope_rows) > MAX_BATCH_AUTHORIZATION_SCOPES:
+            raise ValueError("scope authorization budget exceeded")
+        all_repository_scope_ids = {
+            scope_id for scope_id, all_repositories in scope_rows if all_repositories
+        }
+        explicit_scope_ids = {
+            scope_id for scope_id, all_repositories in scope_rows if not all_repositories
+        }
+        for scope_ids in scope_ids_by_repository.values():
+            scope_ids.update(all_repository_scope_ids)
+        if explicit_scope_ids:
+            bindings = tuple(
+                AccessScopeRepository.objects.filter(
+                    organization_id=actor.organization_id,
+                    access_scope_id__in=explicit_scope_ids,
+                    repository_id__in=retained_repository_ids,
+                )
+                .order_by("repository_id", "access_scope_id")
+                .values_list("repository_id", "access_scope_id")
+                .distinct()[: MAX_BATCH_AUTHORIZATION_SCOPE_BINDINGS + 1]
+            )
+            if len(bindings) > MAX_BATCH_AUTHORIZATION_SCOPE_BINDINGS:
+                raise ValueError("scope binding authorization budget exceeded")
+            for repository_id, scope_id in bindings:
+                scope_ids_by_repository[repository_id].add(scope_id)
+
+    return AuthorizedRepositoryScopes._create(
+        actor=actor,
+        principal_id=principal.principal_id,
+        repositories=repositories,
+        repository_ids_by_action=tuple(
+            (action, permitted_repository_ids_by_action[action]) for action in ordered_actions
+        ),
+        scope_ids_by_repository=tuple(
+            (
+                repository_id,
+                tuple(sorted(scope_ids_by_repository[repository_id], key=str)),
+            )
+            for repository_id in sorted(scope_ids_by_repository, key=str)
+        ),
+    )
 
 
 def authorized_access_scope_ids(

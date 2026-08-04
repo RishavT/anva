@@ -100,6 +100,10 @@ authorized_chunks AS MATERIALIZED (
       AND repository.id = %(repository_id)s
       AND source_connection.state IN ('ACTIVE', 'DEGRADED')
       AND visibility.state = 'AVAILABLE'
+      AND (
+          %(source_location_ids)s::uuid[] IS NULL
+          OR visibility.source_location_id = ANY(%(source_location_ids)s::uuid[])
+      )
       AND visibility.revoked_at IS NULL
       AND snapshot.revoked_at IS NULL
       AND document.state = 'PRESENT'
@@ -348,6 +352,7 @@ def search_chunks(
     query: str,
     phase: str | None = None,
     limit: int = 20,
+    source_location_ids: tuple[uuid.UUID, ...] | None = None,
 ) -> SearchResponse:
     """Authorize scopes before running either ranking branch in one bounded query."""
     normalized_query = " ".join(query.split())
@@ -355,6 +360,8 @@ def search_chunks(
         raise ValueError("query must contain between 1 and 500 characters")
     if limit < 1 or limit > MAX_SEARCH_RESULTS:
         raise ValueError("limit must contain between 1 and 100 results")
+    if source_location_ids is not None and len(source_location_ids) > 2_000:
+        raise ValueError("source location scope exceeds 2000 entries")
 
     authorize_action(
         actor=actor,
@@ -368,6 +375,11 @@ def search_chunks(
         "actor_id": actor.actor_id,
         "credential_id": str(actor.credential_id) if actor.credential_id else None,
         "action": Action.SEARCH.value,
+        "source_location_ids": (
+            sorted(str(value) for value in source_location_ids)
+            if source_location_ids is not None
+            else None
+        ),
     }
     authorization_hash = hashlib.sha256(
         json.dumps(
@@ -391,6 +403,9 @@ def search_chunks(
         "candidate_limit": min(MAX_SEARCH_RESULTS * 2, max(limit * 4, 50)),
         "rrf_k": RRF_K,
         "result_limit": limit,
+        "source_location_ids": (
+            list(source_location_ids) if source_location_ids is not None else None
+        ),
     }
     with connection.cursor() as cursor:
         cursor.execute(_SEARCH_SQL, parameters)

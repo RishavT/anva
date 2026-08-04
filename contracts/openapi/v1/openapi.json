@@ -174,6 +174,40 @@
         "title": "Anva Manual Diff Assurance Report",
         "type": "object"
       },
+      "canvas-filter-value": {
+        "oneOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "maxLength": 2000,
+            "type": "string"
+          },
+          {
+            "items": {
+              "$ref": "#/components/schemas/canvas-filter-value"
+            },
+            "maxItems": 2000,
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/canvas-filter-value"
+            },
+            "maxProperties": 2000,
+            "propertyNames": {
+              "maxLength": 500
+            },
+            "type": "object"
+          }
+        ]
+      },
       "context-packet": {
         "$defs": {
           "context_item": {
@@ -3153,6 +3187,1139 @@
         "responses": {
           "200": {
             "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/canvas/entities/{resource_id}": {
+      "get": {
+        "operationId": "getOrganizationalCanvasEntity",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "repository_id",
+            "required": false,
+            "schema": {
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "maxItems": 100,
+              "type": "array"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/canvas/path": {
+      "post": {
+        "operationId": "explainOrganizationalCanvasPath",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "max_depth": {
+                    "maximum": 6,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "repository_ids": {
+                    "items": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "maxItems": 100,
+                    "type": "array",
+                    "uniqueItems": true
+                  },
+                  "source_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "target_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "source_id",
+                  "target_id"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/canvas/query": {
+      "post": {
+        "description": "Return a deterministic, bounded union of independently authorized repository projections. Hidden records never enter counts or layout.",
+        "operationId": "queryOrganizationalCanvas",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "anchor_id": {
+                    "oneOf": [
+                      {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "as_of": {
+                    "oneOf": [
+                      {
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "depth": {
+                    "maximum": 4,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "edge_limit": {
+                    "maximum": 600,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "entity_types": {
+                    "items": {
+                      "enum": [
+                        "GOAL",
+                        "METRIC",
+                        "INITIATIVE",
+                        "PRODUCT",
+                        "OWNER",
+                        "ENVIRONMENT",
+                        "CUSTOMER_COMMITMENT",
+                        "ARCHITECTURAL_DECISION",
+                        "ACCEPTANCE_CRITERION",
+                        "RELEASE",
+                        "TEAM",
+                        "REPOSITORY",
+                        "SERVICE",
+                        "COMPONENT",
+                        "API",
+                        "DATA_ASSET",
+                        "WORK_ITEM",
+                        "TASK",
+                        "PULL_REQUEST",
+                        "EVIDENCE",
+                        "RISK",
+                        "INCIDENT",
+                        "CONTROL",
+                        "DECISION",
+                        "POLICY",
+                        "REQUIREMENT",
+                        "UNKNOWN"
+                      ],
+                      "type": "string"
+                    },
+                    "maxItems": 27,
+                    "type": "array",
+                    "uniqueItems": true
+                  },
+                  "freshness": {
+                    "enum": [
+                      "FRESH",
+                      "AGING",
+                      "STALE",
+                      "CONTRADICTED",
+                      "SOURCE_UNAVAILABLE",
+                      "UNKNOWN"
+                    ],
+                    "type": "string"
+                  },
+                  "layers": {
+                    "items": {
+                      "enum": [
+                        "execution",
+                        "ownership",
+                        "dependencies",
+                        "governance",
+                        "provenance"
+                      ],
+                      "type": "string"
+                    },
+                    "maxItems": 5,
+                    "type": "array",
+                    "uniqueItems": true
+                  },
+                  "node_limit": {
+                    "maximum": 300,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "owner": {
+                    "maxLength": 500,
+                    "type": "string"
+                  },
+                  "repository_ids": {
+                    "items": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "maxItems": 100,
+                    "type": "array",
+                    "uniqueItems": true
+                  },
+                  "risk": {
+                    "maxLength": 500,
+                    "type": "string"
+                  },
+                  "search": {
+                    "maxLength": 500,
+                    "type": "string"
+                  },
+                  "status": {
+                    "maxLength": 500,
+                    "type": "string"
+                  },
+                  "view_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "view_revision": {
+                    "minimum": 1,
+                    "type": "integer"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/canvas/relationship-proposals": {
+      "post": {
+        "description": "Create review state only; this endpoint never writes a canonical edge.",
+        "operationId": "proposeOrganizationalCanvasRelationship",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expected_source_revision": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "expected_target_revision": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "idempotency_key": {
+                    "maxLength": 500,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "rationale": {
+                    "maxLength": 2000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "relationship_type": {
+                    "enum": [
+                      "GOAL_MEASURED_BY_METRIC",
+                      "INITIATIVE_SUPPORTS_GOAL",
+                      "INITIATIVE_OWNED_BY_TEAM",
+                      "INITIATIVE_AFFECTS_PRODUCT",
+                      "PRODUCT_IMPLEMENTED_BY_REPOSITORY",
+                      "COMPONENT_BELONGS_TO_PRODUCT",
+                      "REPOSITORY_OWNED_BY_TEAM",
+                      "REPOSITORY_CONTAINS_COMPONENT",
+                      "SERVICE_IMPLEMENTED_BY_REPOSITORY",
+                      "SERVICE_DEPENDS_ON_SERVICE",
+                      "API_PROVIDED_BY_SERVICE",
+                      "API_CONSUMED_BY_COMPONENT",
+                      "DATA_ASSET_USED_BY_SERVICE",
+                      "DECISION_APPLIES_TO_ENTITY",
+                      "POLICY_APPLIES_TO_ENTITY",
+                      "RISK_AFFECTS_ENTITY",
+                      "INCIDENT_AFFECTED_ENTITY",
+                      "REQUIREMENT_SUPPORTS_INITIATIVE",
+                      "REQUIREMENT_IMPLEMENTED_BY_PULL_REQUEST",
+                      "ACCEPTANCE_CRITERION_VERIFIED_BY_EVIDENCE",
+                      "TASK_CHANGES_ENTITY",
+                      "PULL_REQUEST_CHANGES_ENTITY",
+                      "ENTITY_OWNED_BY_OWNER",
+                      "ENTITY_REVIEWED_BY_TEAM"
+                    ],
+                    "type": "string"
+                  },
+                  "repository_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "source_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "target_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "source_id",
+                  "target_id",
+                  "relationship_type",
+                  "repository_id",
+                  "expected_source_revision",
+                  "expected_target_revision",
+                  "rationale",
+                  "idempotency_key"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing resource returned for an exact canonical replay."
+          },
+          "201": {
+            "description": "Tenant-scoped resource created."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/canvas/shares/{resource_id}/revoke": {
+      "post": {
+        "description": "Immediately close one sign-in-required link without deleting its pinned immutable view revision.",
+        "operationId": "revokeOrganizationalCanvasShare",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expected_view_revision": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "idempotency_key": {
+                    "maxLength": 500,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "expected_view_revision",
+                  "idempotency_key"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/canvas/views": {
+      "get": {
+        "operationId": "listOrganizationalCanvasViews",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized tenant-scoped response."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createOrganizationalCanvasView",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "access_scope_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "description": {
+                    "maxLength": 1000,
+                    "type": "string"
+                  },
+                  "idempotency_key": {
+                    "maxLength": 500,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "repository_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "semantic_query": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "as_of": {
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      "depth": {
+                        "maximum": 4,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "entity_types": {
+                        "items": {
+                          "enum": [
+                            "GOAL",
+                            "METRIC",
+                            "INITIATIVE",
+                            "PRODUCT",
+                            "OWNER",
+                            "ENVIRONMENT",
+                            "CUSTOMER_COMMITMENT",
+                            "ARCHITECTURAL_DECISION",
+                            "ACCEPTANCE_CRITERION",
+                            "RELEASE",
+                            "TEAM",
+                            "REPOSITORY",
+                            "SERVICE",
+                            "COMPONENT",
+                            "API",
+                            "DATA_ASSET",
+                            "WORK_ITEM",
+                            "TASK",
+                            "PULL_REQUEST",
+                            "EVIDENCE",
+                            "RISK",
+                            "INCIDENT",
+                            "CONTROL",
+                            "DECISION",
+                            "POLICY",
+                            "REQUIREMENT",
+                            "UNKNOWN"
+                          ],
+                          "type": "string"
+                        },
+                        "maxItems": 27,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "freshness": {
+                        "enum": [
+                          "FRESH",
+                          "AGING",
+                          "STALE",
+                          "CONTRADICTED",
+                          "SOURCE_UNAVAILABLE",
+                          "UNKNOWN"
+                        ],
+                        "type": "string"
+                      },
+                      "layers": {
+                        "items": {
+                          "enum": [
+                            "execution",
+                            "ownership",
+                            "dependencies",
+                            "governance",
+                            "provenance"
+                          ],
+                          "type": "string"
+                        },
+                        "maxItems": 5,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "owner": {
+                        "maxLength": 500,
+                        "type": "string"
+                      },
+                      "repository_ids": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "maxItems": 100,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "risk": {
+                        "maxLength": 500,
+                        "type": "string"
+                      },
+                      "root_entity_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "search": {
+                        "maxLength": 500,
+                        "type": "string"
+                      },
+                      "status": {
+                        "maxLength": 500,
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "view_type": {
+                    "enum": [
+                      "STRATEGY",
+                      "PRODUCT_SYSTEM",
+                      "INITIATIVE",
+                      "RISK_POLICY",
+                      "CHANGE_HISTORY",
+                      "CUSTOM"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "view_type",
+                  "semantic_query",
+                  "idempotency_key"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing resource returned for an exact canonical replay."
+          },
+          "201": {
+            "description": "Tenant-scoped resource created."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/canvas/views/{resource_id}/revisions": {
+      "post": {
+        "operationId": "appendOrganizationalCanvasViewRevision",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expected_revision": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "idempotency_key": {
+                    "maxLength": 500,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "presentation": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "annotations": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "body": {
+                              "maxLength": 2000,
+                              "type": "string"
+                            },
+                            "entity_id": {
+                              "format": "uuid",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "x": {
+                              "maximum": 1000000,
+                              "minimum": -1000000,
+                              "type": "number"
+                            },
+                            "y": {
+                              "maximum": 1000000,
+                              "minimum": -1000000,
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "entity_id",
+                            "body",
+                            "x",
+                            "y"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 100,
+                        "type": "array"
+                      },
+                      "filters": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "field": {
+                              "enum": [
+                                "entity_type",
+                                "owner",
+                                "status",
+                                "time",
+                                "risk",
+                                "freshness"
+                              ],
+                              "type": "string"
+                            },
+                            "operator": {
+                              "enum": [
+                                "EQUALS",
+                                "CONTAINS",
+                                "IN",
+                                "SINCE"
+                              ],
+                              "type": "string"
+                            },
+                            "value": {
+                              "$ref": "#/components/schemas/canvas-filter-value"
+                            }
+                          },
+                          "required": [
+                            "field",
+                            "operator",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 20,
+                        "type": "array"
+                      },
+                      "groups": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "height": {
+                              "exclusiveMinimum": 0,
+                              "maximum": 1000000,
+                              "type": "number"
+                            },
+                            "label": {
+                              "maxLength": 200,
+                              "type": "string"
+                            },
+                            "width": {
+                              "exclusiveMinimum": 0,
+                              "maximum": 1000000,
+                              "type": "number"
+                            },
+                            "x": {
+                              "maximum": 1000000,
+                              "minimum": -1000000,
+                              "type": "number"
+                            },
+                            "y": {
+                              "maximum": 1000000,
+                              "minimum": -1000000,
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "label",
+                            "x",
+                            "y",
+                            "width",
+                            "height"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 50,
+                        "type": "array"
+                      },
+                      "layers": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "is_visible": {
+                              "type": "boolean"
+                            },
+                            "key": {
+                              "enum": [
+                                "execution",
+                                "ownership",
+                                "dependencies",
+                                "governance",
+                                "provenance"
+                              ],
+                              "type": "string"
+                            },
+                            "label": {
+                              "maxLength": 100,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "key",
+                            "label",
+                            "is_visible"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 20,
+                        "type": "array"
+                      },
+                      "placements": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "entity_id": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "group_index": {
+                              "oneOf": [
+                                {
+                                  "maximum": 49,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "is_hidden": {
+                              "type": "boolean"
+                            },
+                            "is_pinned": {
+                              "type": "boolean"
+                            },
+                            "x": {
+                              "maximum": 1000000,
+                              "minimum": -1000000,
+                              "type": "number"
+                            },
+                            "y": {
+                              "maximum": 1000000,
+                              "minimum": -1000000,
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "entity_id",
+                            "x",
+                            "y",
+                            "is_pinned",
+                            "is_hidden",
+                            "group_index"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 300,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "placements",
+                      "filters",
+                      "layers",
+                      "groups",
+                      "annotations"
+                    ],
+                    "type": "object"
+                  },
+                  "semantic_query": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "as_of": {
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      "depth": {
+                        "maximum": 4,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "entity_types": {
+                        "items": {
+                          "enum": [
+                            "GOAL",
+                            "METRIC",
+                            "INITIATIVE",
+                            "PRODUCT",
+                            "OWNER",
+                            "ENVIRONMENT",
+                            "CUSTOMER_COMMITMENT",
+                            "ARCHITECTURAL_DECISION",
+                            "ACCEPTANCE_CRITERION",
+                            "RELEASE",
+                            "TEAM",
+                            "REPOSITORY",
+                            "SERVICE",
+                            "COMPONENT",
+                            "API",
+                            "DATA_ASSET",
+                            "WORK_ITEM",
+                            "TASK",
+                            "PULL_REQUEST",
+                            "EVIDENCE",
+                            "RISK",
+                            "INCIDENT",
+                            "CONTROL",
+                            "DECISION",
+                            "POLICY",
+                            "REQUIREMENT",
+                            "UNKNOWN"
+                          ],
+                          "type": "string"
+                        },
+                        "maxItems": 27,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "freshness": {
+                        "enum": [
+                          "FRESH",
+                          "AGING",
+                          "STALE",
+                          "CONTRADICTED",
+                          "SOURCE_UNAVAILABLE",
+                          "UNKNOWN"
+                        ],
+                        "type": "string"
+                      },
+                      "layers": {
+                        "items": {
+                          "enum": [
+                            "execution",
+                            "ownership",
+                            "dependencies",
+                            "governance",
+                            "provenance"
+                          ],
+                          "type": "string"
+                        },
+                        "maxItems": 5,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "owner": {
+                        "maxLength": 500,
+                        "type": "string"
+                      },
+                      "repository_ids": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "maxItems": 100,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "risk": {
+                        "maxLength": 500,
+                        "type": "string"
+                      },
+                      "root_entity_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "search": {
+                        "maxLength": 500,
+                        "type": "string"
+                      },
+                      "status": {
+                        "maxLength": 500,
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "expected_revision",
+                  "semantic_query",
+                  "presentation",
+                  "idempotency_key"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing resource returned for an exact canonical replay."
+          },
+          "201": {
+            "description": "Tenant-scoped resource created."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/canvas/views/{resource_id}/shares": {
+      "post": {
+        "description": "Create a sign-in-required deep link that grants no authority.",
+        "operationId": "shareOrganizationalCanvasViewRevision",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expires_at": {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  "idempotency_key": {
+                    "maxLength": 500,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "recipient_membership_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "idempotency_key"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing resource returned for an exact canonical replay."
+          },
+          "201": {
+            "description": "Tenant-scoped resource created."
           },
           "400": {
             "$ref": "#/components/responses/StructuredError"
