@@ -864,7 +864,12 @@ class KnowledgeAssertion(RevisionedTenantModel):
             models.Index(
                 fields=["organization", "subject_key", "predicate"],
                 name="core_assert_subject_pred_idx",
-            )
+            ),
+            models.Index(
+                fields=["organization", "subject_key", "-observed_at", "-id"],
+                condition=Q(valid_until__isnull=True),
+                name="core_assert_current_subj_idx",
+            ),
         ]
         constraints: ClassVar[list[models.BaseConstraint]] = [
             *RevisionedTenantModel.Meta.constraints,
@@ -904,6 +909,12 @@ class AssertionProvenance(TenantOwnedModel):
     observed_at = models.DateTimeField()
 
     class Meta:
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(
+                fields=["organization", "assertion", "observed_at", "id"],
+                name="core_assertprov_order_idx",
+            )
+        ]
         constraints: ClassVar[list[models.BaseConstraint]] = [
             models.UniqueConstraint(
                 fields=["organization", "assertion", "source_location"],

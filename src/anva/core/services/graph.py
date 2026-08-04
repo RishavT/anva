@@ -6,9 +6,16 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 
+from django.conf import settings
 from django.db import connection
 
-from anva.core.services.authorization import Action, authorize_action
+from anva.core.exceptions import ResourceNotFoundError
+from anva.core.services.authorization import (
+    NOT_FOUND_MESSAGE,
+    Action,
+    AuthorizedRepositoryScopes,
+    authorize_action,
+)
 from anva.core.services.context import ActorContext
 
 MAX_GRAPH_DEPTH = 4
@@ -20,6 +27,7 @@ _GRAPH_SQL = """
 WITH RECURSIVE
 authorized_edges AS MATERIALIZED (
     SELECT
+        repository.id AS repository_id,
         relationship.id AS relationship_id,
         relationship.relationship_type,
         relationship.source_entity_id,
@@ -184,6 +192,8 @@ authorized_edges AS MATERIALIZED (
                 AND credential.service_identity_id = service_identity.id
                 AND credential.revoked_at IS NULL
                 AND credential.expires_at > CURRENT_TIMESTAMP
+                AND credential.issuer = %(token_issuer)s
+                AND credential.audience = %(token_audience)s
                 AND credential.allowed_actions ? %(action)s
           )
       )
@@ -431,6 +441,400 @@ LIMIT %(edge_limit)s
 """
 )
 
+_AUTHORIZED_INCIDENT_EDGE_BATCH_SELECT = """
+WITH incident_relationships AS MATERIALIZED (
+    SELECT relationship.*
+    FROM core_knowledgerelationship relationship
+    WHERE relationship.organization_id = %(organization_id)s
+      AND (
+          relationship.source_entity_id = %(entity_id)s
+          OR relationship.target_entity_id = %(entity_id)s
+      )
+),
+incident_semantics AS MATERIALIZED (
+    SELECT
+        relationship.organization_id,
+        relationship.id AS relationship_id,
+        relationship.relationship_type,
+        relationship.source_entity_id,
+        relationship.target_entity_id,
+        relationship.source_entity_type,
+        relationship.target_entity_type,
+        source_entity.canonical_key AS source_key,
+        source_entity.display_name AS source_name,
+        source_entity.access_scope_id AS source_scope_id,
+        target_entity.canonical_key AS target_key,
+        target_entity.display_name AS target_name,
+        target_entity.access_scope_id AS target_scope_id,
+        relationship.assertion_id,
+        assertion.access_scope_id AS assertion_scope_id,
+        relationship.source_location_id,
+        relationship.source_observation_id,
+        relationship.access_snapshot_id,
+        relationship.access_scope_id AS edge_scope_id,
+        relationship.observed_at,
+        relationship.confidence
+    FROM incident_relationships relationship
+    JOIN core_knowledgeentity source_entity
+      ON source_entity.id = relationship.source_entity_id
+     AND source_entity.organization_id = relationship.organization_id
+    JOIN core_knowledgeentity target_entity
+      ON target_entity.id = relationship.target_entity_id
+     AND target_entity.organization_id = relationship.organization_id
+    JOIN core_knowledgeassertion assertion
+      ON assertion.id = relationship.assertion_id
+     AND assertion.organization_id = relationship.organization_id
+    WHERE relationship.review_state <> 'REJECTED'
+      AND source_entity.is_active
+      AND target_entity.is_active
+      AND assertion.valid_until IS NULL
+),
+scoped_incidents AS MATERIALIZED (
+    SELECT
+        incident.*,
+        edge_scope.all_memberships AS edge_all_memberships,
+        edge_scope.all_service_identities AS edge_all_service_identities,
+        edge_scope.all_repositories AS edge_all_repositories,
+        source_scope.all_memberships AS source_all_memberships,
+        source_scope.all_service_identities AS source_all_service_identities,
+        source_scope.all_repositories AS source_all_repositories,
+        target_scope.all_memberships AS target_all_memberships,
+        target_scope.all_service_identities AS target_all_service_identities,
+        target_scope.all_repositories AS target_all_repositories,
+        assertion_scope.all_memberships AS assertion_all_memberships,
+        assertion_scope.all_service_identities AS assertion_all_service_identities,
+        assertion_scope.all_repositories AS assertion_all_repositories
+    FROM incident_semantics incident
+    JOIN core_accessscope edge_scope
+      ON edge_scope.id = incident.edge_scope_id
+     AND edge_scope.organization_id = incident.organization_id
+     AND edge_scope.is_active
+    JOIN core_accessscope source_scope
+      ON source_scope.id = incident.source_scope_id
+     AND source_scope.organization_id = incident.organization_id
+     AND source_scope.is_active
+    JOIN core_accessscope target_scope
+      ON target_scope.id = incident.target_scope_id
+     AND target_scope.organization_id = incident.organization_id
+     AND target_scope.is_active
+    JOIN core_accessscope assertion_scope
+      ON assertion_scope.id = incident.assertion_scope_id
+     AND assertion_scope.organization_id = incident.organization_id
+     AND assertion_scope.is_active
+),
+current_lineage AS MATERIALIZED (
+    SELECT
+        incident.*,
+        document.source_container_id
+    FROM scoped_incidents incident
+    JOIN core_sourcelocation location
+      ON location.id = incident.source_location_id
+     AND location.organization_id = incident.organization_id
+     AND location.source_observation_id = incident.source_observation_id
+    JOIN core_sourceobservation observation
+      ON observation.id = incident.source_observation_id
+     AND observation.organization_id = incident.organization_id
+    JOIN core_parsedsource parsed_source
+      ON parsed_source.id = location.parsed_source_id
+     AND parsed_source.organization_id = incident.organization_id
+     AND parsed_source.source_revision_id = observation.source_revision_id
+    JOIN core_sourcedocument document
+      ON document.id = observation.source_document_id
+     AND document.organization_id = incident.organization_id
+    WHERE observation.status = 'PRESENT'
+      AND document.state = 'PRESENT'
+      AND observation.source_revision_id = document.current_revision_id
+      AND observation.sync_run_id = document.last_seen_run_id
+),
+current_sources AS MATERIALIZED (
+    SELECT
+        incident.*,
+        source_connection.id AS source_connection_id,
+        repository.id AS repository_id
+    FROM current_lineage incident
+    JOIN core_sourcecontainer container
+      ON container.id = incident.source_container_id
+     AND container.organization_id = incident.organization_id
+    JOIN core_sourceconnection source_connection
+      ON source_connection.id = container.source_connection_id
+     AND source_connection.organization_id = incident.organization_id
+    JOIN core_repository repository
+      ON repository.id = source_connection.repository_id
+     AND repository.organization_id = incident.organization_id
+     AND repository.is_active
+    JOIN core_accesssnapshot snapshot
+      ON snapshot.id = incident.access_snapshot_id
+     AND snapshot.organization_id = incident.organization_id
+     AND snapshot.source_connection_id = source_connection.id
+     AND snapshot.access_scope_id = incident.edge_scope_id
+    WHERE repository.id = ANY(%(repository_ids)s::uuid[])
+      AND source_connection.state IN ('ACTIVE', 'DEGRADED')
+      AND snapshot.revoked_at IS NULL
+      AND EXISTS (
+          SELECT 1
+          FROM core_accessscopesource edge_scope_source
+          WHERE edge_scope_source.organization_id = incident.organization_id
+            AND edge_scope_source.access_scope_id = incident.edge_scope_id
+            AND edge_scope_source.source_connection_id = source_connection.id
+      )
+),
+authorized_edges AS MATERIALIZED (
+    SELECT
+        edge.repository_id,
+        edge.relationship_id,
+        edge.relationship_type,
+        edge.source_entity_id,
+        edge.target_entity_id,
+        edge.source_entity_type,
+        edge.target_entity_type,
+        edge.source_key,
+        edge.source_name,
+        edge.target_key,
+        edge.target_name,
+        edge.assertion_id,
+        edge.source_location_id,
+        edge.source_observation_id,
+        edge.access_snapshot_id,
+        edge.observed_at,
+        edge.confidence
+    FROM current_sources edge
+    LEFT JOIN core_membership membership
+      ON %(actor_type)s = 'USER'
+     AND membership.organization_id = edge.organization_id
+     AND membership.user_id = %(actor_id)s
+     AND membership.is_active
+    LEFT JOIN core_user principal_user
+      ON principal_user.id = membership.user_id
+     AND principal_user.is_active
+    LEFT JOIN core_role role
+      ON role.id = membership.role_id
+     AND role.organization_id = edge.organization_id
+    LEFT JOIN core_serviceidentity service_identity
+      ON %(actor_type)s = 'SERVICE'
+     AND service_identity.id = %(actor_id)s
+     AND service_identity.organization_id = edge.organization_id
+     AND service_identity.is_active
+    WHERE (
+          (
+              %(actor_type)s = 'USER'
+              AND membership.id IS NOT NULL
+              AND principal_user.id IS NOT NULL
+          )
+          OR (
+              %(actor_type)s = 'SERVICE'
+              AND service_identity.id IS NOT NULL
+          )
+      )
+      AND (
+          (
+              %(actor_type)s = 'USER'
+              AND role.code IN (
+                  'ORG_ADMIN', 'KNOWLEDGE_ADMIN', 'TECHNICAL_OWNER',
+                  'PRODUCT_OWNER', 'DEVELOPER', 'REVIEWER',
+                  'SECURITY_REVIEWER', 'VIEWER'
+              )
+          )
+          OR EXISTS (
+              SELECT 1
+              FROM core_accessgrant action_grant
+              WHERE action_grant.organization_id = edge.organization_id
+                AND action_grant.action = %(action)s
+                AND action_grant.revoked_at IS NULL
+                AND (
+                    action_grant.expires_at IS NULL
+                    OR action_grant.expires_at > CURRENT_TIMESTAMP
+                )
+                AND (
+                    action_grant.repository_id IS NULL
+                    OR action_grant.repository_id = edge.repository_id
+                )
+                AND action_grant.source_connection_id IS NULL
+                AND (
+                    (
+                        %(actor_type)s = 'USER'
+                        AND action_grant.membership_id = membership.id
+                    )
+                    OR (
+                        %(actor_type)s = 'SERVICE'
+                        AND action_grant.service_identity_id = service_identity.id
+                    )
+                )
+          )
+      )
+      AND (
+          %(credential_id)s::uuid IS NULL
+          OR EXISTS (
+              SELECT 1
+              FROM core_repositoryaccesstoken credential
+              WHERE credential.id = %(credential_id)s::uuid
+                AND credential.organization_id = edge.organization_id
+                AND credential.repository_id = edge.repository_id
+                AND credential.service_identity_id = service_identity.id
+                AND credential.revoked_at IS NULL
+                AND credential.expires_at > CURRENT_TIMESTAMP
+                AND credential.issuer = %(token_issuer)s
+                AND credential.audience = %(token_audience)s
+                AND credential.allowed_actions ? %(action)s
+          )
+      )
+      AND (
+          (
+              %(actor_type)s = 'USER'
+              AND (
+                  edge.edge_all_memberships
+                  OR EXISTS (
+                      SELECT 1 FROM core_accessscopemembership edge_member
+                      WHERE edge_member.organization_id = edge.organization_id
+                        AND edge_member.access_scope_id = edge.edge_scope_id
+                        AND edge_member.membership_id = membership.id
+                  )
+              )
+              AND (
+                  edge.source_all_memberships
+                  OR EXISTS (
+                      SELECT 1 FROM core_accessscopemembership source_member
+                      WHERE source_member.organization_id = edge.organization_id
+                        AND source_member.access_scope_id = edge.source_scope_id
+                        AND source_member.membership_id = membership.id
+                  )
+              )
+              AND (
+                  edge.target_all_memberships
+                  OR EXISTS (
+                      SELECT 1 FROM core_accessscopemembership target_member
+                      WHERE target_member.organization_id = edge.organization_id
+                        AND target_member.access_scope_id = edge.target_scope_id
+                        AND target_member.membership_id = membership.id
+                  )
+              )
+              AND (
+                  edge.assertion_all_memberships
+                  OR EXISTS (
+                      SELECT 1 FROM core_accessscopemembership assertion_member
+                      WHERE assertion_member.organization_id = edge.organization_id
+                        AND assertion_member.access_scope_id = edge.assertion_scope_id
+                        AND assertion_member.membership_id = membership.id
+                  )
+              )
+          )
+          OR (
+              %(actor_type)s = 'SERVICE'
+              AND (
+                  edge.edge_all_service_identities
+                  OR EXISTS (
+                      SELECT 1 FROM core_accessscopeserviceidentity edge_service
+                      WHERE edge_service.organization_id = edge.organization_id
+                        AND edge_service.access_scope_id = edge.edge_scope_id
+                        AND edge_service.service_identity_id = service_identity.id
+                  )
+              )
+              AND (
+                  edge.source_all_service_identities
+                  OR EXISTS (
+                      SELECT 1 FROM core_accessscopeserviceidentity source_service
+                      WHERE source_service.organization_id = edge.organization_id
+                        AND source_service.access_scope_id = edge.source_scope_id
+                        AND source_service.service_identity_id = service_identity.id
+                  )
+              )
+              AND (
+                  edge.target_all_service_identities
+                  OR EXISTS (
+                      SELECT 1 FROM core_accessscopeserviceidentity target_service
+                      WHERE target_service.organization_id = edge.organization_id
+                        AND target_service.access_scope_id = edge.target_scope_id
+                        AND target_service.service_identity_id = service_identity.id
+                  )
+              )
+              AND (
+                  edge.assertion_all_service_identities
+                  OR EXISTS (
+                      SELECT 1 FROM core_accessscopeserviceidentity assertion_service
+                      WHERE assertion_service.organization_id = edge.organization_id
+                        AND assertion_service.access_scope_id = edge.assertion_scope_id
+                        AND assertion_service.service_identity_id = service_identity.id
+                  )
+              )
+          )
+      )
+      AND (
+          (
+              edge.edge_all_repositories
+              OR EXISTS (
+                  SELECT 1 FROM core_accessscoperepository edge_repository
+                  WHERE edge_repository.organization_id = edge.organization_id
+                    AND edge_repository.access_scope_id = edge.edge_scope_id
+                    AND edge_repository.repository_id = edge.repository_id
+              )
+          )
+          AND (
+              edge.source_all_repositories
+              OR EXISTS (
+                  SELECT 1 FROM core_accessscoperepository source_repository
+                  WHERE source_repository.organization_id = edge.organization_id
+                    AND source_repository.access_scope_id = edge.source_scope_id
+                    AND source_repository.repository_id = edge.repository_id
+              )
+          )
+          AND (
+              edge.target_all_repositories
+              OR EXISTS (
+                  SELECT 1 FROM core_accessscoperepository target_repository
+                  WHERE target_repository.organization_id = edge.organization_id
+                    AND target_repository.access_scope_id = edge.target_scope_id
+                    AND target_repository.repository_id = edge.repository_id
+              )
+          )
+          AND (
+              edge.assertion_all_repositories
+              OR EXISTS (
+                  SELECT 1 FROM core_accessscoperepository assertion_repository
+                  WHERE assertion_repository.organization_id = edge.organization_id
+                    AND assertion_repository.access_scope_id = edge.assertion_scope_id
+                    AND assertion_repository.repository_id = edge.repository_id
+              )
+          )
+      )
+      AND NOT EXISTS (
+          SELECT 1
+          FROM core_accessscopesource governed_scope_source
+          JOIN core_sourceconnection governed_source
+            ON governed_source.id = governed_scope_source.source_connection_id
+           AND governed_source.organization_id = governed_scope_source.organization_id
+          WHERE governed_scope_source.organization_id = edge.organization_id
+            AND governed_scope_source.access_scope_id IN (
+                edge.edge_scope_id,
+                edge.source_scope_id,
+                edge.target_scope_id,
+                edge.assertion_scope_id
+            )
+            AND governed_source.state IN ('REVOKED', 'DISABLED')
+      )
+)
+SELECT
+    repository_id,
+    relationship_id,
+    relationship_type,
+    source_entity_id,
+    target_entity_id,
+    source_entity_type,
+    target_entity_type,
+    source_key,
+    source_name,
+    target_key,
+    target_name,
+    assertion_id,
+    source_location_id,
+    source_observation_id,
+    access_snapshot_id,
+    observed_at,
+    confidence,
+    1 AS depth
+FROM authorized_edges
+ORDER BY relationship_id, repository_id
+LIMIT %(edge_limit)s
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class GraphEdge:
@@ -479,6 +883,12 @@ class GraphEdge:
 
 
 @dataclass(frozen=True, slots=True)
+class RepositoryGraphEdge:
+    repository_id: uuid.UUID
+    edge: GraphEdge
+
+
+@dataclass(frozen=True, slots=True)
 class GraphResult:
     start_entity_id: uuid.UUID
     depth_limit: int
@@ -523,6 +933,8 @@ def authorized_graph_edges(
                 "actor_type": actor.actor_type,
                 "actor_id": uuid.UUID(actor.actor_id),
                 "credential_id": actor.credential_id,
+                "token_issuer": settings.TOKEN_ISSUER,
+                "token_audience": settings.TOKEN_AUDIENCE,
                 "action": Action.CANVAS_VIEW.value,
                 "edge_limit": edge_limit + 1,
             },
@@ -555,6 +967,8 @@ def authorized_incident_graph_edges(
                 "actor_type": actor.actor_type,
                 "actor_id": uuid.UUID(actor.actor_id),
                 "credential_id": actor.credential_id,
+                "token_issuer": settings.TOKEN_ISSUER,
+                "token_audience": settings.TOKEN_AUDIENCE,
                 "action": Action.CANVAS_VIEW.value,
                 "entity_id": entity_id,
                 "edge_limit": edge_limit + 1,
@@ -562,6 +976,54 @@ def authorized_incident_graph_edges(
         )
         rows = cursor.fetchall()
     return tuple(GraphEdge(*row) for row in rows[:edge_limit]), len(rows) > edge_limit
+
+
+def authorized_incident_graph_edges_batch(
+    *,
+    actor: ActorContext,
+    authorization: AuthorizedRepositoryScopes,
+    entity_id: uuid.UUID,
+    edge_limit: int = MAX_CANVAS_GRAPH_EDGES,
+) -> tuple[tuple[RepositoryGraphEdge, ...], bool]:
+    """List incident edges from one actor-bound repository authorization snapshot."""
+    ordered_repository_ids = authorization.repository_ids_for(Action.CANVAS_VIEW)
+    boundary_repository_ids = tuple(repository.id for repository in authorization.repositories)
+    if (
+        not authorization.is_bound_to(actor)
+        or ordered_repository_ids != boundary_repository_ids
+        or (actor.credential_actions and Action.CANVAS_VIEW.value not in actor.credential_actions)
+    ):
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    if not ordered_repository_ids or len(ordered_repository_ids) > 100:
+        raise ValueError("repository_ids must contain between 1 and 100 repositories")
+    if edge_limit < 1 or edge_limit > MAX_CANVAS_GRAPH_EDGES:
+        raise ValueError("Canvas edge_limit must be between 1 and 600")
+    if actor.repository_id is not None and ordered_repository_ids != (actor.repository_id,):
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            _AUTHORIZED_INCIDENT_EDGE_BATCH_SELECT,
+            {
+                "organization_id": actor.organization_id,
+                "repository_ids": list(ordered_repository_ids),
+                "actor_type": actor.actor_type,
+                "actor_id": uuid.UUID(actor.actor_id),
+                "credential_id": actor.credential_id,
+                "token_issuer": settings.TOKEN_ISSUER,
+                "token_audience": settings.TOKEN_AUDIENCE,
+                "action": Action.CANVAS_VIEW.value,
+                "entity_id": entity_id,
+                "edge_limit": edge_limit + 1,
+            },
+        )
+        rows = cursor.fetchall()
+    return (
+        tuple(
+            RepositoryGraphEdge(repository_id=row[0], edge=GraphEdge(*row[1:]))
+            for row in rows[:edge_limit]
+        ),
+        len(rows) > edge_limit,
+    )
 
 
 def traverse_graph(
@@ -594,6 +1056,8 @@ def traverse_graph(
                 "actor_type": actor.actor_type,
                 "actor_id": uuid.UUID(actor.actor_id),
                 "credential_id": actor.credential_id,
+                "token_issuer": settings.TOKEN_ISSUER,
+                "token_audience": settings.TOKEN_AUDIENCE,
                 "action": Action.KNOWLEDGE_VIEW.value,
                 "start_entity_id": start_entity_id,
                 "depth_limit": depth,

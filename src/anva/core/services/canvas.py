@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Any, cast
 
 from django.db import transaction
-from django.db.models import F, Q
+from django.db.models import Exists, F, OuterRef, Q
 from django.utils import timezone
 
 from anva.core.exceptions import (
@@ -43,25 +43,30 @@ from anva.core.models import (
     Organization,
     Repository,
     SourceChunkVisibility,
+    SourceDocument,
     SourceLocation,
     content_hash,
 )
 from anva.core.services.authorization import (
     NOT_FOUND_MESSAGE,
     Action,
+    AuthorizedRepositoryScopes,
     authorize_action,
     authorized_access_scope_ids,
+    current_authorized_scope_filter,
     get_tenant_record,
     get_tenant_record_for_update,
+    resolve_authorized_repository_scopes,
 )
 from anva.core.services.context import ActorContext
-from anva.core.services.context_packets import authorized_assertion_citations
+from anva.core.services.context_packets import authorized_assertion_citations_batch
 from anva.core.services.creation import submit_knowledge_proposal
 from anva.core.services.events import record_transition
 from anva.core.services.graph import (
     GraphEdge,
     authorized_graph_edges,
     authorized_incident_graph_edges,
+    authorized_incident_graph_edges_batch,
 )
 from anva.core.services.retrieval import authorized_assertions, authorized_entities
 
@@ -553,6 +558,80 @@ def _authorized_entity_union(
         if entity is not None:
             return entity
     raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+
+
+def _batch_authorized_entities(
+    *,
+    actor: ActorContext,
+    authorization: AuthorizedRepositoryScopes,
+    entity_ids: set[uuid.UUID] | None = None,
+) -> list[KnowledgeEntity]:
+    """Hydrate a visible entity union once from a resolved repository boundary."""
+    queryset = KnowledgeEntity.objects.filter(
+        organization_id=actor.organization_id,
+        is_active=True,
+    ).filter(
+        current_authorized_scope_filter(
+            actor=actor,
+            authorization=authorization,
+            action=Action.CANVAS_VIEW,
+            scope_id_path="access_scope_id",
+        )
+    )
+    if entity_ids is not None:
+        queryset = queryset.filter(id__in=entity_ids)
+    return list(queryset.order_by("id").distinct())
+
+
+def _batch_authorized_assertions(
+    *,
+    actor: ActorContext,
+    authorization: AuthorizedRepositoryScopes,
+    subject_keys: set[str],
+    limit: int,
+) -> list[KnowledgeAssertion]:
+    """Hydrate a deterministic bounded current assertion prefix in one statement."""
+    if not 1 <= limit <= CANVAS_DETAIL_SECTION_LIMIT + 1:
+        raise ValueError("assertion hydration limit is out of bounds")
+    if not subject_keys:
+        return []
+    any_provenance = AssertionProvenance.objects.filter(assertion_id=OuterRef("id"))
+    current_provenance = AssertionProvenance.objects.filter(
+        assertion_id=OuterRef("id"),
+        access_snapshot__revoked_at__isnull=True,
+        access_snapshot__source_connection_id=F(
+            "source_observation__source_document__source_container__source_connection_id"
+        ),
+        source_observation__status="PRESENT",
+        source_observation__source_document__state=SourceDocument.State.PRESENT,
+        source_observation__source_document__source_container__source_connection__state__in=(
+            "ACTIVE",
+            "DEGRADED",
+        ),
+        source_observation__source_revision_id=F(
+            "source_observation__source_document__current_revision_id"
+        ),
+        source_observation__sync_run_id=F("source_observation__source_document__last_seen_run_id"),
+        assertion__assertionvalidityinterval__valid_until__isnull=True,
+        assertion__assertionvalidityinterval__source_observation_id=F("source_observation_id"),
+    )
+    return list(
+        KnowledgeAssertion.objects.filter(
+            organization_id=actor.organization_id,
+            subject_key__in=subject_keys,
+            valid_until__isnull=True,
+        )
+        .filter(
+            current_authorized_scope_filter(
+                actor=actor,
+                authorization=authorization,
+                action=Action.CANVAS_VIEW,
+                scope_id_path="access_scope_id",
+            )
+        )
+        .filter(~Exists(any_provenance) | Exists(current_provenance))
+        .order_by("-observed_at", "-id")[:limit]
+    )
 
 
 def _semantic_query(
@@ -1479,18 +1558,28 @@ def canvas_entity_detail(
     repository_ids: tuple[uuid.UUID, ...] = (),
 ) -> dict[str, object]:
     """Return bounded inspector context from only the current authorized graph."""
-    repositories = _visible_repositories(actor=actor, requested_ids=repository_ids)
-    entity = _authorized_entity_union(
+    authorization = resolve_authorized_repository_scopes(
         actor=actor,
-        entity_id=entity_id,
-        repositories=repositories,
+        actions=(Action.CANVAS_VIEW, Action.SEARCH),
+        required_action=Action.CANVAS_VIEW,
+        repository_ids=repository_ids,
+        repository_limit=CANVAS_REPOSITORY_LIMIT,
     )
+    visible_entities = _batch_authorized_entities(
+        actor=actor,
+        authorization=authorization,
+        entity_ids={entity_id},
+    )
+    if not visible_entities:
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    entity = visible_entities[0]
     authorized_subject_assertions = sorted(
-        _authorized_assertion_union(
+        _batch_authorized_assertions(
             actor=actor,
-            repositories=repositories,
+            authorization=authorization,
             subject_keys={entity.canonical_key},
-        ).get(entity.canonical_key, []),
+            limit=CANVAS_DETAIL_SECTION_LIMIT + 1,
+        ),
         key=lambda item: (item.observed_at, str(item.id)),
         reverse=True,
     )
@@ -1503,20 +1592,21 @@ def canvas_entity_detail(
         left_assertion_id__in=assertion_ids,
         right_assertion_id__in=assertion_ids,
     )
+    citations_by_assertion = authorized_assertion_citations_batch(
+        actor=actor,
+        authorization=authorization,
+        assertion_ids=tuple(assertion_ids),
+        per_assertion_limit=CANVAS_DETAIL_SECTION_LIMIT,
+    )
     source_details: list[dict[str, object]] = []
     for assertion in assertions:
         citations: dict[tuple[str, str], dict[str, object]] = {}
-        for repository in repositories:
-            for citation in authorized_assertion_citations(
-                actor=actor,
-                repository_id=repository.id,
-                assertion_id=assertion.id,
-            ):
-                key = (str(citation.get("locator", "")), str(citation.get("observed_at", "")))
-                citations[key] = {
-                    "locator": str(citation.get("locator", ""))[:1_000],
-                    "observed_at": citation.get("observed_at"),
-                }
+        for citation in citations_by_assertion.get(assertion.id, ()):
+            key = (str(citation.get("locator", "")), str(citation.get("observed_at", "")))
+            citations[key] = {
+                "locator": str(citation.get("locator", ""))[:1_000],
+                "observed_at": citation.get("observed_at"),
+            }
         source_details.append(
             {
                 "assertion_id": str(assertion.id),
@@ -1530,30 +1620,30 @@ def canvas_entity_detail(
             }
         )
 
-    incident_edges, relationship_truncated = _authorized_incident_edge_union(
+    repository_edges, relationship_truncated = authorized_incident_graph_edges_batch(
         actor=actor,
-        repositories=repositories,
+        authorization=authorization,
         entity_id=entity.id,
         edge_limit=CANVAS_DETAIL_RELATIONSHIP_LIMIT,
     )
+    incident_edges = [
+        AuthorizedCanvasEdge(repository_id=item.repository_id, edge=item.edge)
+        for item in repository_edges
+    ]
     related_ids = {
         item.edge.target_entity_id
         if item.edge.source_entity_id == entity.id
         else item.edge.source_entity_id
         for item in incident_edges
     }
-    related_entities: dict[uuid.UUID, KnowledgeEntity] = {}
-    for repository in repositories:
-        for related in (
-            authorized_entities(
-                actor=actor,
-                repository_id=repository.id,
-                action=Action.CANVAS_VIEW,
-            )
-            .filter(id__in=related_ids)
-            .order_by("id")
-        ):
-            related_entities.setdefault(related.id, related)
+    related_entities = {
+        related.id: related
+        for related in _batch_authorized_entities(
+            actor=actor,
+            authorization=authorization,
+            entity_ids=related_ids,
+        )
+    }
 
     relationships: list[dict[str, object]] = []
     context: list[dict[str, object]] = []

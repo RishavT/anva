@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
 import platform
 import time
 import uuid
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -28,8 +30,13 @@ from anva.core.models import (
     AccessGrant,
     AccessScope,
     AccessScopeMembership,
+    AccessScopeRepository,
+    AccessScopeServiceIdentity,
+    AccessScopeSource,
+    AccessSnapshot,
     AssertionProvenance,
     AssertionRevision,
+    AssertionValidityInterval,
     CanvasNodePlacement,
     CanvasShare,
     CanvasView,
@@ -41,16 +48,31 @@ from anva.core.models import (
     KnowledgeRelationship,
     Membership,
     Organization,
+    ParsedSource,
     Repository,
     Role,
     ServiceIdentity,
     SourceChunkVisibility,
     SourceConnection,
+    SourceContainer,
+    SourceContentArtifact,
+    SourceDocument,
+    SourceLocation,
+    SourceObservation,
+    SourceRevision,
+    SyncRun,
     User,
+    content_hash,
 )
-from anva.core.services.authorization import Action
+from anva.core.services.authorization import (
+    Action,
+    AuthorizedRepositoryScopes,
+    resolve_authorized_repository_scopes,
+)
 from anva.core.services.canvas import (
     CanvasQuery,
+    _batch_authorized_assertions,
+    _batch_authorized_entities,
     _canvas_payload_size,
     canvas_entity_detail,
     canvas_path,
@@ -65,7 +87,12 @@ from anva.core.services.canvas import (
     save_canvas_revision,
 )
 from anva.core.services.context import ActorContext
-from anva.core.services.graph import authorized_graph_edges
+from anva.core.services.context_packets import authorized_assertion_citations_batch
+from anva.core.services.graph import (
+    _AUTHORIZED_INCIDENT_EDGE_BATCH_SELECT,
+    authorized_graph_edges,
+    authorized_incident_graph_edges_batch,
+)
 from anva.core.services.ingestion import (
     connect_filesystem_source,
     execute_ingestion_job,
@@ -426,6 +453,811 @@ def test_canvas_detail_and_as_of_use_only_bounded_authorized_graph_context(
     assert str(late_relationship.id) in {edge["id"] for edge in current_edges}
     assert str(late_relationship.id) not in {edge["id"] for edge in historical_edges}
     assert historical["as_of"] == boundary.isoformat()
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_canvas_detail_batches_authorization_provenance_and_related_context_queries() -> None:
+    organization, first_repository, _admin, admin_user = _tenant(slug="canvas-detail-batch")
+    repositories = [first_repository]
+    repositories.extend(
+        Repository.objects.create(
+            organization=organization,
+            external_id=f"filesystem:canvas-detail-batch:{index}",
+            name=f"detail-batch-{index}",
+        )
+        for index in range(1, 10)
+    )
+    visible_scope = AccessScope.objects.create(
+        organization=organization,
+        name="detail batch visible",
+    )
+    AccessScopeRepository.objects.bulk_create(
+        [
+            AccessScopeRepository(
+                organization=organization,
+                access_scope=visible_scope,
+                repository=repository,
+            )
+            for repository in repositories
+        ]
+    )
+    viewer = _viewer(
+        organization=organization,
+        membership_scope=visible_scope,
+        label="canvas-detail-batch-viewer",
+    )
+
+    def create_seed_provenance(
+        *,
+        repository: Repository,
+        scope: AccessScope,
+        index: int,
+        label: str,
+    ) -> AssertionProvenance:
+        observed_at = timezone.now() + timedelta(seconds=index)
+        source = SourceConnection.objects.create(
+            organization=organization,
+            external_key=f"filesystem:detail-batch:{label}:{index}",
+            display_name=f"Detail batch {label} {index}",
+            repository=repository,
+            access_scope=scope,
+            state=SourceConnection.State.ACTIVE,
+        )
+        AccessScopeSource.objects.create(
+            organization=organization,
+            access_scope=scope,
+            source_connection=source,
+        )
+        snapshot = AccessSnapshot.objects.create(
+            organization=organization,
+            source_connection=source,
+            access_scope=scope,
+            scope_revision=scope.revision,
+            payload={"scope_id": str(scope.id), "repository_id": str(repository.id)},
+        )
+        sync_run = SyncRun.objects.create(
+            organization=organization,
+            source_connection=source,
+            access_snapshot=snapshot,
+            state=SyncRun.State.COMPLETED,
+            started_at=observed_at,
+            completed_at=observed_at,
+            discovered_count=1,
+            processed_count=1,
+        )
+        container = SourceContainer.objects.create(
+            organization=organization,
+            source_connection=source,
+            external_id=f"root-{label}-{index}",
+            name=f"root-{label}-{index}",
+            canonical_url=f"file:///detail-batch/{label}/{index}",
+        )
+        document = SourceDocument.objects.create(
+            organization=organization,
+            source_container=container,
+            external_id="service.json",
+            relative_path="service.json",
+            canonical_url=f"file:///detail-batch/{label}/{index}/service.json",
+            document_kind=SourceDocument.Kind.JSON,
+            media_type="application/json",
+        )
+        raw_content = json.dumps({"label": label, "index": index}).encode()
+        digest = hashlib.sha256(raw_content).hexdigest()
+        artifact = SourceContentArtifact.objects.create(
+            organization=organization,
+            content_hash=digest,
+            byte_size=len(raw_content),
+            media_type="application/json",
+            content=raw_content,
+        )
+        revision = SourceRevision.objects.create(
+            organization=organization,
+            source_document=document,
+            content_artifact=artifact,
+            content_hash=digest,
+            canonical_url=document.canonical_url,
+            observed_at=observed_at,
+        )
+        observation = SourceObservation.objects.create(
+            organization=organization,
+            sync_run=sync_run,
+            source_document=document,
+            source_revision=revision,
+            access_snapshot=snapshot,
+            status=SourceObservation.Status.PRESENT,
+            observed_at=observed_at,
+        )
+        document.current_revision = revision
+        document.last_seen_run = sync_run
+        document.last_observed_at = observed_at
+        document.save(update_fields=["current_revision", "last_seen_run", "last_observed_at"])
+        normalized = {"label": label, "index": index}
+        parsed = ParsedSource.objects.create(
+            organization=organization,
+            source_revision=revision,
+            parser_name="json",
+            parser_version="detail-batch-v1",
+            document_kind=SourceDocument.Kind.JSON,
+            normalized=normalized,
+            output_hash=content_hash(normalized),
+            duration_ms=1,
+        )
+        location = SourceLocation.objects.create(
+            organization=organization,
+            parsed_source=parsed,
+            source_observation=observation,
+            pointer=f"/{label}/{index}",
+            excerpt_hash=digest,
+        )
+        seed_assertion = KnowledgeAssertion.objects.create(
+            organization=organization,
+            subject_key=f"seed:{label}:{index}",
+            predicate="detail.batch.seed",
+            value=normalized,
+            extraction_class=KnowledgeAssertion.ExtractionClass.MECHANICAL,
+            extraction_method="test:detail-batch-seed",
+            confidence=1.0,
+            valid_from=observed_at,
+            observed_at=observed_at,
+            provenance=[{"source_location_id": str(location.id)}],
+            access_scope=scope,
+        )
+        provenance = AssertionProvenance.objects.create(
+            organization=organization,
+            assertion=seed_assertion,
+            source_location=location,
+            source_observation=observation,
+            access_snapshot=snapshot,
+            extraction_class=seed_assertion.extraction_class,
+            extraction_method=seed_assertion.extraction_method,
+            confidence=seed_assertion.confidence,
+            observed_at=observed_at,
+        )
+        AssertionValidityInterval.objects.create(
+            organization=organization,
+            assertion=seed_assertion,
+            source_document=document,
+            source_observation=observation,
+            valid_from=observed_at,
+            observed_from=observed_at,
+        )
+        return provenance
+
+    seed_provenance: list[AssertionProvenance] = []
+    for index, repository in enumerate(repositories):
+        seed_provenance.append(
+            create_seed_provenance(
+                repository=repository,
+                scope=visible_scope,
+                index=index,
+                label="visible",
+            )
+        )
+
+    selected = KnowledgeEntity.objects.create(
+        organization=organization,
+        entity_type=KnowledgeEntity.EntityType.SERVICE,
+        canonical_key="service:detail-batch-selected",
+        display_name="Detail batch selected",
+        attributes={"status": "ACTIVE", "owner": "platform"},
+        access_scope=visible_scope,
+    )
+    related_entities = [
+        KnowledgeEntity.objects.create(
+            organization=organization,
+            entity_type=KnowledgeEntity.EntityType.SERVICE,
+            canonical_key=f"service:detail-batch-related-{index}",
+            display_name=f"Detail batch related {index}",
+            attributes={"status": "ACTIVE"},
+            access_scope=visible_scope,
+        )
+        for index in range(10)
+    ]
+    assertions: list[KnowledgeAssertion] = []
+    provenance_by_assertion: dict[uuid.UUID, list[AssertionProvenance]] = {}
+
+    def create_assertion(index: int) -> KnowledgeAssertion:
+        observed_at = timezone.now() + timedelta(minutes=index)
+        assertion = KnowledgeAssertion.objects.create(
+            organization=organization,
+            subject_key=selected.canonical_key,
+            predicate=f"detail.batch.predicate.{index:02d}",
+            value={"index": index},
+            extraction_class=KnowledgeAssertion.ExtractionClass.MECHANICAL,
+            extraction_method="test:detail-batch",
+            confidence=0.99,
+            valid_from=observed_at,
+            observed_at=observed_at,
+            staleness_state=KnowledgeAssertion.StalenessState.FRESH,
+            provenance=[{"fixture": "detail-batch", "index": index}],
+            review_state=KnowledgeAssertion.ReviewState.AUTO_ACCEPTED,
+            access_scope=visible_scope,
+        )
+        assertion_provenance: list[AssertionProvenance] = []
+        for repository_index, seed in enumerate(seed_provenance):
+            citation_time = observed_at + timedelta(seconds=repository_index)
+            assertion_provenance.append(
+                AssertionProvenance.objects.create(
+                    organization=organization,
+                    assertion=assertion,
+                    source_location=seed.source_location,
+                    source_observation=seed.source_observation,
+                    access_snapshot=seed.access_snapshot,
+                    extraction_class=seed.extraction_class,
+                    extraction_method=seed.extraction_method,
+                    confidence=seed.confidence,
+                    is_inferred=False,
+                    observed_at=citation_time,
+                )
+            )
+            AssertionValidityInterval.objects.create(
+                organization=organization,
+                assertion=assertion,
+                source_document=seed.source_observation.source_document,
+                source_observation=seed.source_observation,
+                valid_from=citation_time,
+                observed_from=citation_time,
+            )
+        provenance_by_assertion[assertion.id] = assertion_provenance
+        return assertion
+
+    query_counts: dict[str, int] = {}
+    shapes = ((1, 1), (2, 2), (5, 4), (20, 10))
+    for assertion_count, repository_count in shapes:
+        while len(assertions) < assertion_count:
+            assertions.append(create_assertion(len(assertions)))
+        if assertion_count == 1:
+            for repository_index, related in enumerate(related_entities):
+                provenance = provenance_by_assertion[assertions[0].id][repository_index]
+                KnowledgeRelationship.objects.create(
+                    organization=organization,
+                    relationship_type=(
+                        KnowledgeRelationship.RelationshipType.SERVICE_DEPENDS_ON_SERVICE
+                    ),
+                    source_entity=selected,
+                    target_entity=related,
+                    source_entity_type=selected.entity_type,
+                    target_entity_type=related.entity_type,
+                    assertion=assertions[0],
+                    source_location=provenance.source_location,
+                    source_observation=provenance.source_observation,
+                    access_snapshot=provenance.access_snapshot,
+                    access_scope=visible_scope,
+                    extraction_class=provenance.extraction_class,
+                    confidence=provenance.confidence,
+                    observed_at=provenance.observed_at,
+                    review_state=KnowledgeRelationship.ReviewState.UNREVIEWED,
+                )
+        requested_ids = tuple(repository.id for repository in repositories[:repository_count])
+        with CaptureQueriesContext(connection) as captured:
+            detail = canvas_entity_detail(
+                actor=viewer,
+                entity_id=selected.id,
+                repository_ids=requested_ids,
+            )
+        query_counts[f"{assertion_count}x{repository_count}"] = len(captured)
+        sources = cast(list[dict[str, object]], detail["sources"])
+        relationships = cast(list[dict[str, object]], detail["relationships"])
+        assert len(sources) == assertion_count
+        assert all(
+            len(cast(list[dict[str, object]], source["citations"])) == repository_count
+            for source in sources
+        )
+        for source in sources:
+            citations = cast(list[dict[str, object]], source["citations"])
+            observed_values = [str(citation["observed_at"]) for citation in citations]
+            assert observed_values == sorted(observed_values)
+        assert {relationship["repository_id"] for relationship in relationships} == {
+            str(repository_id) for repository_id in requested_ids
+        }
+        assert len(relationships) == repository_count
+
+    # Principal/grants/repositories, two scope-map statements, eight detail-data
+    # statements, and four organization-action checks are exactly 17 statements.
+    assert query_counts == {"1x1": 17, "2x2": 17, "5x4": 17, "20x10": 17}
+    assert max(query_counts.values()) <= 22, query_counts
+    assert max(query_counts.values()) - min(query_counts.values()) <= 2, query_counts
+    materialized_cte = _AUTHORIZED_INCIDENT_EDGE_BATCH_SELECT.partition(")\nSELECT")[0]
+    assert "relationship.source_entity_id = %(entity_id)s" in materialized_cte
+    assert "relationship.target_entity_id = %(entity_id)s" in materialized_cte
+    assert "FROM authorized_edges\nWHERE" not in _AUTHORIZED_INCIDENT_EDGE_BATCH_SELECT
+
+    with CaptureQueriesContext(connection) as before_queries:
+        before_hidden = canvas_entity_detail(actor=viewer, entity_id=selected.id)
+    hidden_repository = Repository.objects.create(
+        organization=organization,
+        external_id="filesystem:canvas-detail-batch:hidden",
+        name="detail-batch-hidden",
+    )
+    hidden_scope = AccessScope.objects.create(
+        organization=organization,
+        name="detail batch hidden",
+    )
+    AccessScopeRepository.objects.create(
+        organization=organization,
+        access_scope=hidden_scope,
+        repository=hidden_repository,
+    )
+    admin_membership = Membership.objects.get(organization=organization, user=admin_user)
+    AccessScopeMembership.objects.create(
+        organization=organization,
+        access_scope=hidden_scope,
+        membership=admin_membership,
+    )
+    hidden_seed = create_seed_provenance(
+        repository=hidden_repository,
+        scope=hidden_scope,
+        index=10,
+        label="hidden",
+    )
+    hidden_time = timezone.now() + timedelta(hours=1)
+    hidden_assertion = KnowledgeAssertion.objects.create(
+        organization=organization,
+        subject_key=selected.canonical_key,
+        predicate="CANARY-HIDDEN-DETAIL-BATCH",
+        value={"hidden": True},
+        extraction_class=KnowledgeAssertion.ExtractionClass.MECHANICAL,
+        extraction_method="test:hidden-detail-batch",
+        confidence=1.0,
+        valid_from=hidden_time,
+        observed_at=hidden_time,
+        provenance=[{"fixture": "hidden-detail-batch"}],
+        access_scope=hidden_scope,
+    )
+    hidden_provenance = AssertionProvenance.objects.create(
+        organization=organization,
+        assertion=hidden_assertion,
+        source_location=hidden_seed.source_location,
+        source_observation=hidden_seed.source_observation,
+        access_snapshot=hidden_seed.access_snapshot,
+        extraction_class=hidden_seed.extraction_class,
+        extraction_method=hidden_seed.extraction_method,
+        confidence=hidden_seed.confidence,
+        observed_at=hidden_time,
+    )
+    AssertionValidityInterval.objects.create(
+        organization=organization,
+        assertion=hidden_assertion,
+        source_document=hidden_seed.source_observation.source_document,
+        source_observation=hidden_seed.source_observation,
+        valid_from=hidden_time,
+        observed_from=hidden_time,
+    )
+    hidden_related = KnowledgeEntity.objects.create(
+        organization=organization,
+        entity_type=KnowledgeEntity.EntityType.SERVICE,
+        canonical_key="service:CANARY-HIDDEN-DETAIL-BATCH-RELATED",
+        display_name="CANARY-HIDDEN-DETAIL-BATCH",
+        access_scope=hidden_scope,
+    )
+    KnowledgeRelationship.objects.create(
+        organization=organization,
+        relationship_type=KnowledgeRelationship.RelationshipType.SERVICE_DEPENDS_ON_SERVICE,
+        source_entity=selected,
+        target_entity=hidden_related,
+        source_entity_type=selected.entity_type,
+        target_entity_type=hidden_related.entity_type,
+        assertion=hidden_assertion,
+        source_location=hidden_provenance.source_location,
+        source_observation=hidden_provenance.source_observation,
+        access_snapshot=hidden_provenance.access_snapshot,
+        access_scope=hidden_scope,
+        extraction_class=hidden_provenance.extraction_class,
+        confidence=hidden_provenance.confidence,
+        observed_at=hidden_provenance.observed_at,
+        review_state=KnowledgeRelationship.ReviewState.UNREVIEWED,
+    )
+    with CaptureQueriesContext(connection) as after_queries:
+        after_hidden = canvas_entity_detail(actor=viewer, entity_id=selected.id)
+    assert after_hidden == before_hidden
+    assert "CANARY-HIDDEN-DETAIL-BATCH" not in json.dumps(after_hidden, sort_keys=True)
+    assert len(after_queries) == len(before_queries)
+
+    citation_boundary = resolve_authorized_repository_scopes(
+        actor=viewer,
+        actions=(Action.CANVAS_VIEW, Action.SEARCH),
+        required_action=Action.SEARCH,
+        repository_ids=tuple(repository.id for repository in repositories),
+    )
+    assert isinstance(citation_boundary.repository_ids_by_action, tuple)
+    assert isinstance(citation_boundary.scope_ids_by_repository, tuple)
+    with pytest.raises(TypeError):
+        AuthorizedRepositoryScopes()
+    with pytest.raises(ValueError, match="repository authorization budget"):
+        resolve_authorized_repository_scopes(
+            actor=viewer,
+            actions=(Action.SEARCH,),
+            required_action=Action.SEARCH,
+            repository_ids=(repositories[0].id,) * 101,
+        )
+    with pytest.raises(ValueError, match="assertion citation batch budget"):
+        authorized_assertion_citations_batch(
+            actor=viewer,
+            authorization=citation_boundary,
+            assertion_ids=(assertions[0].id,) * 501,
+            per_assertion_limit=20,
+        )
+    with pytest.raises(ResourceNotFoundError):
+        authorized_incident_graph_edges_batch(
+            actor=replace(
+                viewer,
+                credential_actions=frozenset({Action.SEARCH.value}),
+            ),
+            authorization=citation_boundary,
+            entity_id=selected.id,
+        )
+
+    citation_seed = seed_provenance[0]
+    citation_revision = citation_seed.source_observation.source_revision
+    assert citation_revision is not None
+    duplicate_observed_at = assertions[0].observed_at - timedelta(hours=1)
+    for index in range(45):
+        normalized = {"citation_dedupe": index}
+        parsed = ParsedSource.objects.create(
+            organization=organization,
+            source_revision=citation_revision,
+            parser_name=f"detail-batch-citation-{index}",
+            parser_version="v1",
+            document_kind=SourceDocument.Kind.JSON,
+            normalized=normalized,
+            output_hash=content_hash(normalized),
+            duration_ms=1,
+        )
+        pointer = "/duplicate-display-key" if index < 25 else f"/unique-display-key/{index}"
+        location = SourceLocation.objects.create(
+            organization=organization,
+            parsed_source=parsed,
+            source_observation=citation_seed.source_observation,
+            pointer=pointer,
+            excerpt_hash=citation_seed.source_location.excerpt_hash,
+        )
+        AssertionProvenance.objects.create(
+            organization=organization,
+            assertion=assertions[0],
+            source_location=location,
+            source_observation=citation_seed.source_observation,
+            access_snapshot=citation_seed.access_snapshot,
+            extraction_class=citation_seed.extraction_class,
+            extraction_method=citation_seed.extraction_method,
+            confidence=citation_seed.confidence,
+            observed_at=(
+                duplicate_observed_at
+                if index < 25
+                else duplicate_observed_at + timedelta(seconds=index)
+            ),
+        )
+    deduplicated_citations = authorized_assertion_citations_batch(
+        actor=viewer,
+        authorization=citation_boundary,
+        assertion_ids=(assertions[0].id,),
+        per_assertion_limit=20,
+    )[assertions[0].id]
+    display_keys = [
+        (str(citation["locator"]), str(citation["observed_at"]))
+        for citation in deduplicated_citations
+    ]
+    assert len(display_keys) == 20
+    assert len(set(display_keys)) == 20
+    assert sum(locator == "/duplicate-display-key" for locator, _observed_at in display_keys) == 1
+
+    extra_repositories = Repository.objects.bulk_create(
+        [
+            Repository(
+                organization=organization,
+                external_id=f"filesystem:canvas-detail-batch:high-cardinality:{index}",
+                name=f"detail-batch-high-cardinality-{index}",
+            )
+            for index in range(90)
+        ]
+    )
+    repositories.extend(extra_repositories)
+    AccessScopeRepository.objects.bulk_create(
+        [
+            AccessScopeRepository(
+                organization=organization,
+                access_scope=visible_scope,
+                repository=repository,
+            )
+            for repository in extra_repositories
+        ]
+    )
+    AccessScope.objects.bulk_create(
+        [
+            AccessScope(
+                organization=organization,
+                name=f"detail batch high cardinality scope {index}",
+                all_memberships=True,
+                all_repositories=True,
+            )
+            for index in range(99)
+        ]
+    )
+    high_cardinality_boundary = resolve_authorized_repository_scopes(
+        actor=viewer,
+        actions=(Action.CANVAS_VIEW, Action.SEARCH),
+        required_action=Action.CANVAS_VIEW,
+        repository_ids=tuple(repository.id for repository in repositories),
+        repository_limit=100,
+    )
+    assert len(high_cardinality_boundary.repositories) == 100
+    assert len(high_cardinality_boundary.scope_ids_for(Action.SEARCH)) == 100
+    high_cardinality_started = time.perf_counter()
+    with CaptureQueriesContext(connection) as high_cardinality_queries:
+        high_cardinality_detail = canvas_entity_detail(
+            actor=viewer,
+            entity_id=selected.id,
+            repository_ids=tuple(repository.id for repository in repositories),
+        )
+    high_cardinality_wall_seconds = time.perf_counter() - high_cardinality_started
+    high_cardinality_query_seconds = [
+        float(query["time"]) for query in high_cardinality_queries.captured_queries
+    ]
+    assert high_cardinality_detail["id"] == str(selected.id)
+    assert len(high_cardinality_queries) <= 22
+    assert high_cardinality_wall_seconds < 1.0, high_cardinality_wall_seconds
+    assert max(high_cardinality_query_seconds, default=0.0) < 1.0, high_cardinality_query_seconds
+
+    tied_observed_at = timezone.now() + timedelta(hours=2)
+    tied_assertions = KnowledgeAssertion.objects.bulk_create(
+        [
+            KnowledgeAssertion(
+                organization=organization,
+                subject_key=selected.canonical_key,
+                predicate=f"detail.batch.tied.{index:02d}",
+                value={"tied": index},
+                extraction_class=KnowledgeAssertion.ExtractionClass.HUMAN,
+                extraction_method="test:detail-batch-tied",
+                confidence=1.0,
+                valid_from=tied_observed_at,
+                observed_at=tied_observed_at,
+                provenance=[{"fixture": "detail-batch-tied", "index": index}],
+                access_scope=visible_scope,
+            )
+            for index in range(22)
+        ]
+    )
+    expected_tied_ids = [
+        str(assertion.id)
+        for assertion in sorted(
+            tied_assertions, key=lambda assertion: str(assertion.id), reverse=True
+        )[:21]
+    ]
+    first_tied_assertions = _batch_authorized_assertions(
+        actor=viewer,
+        authorization=citation_boundary,
+        subject_keys={selected.canonical_key},
+        limit=21,
+    )
+    second_tied_assertions = _batch_authorized_assertions(
+        actor=viewer,
+        authorization=citation_boundary,
+        subject_keys={selected.canonical_key},
+        limit=21,
+    )
+    first_tied_ids = [str(assertion.id) for assertion in first_tied_assertions]
+    second_tied_ids = [str(assertion.id) for assertion in second_tied_assertions]
+    assert first_tied_ids == expected_tied_ids
+    assert first_tied_ids == second_tied_ids
+    assert len(first_tied_ids[:20]) == 20
+    assert len(first_tied_ids) == 21
+
+    with connection.cursor() as cursor:
+        cursor.execute("ANALYZE core_knowledgeassertion, core_assertionprovenance")
+        cursor.execute("SET LOCAL enable_seqscan = off")
+        cursor.execute(
+            """
+            EXPLAIN (FORMAT JSON)
+            SELECT id
+            FROM core_knowledgeassertion
+            WHERE organization_id = %s
+              AND subject_key = %s
+              AND valid_until IS NULL
+            ORDER BY observed_at DESC, id DESC
+            LIMIT 21
+            """,
+            (organization.id, selected.canonical_key),
+        )
+        assertion_plan = json.dumps(cursor.fetchone()[0])
+        cursor.execute("SET LOCAL enable_bitmapscan = off")
+        cursor.execute("SET LOCAL enable_sort = off")
+        cursor.execute(
+            """
+            EXPLAIN (FORMAT JSON)
+            SELECT id
+            FROM core_assertionprovenance
+            WHERE organization_id = %s
+              AND assertion_id = %s
+            ORDER BY observed_at, id
+            LIMIT 20
+            """,
+            (organization.id, assertions[0].id),
+        )
+        provenance_plan = json.dumps(cursor.fetchone()[0])
+    assert "core_assert_current_subj_idx" in assertion_plan
+    assert "core_assertprov_order_idx" in provenance_plan
+
+    viewer_membership = Membership.objects.get(
+        organization=organization,
+        user_id=uuid.UUID(viewer.actor_id),
+    )
+    AccessScopeMembership.objects.filter(
+        access_scope=visible_scope,
+        membership=viewer_membership,
+    ).delete()
+    assert authorized_assertion_citations_batch(
+        actor=viewer,
+        authorization=citation_boundary,
+        assertion_ids=(assertions[0].id,),
+        per_assertion_limit=20,
+    ) == {assertions[0].id: ()}
+    assert (
+        _batch_authorized_entities(
+            actor=viewer,
+            authorization=citation_boundary,
+            entity_ids={selected.id},
+        )
+        == []
+    )
+    assert (
+        _batch_authorized_assertions(
+            actor=viewer,
+            authorization=citation_boundary,
+            subject_keys={selected.canonical_key},
+            limit=21,
+        )
+        == []
+    )
+    AccessScopeMembership.objects.create(
+        organization=organization,
+        access_scope=visible_scope,
+        membership=viewer_membership,
+    )
+
+    AccessScopeRepository.objects.filter(
+        access_scope=visible_scope,
+        repository=repositories[0],
+    ).delete()
+    binding_revoked_citations = authorized_assertion_citations_batch(
+        actor=viewer,
+        authorization=citation_boundary,
+        assertion_ids=(assertions[0].id,),
+        per_assertion_limit=20,
+    )[assertions[0].id]
+    assert len(binding_revoked_citations) == 9
+    assert not any(citation["locator"] == "/visible/0" for citation in binding_revoked_citations)
+    AccessScopeRepository.objects.create(
+        organization=organization,
+        access_scope=visible_scope,
+        repository=repositories[0],
+    )
+
+    service_identity = ServiceIdentity.objects.create(
+        organization=organization,
+        name="canvas detail stale-boundary service",
+        issuer="anva-test",
+        audience="anva-test-api",
+    )
+    scope_service_binding = AccessScopeServiceIdentity.objects.create(
+        organization=organization,
+        access_scope=visible_scope,
+        service_identity=service_identity,
+    )
+    service_grants = [
+        AccessGrant.objects.create(
+            organization=organization,
+            service_identity=service_identity,
+            repository=repositories[0],
+            action=action.value,
+        )
+        for action in (Action.CANVAS_VIEW, Action.SEARCH)
+    ]
+    issued = issue_bootstrap_repository_token(
+        organization=organization,
+        repository=repositories[0],
+        service_identity=service_identity,
+        actions=frozenset({Action.CANVAS_VIEW, Action.SEARCH}),
+        expires_at=timezone.now() + timedelta(days=1),
+    )
+    service_actor = ActorContext(
+        organization_id=organization.id,
+        actor_type="SERVICE",
+        actor_id=str(service_identity.id),
+        authorization_path="test:canvas-detail-stale-boundary",
+        request_id=uuid.uuid4(),
+        repository_id=repositories[0].id,
+        credential_id=issued.record.id,
+        credential_actions=frozenset({Action.CANVAS_VIEW.value, Action.SEARCH.value}),
+    )
+    service_boundary = resolve_authorized_repository_scopes(
+        actor=service_actor,
+        actions=(Action.CANVAS_VIEW, Action.SEARCH),
+        required_action=Action.CANVAS_VIEW,
+        repository_ids=(repositories[0].id,),
+        repository_limit=1,
+    )
+    assert authorized_assertion_citations_batch(
+        actor=service_actor,
+        authorization=service_boundary,
+        assertion_ids=(assertions[0].id,),
+        per_assertion_limit=20,
+    )[assertions[0].id]
+
+    issued.record.revoked_at = timezone.now()
+    issued.record.save(update_fields=["revoked_at"])
+    assert authorized_assertion_citations_batch(
+        actor=service_actor,
+        authorization=service_boundary,
+        assertion_ids=(assertions[0].id,),
+        per_assertion_limit=20,
+    ) == {assertions[0].id: ()}
+    issued.record.revoked_at = None
+    issued.record.save(update_fields=["revoked_at"])
+
+    for grant in service_grants:
+        grant.revoked_at = timezone.now()
+        grant.save(update_fields=["revoked_at"])
+    assert authorized_assertion_citations_batch(
+        actor=service_actor,
+        authorization=service_boundary,
+        assertion_ids=(assertions[0].id,),
+        per_assertion_limit=20,
+    ) == {assertions[0].id: ()}
+    assert (
+        _batch_authorized_entities(
+            actor=service_actor,
+            authorization=service_boundary,
+            entity_ids={selected.id},
+        )
+        == []
+    )
+    for grant in service_grants:
+        grant.revoked_at = None
+        grant.save(update_fields=["revoked_at"])
+
+    scope_service_binding.delete()
+    assert authorized_assertion_citations_batch(
+        actor=service_actor,
+        authorization=service_boundary,
+        assertion_ids=(assertions[0].id,),
+        per_assertion_limit=20,
+    ) == {assertions[0].id: ()}
+    scope_service_binding = AccessScopeServiceIdentity.objects.create(
+        organization=organization,
+        access_scope=visible_scope,
+        service_identity=service_identity,
+    )
+
+    repositories[0].is_active = False
+    repositories[0].save(update_fields=["is_active"])
+    assert authorized_assertion_citations_batch(
+        actor=service_actor,
+        authorization=service_boundary,
+        assertion_ids=(assertions[0].id,),
+        per_assertion_limit=20,
+    ) == {assertions[0].id: ()}
+    assert (
+        _batch_authorized_entities(
+            actor=service_actor,
+            authorization=service_boundary,
+            entity_ids={selected.id},
+        )
+        == []
+    )
+    repositories[0].is_active = True
+    repositories[0].save(update_fields=["is_active"])
+    scope_service_binding.delete()
+
+    visible_scope.is_active = False
+    visible_scope.save(update_fields=["is_active"])
+    assert authorized_assertion_citations_batch(
+        actor=viewer,
+        authorization=citation_boundary,
+        assertion_ids=(assertions[0].id,),
+        per_assertion_limit=20,
+    ) == {assertions[0].id: ()}
+    with pytest.raises(ResourceNotFoundError):
+        canvas_entity_detail(actor=viewer, entity_id=selected.id)
 
 
 @pytest.mark.integration
