@@ -89,7 +89,7 @@ tool, dynamic module download, cross-origin script, or browser persistence.
 | 4 | Provenance-only selection has no all-edge fallthrough. | `test_canvas_unions_only_strict_per_repository_authorized_graphs` |
 | 5 | Secret detection traverses every supported nested JSON child. | `test_canvas_filter_values_recursively_reject_secret_shaped_strings` |
 | 6 | Focus root/depth and progressive one-hop expansion exist in the service, interactive product, and no-JS controls. | `test_canvas_focus_walk_is_undirected_deterministic_and_depth_bounded`; Chromium focus journey; accessibility assertions |
-| 7 | List/get/share/save re-authorize revision-embedded repository UUIDs before exposing metadata or projection data; listing authorizes candidates before its 300-view cap so inaccessible or malformed earlier rows cannot crowd out a later visible view. | `test_saved_canvas_boundaries_are_reauthorized_before_persist_or_exposure`; bearer/session integration journeys |
+| 7 | List/get/share/save re-authorize revision-embedded repository UUIDs before exposing metadata or projection data; listing rechecks the live principal, grant or role, credential, scope-principal binding, repository, source, revision, and root boundaries in its authoritative candidate statement before its 300-view cap. | `test_saved_canvas_boundaries_are_reauthorized_before_persist_or_exposure`; `test_saved_canvas_list_rechecks_authorization_after_resolution`; bearer/session integration journeys |
 | 8 | Share revocation is authenticated, CSRF-protected for humans, optimistic, request-idempotent, immediate, and history-preserving. | `test_canvas_revisions_are_append_only_idempotent_and_tenant_safe`; session and bearer HTTP integration journeys |
 | 9 | Presentation child schemas are closed at runtime and in OpenAPI; detail annotations and scoped questions are bounded and authorized. | strict presentation unit tests; `test_canvas_openapi_surfaces_are_authenticated_bounded_and_closed`; session integration and Chromium journeys |
 | 10 | The 750 KiB response gate measures compact unescaped Unicode response bytes and trims deterministically. | `test_canvas_http_wire_budget_is_compact_utf8_and_deterministically_trimmed` |
@@ -116,10 +116,10 @@ tool, dynamic module download, cross-origin script, or browser persistence.
   horizontal bounds of the actual shell, main, sidebar, title, semantic
   controls, and focus control rather than relying on scroll state alone.
 - Schema migration has no model drift, applies in clean browser/integration
-  databases, and the exact production wheel reverses from migration 0018 to
-  0017 then reapplies 0018 successfully. OpenAPI generation emits the exact
+  databases, and the exact production wheel reverses from migration 0019 to
+  0018 then reapplies 0019 successfully. OpenAPI generation emits the exact
   Canvas v3 enums, closed request schemas, routes, and limits.
-- The full repository gate passed with 677 tests, four expected skips, and 86%
+- The full repository gate passed with 681 tests, four expected skips, and 86%
   aggregate branch coverage. Canvas service coverage is 90%.
 - The production wheel contains the migration, Canvas template, JS, CSS, and
   vendored Dagre asset. Its non-root runtime image passes `collectstatic`,
@@ -128,7 +128,7 @@ tool, dynamic module download, cross-origin script, or browser persistence.
   proxy-owned SSL redirect/HSTS warnings.
 - Both database and browser performance reports preserve all 30 post-warm raw
   samples, environment/fixture metadata, query counts, exact thresholds, and
-  source/test commit `662460ae2718cf44d07d2b83e7709e254a000ef5`.
+  source/test commit `b677585542e1a9a24c913274112a59ef7a106dce`.
   Recursive report checks recompute p50, p95, max, and sample count from the
   exact rounded values that are serialized in every nested raw sample array.
 - Hosted GitHub Actions remains disabled because the repository account's
