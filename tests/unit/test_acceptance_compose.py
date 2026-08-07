@@ -22,6 +22,9 @@ def test_only_adapter_mounts_raw_acceptance_input() -> None:
     assert adapter["read_only"] is True
     assert adapter["cap_drop"] == ["ALL"]
     assert adapter["security_opt"] == ["no-new-privileges:true"]
+    assert adapter["mem_limit"] == "256m"
+    assert adapter["memswap_limit"] == "256m"
+    assert adapter["pids_limit"] == 64
     assert "acceptance" in cast(list[str], adapter["profiles"])
     command = cast(list[str], adapter["command"])
     assert command[:3] == ["anva", "acceptance", "canonicalize"]
@@ -71,6 +74,20 @@ def test_product_and_runner_receive_only_read_only_canonical_volume() -> None:
     assert runner["read_only"] is True
     assert runner["cap_drop"] == ["ALL"]
     assert "/acceptance/raw" not in str(runner)
+    command = cast(list[str], runner["command"])
+    assert command == [
+        "anva",
+        "acceptance",
+        "verify",
+        "--canonical-root",
+        "/app/acceptance/canonical",
+        "--manifest-sha256",
+        "${ANVA_ACCEPTANCE_MANIFEST_SHA256:-invalid-unpinned-manifest}",
+        "--source-fingerprint",
+        "${ANVA_ACCEPTANCE_SOURCE_FINGERPRINT:-invalid-unpinned-fingerprint}",
+        "--canonical-manifest-sha256",
+        "${ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256:-invalid-unpinned-canonical-manifest}",
+    ]
 
 
 @pytest.mark.unit
@@ -82,6 +99,14 @@ def test_acceptance_make_targets_are_scoped_and_cleanup_ephemeral_volume() -> No
     cleanup = makefile.split("\nacceptance-down:\n", 1)[1].split("\ncontract:\n", 1)[0]
     assert "$(ACCEPTANCE_COMPOSE) --profile acceptance down --volumes --remove-orphans" in cleanup
     assert "prune" not in cleanup
+    verify = makefile.split("\nacceptance-verify:\n", 1)[1].split("\nacceptance-down:\n", 1)[0]
+    for pin in (
+        "ANVA_ACCEPTANCE_MANIFEST_SHA256",
+        "ANVA_ACCEPTANCE_SOURCE_FINGERPRINT",
+        "ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256",
+    ):
+        assert f'@test -n "$({pin})"' in verify
+    assert "acceptance-runner" in verify
 
 
 @pytest.mark.unit

@@ -9,12 +9,14 @@ import stat
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
+from unittest.mock import patch
 
 import pytest
 
 from anva.acceptance.corpus import (
     AcceptanceCorpusError,
     AdapterLimits,
+    CanonicalCorpus,
     canonicalize_corpus,
     verify_canonical_corpus,
 )
@@ -87,6 +89,15 @@ def _make_writable(root: Path) -> None:
     root.chmod(0o700)
 
 
+def _verify(root: Path, expected: CanonicalCorpus) -> CanonicalCorpus:
+    return verify_canonical_corpus(
+        root,
+        expected_manifest_sha256=expected.manifest_sha256,
+        expected_source_fingerprint=expected.source_fingerprint,
+        expected_canonical_manifest_sha256=expected.canonical_manifest_sha256,
+    )
+
+
 @pytest.mark.unit
 def test_canonicalization_is_pinned_deterministic_and_verifiable(tmp_path: Path) -> None:
     raw, pin, _ = _public_bundle(tmp_path / "raw")
@@ -113,7 +124,7 @@ def test_canonicalization_is_pinned_deterministic_and_verifiable(tmp_path: Path)
             b"# Public decision\n"
         )
         assert not (first_root / "acceptance-corpus.json").exists()
-        assert verify_canonical_corpus(first_root) == first
+        assert _verify(first_root, first) == first
         assert stat.S_IMODE(first_root.stat().st_mode) == 0o555
         assert stat.S_IMODE((first_root / "payload").stat().st_mode) == 0o555
         assert (
@@ -122,6 +133,42 @@ def test_canonicalization_is_pinned_deterministic_and_verifiable(tmp_path: Path)
     finally:
         _make_writable(first_root)
         _make_writable(second_root)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "changed_pin",
+    ("manifest", "fingerprint", "canonical_manifest"),
+)
+def test_verification_rejects_each_independent_operator_pin(
+    tmp_path: Path,
+    changed_pin: str,
+) -> None:
+    raw, pin, _ = _public_bundle(tmp_path / "raw")
+    canonical = tmp_path / "canonical"
+    canonical.mkdir()
+    expected = canonicalize_corpus(
+        raw_root=raw,
+        canonical_root=canonical,
+        manifest_sha256=pin,
+    )
+    pins = {
+        "manifest": expected.manifest_sha256,
+        "fingerprint": expected.source_fingerprint,
+        "canonical_manifest": expected.canonical_manifest_sha256,
+    }
+    pins[changed_pin] = "f" * 64
+    try:
+        with pytest.raises(AcceptanceCorpusError) as rejected:
+            verify_canonical_corpus(
+                canonical,
+                expected_manifest_sha256=pins["manifest"],
+                expected_source_fingerprint=pins["fingerprint"],
+                expected_canonical_manifest_sha256=pins["canonical_manifest"],
+            )
+        assert rejected.value.code == "verification_pin_mismatch"
+    finally:
+        _make_writable(canonical)
 
 
 @pytest.mark.unit
@@ -274,6 +321,54 @@ def test_adapter_rejects_unlisted_symlink_hardlink_and_special_files(tmp_path: P
 
 
 @pytest.mark.unit
+def test_large_unlisted_inventory_is_rejected_without_output(tmp_path: Path) -> None:
+    raw, pin, _ = _public_bundle(tmp_path / "raw")
+    unlisted = raw / "payload/organization"
+    for index in range(2_000):
+        (unlisted / f"entry-{index:04d}").write_bytes(b"x")
+    canonical = tmp_path / "canonical"
+    canonical.mkdir()
+
+    with pytest.raises(AcceptanceCorpusError) as rejected:
+        canonicalize_corpus(
+            raw_root=raw,
+            canonical_root=canonical,
+            manifest_sha256=pin,
+        )
+
+    assert rejected.value.code == "unlisted_entry"
+    assert not tuple(canonical.iterdir())
+
+
+@pytest.mark.unit
+def test_streamed_inventory_has_a_hard_entry_ceiling(tmp_path: Path) -> None:
+    raw, pin, _ = _public_bundle(tmp_path / "raw")
+    canonical = tmp_path / "canonical"
+    canonical.mkdir()
+
+    with (
+        patch("anva.acceptance.corpus.HARD_MAX_INVENTORY_ENTRIES", 1),
+        pytest.raises(AcceptanceCorpusError) as rejected,
+    ):
+        canonicalize_corpus(
+            raw_root=raw,
+            canonical_root=canonical,
+            manifest_sha256=pin,
+        )
+
+    assert rejected.value.code == "inventory_limit_exceeded"
+    assert not tuple(canonical.iterdir())
+
+
+@pytest.mark.unit
+def test_inventory_scans_do_not_materialize_scandir_iterators() -> None:
+    source = Path("src/anva/acceptance/corpus.py").read_text(encoding="utf-8")
+
+    assert "tuple(os.scandir" not in source
+    assert "list(os.scandir" not in source
+
+
+@pytest.mark.unit
 def test_hash_or_size_mismatch_leaves_canonical_root_empty(tmp_path: Path) -> None:
     def mutation(manifest: dict[str, object]) -> None:
         records = manifest["files"]
@@ -316,12 +411,115 @@ def test_destination_io_failure_is_safe_and_leaves_no_output(tmp_path: Path) -> 
 
 
 @pytest.mark.unit
+def test_mid_write_failure_is_redacted_and_leaves_no_partial_output(tmp_path: Path) -> None:
+    raw, pin, _ = _public_bundle(tmp_path / "raw")
+    canonical = tmp_path / "canonical"
+    canonical.mkdir()
+    real_write = os.write
+    failed = False
+
+    def fail_after_partial_write(descriptor: int, content: object) -> int:
+        nonlocal failed
+        if not failed:
+            failed = True
+            real_write(descriptor, memoryview(cast(bytes, content))[:1])
+            raise OSError(f"CANARY partial write at {canonical}")
+        return real_write(descriptor, cast(bytes, content))
+
+    with (
+        patch("anva.acceptance.corpus.os.write", side_effect=fail_after_partial_write),
+        pytest.raises(AcceptanceCorpusError) as rejected,
+    ):
+        canonicalize_corpus(
+            raw_root=raw,
+            canonical_root=canonical,
+            manifest_sha256=pin,
+        )
+
+    assert rejected.value.code == "canonical_unavailable"
+    assert str(rejected.value) == "Canonical corpus output is unavailable"
+    assert "CANARY" not in str(rejected.value)
+    assert str(canonical) not in str(rejected.value)
+    assert not tuple(canonical.iterdir())
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("failure_call", (1, 2))
+def test_fsync_failure_is_redacted_and_leaves_no_partial_output(
+    tmp_path: Path,
+    failure_call: int,
+) -> None:
+    raw, pin, _ = _public_bundle(tmp_path / "raw")
+    canonical = tmp_path / "canonical"
+    canonical.mkdir()
+    real_fsync = os.fsync
+    fsync_calls = 0
+
+    def fail_selected_fsync(descriptor: int) -> None:
+        nonlocal fsync_calls
+        fsync_calls += 1
+        if fsync_calls == failure_call:
+            raise OSError(f"CANARY fsync failure at {canonical}")
+        real_fsync(descriptor)
+
+    with (
+        patch("anva.acceptance.corpus.os.fsync", side_effect=fail_selected_fsync),
+        pytest.raises(AcceptanceCorpusError) as rejected,
+    ):
+        canonicalize_corpus(
+            raw_root=raw,
+            canonical_root=canonical,
+            manifest_sha256=pin,
+        )
+
+    assert rejected.value.code == "canonical_unavailable"
+    assert str(rejected.value) == "Canonical corpus output is unavailable"
+    assert "CANARY" not in str(rejected.value)
+    assert str(canonical) not in str(rejected.value)
+    assert not tuple(canonical.iterdir())
+
+
+@pytest.mark.unit
+def test_unprovable_cleanup_returns_volume_discard_error_without_traceback(
+    tmp_path: Path,
+) -> None:
+    raw, pin, _ = _public_bundle(tmp_path / "raw")
+    canonical = tmp_path / "canonical"
+    canonical.mkdir()
+    canary = f"CANARY cleanup failure at {canonical}"
+
+    try:
+        with (
+            patch("anva.acceptance.corpus.os.fsync", side_effect=OSError(canary)),
+            patch("anva.acceptance.corpus._cleanup_canonical_output", return_value=False),
+            pytest.raises(AcceptanceCorpusError) as rejected,
+        ):
+            canonicalize_corpus(
+                raw_root=raw,
+                canonical_root=canonical,
+                manifest_sha256=pin,
+            )
+
+        assert rejected.value.code == "canonical_cleanup_failed"
+        assert str(rejected.value) == (
+            "Canonical corpus cleanup failed; discard the ephemeral volume"
+        )
+        assert rejected.value.__cause__ is None
+        assert "CANARY" not in str(rejected.value)
+        assert str(canonical) not in str(rejected.value)
+    finally:
+        _make_writable(canonical)
+        for path in sorted(canonical.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+            path.rmdir() if path.is_dir() else path.unlink()
+
+
+@pytest.mark.unit
 def test_canonical_verification_detects_tampering(tmp_path: Path) -> None:
     raw, pin, _ = _public_bundle(tmp_path / "raw")
     canonical = tmp_path / "canonical"
     canonical.mkdir()
     try:
-        canonicalize_corpus(
+        result = canonicalize_corpus(
             raw_root=raw,
             canonical_root=canonical,
             manifest_sha256=pin,
@@ -330,7 +528,64 @@ def test_canonical_verification_detects_tampering(tmp_path: Path) -> None:
         decision.chmod(0o600)
         decision.write_bytes(b"tampered\n")
         with pytest.raises(AcceptanceCorpusError) as rejected:
-            verify_canonical_corpus(canonical)
+            _verify(canonical, result)
         assert rejected.value.code == "content_mismatch"
+    finally:
+        _make_writable(canonical)
+
+
+@pytest.mark.unit
+def test_self_consistent_substituted_volume_fails_operator_pins(tmp_path: Path) -> None:
+    raw, pin, _ = _public_bundle(tmp_path / "raw")
+    canonical = tmp_path / "canonical"
+    canonical.mkdir()
+    original = canonicalize_corpus(
+        raw_root=raw,
+        canonical_root=canonical,
+        manifest_sha256=pin,
+    )
+    try:
+        _make_writable(canonical)
+        replacement = b"# Substituted public decision\n"
+        decision = canonical / "payload/organization/decision.md"
+        decision.write_bytes(replacement)
+        manifest_path = canonical / "canonical-manifest.json"
+        manifest = cast(dict[str, object], json.loads(manifest_path.read_bytes()))
+        records = _file_records(manifest)
+        record = next(
+            item for item in records if item["path"] == decision.relative_to(canonical).as_posix()
+        )
+        record["sha256"] = hashlib.sha256(replacement).hexdigest()
+        record["size_bytes"] = len(replacement)
+        replacement_manifest_sha256 = "b" * 64
+        manifest["input_manifest_sha256"] = replacement_manifest_sha256
+        identity = {
+            "schema_version": "1.0",
+            "corpus_id": manifest["corpus_id"],
+            "source_commit": manifest["source_commit"],
+            "files": records,
+        }
+        replacement_fingerprint = hashlib.sha256(_canonical_json(identity)).hexdigest()
+        manifest["source_fingerprint"] = replacement_fingerprint
+        replacement_manifest = _canonical_json(manifest)
+        manifest_path.write_bytes(replacement_manifest)
+        replacement_canonical_sha256 = hashlib.sha256(replacement_manifest).hexdigest()
+
+        replacement_result = verify_canonical_corpus(
+            canonical,
+            expected_manifest_sha256=replacement_manifest_sha256,
+            expected_source_fingerprint=replacement_fingerprint,
+            expected_canonical_manifest_sha256=replacement_canonical_sha256,
+        )
+        assert replacement_result.source_fingerprint == replacement_fingerprint
+
+        with pytest.raises(AcceptanceCorpusError) as rejected:
+            verify_canonical_corpus(
+                canonical,
+                expected_manifest_sha256=original.manifest_sha256,
+                expected_source_fingerprint=original.source_fingerprint,
+                expected_canonical_manifest_sha256=replacement_canonical_sha256,
+            )
+        assert rejected.value.code == "verification_pin_mismatch"
     finally:
         _make_writable(canonical)

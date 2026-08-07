@@ -94,6 +94,9 @@ def build_parser() -> argparse.ArgumentParser:
     acceptance_canonicalize.add_argument("--max-depth", type=int, default=32)
     acceptance_verify = acceptance_commands.add_parser("verify")
     acceptance_verify.add_argument("--canonical-root", required=True, type=Path)
+    acceptance_verify.add_argument("--manifest-sha256", required=True)
+    acceptance_verify.add_argument("--source-fingerprint", required=True)
+    acceptance_verify.add_argument("--canonical-manifest-sha256", required=True)
     source = subparsers.add_parser("source", help="Operate source connections through the API")
     source.add_argument(
         "--api-url",
@@ -971,11 +974,27 @@ def _acceptance_request(arguments: argparse.Namespace) -> int:
             payload = result.as_dict()
             payload["status"] = "canonicalized"
         elif arguments.acceptance_command == "verify":
-            payload = verify_canonical_corpus(arguments.canonical_root).as_dict()
+            payload = verify_canonical_corpus(
+                arguments.canonical_root,
+                expected_manifest_sha256=str(arguments.manifest_sha256),
+                expected_source_fingerprint=str(arguments.source_fingerprint),
+                expected_canonical_manifest_sha256=str(arguments.canonical_manifest_sha256),
+            ).as_dict()
         else:
             raise ValueError("Unknown acceptance command")
     except AcceptanceCorpusError as error:
         print(json.dumps({"code": error.code, "message": str(error)}, sort_keys=True))
+        return 2
+    except OSError:
+        print(
+            json.dumps(
+                {
+                    "code": "acceptance_io_rejected",
+                    "message": "Acceptance corpus I/O failed safely",
+                },
+                sort_keys=True,
+            )
+        )
         return 2
     print(json.dumps(payload, sort_keys=True))
     return 0

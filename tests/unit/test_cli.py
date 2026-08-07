@@ -19,16 +19,9 @@ from anva.entrypoints.cli import main
 from anva.foundation.services import DependencyStatus, ReadinessStatus
 
 
-@pytest.mark.unit
-def test_acceptance_cli_canonicalizes_without_initializing_django(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    raw = tmp_path / "raw"
-    canonical = tmp_path / "canonical"
+def _write_acceptance_bundle(raw: Path) -> str:
     payload = raw / "payload"
     payload.mkdir(parents=True)
-    canonical.mkdir()
     public_file = payload / "source.md"
     public_file.write_bytes(b"public\n")
     manifest = {
@@ -52,7 +45,18 @@ def test_acceptance_cli_canonicalizes_without_initializing_django(
     }
     manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
     (raw / "acceptance-corpus.json").write_bytes(manifest_bytes)
-    pin = hashlib.sha256(manifest_bytes).hexdigest()
+    return hashlib.sha256(manifest_bytes).hexdigest()
+
+
+@pytest.mark.unit
+def test_acceptance_cli_canonicalizes_without_initializing_django(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    raw = tmp_path / "raw"
+    canonical = tmp_path / "canonical"
+    canonical.mkdir()
+    pin = _write_acceptance_bundle(raw)
 
     try:
         with patch("anva.entrypoints.cli.configure_django") as configure:
@@ -77,10 +81,27 @@ def test_acceptance_cli_canonicalizes_without_initializing_django(
                 ]
             )
         assert result == 0
-        assert json.loads(capsys.readouterr().out)["status"] == "canonicalized"
+        canonicalized = json.loads(capsys.readouterr().out)
+        assert canonicalized["status"] == "canonicalized"
         configure.assert_not_called()
 
-        assert main(["acceptance", "verify", "--canonical-root", str(canonical)]) == 0
+        assert (
+            main(
+                [
+                    "acceptance",
+                    "verify",
+                    "--canonical-root",
+                    str(canonical),
+                    "--manifest-sha256",
+                    canonicalized["manifest_sha256"],
+                    "--source-fingerprint",
+                    canonicalized["source_fingerprint"],
+                    "--canonical-manifest-sha256",
+                    canonicalized["canonical_manifest_sha256"],
+                ]
+            )
+            == 0
+        )
         assert json.loads(capsys.readouterr().out)["status"] == "verified"
     finally:
         for path in canonical.rglob("*"):
@@ -117,6 +138,42 @@ def test_acceptance_cli_returns_safe_structured_rejection(
         "code": "manifest_pin_mismatch",
         "message": "Acceptance manifest does not match the operator pin",
     }
+
+
+@pytest.mark.unit
+def test_acceptance_cli_redacts_fsync_failure_and_removes_partial_output(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    raw = tmp_path / "raw"
+    canonical = tmp_path / "canonical"
+    canonical.mkdir()
+    pin = _write_acceptance_bundle(raw)
+    canary = f"PRIVATE-CANARY at {canonical}"
+
+    with patch("anva.acceptance.corpus.os.fsync", side_effect=OSError(canary)):
+        result = main(
+            [
+                "acceptance",
+                "canonicalize",
+                "--raw-root",
+                str(raw),
+                "--canonical-root",
+                str(canonical),
+                "--manifest-sha256",
+                pin,
+            ]
+        )
+
+    assert result == 2
+    output = capsys.readouterr().out
+    assert json.loads(output) == {
+        "code": "canonical_unavailable",
+        "message": "Canonical corpus output is unavailable",
+    }
+    assert "PRIVATE-CANARY" not in output
+    assert str(canonical) not in output
+    assert not tuple(canonical.iterdir())
 
 
 @pytest.mark.unit

@@ -17,6 +17,7 @@ from anva.contracts.validation import ContractValidationError, validate_payload
 INPUT_MANIFEST_NAME = "acceptance-corpus.json"
 CANONICAL_MANIFEST_NAME = "canonical-manifest.json"
 MAX_MANIFEST_BYTES = 1_000_000
+HARD_MAX_INVENTORY_ENTRIES = 20_000
 SHA256_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 DRIVE_PATH_PATTERN = re.compile(r"^[A-Za-z]:")
 FORBIDDEN_PARTS = frozenset(
@@ -221,7 +222,7 @@ def _load_input_manifest(raw_root: Path, pinned_sha256: str) -> tuple[dict[str, 
 
 def _manifest_files(
     manifest: dict[str, object], operator_limits: AdapterLimits
-) -> tuple[CorpusFile, ...]:
+) -> tuple[tuple[CorpusFile, ...], AdapterLimits]:
     limits = cast(dict[str, int], manifest["limits"])
     declared = AdapterLimits(
         max_files=limits["max_files"],
@@ -286,10 +287,15 @@ def _manifest_files(
         files.append(CorpusFile(path=path, sha256=digest, size_bytes=size_bytes))
     if [item.path for item in files] != sorted(item.path for item in files):
         raise AcceptanceCorpusError("noncanonical_order", "Manifest files must be path-sorted")
-    return tuple(files)
+    return tuple(files), declared
 
 
-def _verify_raw_inventory(raw_root: Path, files: tuple[CorpusFile, ...]) -> None:
+def _verify_raw_inventory(
+    raw_root: Path,
+    files: tuple[CorpusFile, ...],
+    *,
+    declared_max_files: int,
+) -> None:
     expected_files = {INPUT_MANIFEST_NAME, *(item.path for item in files)}
     expected_directories = {"payload"}
     for item in files:
@@ -300,44 +306,128 @@ def _verify_raw_inventory(raw_root: Path, files: tuple[CorpusFile, ...]) -> None
 
     pending = [raw_root]
     observed_files: set[str] = set()
+    observed_data_files = 0
+    observed_entries = 0
     while pending:
         directory = pending.pop()
         try:
-            entries = tuple(os.scandir(directory))
+            entries = os.scandir(directory)
         except OSError as error:
             raise AcceptanceCorpusError(
                 "source_unavailable", "Acceptance input directory cannot be read"
             ) from error
-        for entry in entries:
-            entry_path = Path(entry.path)
-            relative = entry_path.relative_to(raw_root).as_posix()
-            try:
-                metadata = os.lstat(entry_path)
-            except OSError as error:
-                raise AcceptanceCorpusError(
-                    "source_unavailable", "Acceptance input entry cannot be inspected"
-                ) from error
-            if stat.S_ISLNK(metadata.st_mode):
-                raise AcceptanceCorpusError("symlink_rejected", "Acceptance input has a symlink")
-            if stat.S_ISDIR(metadata.st_mode):
-                if relative not in expected_directories:
+        with entries:
+            for entry in entries:
+                observed_entries += 1
+                if observed_entries > HARD_MAX_INVENTORY_ENTRIES:
                     raise AcceptanceCorpusError(
-                        "unlisted_entry", "Acceptance input has an unlisted directory"
+                        "inventory_limit_exceeded",
+                        "Acceptance input exceeds the hard inventory limit",
                     )
-                pending.append(entry_path)
-                continue
-            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
-                raise AcceptanceCorpusError(
-                    "unsupported_file", "Acceptance input has an unsupported file"
-                )
-            if relative not in expected_files:
-                raise AcceptanceCorpusError(
-                    "unlisted_entry", "Acceptance input has an unlisted file"
-                )
-            observed_files.add(relative)
+                entry_path = Path(entry.path)
+                relative = entry_path.relative_to(raw_root).as_posix()
+                try:
+                    metadata = os.lstat(entry_path)
+                except OSError as error:
+                    raise AcceptanceCorpusError(
+                        "source_unavailable", "Acceptance input entry cannot be inspected"
+                    ) from error
+                if stat.S_ISLNK(metadata.st_mode):
+                    raise AcceptanceCorpusError(
+                        "symlink_rejected", "Acceptance input has a symlink"
+                    )
+                if stat.S_ISDIR(metadata.st_mode):
+                    if relative not in expected_directories:
+                        raise AcceptanceCorpusError(
+                            "unlisted_entry", "Acceptance input has an unlisted directory"
+                        )
+                    pending.append(entry_path)
+                    continue
+                if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                    raise AcceptanceCorpusError(
+                        "unsupported_file", "Acceptance input has an unsupported file"
+                    )
+                if relative != INPUT_MANIFEST_NAME:
+                    observed_data_files += 1
+                    if observed_data_files > declared_max_files:
+                        raise AcceptanceCorpusError(
+                            "file_count_exceeded",
+                            "Acceptance input exceeds the declared file limit",
+                        )
+                if relative not in expected_files:
+                    raise AcceptanceCorpusError(
+                        "unlisted_entry", "Acceptance input has an unlisted file"
+                    )
+                observed_files.add(relative)
     if observed_files != expected_files:
         raise AcceptanceCorpusError(
             "inventory_mismatch", "Acceptance input does not match the manifest inventory"
+        )
+
+
+def _verify_canonical_inventory(
+    canonical_root: Path,
+    files: tuple[CorpusFile, ...],
+) -> None:
+    expected_files = {CANONICAL_MANIFEST_NAME, *(item.path for item in files)}
+    expected_directories = {"payload"}
+    for item in files:
+        relative_path = PurePosixPath(item.path)
+        expected_directories.update(
+            parent.as_posix() for parent in relative_path.parents if parent.parts
+        )
+
+    pending = [canonical_root]
+    observed_files: set[str] = set()
+    observed_entries = 0
+    while pending:
+        directory = pending.pop()
+        try:
+            entries = os.scandir(directory)
+        except OSError as error:
+            raise AcceptanceCorpusError(
+                "canonical_unavailable", "Canonical corpus cannot be read"
+            ) from error
+        with entries:
+            for entry in entries:
+                observed_entries += 1
+                if observed_entries > HARD_MAX_INVENTORY_ENTRIES:
+                    raise AcceptanceCorpusError(
+                        "inventory_limit_exceeded",
+                        "Canonical corpus exceeds the hard inventory limit",
+                    )
+                entry_path = Path(entry.path)
+                relative = entry_path.relative_to(canonical_root).as_posix()
+                try:
+                    metadata = os.lstat(entry_path)
+                except OSError as error:
+                    raise AcceptanceCorpusError(
+                        "canonical_unavailable",
+                        "Canonical corpus entry cannot be inspected",
+                    ) from error
+                if stat.S_ISLNK(metadata.st_mode):
+                    raise AcceptanceCorpusError(
+                        "symlink_rejected", "Canonical corpus has a symlink"
+                    )
+                if stat.S_ISDIR(metadata.st_mode):
+                    if relative not in expected_directories:
+                        raise AcceptanceCorpusError(
+                            "unlisted_entry", "Canonical corpus has an unlisted directory"
+                        )
+                    pending.append(entry_path)
+                    continue
+                if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                    raise AcceptanceCorpusError(
+                        "unsupported_file", "Canonical corpus has an unsupported file"
+                    )
+                if relative not in expected_files:
+                    raise AcceptanceCorpusError(
+                        "unlisted_entry", "Canonical corpus has an unlisted file"
+                    )
+                observed_files.add(relative)
+    if observed_files != expected_files:
+        raise AcceptanceCorpusError(
+            "inventory_mismatch", "Canonical corpus does not match its manifest"
         )
 
 
@@ -351,17 +441,66 @@ def _source_fingerprint(corpus_id: str, source_commit: str, files: tuple[CorpusF
     return hashlib.sha256(_canonical_json(identity)).hexdigest()
 
 
-def _write_exclusive(path: Path, content: bytes) -> None:
+def _write_atomic(path: Path, content: bytes, tracked_files: list[Path]) -> None:
+    """Publish one complete file without ever exposing a partial destination."""
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW
-    descriptor = os.open(path, flags, 0o400)
+    temporary = path.with_name(f".{path.name}.anva-{secrets.token_hex(16)}.tmp")
+    tracked_files.append(path)
+    tracked_files.append(temporary)
+    descriptor = os.open(temporary, flags, 0o600)
     try:
         view = memoryview(content)
         while view:
             written = os.write(descriptor, view)
+            if written < 1:
+                raise OSError("Acceptance output write made no progress")
             view = view[written:]
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+    os.link(temporary, path, follow_symlinks=False)
+    temporary.unlink()
+    directory_fd = os.open(
+        path.parent,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+    )
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _cleanup_canonical_output(
+    canonical: Path,
+    tracked_files: list[Path],
+    tracked_directories: list[Path],
+) -> bool:
+    """Best-effort cleanup that never replaces the original failure with a traceback."""
+    clean = True
+    for directory in (canonical, *tracked_directories):
+        try:
+            if directory.exists() and not directory.is_symlink():
+                directory.chmod(0o700)
+        except OSError:
+            clean = False
+    for path in reversed(tracked_files):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            clean = False
+    for directory in reversed(tracked_directories):
+        try:
+            directory.rmdir()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            clean = False
+    try:
+        if any(canonical.iterdir()):
+            clean = False
+    except OSError:
+        clean = False
+    return clean
 
 
 def canonicalize_corpus(
@@ -379,10 +518,15 @@ def canonicalize_corpus(
             "overlapping_roots", "Raw and canonical acceptance roots must be disjoint"
         )
     manifest, observed_manifest_sha256 = _load_input_manifest(raw, manifest_sha256)
-    files = _manifest_files(manifest, operator_limits or AdapterLimits())
-    _verify_raw_inventory(raw, files)
+    files, declared_limits = _manifest_files(manifest, operator_limits or AdapterLimits())
+    _verify_raw_inventory(
+        raw,
+        files,
+        declared_max_files=declared_limits.max_files,
+    )
 
     created_files: list[Path] = []
+    published_files: list[Path] = []
     created_directories: list[Path] = []
     try:
         for item in files:
@@ -401,10 +545,10 @@ def canonicalize_corpus(
                 missing.append(current)
                 current = current.parent
             for directory in reversed(missing):
-                directory.mkdir(mode=0o700)
                 created_directories.append(directory)
-            _write_exclusive(destination, content)
-            created_files.append(destination)
+                directory.mkdir(mode=0o700)
+            _write_atomic(destination, content, created_files)
+            published_files.append(destination)
 
         corpus_id = cast(str, manifest["corpus_id"])
         source_commit = cast(str, manifest["source_commit"])
@@ -420,9 +564,9 @@ def canonicalize_corpus(
         }
         canonical_bytes = _canonical_json(canonical_manifest)
         canonical_manifest_path = canonical / CANONICAL_MANIFEST_NAME
-        _write_exclusive(canonical_manifest_path, canonical_bytes)
-        created_files.append(canonical_manifest_path)
-        for path in created_files:
+        _write_atomic(canonical_manifest_path, canonical_bytes, created_files)
+        published_files.append(canonical_manifest_path)
+        for path in published_files:
             path.chmod(0o444)
         for path in reversed(created_directories):
             path.chmod(0o555)
@@ -436,29 +580,58 @@ def canonicalize_corpus(
             total_bytes=sum(item.size_bytes for item in files),
         )
     except OSError as error:
-        for path in reversed(created_files):
-            path.unlink(missing_ok=True)
-        for path in reversed(created_directories):
-            path.rmdir()
+        cleaned = _cleanup_canonical_output(canonical, created_files, created_directories)
+        if not cleaned:
+            raise AcceptanceCorpusError(
+                "canonical_cleanup_failed",
+                "Canonical corpus cleanup failed; discard the ephemeral volume",
+            ) from None
         raise AcceptanceCorpusError(
             "canonical_unavailable", "Canonical corpus output is unavailable"
         ) from error
     except Exception:
-        for path in reversed(created_files):
-            path.unlink(missing_ok=True)
-        for path in reversed(created_directories):
-            path.rmdir()
+        cleaned = _cleanup_canonical_output(canonical, created_files, created_directories)
+        if not cleaned:
+            raise AcceptanceCorpusError(
+                "canonical_cleanup_failed",
+                "Canonical corpus cleanup failed; discard the ephemeral volume",
+            ) from None
         raise
 
 
-def verify_canonical_corpus(canonical_root: Path) -> CanonicalCorpus:
-    """Re-verify a canonical root without access to the raw public bundle."""
+def verify_canonical_corpus(
+    canonical_root: Path,
+    *,
+    expected_manifest_sha256: str,
+    expected_source_fingerprint: str,
+    expected_canonical_manifest_sha256: str,
+) -> CanonicalCorpus:
+    """Re-verify a canonical root against three operator-pinned identities."""
+    pins = (
+        expected_manifest_sha256,
+        expected_source_fingerprint,
+        expected_canonical_manifest_sha256,
+    )
+    if any(SHA256_PATTERN.fullmatch(pin) is None for pin in pins):
+        raise AcceptanceCorpusError(
+            "invalid_verification_pin",
+            "Acceptance verification pins must be 64 lowercase hex characters",
+        )
     canonical = _validate_root(canonical_root, empty=False)
     manifest_bytes = _read_regular_file(
         canonical,
         PurePosixPath(CANONICAL_MANIFEST_NAME),
         max_bytes=MAX_MANIFEST_BYTES,
     )
+    canonical_manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    if not secrets.compare_digest(
+        canonical_manifest_sha256,
+        expected_canonical_manifest_sha256,
+    ):
+        raise AcceptanceCorpusError(
+            "verification_pin_mismatch",
+            "Canonical corpus does not match the operator-pinned identity",
+        )
     try:
         manifest = json.loads(manifest_bytes.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -550,38 +723,16 @@ def verify_canonical_corpus(canonical_root: Path) -> CanonicalCorpus:
             "invalid_canonical_manifest", "Canonical file inventory is invalid"
         )
     expected_fingerprint = _source_fingerprint(corpus_id, source_commit, file_tuple)
-    if not secrets.compare_digest(source_fingerprint, expected_fingerprint):
+    if (
+        not secrets.compare_digest(input_manifest_sha256, expected_manifest_sha256)
+        or not secrets.compare_digest(source_fingerprint, expected_source_fingerprint)
+        or not secrets.compare_digest(source_fingerprint, expected_fingerprint)
+    ):
         raise AcceptanceCorpusError(
-            "fingerprint_mismatch", "Canonical source fingerprint does not match"
+            "verification_pin_mismatch",
+            "Canonical corpus does not match the operator-pinned identity",
         )
-    expected_files = {CANONICAL_MANIFEST_NAME, *(item.path for item in file_tuple)}
-    expected_directories = {"payload"}
-    for item in file_tuple:
-        path = PurePosixPath(item.path)
-        expected_directories.update(parent.as_posix() for parent in path.parents if parent.parts)
-    observed: set[str] = set()
-    for path in canonical.rglob("*"):
-        relative = path.relative_to(canonical).as_posix()
-        metadata = path.lstat()
-        if stat.S_ISLNK(metadata.st_mode):
-            raise AcceptanceCorpusError("symlink_rejected", "Canonical corpus has a symlink")
-        if stat.S_ISDIR(metadata.st_mode):
-            if relative not in expected_directories:
-                raise AcceptanceCorpusError(
-                    "unlisted_entry", "Canonical corpus has an unlisted directory"
-                )
-            continue
-        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
-            raise AcceptanceCorpusError(
-                "unsupported_file", "Canonical corpus has an unsupported file"
-            )
-        if relative not in expected_files:
-            raise AcceptanceCorpusError("unlisted_entry", "Canonical corpus has an unlisted file")
-        observed.add(relative)
-    if observed != expected_files:
-        raise AcceptanceCorpusError(
-            "inventory_mismatch", "Canonical corpus does not match its manifest"
-        )
+    _verify_canonical_inventory(canonical, file_tuple)
     for item in file_tuple:
         content = _read_regular_file(
             canonical,
@@ -598,7 +749,7 @@ def verify_canonical_corpus(canonical_root: Path) -> CanonicalCorpus:
         corpus_id=corpus_id,
         manifest_sha256=input_manifest_sha256,
         source_fingerprint=source_fingerprint,
-        canonical_manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
+        canonical_manifest_sha256=canonical_manifest_sha256,
         file_count=len(file_tuple),
         total_bytes=sum(item.size_bytes for item in file_tuple),
     )
