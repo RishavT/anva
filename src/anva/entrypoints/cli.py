@@ -3,16 +3,31 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import re
 import uuid
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from anva import __version__
 from anva.entrypoints.bootstrap import configure_django
+
+BACKUP_GENERATION_PATTERN = re.compile(r"^[0-9]{8}T[0-9]{6}Z-[0-9]+$")
+
+
+def _maintenance_batch_limit(raw: str) -> int:
+    try:
+        limit = int(raw)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("maintenance batch limit must be an integer") from error
+    if not 1 <= limit <= 1_000:
+        raise argparse.ArgumentTypeError("maintenance batch limit must be between 1 and 1000")
+    return limit
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -21,6 +36,46 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("status", help="Check required service dependencies")
     subparsers.add_parser("version", help="Print the installed Anva version")
+    demo = subparsers.add_parser("demo", help="Idempotently create a safe local demo tenant")
+    demo.add_argument("--organization-slug", default="anva-demo")
+    demo.add_argument("--organization-name", default="Anva Demo")
+    demo.add_argument("--admin-email", default="admin@anva.local")
+    demo.add_argument("--admin-display-name", default="Anva Administrator")
+    demo.add_argument("--repository-external-id", default="anva-demo-repository")
+    demo.add_argument("--repository-name", default="Anva Demo Repository")
+    backup = subparsers.add_parser("backup", help="Create or verify a backup manifest")
+    backup.add_argument("--directory", required=True, type=Path)
+    backup.add_argument("--generation")
+    backup_commands = backup.add_subparsers(dest="backup_command", required=True)
+    backup_commands.add_parser("manifest")
+    backup_commands.add_parser("verify")
+    backup_commands.add_parser("activate")
+    backup_commands.add_parser("current")
+    operations = subparsers.add_parser("operations", help="Run tenant lifecycle operations")
+    operations.add_argument(
+        "--api-url",
+        default=os.getenv("ANVA_API_URL", "http://localhost:8000/api/v1"),
+    )
+    operations.add_argument("--organization-id", required=True, type=uuid.UUID)
+    operations_commands = operations.add_subparsers(
+        dest="operations_command",
+        required=True,
+    )
+    retention = operations_commands.add_parser("retention")
+    retention.add_argument("--dry-run", action="store_true")
+    maintenance = subparsers.add_parser(
+        "maintenance",
+        help="Run installation-scoped system maintenance",
+    )
+    maintenance_commands = maintenance.add_subparsers(
+        dest="maintenance_command",
+        required=True,
+    )
+    purge_preauth = maintenance_commands.add_parser(
+        "purge-preauth-rate-buckets",
+        help="Delete one bounded batch of expired anonymous request counters",
+    )
+    purge_preauth.add_argument("--limit", type=_maintenance_batch_limit, default=1_000)
     source = subparsers.add_parser("source", help="Operate source connections through the API")
     source.add_argument(
         "--api-url",
@@ -531,6 +586,283 @@ def _mcp_diagnose(arguments: argparse.Namespace) -> int:
     return 0
 
 
+def _operations_request(arguments: argparse.Namespace) -> int:
+    organization_id = str(arguments.organization_id)
+    if arguments.operations_command == "retention":
+        path = f"/organizations/{organization_id}/retention-runs"
+        payload: dict[str, object] = {"dry_run": bool(arguments.dry_run)}
+    else:
+        raise ValueError("Unknown operations command")
+    return _api_request(
+        api_url=str(arguments.api_url),
+        path=path,
+        method="POST",
+        payload=payload,
+    )
+
+
+def _maintenance_request(arguments: argparse.Namespace) -> int:
+    """Run local system maintenance without exposing tenant deletion counts."""
+    if arguments.maintenance_command != "purge-preauth-rate-buckets":
+        raise ValueError("Unknown maintenance command")
+    from anva.core.services.operations import purge_expired_pre_auth_rate_buckets
+
+    purge_expired_pre_auth_rate_buckets(limit=int(arguments.limit))
+    print(
+        json.dumps(
+            {
+                "operation": "purge_pre_auth_rate_buckets",
+                "status": "completed",
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def _bootstrap_demo(arguments: argparse.Namespace) -> int:
+    """Create the local demo once and reveal its repository token only on creation."""
+    from django.conf import settings
+
+    from anva.core.models import Organization
+    from anva.core.services.product_ui import SetupInput, bootstrap_product
+
+    existing = Organization.objects.filter(slug=str(arguments.organization_slug)).first()
+    if existing is not None:
+        print(
+            json.dumps(
+                {
+                    "status": "already_exists",
+                    "organization_id": str(existing.id),
+                    "organization_slug": existing.slug,
+                },
+                sort_keys=True,
+            )
+        )
+        return 0
+    if Organization.objects.exists():
+        print(
+            json.dumps(
+                {
+                    "code": "installation_already_bootstrapped",
+                    "message": "A different organization already exists",
+                },
+                sort_keys=True,
+            )
+        )
+        return 2
+    result = bootstrap_product(
+        supplied_secret=str(settings.BOOTSTRAP_SECRET),
+        data=SetupInput(
+            organization_slug=str(arguments.organization_slug),
+            organization_name=str(arguments.organization_name),
+            admin_email=str(arguments.admin_email),
+            admin_display_name=str(arguments.admin_display_name),
+            repository_external_id=str(arguments.repository_external_id),
+            repository_name=str(arguments.repository_name),
+            retention_days=365,
+            model_processing="DISABLED",
+            skill_distribution="SELF_SERVICE",
+            assurance_mode="OBSERVE",
+        ),
+    )
+    print(
+        json.dumps(
+            {
+                "status": "created",
+                "organization_id": str(result.organization.id),
+                "repository_id": str(result.repository.id),
+                "service_identity_id": str(result.service_identity.id),
+                "token": result.issued_token.plaintext,
+                "token_expires_at": result.issued_token.record.expires_at.isoformat(),
+                "limitations": [
+                    "Model processing is disabled",
+                    "The token is printed once and must be stored securely",
+                ],
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def _backup_files(directory: Path) -> tuple[Path, ...]:
+    """Return a bounded, symlink-free backup inventory."""
+    if directory.is_symlink() or not directory.is_dir():
+        raise ValueError("Backup directory must be a regular directory")
+    files: list[Path] = []
+    for path in sorted(directory.rglob("*")):
+        relative = path.relative_to(directory)
+        if (
+            relative.as_posix() == "manifest.json"
+            or relative.as_posix() == "current"
+            or relative.parts[0] == "generations"
+            or relative.name.endswith(".tmp")
+            or relative.name == ".gitkeep"
+        ):
+            continue
+        if path.is_symlink():
+            raise ValueError("Backup directory must not contain symlinks")
+        if path.is_file():
+            files.append(path)
+        elif not path.is_dir():
+            raise ValueError("Backup directory contains an unsupported entry")
+        if len(files) > 10_000:
+            raise ValueError("Backup exceeds the 10,000-file safety bound")
+    return tuple(files)
+
+
+def _file_sha256(path: Path) -> str:
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def _validate_backup_root(directory: Path) -> Path:
+    if directory.is_symlink():
+        raise ValueError("Backup directory must be a regular directory")
+    root = directory.resolve()
+    if not root.is_dir():
+        raise ValueError("Backup directory must be a regular directory")
+    return root
+
+
+def _generation_directory(root: Path, generation: str) -> Path:
+    if BACKUP_GENERATION_PATTERN.fullmatch(generation) is None:
+        raise ValueError("Backup generation is invalid")
+    generations = root / "generations"
+    if generations.is_symlink():
+        raise ValueError("Backup generations directory must not be a symlink")
+    directory = generations / generation
+    if directory.is_symlink() or not directory.is_dir():
+        raise ValueError("Backup generation is missing")
+    return directory
+
+
+def _current_backup_directory(root: Path) -> Path:
+    current = root / "current"
+    if not current.exists():
+        return root
+    generation = _read_current_backup_generation(root)
+    return _generation_directory(root, generation)
+
+
+def _read_current_backup_generation(root: Path) -> str:
+    current = root / "current"
+    if not current.exists():
+        raise ValueError("Backup current pointer is missing")
+    if current.is_symlink() or not current.is_file() or current.stat().st_size > 128:
+        raise ValueError("Backup current pointer is invalid")
+    try:
+        generation = current.read_text(encoding="ascii").strip()
+    except UnicodeError as error:
+        raise ValueError("Backup current pointer is invalid") from error
+    _generation_directory(root, generation)
+    return generation
+
+
+def _write_backup_manifest(directory: Path, files: tuple[Path, ...]) -> None:
+    relative_names = {path.relative_to(directory).as_posix() for path in files}
+    if "database.dump" not in relative_names:
+        raise ValueError("Backup is missing database.dump")
+    if "objects/.anva-installation-sentinel" not in relative_names:
+        raise ValueError("Backup is missing the object-storage sentinel")
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "anva_version": __version__,
+        "created_at": datetime.now(UTC).isoformat(),
+        "files": [
+            {
+                "path": path.relative_to(directory).as_posix(),
+                "size": path.stat().st_size,
+                "sha256": _file_sha256(path),
+            }
+            for path in files
+        ],
+    }
+    temporary_path = directory / f"manifest.{uuid.uuid4()}.tmp"
+    with temporary_path.open("xb") as stream:
+        stream.write((json.dumps(payload, indent=2, sort_keys=True) + "\n").encode())
+    temporary_path.replace(directory / "manifest.json")
+
+
+def _verify_backup_manifest(directory: Path, files: tuple[Path, ...]) -> None:
+    manifest_path = directory / "manifest.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        raise ValueError("Backup manifest is missing")
+    if manifest_path.stat().st_size > 1_000_000:
+        raise ValueError("Backup manifest exceeds the 1 MB safety bound")
+    payload = json.loads(manifest_path.read_bytes())
+    if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+        raise ValueError("Backup manifest is invalid")
+    records = payload.get("files")
+    if not isinstance(records, list) or len(records) != len(files):
+        raise ValueError("Backup manifest inventory does not match")
+    expected = {
+        path.relative_to(directory).as_posix(): (path.stat().st_size, _file_sha256(path))
+        for path in files
+    }
+    observed: dict[str, tuple[int, str]] = {}
+    for record in records:
+        if not isinstance(record, dict):
+            raise ValueError("Backup manifest is invalid")
+        path_value = record.get("path")
+        size = record.get("size")
+        digest = record.get("sha256")
+        if (
+            not isinstance(path_value, str)
+            or path_value.startswith("/")
+            or ".." in Path(path_value).parts
+            or not isinstance(size, int)
+            or not isinstance(digest, str)
+            or re.fullmatch(r"[a-f0-9]{64}", digest) is None
+            or path_value in observed
+        ):
+            raise ValueError("Backup manifest is invalid")
+        observed[path_value] = (size, digest)
+    if observed != expected:
+        raise ValueError("Backup checksum verification failed")
+
+
+def _backup_request(arguments: argparse.Namespace) -> int:
+    """Write or verify a content-addressed backup manifest without reading secrets."""
+    root = _validate_backup_root(arguments.directory)
+    generation = arguments.generation
+    if generation is not None and not isinstance(generation, str):
+        raise ValueError("Backup generation is invalid")
+    if arguments.backup_command == "current":
+        if generation is not None:
+            raise ValueError("Backup current lookup does not accept --generation")
+        print(_read_current_backup_generation(root))
+        return 0
+    if arguments.backup_command == "activate":
+        if generation is None:
+            raise ValueError("Backup activation requires --generation")
+        directory = _generation_directory(root, generation)
+        files = _backup_files(directory)
+        _verify_backup_manifest(directory, files)
+        temporary_path = root / f"current.{uuid.uuid4()}.tmp"
+        with temporary_path.open("x", encoding="ascii") as stream:
+            stream.write(f"{generation}\n")
+        temporary_path.replace(root / "current")
+        print(json.dumps({"generation": generation, "status": "activated"}, sort_keys=True))
+        return 0
+    directory = (
+        _generation_directory(root, generation)
+        if generation is not None
+        else _current_backup_directory(root)
+    )
+    files = _backup_files(directory)
+    if arguments.backup_command == "manifest":
+        _write_backup_manifest(directory, files)
+        print(json.dumps({"status": "created", "files": len(files)}, sort_keys=True))
+        return 0
+    if arguments.backup_command != "verify":
+        raise ValueError("Unknown backup command")
+    _verify_backup_manifest(directory, files)
+    print(json.dumps({"status": "verified", "files": len(files)}, sort_keys=True))
+    return 0
+
+
 def _skills_request(arguments: argparse.Namespace) -> int:
     from anva.skills.contracts import default_package_root
     from anva.skills.diagnostics import diagnose_skills
@@ -629,6 +961,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
     if arguments.command == "mcp":
         return _mcp_diagnose(arguments)
+    if arguments.command == "operations":
+        return _operations_request(arguments)
+    if arguments.command == "maintenance":
+        configure_django()
+        return _maintenance_request(arguments)
+    if arguments.command == "backup":
+        try:
+            return _backup_request(arguments)
+        except (json.JSONDecodeError, OSError, ValueError) as error:
+            print(
+                json.dumps(
+                    {"code": "backup_invalid", "message": str(error)},
+                    sort_keys=True,
+                )
+            )
+            return 2
     if arguments.command == "skills":
         try:
             return _skills_request(arguments)
@@ -645,6 +993,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
 
     configure_django()
+    if arguments.command == "demo":
+        return _bootstrap_demo(arguments)
     from anva.foundation.services import readiness_status
 
     status = readiness_status()

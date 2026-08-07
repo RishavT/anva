@@ -20,6 +20,7 @@ from anva import __version__
 from anva.core.exceptions import (
     AuthenticationError,
     DomainOperationError,
+    RateLimitExceededError,
     ResourceNotFoundError,
 )
 from anva.core.models import KnowledgeProposal, SyncRun
@@ -43,6 +44,12 @@ def _safe_next(request: HttpRequest) -> str:
 
 
 def _correlation(request: HttpRequest) -> str:
+    resolved = getattr(request, "anva_correlation_id", "")
+    if isinstance(resolved, str):
+        try:
+            return str(uuid.UUID(resolved))
+        except ValueError:
+            pass
     raw = request.headers.get("X-Correlation-ID", "")
     try:
         return str(uuid.UUID(raw)) if raw else str(uuid.uuid4())
@@ -110,6 +117,21 @@ def web_errors[**Parameters](
                 },
                 status=404,
             )
+        except RateLimitExceededError as error:
+            response = render(
+                request,
+                "product/error.html",
+                {
+                    "version": __version__,
+                    "status_code": 429,
+                    "error_title": "Too many requests",
+                    "error_message": "Wait briefly, then try again.",
+                    "correlation_id": _correlation(request),
+                },
+                status=429,
+            )
+            response.headers["Retry-After"] = str(error.retry_after_seconds)
+            return response
         except DomainOperationError:
             return render(
                 request,

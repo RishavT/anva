@@ -49,7 +49,7 @@ def default_package_root() -> Path:
     candidates = (
         Path.cwd() / "packages" / "anva-skills",
         Path(__file__).resolve().parents[3] / "packages" / "anva-skills",
-        Path(__file__).resolve().parent,
+        Path(__file__).resolve().parent / "distribution",
     )
     for candidate in candidates:
         if (candidate / "manifest.yaml").is_file():

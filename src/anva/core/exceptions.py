@@ -64,3 +64,13 @@ class RequiredPolicyBudgetError(DomainOperationError):
     """A packet budget cannot contain every applicable required policy."""
 
     code = "required_policy_budget_exceeded"
+
+
+class RateLimitExceededError(DomainOperationError):
+    """The authenticated principal exhausted a bounded request window."""
+
+    code = "rate_limited"
+
+    def __init__(self, retry_after_seconds: int) -> None:
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__("Request rate limit exceeded")

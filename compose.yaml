@@ -1,5 +1,28 @@
 name: anva
 
+x-app-build: &app-build
+  context: .
+  target: runtime
+  args:
+    ANVA_VERSION: ${ANVA_VERSION:-0.1.0}
+    ANVA_REVISION: ${ANVA_REVISION:-unknown}
+    ANVA_SOURCE: ${ANVA_SOURCE:-https://github.com/rishavt/anva}
+    SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH:-1756684800}
+
+x-app-security: &app-security
+  read_only: true
+  cap_drop: ["ALL"]
+  security_opt: ["no-new-privileges:true"]
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+    - /app/run:size=16m,mode=0700,uid=10001,gid=10001
+
+x-bounded-logging: &bounded-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 x-app-environment: &app-environment
   ANVA_ENV: ${ANVA_ENV:-development}
   ANVA_DEBUG: ${ANVA_DEBUG:-true}
@@ -14,6 +37,7 @@ x-app-environment: &app-environment
   ANVA_OBJECT_STORAGE_BUCKET: ${ANVA_OBJECT_STORAGE_BUCKET:-anva}
   ANVA_OBJECT_STORAGE_ACCESS_KEY: ${ANVA_OBJECT_STORAGE_ACCESS_KEY:-anva-local}
   ANVA_OBJECT_STORAGE_SECRET_KEY: ${ANVA_OBJECT_STORAGE_SECRET_KEY:-anva-local-only}
+  ANVA_OBJECT_STORAGE_REGION: ${ANVA_OBJECT_STORAGE_REGION:-us-east-1}
   ANVA_FILESYSTEM_ALLOWED_ROOTS: ${ANVA_FILESYSTEM_ALLOWED_ROOTS:-/fixtures}
   ANVA_API_URL: ${ANVA_API_URL:-http://api:8000/api/v1}
   ANVA_PUBLIC_BASE_URL: ${ANVA_PUBLIC_BASE_URL:-http://api:8000}
@@ -23,6 +47,14 @@ x-app-environment: &app-environment
   ANVA_MCP_READ_ONLY: ${ANVA_MCP_READ_ONLY:-false}
   ANVA_MCP_PUBLIC_BASE_URL: ${ANVA_MCP_PUBLIC_BASE_URL:-http://mcp:8001}
   ANVA_LOG_LEVEL: ${ANVA_LOG_LEVEL:-INFO}
+  ANVA_METRICS_TOKEN: ${ANVA_METRICS_TOKEN:-}
+  ANVA_RATE_LIMIT_ENABLED: ${ANVA_RATE_LIMIT_ENABLED:-true}
+  ANVA_RATE_LIMIT_WINDOW_SECONDS: ${ANVA_RATE_LIMIT_WINDOW_SECONDS:-60}
+  ANVA_RATE_LIMIT_API_REQUESTS: ${ANVA_RATE_LIMIT_API_REQUESTS:-600}
+  ANVA_RATE_LIMIT_MCP_REQUESTS: ${ANVA_RATE_LIMIT_MCP_REQUESTS:-300}
+  ANVA_RATE_LIMIT_WEB_REQUESTS: ${ANVA_RATE_LIMIT_WEB_REQUESTS:-600}
+  ANVA_RATE_LIMIT_PREAUTH_REQUESTS: ${ANVA_RATE_LIMIT_PREAUTH_REQUESTS:-1200}
+  ANVA_TRUSTED_PROXY_IPS: ${ANVA_TRUSTED_PROXY_IPS:-}
 
 x-app-dependencies: &app-dependencies
   postgres:
@@ -36,7 +68,8 @@ x-app-dependencies: &app-dependencies
 
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg16@sha256:a36250871de0833b8757561c72f2477ef1ddd1101afa4e617fb552e0de514c6b
+    logging: *bounded-logging
     environment:
       POSTGRES_DB: ${ANVA_POSTGRES_DB:-anva}
       POSTGRES_USER: ${ANVA_POSTGRES_USER:-anva}
@@ -50,7 +83,8 @@ services:
       - postgres-data:/var/lib/postgresql/data
 
   minio:
-    image: minio/minio:RELEASE.2025-07-23T15-54-02Z
+    image: minio/minio:RELEASE.2025-07-23T15-54-02Z@sha256:d249d1fb6966de4d8ad26c04754b545205ff15a62e4fd19ebd0f26fa5baacbc0
+    logging: *bounded-logging
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${ANVA_MINIO_ROOT_USER:-anva-local}
@@ -64,7 +98,8 @@ services:
       - minio-data:/data
 
   minio-init:
-    image: minio/mc:RELEASE.2025-07-21T05-28-08Z
+    image: minio/mc:RELEASE.2025-07-21T05-28-08Z@sha256:fb8f773eac8ef9d6da0486d5dec2f42f219358bcb8de579d1623d518c9ebd4cc
+    logging: *bounded-logging
     depends_on:
       minio:
         condition: service_healthy
@@ -72,17 +107,20 @@ services:
     command:
       - >
         mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}";
-        mc mb --ignore-existing "local/$${ANVA_OBJECT_STORAGE_BUCKET}";
+        mc mb --ignore-existing "local/$${ANVA_MINIO_BUCKET}";
+        printf 'anva-object-storage-sentinel-v1\n' |
+          mc pipe "local/$${ANVA_MINIO_BUCKET}/.anva-installation-sentinel";
     environment:
       MINIO_ROOT_USER: ${ANVA_MINIO_ROOT_USER:-anva-local}
       MINIO_ROOT_PASSWORD: ${ANVA_MINIO_ROOT_PASSWORD:-anva-local-only}
-      ANVA_OBJECT_STORAGE_BUCKET: ${ANVA_OBJECT_STORAGE_BUCKET:-anva}
+      ANVA_MINIO_BUCKET: ${ANVA_MINIO_BUCKET:-anva}
     restart: "no"
 
   migrate:
-    build:
-      context: .
-      target: runtime
+    <<: *app-security
+    image: ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.0}
+    build: *app-build
+    logging: *bounded-logging
     command: ["python", "-m", "anva.manage", "migrate", "--noinput"]
     environment: *app-environment
     depends_on:
@@ -91,9 +129,10 @@ services:
     restart: "no"
 
   api:
-    build:
-      context: .
-      target: runtime
+    <<: *app-security
+    image: ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.0}
+    build: *app-build
+    logging: *bounded-logging
     environment:
       <<: *app-environment
       ANVA_GITHUB_WEBHOOK_SECRETS: ${ANVA_GITHUB_WEBHOOK_SECRETS:-local-only-github-webhook-secret}
@@ -112,9 +151,10 @@ services:
       start_period: 5s
 
   worker:
-    build:
-      context: .
-      target: runtime
+    <<: *app-security
+    image: ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.0}
+    build: *app-build
+    logging: *bounded-logging
     command: ["python", "-m", "anva.entrypoints.worker"]
     environment:
       <<: *app-environment
@@ -128,9 +168,10 @@ services:
       retries: 20
 
   github-worker:
-    build:
-      context: .
-      target: runtime
+    <<: *app-security
+    image: ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.0}
+    build: *app-build
+    logging: *bounded-logging
     profiles: ["github"]
     command: ["python", "-m", "anva.entrypoints.github_worker"]
     environment:
@@ -151,9 +192,10 @@ services:
       retries: 20
 
   mcp:
-    build:
-      context: .
-      target: runtime
+    <<: *app-security
+    image: ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.0}
+    build: *app-build
+    logging: *bounded-logging
     command:
       [
         "uvicorn",
@@ -161,6 +203,8 @@ services:
         "--host=0.0.0.0",
         "--port=8001",
         "--no-server-header",
+        "--no-access-log",
+        "--log-level=error",
       ]
     environment: *app-environment
     depends_on: *app-dependencies
@@ -178,9 +222,10 @@ services:
       start_period: 5s
 
   mcp-read-only:
-    build:
-      context: .
-      target: runtime
+    <<: *app-security
+    image: ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.0}
+    build: *app-build
+    logging: *bounded-logging
     profiles: ["mcp-test"]
     command:
       [
@@ -189,6 +234,8 @@ services:
         "--host=0.0.0.0",
         "--port=8002",
         "--no-server-header",
+        "--no-access-log",
+        "--log-level=error",
       ]
     environment:
       <<: *app-environment
@@ -209,16 +256,219 @@ services:
       start_period: 5s
 
   cli:
-    build:
-      context: .
-      target: runtime
+    <<: *app-security
+    image: ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.0}
+    build: *app-build
+    logging: *bounded-logging
     profiles: ["tools"]
     command: ["python", "-m", "anva.entrypoints.cli", "status"]
     environment: *app-environment
     depends_on: *app-dependencies
 
+  demo:
+    <<: *app-security
+    image: ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.0}
+    build: *app-build
+    profiles: ["demo"]
+    command: ["anva", "demo"]
+    environment: *app-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    logging:
+      driver: none
+    restart: "no"
+
+  operations-guard:
+    <<: *app-security
+    image: ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.0}
+    build: *app-build
+    profiles: ["operations"]
+    command: ["python", "-m", "anva.operations_safety"]
+    environment:
+      <<: *app-environment
+      ANVA_POSTGRES_DB: ${ANVA_POSTGRES_DB:-anva}
+      ANVA_POSTGRES_USER: ${ANVA_POSTGRES_USER:-anva}
+      ANVA_POSTGRES_PASSWORD: ${ANVA_POSTGRES_PASSWORD:-anva-local-only}
+      ANVA_MINIO_BUCKET: ${ANVA_MINIO_BUCKET:-anva}
+      ANVA_MINIO_ROOT_USER: ${ANVA_MINIO_ROOT_USER:-anva-local}
+      ANVA_MINIO_ROOT_PASSWORD: ${ANVA_MINIO_ROOT_PASSWORD:-anva-local-only}
+    logging: *bounded-logging
+    restart: "no"
+
+  backup-database:
+    <<: *app-security
+    image: pgvector/pgvector:pg16@sha256:a36250871de0833b8757561c72f2477ef1ddd1101afa4e617fb552e0de514c6b
+    profiles: ["operations"]
+    user: "${ANVA_HOST_UID:-1000}:${ANVA_HOST_GID:-1000}"
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command:
+      - >
+        generation="$${ANVA_BACKUP_GENERATION}";
+        case "$${generation}" in
+          [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z-[0-9]*) ;;
+          *) exit 2 ;;
+        esac;
+        case "$${generation##*-}" in ''|*[!0-9]*) exit 2 ;; esac;
+        destination="/backup/generations/$${generation}";
+        test ! -e "$${destination}";
+        mkdir -p "$${destination}";
+        pg_dump --format=custom --compress=6 --no-owner --no-privileges
+        --file="$${destination}/database.dump"
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: ${ANVA_POSTGRES_DB:-anva}
+      PGUSER: ${ANVA_POSTGRES_USER:-anva}
+      PGPASSWORD: ${ANVA_POSTGRES_PASSWORD:-anva-local-only}
+      ANVA_BACKUP_GENERATION: ${ANVA_BACKUP_GENERATION:-}
+    volumes:
+      - type: bind
+        source: ${ANVA_BACKUP_DIR:-./backups}
+        target: /backup
+    logging: *bounded-logging
+    restart: "no"
+
+  backup-objects:
+    <<: *app-security
+    image: minio/mc:RELEASE.2025-07-21T05-28-08Z@sha256:fb8f773eac8ef9d6da0486d5dec2f42f219358bcb8de579d1623d518c9ebd4cc
+    profiles: ["operations"]
+    user: "${ANVA_HOST_UID:-1000}:${ANVA_HOST_GID:-1000}"
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command:
+      - >
+        generation="$${ANVA_BACKUP_GENERATION}";
+        case "$${generation}" in
+          [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z-[0-9]*) ;;
+          *) exit 2 ;;
+        esac;
+        case "$${generation##*-}" in ''|*[!0-9]*) exit 2 ;; esac;
+        destination="/backup/generations/$${generation}";
+        test -f "$${destination}/database.dump";
+        mc alias set local "$${ANVA_OBJECT_STORAGE_ENDPOINT}" "$${ANVA_OBJECT_STORAGE_ACCESS_KEY}" "$${ANVA_OBJECT_STORAGE_SECRET_KEY}";
+        mkdir -p "$${destination}/objects";
+        mc mirror --overwrite --remove "local/$${ANVA_OBJECT_STORAGE_BUCKET}" "$${destination}/objects";
+    environment:
+      MC_CONFIG_DIR: /tmp/.mc
+      ANVA_OBJECT_STORAGE_ENDPOINT: ${ANVA_OBJECT_STORAGE_ENDPOINT:-http://minio:9000}
+      ANVA_OBJECT_STORAGE_BUCKET: ${ANVA_OBJECT_STORAGE_BUCKET:-anva}
+      ANVA_OBJECT_STORAGE_ACCESS_KEY: ${ANVA_OBJECT_STORAGE_ACCESS_KEY:-anva-local}
+      ANVA_OBJECT_STORAGE_SECRET_KEY: ${ANVA_OBJECT_STORAGE_SECRET_KEY:-anva-local-only}
+      ANVA_BACKUP_GENERATION: ${ANVA_BACKUP_GENERATION:-}
+    volumes:
+      - type: bind
+        source: ${ANVA_BACKUP_DIR:-./backups}
+        target: /backup
+    logging: *bounded-logging
+    restart: "no"
+
+  backup-manifest:
+    <<: *app-security
+    image: ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.0}
+    build: *app-build
+    profiles: ["operations"]
+    user: "${ANVA_HOST_UID:-1000}:${ANVA_HOST_GID:-1000}"
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command:
+      - >
+        if [ -n "$${ANVA_BACKUP_GENERATION}" ]; then
+          exec anva backup --directory /backup --generation "$${ANVA_BACKUP_GENERATION}" manifest;
+        fi;
+        exec anva backup --directory /backup verify
+    environment:
+      <<: *app-environment
+      ANVA_BACKUP_GENERATION: ${ANVA_BACKUP_GENERATION:-}
+    volumes:
+      - type: bind
+        source: ${ANVA_BACKUP_DIR:-./backups}
+        target: /backup
+    logging: *bounded-logging
+    restart: "no"
+
+  restore-database:
+    <<: *app-security
+    image: pgvector/pgvector:pg16@sha256:a36250871de0833b8757561c72f2477ef1ddd1101afa4e617fb552e0de514c6b
+    profiles: ["operations"]
+    user: "${ANVA_HOST_UID:-1000}:${ANVA_HOST_GID:-1000}"
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command:
+      - >
+        generation="$${ANVA_BACKUP_GENERATION}";
+        case "$${generation}" in
+          [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z-[0-9]*) ;;
+          *) exit 2 ;;
+        esac;
+        case "$${generation##*-}" in ''|*[!0-9]*) exit 2 ;; esac;
+        source="/backup/generations/$${generation}";
+        test -f "$${source}/database.dump";
+        pg_restore --dbname="$${PGDATABASE}"
+        --clean --if-exists --no-owner --no-privileges
+        "$${source}/database.dump"
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: ${ANVA_POSTGRES_DB:-anva}
+      PGUSER: ${ANVA_POSTGRES_USER:-anva}
+      PGPASSWORD: ${ANVA_POSTGRES_PASSWORD:-anva-local-only}
+      ANVA_BACKUP_GENERATION: ${ANVA_BACKUP_GENERATION:-}
+    volumes:
+      - type: bind
+        source: ${ANVA_BACKUP_DIR:-./backups}
+        target: /backup
+        read_only: true
+    logging: *bounded-logging
+    restart: "no"
+
+  restore-objects:
+    <<: *app-security
+    image: minio/mc:RELEASE.2025-07-21T05-28-08Z@sha256:fb8f773eac8ef9d6da0486d5dec2f42f219358bcb8de579d1623d518c9ebd4cc
+    profiles: ["operations"]
+    user: "${ANVA_HOST_UID:-1000}:${ANVA_HOST_GID:-1000}"
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command:
+      - >
+        generation="$${ANVA_BACKUP_GENERATION}";
+        case "$${generation}" in
+          [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z-[0-9]*) ;;
+          *) exit 2 ;;
+        esac;
+        case "$${generation##*-}" in ''|*[!0-9]*) exit 2 ;; esac;
+        source="/backup/generations/$${generation}";
+        test -d "$${source}/objects";
+        mc alias set local "$${ANVA_OBJECT_STORAGE_ENDPOINT}" "$${ANVA_OBJECT_STORAGE_ACCESS_KEY}" "$${ANVA_OBJECT_STORAGE_SECRET_KEY}";
+        mc mirror --overwrite --remove "$${source}/objects" "local/$${ANVA_OBJECT_STORAGE_BUCKET}";
+    environment:
+      MC_CONFIG_DIR: /tmp/.mc
+      ANVA_OBJECT_STORAGE_ENDPOINT: ${ANVA_OBJECT_STORAGE_ENDPOINT:-http://minio:9000}
+      ANVA_OBJECT_STORAGE_BUCKET: ${ANVA_OBJECT_STORAGE_BUCKET:-anva}
+      ANVA_OBJECT_STORAGE_ACCESS_KEY: ${ANVA_OBJECT_STORAGE_ACCESS_KEY:-anva-local}
+      ANVA_OBJECT_STORAGE_SECRET_KEY: ${ANVA_OBJECT_STORAGE_SECRET_KEY:-anva-local-only}
+      ANVA_BACKUP_GENERATION: ${ANVA_BACKUP_GENERATION:-}
+    volumes:
+      - type: bind
+        source: ${ANVA_BACKUP_DIR:-./backups}
+        target: /backup
+        read_only: true
+    logging: *bounded-logging
+    restart: "no"
+
+  operations-lock:
+    <<: *app-security
+    image: pgvector/pgvector:pg16@sha256:a36250871de0833b8757561c72f2477ef1ddd1101afa4e617fb552e0de514c6b
+    profiles: ["operations"]
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command:
+      - >
+        trap 'exit 0' HUP INT TERM;
+        while :; do sleep 3600 & wait "$$!"; done
+    logging:
+      driver: none
+    restart: "no"
+
   lock:
-    image: ghcr.io/astral-sh/uv:0.8.13-python3.12-bookworm-slim
+    image: ghcr.io/astral-sh/uv:0.8.13-python3.12-bookworm-slim@sha256:727eea7895e8bda0c5f582a5fa2795bdeecabbcb2e9371de066b95da06c31ad5
     profiles: ["tools"]
     working_dir: /workspace
     command: ["uv", "lock", "--python", "3.12"]
@@ -226,7 +476,7 @@ services:
       - .:/workspace
 
   test-postgres:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg16@sha256:a36250871de0833b8757561c72f2477ef1ddd1101afa4e617fb552e0de514c6b
     profiles: ["test"]
     environment:
       POSTGRES_DB: anva_test
@@ -239,7 +489,7 @@ services:
       retries: 20
 
   test-minio:
-    image: minio/minio:RELEASE.2025-07-23T15-54-02Z
+    image: minio/minio:RELEASE.2025-07-23T15-54-02Z@sha256:d249d1fb6966de4d8ad26c04754b545205ff15a62e4fd19ebd0f26fa5baacbc0
     profiles: ["test"]
     command: server /data
     environment:
@@ -250,6 +500,19 @@ services:
       interval: 2s
       timeout: 3s
       retries: 20
+
+  test-minio-init:
+    image: minio/mc:RELEASE.2025-07-21T05-28-08Z@sha256:fb8f773eac8ef9d6da0486d5dec2f42f219358bcb8de579d1623d518c9ebd4cc
+    profiles: ["test"]
+    depends_on:
+      test-minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command:
+      - >
+        mc alias set test http://test-minio:9000 anva-test anva-test-only;
+        mc mb --ignore-existing test/anva-test;
+    restart: "no"
 
   test:
     build:
@@ -291,6 +554,8 @@ services:
         condition: service_healthy
       test-minio:
         condition: service_healthy
+      test-minio-init:
+        condition: service_completed_successfully
 
   browser-test:
     build:
@@ -330,6 +595,8 @@ services:
         condition: service_healthy
       test-minio:
         condition: service_healthy
+      test-minio-init:
+        condition: service_completed_successfully
 
   mcp-client-test:
     build:

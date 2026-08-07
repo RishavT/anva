@@ -11,13 +11,13 @@ requires-python = ">=3.12,<3.13"
 license = { text = "Proprietary" }
 authors = [{ name = "Anva" }]
 dependencies = [
-  "Django==5.2.5",
+  "Django==5.2.13",
   "gunicorn==23.0.0",
   "jsonschema[format]==4.25.1",
   "mcp==1.28.1",
   "pgvector==0.5.0",
   "psycopg[binary]==3.2.9",
-  "PyJWT[crypto]==2.10.1",
+  "PyJWT[crypto]==2.13.0",
   "PyYAML==6.0.2",
   "uvicorn==0.35.0",
   "whitenoise==6.9.0",
@@ -33,6 +33,9 @@ dev = [
   "ruff==0.12.9",
   "selenium==4.34.2",
 ]
+release = [
+  "hatchling==1.27.0",
+]
 
 [project.scripts]
 anva = "anva.entrypoints.cli:main"
@@ -42,6 +45,9 @@ anva-github-worker = "anva.entrypoints.github_worker:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/anva"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"packages/anva-skills" = "anva/skills/distribution"
 
 [tool.uv]
 default-groups = ["dev"]

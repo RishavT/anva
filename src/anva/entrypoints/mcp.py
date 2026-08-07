@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Any, cast
 from urllib.parse import urlparse
 
@@ -40,18 +43,26 @@ from starlette.middleware.authentication import AuthenticationMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from anva.entrypoints.bootstrap import configure_django
 
 configure_django()
 
 from anva import __version__  # noqa: E402
-from anva.core.exceptions import DomainOperationError  # noqa: E402
+from anva.core.exceptions import (  # noqa: E402
+    DomainOperationError,
+    RateLimitExceededError,
+)
 from anva.core.services.context import ActorContext  # noqa: E402
 from anva.core.services.mcp_gateway import (  # noqa: E402
     MCPGatewayError,
     diagnostics_payload,
     dispatch_tool,
+)
+from anva.core.services.operations import (  # noqa: E402
+    enforce_pre_auth_rate_limit,
+    enforce_rate_limit,
 )
 from anva.core.services.tokens import authenticate_bearer  # noqa: E402
 from anva.mcp.contracts import (  # noqa: E402
@@ -63,6 +74,20 @@ from anva.mcp.contracts import (  # noqa: E402
 _SDK_LOGGER_NAME = "mcp.server.lowlevel.server"
 _SDK_UNLISTED_TOOL_MESSAGE = "Tool '%s' not listed, no validation will be performed"
 _SAFE_UNLISTED_TOOL_MESSAGE = "Unlisted tool requested; SDK schema validation skipped"
+_ActorRateKey = tuple[uuid.UUID, uuid.UUID | None, str]
+
+
+@dataclass(slots=True)
+class _ActorRateRequestState:
+    handler_keys: set[_ActorRateKey]
+    discovery_results: dict[_ActorRateKey, int | None]
+    consumed_discovery_keys: set[_ActorRateKey]
+
+
+_actor_rate_state: ContextVar[_ActorRateRequestState | None] = ContextVar(
+    "anva_mcp_actor_rate_state", default=None
+)
+_actor_rate_kind: ContextVar[str] = ContextVar("anva_mcp_actor_rate_kind", default="handler")
 
 
 class _UnlistedToolWarningFilter(logging.Filter):
@@ -76,6 +101,66 @@ class _UnlistedToolWarningFilter(logging.Filter):
 
 
 _unlisted_tool_warning_filter = _UnlistedToolWarningFilter()
+
+
+def _request_client_rate_key(scope: Scope) -> str:
+    """Normalize one request peer without retaining raw transport metadata."""
+    client = scope.get("client")
+    remote = str(client[0]) if client else ""
+    candidate = remote
+    if remote in settings.ANVA_TRUSTED_PROXY_IPS:
+        for raw_name, raw_value in scope.get("headers", ()):
+            if raw_name.lower() != b"x-forwarded-for":
+                continue
+            forwarded = raw_value[:256].decode("ascii", errors="ignore")
+            first = forwarded.split(",", maxsplit=1)[0].strip()
+            if first:
+                candidate = first
+            break
+    try:
+        return str(ipaddress.ip_address(candidate))
+    except ValueError:
+        return "unresolved-client"
+
+
+class MCPPreAuthRateLimitMiddleware:
+    """Apply one anonymous request-tier charge before MCP protocol dispatch."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope.get("path") != "/mcp":
+            await self.app(scope, receive, send)
+            return
+        state_token = _actor_rate_state.set(_ActorRateRequestState(set(), {}, set()))
+        try:
+            try:
+                await sync_to_async(enforce_pre_auth_rate_limit, thread_sensitive=True)(
+                    client_key=_request_client_rate_key(scope)
+                )
+            except RateLimitExceededError as error:
+                response = JSONResponse(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {
+                            "code": -32000,
+                            "message": "Request rate limit exceeded",
+                            "data": {"code": "rate_limited"},
+                        },
+                    },
+                    status_code=429,
+                    headers={
+                        "Retry-After": str(error.retry_after_seconds),
+                        "Cache-Control": "no-store",
+                    },
+                )
+                await response(scope, receive, send)
+                return
+            await self.app(scope, receive, send)
+        finally:
+            _actor_rate_state.reset(state_token)
 
 
 def _install_sdk_log_sanitizer() -> None:
@@ -119,7 +204,7 @@ def _actor() -> ActorContext:
         )
     claims = access_token.claims
     try:
-        return ActorContext(
+        actor = ActorContext(
             organization_id=uuid.UUID(str(claims["organization_id"])),
             repository_id=uuid.UUID(str(claims["repository_id"])),
             credential_id=uuid.UUID(str(claims["credential_id"])),
@@ -129,12 +214,58 @@ def _actor() -> ActorContext:
             request_id=uuid.UUID(str(claims["request_id"])),
             credential_actions=frozenset(access_token.scopes),
         )
+        state = _actor_rate_state.get()
+        key = (actor.organization_id, actor.credential_id, actor.actor_id)
+        if state is None:
+            enforce_rate_limit(actor=actor, channel="mcp")
+        elif _actor_rate_kind.get() == "handler":
+            state.handler_keys.add(key)
+            if key in state.discovery_results and key not in state.consumed_discovery_keys:
+                state.consumed_discovery_keys.add(key)
+                retry_after = state.discovery_results[key]
+                if retry_after is not None:
+                    raise RateLimitExceededError(retry_after)
+            else:
+                enforce_rate_limit(actor=actor, channel="mcp")
+        elif key in state.handler_keys:
+            pass
+        elif key in state.discovery_results:
+            retry_after = state.discovery_results[key]
+            if retry_after is not None:
+                raise RateLimitExceededError(retry_after)
+        else:
+            try:
+                enforce_rate_limit(actor=actor, channel="mcp")
+            except RateLimitExceededError as error:
+                state.discovery_results[key] = error.retry_after_seconds
+                raise
+            state.discovery_results[key] = None
+        return actor
     except (KeyError, TypeError, ValueError):
         raise MCPGatewayError(
             "invalid_credential",
             "Credential is invalid or expired",
             http_status=401,
         ) from None
+
+
+async def _authenticated_actor() -> ActorContext:
+    """Resolve and rate-limit an MCP actor outside the ASGI event-loop thread."""
+    return await sync_to_async(_actor, thread_sensitive=True)()
+
+
+async def _authenticated_discovery() -> None:
+    """Rate-limit authenticated capability discovery with a safe protocol error."""
+    rate_kind_token = _actor_rate_kind.set("discovery")
+    try:
+        try:
+            await _authenticated_actor()
+        except Exception as error:
+            safe = _safe_tool_error(error, uuid.uuid4())
+            safe_content = cast(TextContent, safe.content[0])
+            raise ValueError(safe_content.text) from None
+    finally:
+        _actor_rate_kind.reset(rate_kind_token)
 
 
 def _tool_definition(contract: ToolContract) -> Tool:
@@ -252,6 +383,7 @@ def _create_server() -> Server[Any]:
 
     @server.list_tools()  # type: ignore[misc,no-untyped-call]
     async def list_tools() -> list[Tool]:
+        await _authenticated_discovery()
         return [
             _tool_definition(contract)
             for contract in TOOL_CONTRACTS
@@ -260,8 +392,9 @@ def _create_server() -> Server[Any]:
 
     @server.call_tool(validate_input=False)  # type: ignore[misc]
     async def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any] | CallToolResult:
-        actor = _actor()
+        actor: ActorContext | None = None
         try:
+            actor = await _authenticated_actor()
             return await sync_to_async(dispatch_tool, thread_sensitive=True)(
                 actor=actor,
                 tool_name=name,
@@ -269,10 +402,12 @@ def _create_server() -> Server[Any]:
                 transport="MCP",
             )
         except Exception as error:
-            return _safe_tool_error(error, actor.request_id)
+            request_id = actor.request_id if actor is not None else uuid.uuid4()
+            return _safe_tool_error(error, request_id)
 
     @server.list_resources()  # type: ignore[misc,no-untyped-call]
     async def list_resources() -> list[Resource]:
+        await _authenticated_discovery()
         return [
             Resource(
                 name="anva.diagnostics",
@@ -284,6 +419,7 @@ def _create_server() -> Server[Any]:
 
     @server.list_resource_templates()  # type: ignore[misc,no-untyped-call]
     async def list_resource_templates() -> list[ResourceTemplate]:
+        await _authenticated_discovery()
         return [
             ResourceTemplate(
                 name=str(contract["name"]),
@@ -296,11 +432,12 @@ def _create_server() -> Server[Any]:
 
     @server.read_resource()  # type: ignore[misc,no-untyped-call]
     async def read_resource(uri: AnyUrl) -> str:
-        actor = _actor()
-        tool_name, arguments = _resource_arguments(uri, actor)
-        if not tool_name:
-            return json.dumps(diagnostics_payload(), ensure_ascii=False, sort_keys=True)
+        actor: ActorContext | None = None
         try:
+            actor = await _authenticated_actor()
+            tool_name, arguments = _resource_arguments(uri, actor)
+            if not tool_name:
+                return json.dumps(diagnostics_payload(), ensure_ascii=False, sort_keys=True)
             result = await sync_to_async(dispatch_tool, thread_sensitive=True)(
                 actor=actor,
                 tool_name=tool_name,
@@ -308,7 +445,8 @@ def _create_server() -> Server[Any]:
                 transport="MCP_RESOURCE",
             )
         except Exception as error:
-            safe = _safe_tool_error(error, actor.request_id)
+            request_id = actor.request_id if actor is not None else uuid.uuid4()
+            safe = _safe_tool_error(error, request_id)
             safe_content = cast(TextContent, safe.content[0])
             raise ValueError(safe_content.text) from None
         return json.dumps(result, ensure_ascii=False, sort_keys=True)
@@ -359,6 +497,7 @@ def create_application() -> Starlette:
             ),
         ],
         middleware=[
+            Middleware(MCPPreAuthRateLimitMiddleware),
             Middleware(
                 AuthenticationMiddleware,
                 backend=BearerAuthBackend(RepositoryTokenVerifier()),

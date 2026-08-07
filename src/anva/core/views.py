@@ -20,6 +20,7 @@ from django.views.decorators.http import require_http_methods
 from anva.core.exceptions import (
     AuthenticationError,
     DomainOperationError,
+    RateLimitExceededError,
     ResourceNotFoundError,
 )
 from anva.core.models import (
@@ -92,6 +93,11 @@ from anva.core.services.mcp_gateway import (
     diagnostics_payload,
     dispatch_tool,
 )
+from anva.core.services.operations import (
+    decommission_organization,
+    enforce_rate_limit,
+    run_retention,
+)
 from anva.core.services.policies import (
     create_policy_override,
     evaluate_policy,
@@ -121,6 +127,10 @@ from anva.core.services.tokens import (
     revoke_repository_token,
     rotate_repository_token,
 )
+from anva.core.services.web_auth import (
+    require_recent_web_authentication,
+    resolve_web_principal,
+)
 from anva.integrations.github.service import (
     accept_verified_event,
     configure_repository_binding,
@@ -137,6 +147,12 @@ MAX_DIFF_JSON_BODY_BYTES = 1_200_000
 
 
 def _correlation_id(request: HttpRequest) -> uuid.UUID:
+    resolved = getattr(request, "anva_correlation_id", "")
+    if isinstance(resolved, str):
+        try:
+            return uuid.UUID(resolved)
+        except ValueError:
+            pass
     raw = request.headers.get("X-Correlation-ID", "")
     try:
         return uuid.UUID(raw) if raw else uuid.uuid4()
@@ -204,6 +220,10 @@ def api_errors[**Parameters](
                 path=error.path,
                 reason=error.reason,
             )
+        except RateLimitExceededError as error:
+            response = _error(error.code, str(error), correlation_id, 429)
+            response.headers["Retry-After"] = str(error.retry_after_seconds)
+            return response
         except DomainOperationError as error:
             return _error(error.code, str(error), correlation_id, 409)
         except (json.JSONDecodeError, TypeError, ValueError):
@@ -252,6 +272,13 @@ def _integer(payload: dict[str, object], name: str) -> int:
     value = payload.get(name)
     if not isinstance(value, int) or isinstance(value, bool):
         raise ValueError(f"{name} must be an integer")
+    return value
+
+
+def _boolean(payload: dict[str, object], name: str, default: bool = False) -> bool:
+    value = payload.get(name, default)
+    if not isinstance(value, bool):
+        raise ValueError(f"{name} must be a boolean")
     return value
 
 
@@ -310,7 +337,10 @@ def _object_list(payload: dict[str, object], name: str) -> list[dict[str, str]]:
 
 def _actor(request: HttpRequest) -> ActorContext:
     actor = authenticate_bearer(request.headers.get("Authorization", ""))
-    return replace(actor, request_id=_correlation_id(request))
+    actor = replace(actor, request_id=_correlation_id(request))
+    decision = enforce_rate_limit(actor=actor, channel="api")
+    request.anva_rate_limit = decision  # type: ignore[attr-defined]
+    return actor
 
 
 def _canvas_query_payload(payload: dict[str, object]) -> CanvasQuery:
@@ -1001,6 +1031,80 @@ def organization_detail(request: HttpRequest, organization_id: uuid.UUID) -> Jso
             "name": organization.name,
             "authorization_path": decision.authorization_path,
         }
+    )
+
+
+@api_errors
+@require_http_methods(["POST"])
+def organization_retention_run(
+    request: HttpRequest,
+    organization_id: uuid.UUID,
+) -> JsonResponse:
+    """Execute one bounded retention pass for the caller's organization."""
+    actor = _actor(request)
+    if actor.organization_id != organization_id:
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    payload = _closed_payload(
+        _json_body(request),
+        allowed=frozenset({"dry_run"}),
+        required=frozenset(),
+    )
+    run = run_retention(
+        actor=actor,
+        dry_run=_boolean(payload, "dry_run"),
+    )
+    return JsonResponse(
+        {
+            "id": str(run.id),
+            "kind": run.kind,
+            "state": run.state,
+            "dry_run": run.dry_run,
+            "cutoff_at": run.cutoff_at.isoformat(),
+            "summary": run.summary,
+            "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        },
+        status=201,
+    )
+
+
+@api_errors
+@require_http_methods(["POST"])
+def organization_decommission(
+    request: HttpRequest,
+    organization_id: uuid.UUID,
+) -> JsonResponse:
+    """Revoke a tenant after recent human-session and two exact confirmations."""
+    principal = resolve_web_principal(request)
+    require_recent_web_authentication(request)
+    actor = principal.actor
+    if actor.organization_id != organization_id:
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    payload = _closed_payload(
+        _json_body(request),
+        allowed=frozenset({"confirmation", "acknowledgement"}),
+        required=frozenset({"confirmation", "acknowledgement"}),
+    )
+    confirmation = _string(payload, "confirmation")
+    acknowledgement = _string(payload, "acknowledgement")
+    if acknowledgement != f"DECOMMISSION {confirmation}":
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    run = decommission_organization(
+        actor=actor,
+        confirmation=confirmation,
+        acknowledgement=acknowledgement,
+    )
+    return JsonResponse(
+        {
+            "id": str(run.id),
+            "kind": run.kind,
+            "state": run.state,
+            "summary": run.summary,
+            "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+            "limitations": [
+                "Governed audit, provenance, and immutable evidence metadata are retained."
+            ],
+        },
+        status=202,
     )
 
 

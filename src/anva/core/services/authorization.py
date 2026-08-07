@@ -21,6 +21,7 @@ from anva.core.models import (
     AccessScopeServiceIdentity,
     AccessScopeSource,
     Membership,
+    Organization,
     Repository,
     RepositoryAccessToken,
     Role,
@@ -66,6 +67,7 @@ class Action(StrEnum):
     ARTIFACT_CREATE = "artifact.create"
     SCOPE_MANAGE = "scope.manage"
     GITHUB_MANAGE = "github.manage"
+    RETENTION_MANAGE = "retention.manage"
 
 
 VIEW_ACTIONS = frozenset(
@@ -323,12 +325,14 @@ def current_authorized_scope_filter(
     )
     active_memberships = Membership.objects.filter(
         organization_id=actor.organization_id,
+        organization__lifecycle_state=Organization.LifecycleState.ACTIVE,
         user_id=principal_id,
         user__is_active=True,
         is_active=True,
     )
     active_service_identities = ServiceIdentity.objects.filter(
         organization_id=actor.organization_id,
+        organization__lifecycle_state=Organization.LifecycleState.ACTIVE,
         id=principal_id,
         is_active=True,
     )
@@ -410,6 +414,7 @@ def current_authorized_scope_filter(
     current_repositories = Repository.objects.filter(
         id__in=repository_ids,
         organization_id=actor.organization_id,
+        organization__lifecycle_state=Organization.LifecycleState.ACTIVE,
         is_active=True,
     ).filter(current_action_filter(OuterRef("id")))
     if repository_id_path is not None and repository_relation_path is not None:
@@ -484,6 +489,7 @@ def resolve_principal(actor: ActorContext) -> Principal:
             Membership.objects.select_related("role", "user")
             .filter(
                 organization_id=actor.organization_id,
+                organization__lifecycle_state=Organization.LifecycleState.ACTIVE,
                 user_id=principal_id,
                 user__is_active=True,
                 is_active=True,
@@ -498,6 +504,7 @@ def resolve_principal(actor: ActorContext) -> Principal:
         service_identity = ServiceIdentity.objects.filter(
             id=principal_id,
             organization_id=actor.organization_id,
+            organization__lifecycle_state=Organization.LifecycleState.ACTIVE,
             is_active=True,
         ).first()
         if service_identity is None:

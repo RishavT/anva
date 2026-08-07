@@ -32,6 +32,7 @@ def openapi_document() -> dict[str, object]:
         "401": {"$ref": "#/components/responses/StructuredError"},
         "404": {"$ref": "#/components/responses/StructuredError"},
         "409": {"$ref": "#/components/responses/StructuredError"},
+        "429": {"$ref": "#/components/responses/StructuredError"},
     }
     authorized_responses: dict[str, object] = {
         "200": {"description": "Authorized tenant-scoped response."},
@@ -40,6 +41,10 @@ def openapi_document() -> dict[str, object]:
     accepted_responses: dict[str, object] = {
         "202": {"description": "Authorized request accepted."},
         **structured_errors,
+    }
+    decommission_responses: dict[str, object] = {
+        **accepted_responses,
+        "403": {"description": "CSRF validation failed before domain dispatch."},
     }
     created_responses: dict[str, object] = {
         "201": {"description": "Tenant-scoped resource created."},
@@ -1136,6 +1141,85 @@ def openapi_document() -> dict[str, object]:
                     "responses": authorized_responses,
                 }
             },
+            "/organizations/{organization_id}/retention-runs": {
+                "post": {
+                    "operationId": "runOrganizationRetention",
+                    "description": (
+                        "Run one bounded retention pass. Governed audit and provenance "
+                        "history remains append-only."
+                    ),
+                    "parameters": [
+                        organization_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                    ],
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": False,
+                                    "properties": {
+                                        "dry_run": {"type": "boolean"},
+                                    },
+                                }
+                            }
+                        },
+                    },
+                    "responses": created_responses,
+                }
+            },
+            "/organizations/{organization_id}/decommission": {
+                "post": {
+                    "operationId": "decommissionOrganization",
+                    "description": (
+                        "Revoke tenant access and sources from a recently authenticated "
+                        "human browser session after exact slug and acknowledgement "
+                        "confirmations. Repository bearer tokens are rejected. Governed "
+                        "history is retained; this is not physical erasure."
+                    ),
+                    "security": [{"browserSession": []}],
+                    "parameters": [
+                        organization_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                        {
+                            "name": "X-CSRFToken",
+                            "in": "header",
+                            "required": True,
+                            "schema": {"type": "string", "minLength": 1, "maxLength": 128},
+                        },
+                    ],
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": False,
+                                    "properties": {
+                                        "confirmation": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 80,
+                                        },
+                                        "acknowledgement": {
+                                            "type": "string",
+                                            "minLength": 14,
+                                            "maxLength": 93,
+                                            "description": (
+                                                "Exact text DECOMMISSION followed by a space "
+                                                "and the confirmed organization slug."
+                                            ),
+                                        },
+                                    },
+                                    "required": ["confirmation", "acknowledgement"],
+                                }
+                            }
+                        },
+                    },
+                    "responses": decommission_responses,
+                }
+            },
             "/organizations/{organization_id}/members": {
                 "get": {
                     "operationId": "listMemberships",
@@ -1734,7 +1818,16 @@ def openapi_document() -> dict[str, object]:
                     "type": "http",
                     "scheme": "bearer",
                     "bearerFormat": "AnvaRepositoryToken",
-                }
+                },
+                "browserSession": {
+                    "type": "apiKey",
+                    "in": "cookie",
+                    "name": "sessionid",
+                    "description": (
+                        "Recently authenticated human browser session; unsafe requests also "
+                        "require Django's X-CSRFToken header."
+                    ),
+                },
             },
             "parameters": {
                 "CorrelationId": {
