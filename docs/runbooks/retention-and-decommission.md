@@ -1,9 +1,9 @@
 # Retention and organization decommissioning
 
 MVP-013 implements organization-scoped retention and decommission operations.
-Focused authorization, idempotency, retained-data, and fail-closed access tests
-pass in the worktree; exact-commit release and manual recovery evidence remain
-open.
+Authorization, idempotency, retained-data, caller-time rejection, tenant-bucket
+isolation, and fail-closed access tests pass in the exact source candidate
+`94231d7e...`. Manual interruption/recovery and human acceptance remain open.
 
 ## Authorization and audit expectations
 

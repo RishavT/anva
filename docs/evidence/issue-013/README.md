@@ -1,115 +1,162 @@
 # MVP-013 evidence index
 
-This index separates the current shared-worktree validation snapshot from the
-still-missing exact-commit release record. The summarized results below were
-observed during MVP-013 implementation. They are development evidence, not a
-published release attestation: raw command logs, immutable runner identity,
-timestamps, exact source commit, and checksummed result artifacts have not yet
-been indexed here.
+This index records the immutable local release-candidate evidence for MVP-013.
+It is an exact-source verification record, not a publication attestation: no
+release tag, registry digest, signature/provenance, package publication, GitHub
+Actions execution, or public release is claimed.
 
 ## Candidate identity
 
 - Issue: `rishavt/anva#13`
 - Candidate version: `0.1.0`
-- Git commit: not recorded
-- Git tag: not created
-- Registry image reference/digest: not published or recorded
-- Signature/provenance: not produced
-- GitHub Actions: workflow execution status not recorded; this work does not add,
-  enable, or change a workflow
+- Source commit: `94231d7e57767b18a4cd9546ad5bf33afc13a735`
+- Source tree: `43395db015a2205c739647c1b6dfb9b02626abd2`
+- Local runtime image: `anva-mvp13:0.1.0`
+- Runtime image ID:
+  `sha256:c6ae3a8abfd4c54d91df94be0dfe7f1bc1c52e73da58a4617b2bc30a3b1f6f2c`
+- Runtime OCI revision: `94231d7e57767b18a4cd9546ad5bf33afc13a735`
+- Runtime image size: 356,842,368 bytes
+- Reproducible image creation time: `2025-09-01T00:00:00Z`
+- Git tag, registry digest, signature/provenance, and publication record: not
+  produced
 
-## Worktree validation snapshot
+The product, runtime, test, operations, and scan results below bind to that
+source commit and tree. A later commit that changes only these narrative
+documents is a documentation descendant of the verified source candidate; it
+does not change or invalidate the parent candidate's immutable artifacts. It
+also must not be substituted for `94231d7e...` as the tested product/runtime
+identity. Any product, dependency, build-input, or release-artifact change
+requires a new candidate and new evidence.
 
-- Broad Compose suite: 721 passed, one expected live-MCP skip, three deselected,
-  and 85% branch coverage.
-- Focused MVP-013 suite: 54 passed.
-- Fresh Compose official-Python-client MCP acceptance: 2 passed.
-- Headless Chromium product journeys: 2 passed.
-- Historical release image result: zero fixable high/critical vulnerability
-  findings. The current gate also records 14 reviewed no-vendor-fix exceptions
-  that expire on 2026-08-18; it is not a zero-high/critical result.
-- Source security scan: zero high/critical findings.
-- Atomic-generation PostgreSQL/Compose-managed-MinIO backup, checksum
-  verification, failed-restore stop behavior, and successful restore/resume:
-  passed in a disposable worktree Compose project. An incomplete generation did
-  not replace `current`; the deliberately failed migration left every prior
-  writer stopped. External object-store backup was not exercised or supported.
-- Disposable schema rehearsal from migration `0020` back to `0019` and forward
-  to `0020`: passed. The rehearsal project was removed with its volume/network,
-  while the live project remained at `0020` and returned healthy.
+## Immutable evidence and release metadata
 
-The landed hardening now writes unique backup generations and atomically moves a
-regular `current` pointer only after verification; dynamically quiesces and
-resumes only the Anva writers that were running; leaves writers stopped after a
-failed restore; and rehearses reversal/forward migration only in a guarded,
-disposable restored database clone. The current demo is `run --rm`, uses no Docker log
-driver, and exposes its fresh token only to the attached terminal. These exact
-semantics passed the worktree drills above but still await exact-commit
-revalidation.
+- Evidence archive:
+  `release/anva-evidence-94231d7e57767b18a4cd9546ad5bf33afc13a735.tar.gz`
+- Archive size: 4,648,450 bytes
+- Archive SHA-256:
+  `d90916f8063911757a05f8e0b16e25e5a64063609046a04e44aea9065d6dbeb8`
+- Release manifest SHA-256:
+  `ece6cbb1ca97908c383026c0e0f2e782f9ea9b43a3d7ab5d04272d685e8ab8e9`
+- `SHA256SUMS` SHA-256:
+  `0bee340d464f79ccbbe0fe88dc439aab587c37e9fcf706f7b87827f0b8f48060`
+- Wheel SHA-256:
+  `ad3ee8bc91fca3a5ced940f4f1757d2830e69a4436659ada74594ca273f2b9c9`
+- Evidence freeze time: `2026-08-07T09:36:36Z`
 
-Release hardening also rejects untracked worktree files, binds the image OCI
-revision to clean `HEAD`, rebuilds/verifies skill archives, and gates the source
-vulnerability/secret/misconfiguration scan while excluding operator-owned
-`.git`, secret, backup, release-output, and local-cache paths from the
-distributable report. These are implemented controls, not final publication
-evidence.
+The manifest records the local image ID, exact source commit, wheel, both skill
+archives, both image SBOMs, image/source scan reports, reviewed vulnerability
+exceptions, release notes, and the evidence archive. `SHA256SUMS` covers those
+artifacts plus the release manifest. These are local ignored release outputs;
+they have not been uploaded or signed.
 
-Local wheel, Codex/Claude skill archives, SPDX/CycloneDX image SBOMs, and scan
-reports exist in the ignored `release/` working directory. A paired backup exists
-in the ignored `backups/` directory. They are deliberately not described as
-durable release artifacts because the clean-exact-commit manifest and
-`SHA256SUMS` have not been generated and no registry/package publication has
-occurred.
+## Exact-source verification results
 
-## Required evidence set
+All source mounts used for the broad, corpus, and browser lanes were read-only,
+and the candidate repository was clean before and after each applicable lane.
 
-Before release closure, a local or external named reviewer must record immutable
-or checksummed exact-commit artifacts for:
+| Lane | Exact result |
+| --- | --- |
+| Static and generated artifacts | `uv lock` resolved 78 packages; Ruff format checked 182 files; Ruff lint returned zero findings; mypy checked 158 files with zero errors; 24 generated contracts verified; migrations reported no model drift. |
+| Broad Compose suite | 765 collected; 762 selected; 761 passed; one expected skip for the separately executed live-MCP Compose profile; three browser/corpus tests deselected; zero failures/errors; 274.48 seconds. |
+| Coverage | 85.41424161141758% combined line/branch coverage; 13,733/15,459 lines and 3,144/4,300 branches covered. |
+| External corpus | One `corpus` acceptance test selected and passed; 764 deselected; zero failures/errors/skips; 216.96 seconds. `anva-test` was read-only and clean at commit `a66787b0f3d009d6e599813ad5fefd847e603b7e`, tree `47f11e3ebd8452ddd9675c5406b457d44bffc9a2`. |
+| Browser | Two Chromium journeys passed with zero failures/errors/skips in 107.501 seconds; Chromium and ChromeDriver were `151.0.7922.71`; 19 screenshots/performance artifacts were checksummed. |
+| Live MCP | Two official-Python-client tests passed with zero failures/errors/skips in 1.647 seconds against both the write-capable service and the actual read-only service. |
 
-- unit, integration, end-to-end, migration, and organization-isolation tests;
-- deterministic evaluation and adversarial acceptance results with thresholds;
-- dependency, container, secret, and static-analysis scans, including all 14
-  temporary image exceptions, their 2026-08-18 expiry, and disposition;
-- SBOM, build provenance, image digest, release-manifest checksum, and source
-  revision;
-- one-command clean install and demo bootstrap on a clean host;
-- upgrade, schema rollback decision, data-preserving rollback, and clean restore;
-- PostgreSQL/object-store paired backup manifest and checksum verification;
-- metrics fail-closed authentication and HTTPS, readiness, rate-limit,
-  exact-proxy-IP attribution, server-error retention, and sensitive-data review;
-- retention and decommission state, isolation, audit, interruption, and recovery
-  checks;
-- preserve-data and destructive uninstall, including host integration cleanup;
-  and
-- fresh-agent installation and user/operator/developer documentation review.
+The one broad-suite skip is expected because the live MCP test requires a
+separate topology and was executed once in that topology. It is not an
+unexecuted release case.
 
-The external `anva-test` corpus and sealed fresh-agent Codex/Claude cases remain
-deferred from this snapshot, as does human user/operator/developer acceptance.
-Physical source/object deletion is not implemented: retention appends expiry
-state only after both explicit expiry and the organization minimum have passed,
-and cleans rate buckets only for that organization. Decommission requires a
-setup-authenticated human web session no older than 15 minutes, CSRF, and two
-exact confirmations while rejecting bearer tokens/CLI; it revokes access while
-retaining governed history. There is no login or post-setup reauthentication
-flow, so decommission cannot be performed after that window. This is an open
-release limitation, not an implemented recovery path.
-Telemetry is limited to process-local Prometheus counters, correlated JSON logs,
-and W3C trace context; no persistent aggregation, dashboards, alert delivery, or
-distributed trace exporter is claimed.
+## Operations evidence
 
-The task-owned Docker footprint observed during worktree validation stayed
-below 5 GB with exact-project/image/cache cleanup. That is an observed task
-constraint, not an engine-enforced limit; cleanup must not touch unrelated
-Docker resources.
+The disposable exact-image drill used the local runtime image identified above
+and Compose-managed PostgreSQL/MinIO:
 
-Each evidence record should include UTC start/end times, exact commit and image
-digests, runner/environment versions, exact commands or test identifiers, exit
-status, summarized result, artifact checksum/link, and reviewer. Redact secrets
-and source content.
+- the database and object-store guards rejected hostile configuration with
+  exit 2 before stopping writers, and the writer set was preserved;
+- the operation mutex rejected a competing operation with exit 2;
+- a deliberately incomplete backup failed with exit 2, left an inactive
+  partial generation, and preserved the prior `current` pointer;
+- the paired backup and checksum manifest verified successfully and activated
+  a new unique generation;
+- an injected restore failure exited 2 and left Anva writers stopped;
+- a subsequent restore succeeded with migration and representative model counts
+  invariant;
+- migration rehearsal reversed only the disposable clone to `core.0019`,
+  migrated it forward to head, and left the live database counts and migration
+  state invariant; and
+- the runtime and rehearsal projects left zero containers, networks, or volumes
+  after cleanup.
+
+This evidence covers disposable synthetic data and Compose-managed MinIO only.
+It does not establish external object-store backup, point-in-time recovery,
+encryption/key management, cross-version application compatibility, or
+deployment-sized recovery timing.
+
+## Security scans and SBOMs
+
+`make release-scan-gate` ran once and exited 0 against the exact local runtime
+image and source candidate.
+
+- Image scan: 203 total vulnerability tuples: 6 critical, 18 high, 70 medium,
+  100 low, and 9 unknown. All 24 high/critical package tuples map to 14 reviewed
+  no-vendor-fix exception IDs; zero high/critical tuples were fixable or
+  unwaived. The exceptions were reviewed on 2026-08-04 and expire on
+  **2026-08-18**. This is not a zero-high/critical claim; expiry requires
+  re-review, update, or release blocking.
+- Source scan: zero high/critical vulnerabilities, zero high/critical
+  misconfigurations, and zero secrets. It still reports four fixable Django
+  vulnerabilities below the release threshold: one medium
+  (`CVE-2026-5766`) and three low (`CVE-2026-35192`, `CVE-2026-6907`, and
+  `CVE-2026-7666`), plus low Dockerfile finding `DS026` (no `HEALTHCHECK`).
+  These are residual findings, not a clean-scan claim.
+- SBOMs: CycloneDX 1.6 contains 159 components and 160 dependency entries;
+  SPDX 2.3 contains 160 packages and 323 relationships.
+
+The scan project and scanner image were removed, the task Trivy cache was
+reduced to its tracked one-byte placeholder, and top-level release artifacts
+were preserved.
+
+## Resource and cleanup record
+
+The final conservative task footprint was 1,993,367,109 bytes with the named
+builder cache at 0 bytes, below the 5,000,000,000-byte working limit. The scan
+lane's measured pre-cleanup footprint was 3,386,349,325 bytes, also below the
+limit. This was a measured task constraint, not a Docker-engine quota. Cleanup
+was restricted to exact task projects, images, and cache; no engine-wide prune
+was used or is authorized by this record.
+
+## Open and deferred gates
+
+The exact local evidence does not close these boundaries:
+
+- no tag, registry digest, signature/provenance, package/image publication,
+  GitHub Actions run, or public release exists;
+- the exact corpus ingestion acceptance passed, but the full `anva-test`
+  non-browser/browser baselines and all 31 isolated assurance-oracle scenarios
+  were not executed as a release gate;
+- sealed fresh-agent Codex/Claude executions and human
+  user/operator/developer acceptance remain deferred;
+- external object-store and deployment-sized recovery were not exercised;
+- physical deletion/legal erasure, post-setup reauthentication, persistent
+  telemetry aggregation, dashboards, alert delivery, distributed trace export,
+  OAuth/enterprise SSO, accepted byte/archive upload, external model inference,
+  production Terraform, billing, and multi-browser support remain outside the
+  demonstrated boundary; and
+- the source lower-severity findings and image exceptions described above
+  remain subject to disposition and expiry review.
+
+Retention appends expiry state only after explicit expiry and the organization
+minimum have passed and cleans only that organization's expired rate buckets.
+Decommission is access revocation, not hard deletion; it requires a
+setup-authenticated human session no older than 15 minutes, CSRF, and two exact
+confirmations. Because no post-setup reauthentication exists, decommission is
+unavailable after that window.
 
 ## Status source of truth
 
 Use the [requirements/evidence matrix](../../releases/requirements-evidence-matrix.md)
 for requirement status and the [release checklist](../../releases/release-checklist.md)
-for the release gate. A missing artifact remains pending; do not replace it with
-a prose assertion or retroactively label an unrecorded command as passing.
+for the remaining release gates. Exact local verification must not be
+misrepresented as publication or human acceptance, and a missing artifact must
+not be replaced with a prose assertion.

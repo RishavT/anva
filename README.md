@@ -177,19 +177,21 @@ Read the [operator guide](docs/guides/operator.md), [user
 guide](docs/guides/user.md), and [developer guide](docs/guides/developer.md),
 plus the [install/upgrade/uninstall](docs/runbooks/install-upgrade-uninstall.md)
 and [backup/restore](docs/runbooks/backup-and-restore.md) runbooks before using
-these beyond local evaluation. The current candidate has local build and scan
-artifacts but no release tag, registry digest, signature/provenance, or published
-package/image. See the [MVP-013 release notes](docs/releases/mvp-013.md),
+these beyond local evaluation. The source candidate at `94231d7e...` has a
+checksummed local build, exact test/operations/scan evidence archive, manifest,
+and `SHA256SUMS`, but no release tag, registry digest, signature/provenance, or
+published package/image. See the [MVP-013 release notes](docs/releases/mvp-013.md),
 [compatibility matrix](docs/releases/compatibility.md), and [evidence
 index](docs/evidence/issue-013/README.md) for the exact boundary.
 
 After a test or drill, remove only the named task project with `make test-down`
 or `COMPOSE_PROJECT=<exact-project> make uninstall-clean`; inspect the resolved
 project before deletion. Remove only explicitly identified Anva images and the
-task-owned `release/.trivy-cache` when they are no longer needed. The MVP-013
-worktree exercise kept its task-owned Docker footprint below 5 GB through this
-scoped cleanup, but Anva does not configure or enforce an engine-wide 5 GB cap,
-and these commands must not prune unrelated Docker resources.
+task-owned `release/.trivy-cache` when they are no longer needed. The exact
+MVP-013 candidate exercise kept its task-owned Docker footprint below 5 GB
+through this scoped cleanup, but Anva does not configure or enforce an
+engine-wide 5 GB cap, and these commands must not prune unrelated Docker
+resources.
 
 The worker claims PostgreSQL-leased allowlisted jobs and revalidates source/snapshot access before
 and during ingestion. The dedicated MCP process exposes authenticated, stateless, versioned

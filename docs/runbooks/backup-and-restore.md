@@ -5,11 +5,12 @@ Backing up only one can leave database metadata inconsistent with stored source
 objects. Queue and retrieval-cache state is stored in PostgreSQL in this release.
 
 MVP-013 provides Compose-owned backup, checksum verification, and restore
-commands. Current worktree validation covered atomic generation activation,
-inactive partial-generation pointer preservation, failure-safe writer handling,
-successful restore/resume, and disposable schema rehearsal. The controls still
-require an exact-commit clean-project re-drill and deployment-sized recovery
-exercise.
+commands. Exact local candidate evidence at source commit `94231d7e...` and
+runtime image ID `c6ae3a8a...` covers atomic generation activation, inactive
+partial-generation pointer preservation, hostile guard and mutex rejection,
+failure-safe writer handling, successful restore with state invariance, and
+disposable schema rehearsal. Deployment-sized recovery and an external
+object-store procedure remain unverified.
 
 ## Create a paired backup
 
@@ -135,12 +136,13 @@ remove unrelated containers, volumes, images, or caches.
   cross-version restoration, incremental backups, and large-dataset timing are
   not implemented or verified for MVP-013.
 - The Compose operations do not back up or restore an independently configured
-  external object store. The successful worktree drill covers local
+  external object store. The successful exact-candidate drill covers local
   Compose-managed MinIO only.
-- The current worktree drill covered the unique generation pointer, dynamic
+- The exact-candidate drill covered the unique generation pointer, dynamic
   writer set, failed-restore stop behavior, successful restore/resume, and
-  disposable-clone rehearsal. These controls require exact-commit revalidation.
-  No older application binary or production dataset was exercised.
+  disposable-clone reversal to `core.0019` and forward to head while live state
+  remained invariant. No older application binary or production dataset was
+  exercised.
 - A backup can reintroduce data that was decommissioned or expired after it was
   taken. Operators must reconcile current policy before reopening restored data.
 - Application-level decommissioning does not delete retained backups. Backup

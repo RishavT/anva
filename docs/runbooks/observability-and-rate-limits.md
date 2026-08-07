@@ -1,9 +1,11 @@
 # Observability and rate-limit operations
 
 MVP-013 implements correlated JSON request logs, a protected Prometheus
-endpoint, dependency readiness, and PostgreSQL-backed fixed-window limits.
-Focused worktree tests cover the contracts and redaction behavior. Exact-commit
-operational acceptance remains pending, and the metrics are process-local.
+endpoint, dependency readiness, and PostgreSQL-backed fixed-window limits. The
+exact-source suite at commit `94231d7e...` covers contracts, redaction,
+request-tier/actor-tier charging, proxy attribution, and bounded cleanup.
+Deployed capacity/abuse and telemetry-pipeline acceptance remain pending, and
+the metrics are process-local.
 
 ## Configuration
 
@@ -80,10 +82,11 @@ For `429 Too Many Requests`:
 
 Do not disable limits globally as a routine incident response. Limits
 use database state, so also inspect database health and expired-bucket cleanup.
-The worktree integration/focused suite covers API, MCP, web, and pre-auth
+The exact-source suite covers API, MCP, web, and pre-auth
 enforcement, stable `429`/`Retry-After`, proxy attribution, bucket isolation,
-reset, and retention cleanup. Multi-process capacity and a deployed abuse drill
-still require exact-release evidence.
+reset, and retention cleanup. The live MCP lane separately passed both write and
+actual read-only services. Multi-process capacity and a deployed abuse drill
+remain unverified.
 
 Each MCP HTTP request consumes one pre-auth request-tier allowance before
 protocol dispatch, including valid-token `initialize` and `ping`. Tools and
