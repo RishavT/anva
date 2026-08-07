@@ -71,13 +71,10 @@ Preserve source/run/job IDs, access snapshot hash, audit/outbox IDs, failure cod
 and mount configuration. Preserve immutable provenance unless legal deletion policy requires a
 separately reviewed erasure operation.
 
-## External corpus acceptance
+## External acceptance corpus
 
-With the sibling `../anva-test` repository present:
-
-```bash
-make corpus
-```
-
-The override mounts it read-only, ingests the realistic mixed corpus, checks expected document
-taxonomies, and verifies representative file hashes are unchanged.
+Do not mount an exporter repository or other mixed public/private checkout into Anva. External
+acceptance starts from the operator-pinned public bundle and canonical adapter described in the
+[acceptance corpus runbook](acceptance-corpus.md). Connect the supported filesystem source only to
+`/app/acceptance/canonical/payload`; the generated canonical manifest is outside that connector
+root.

@@ -17,7 +17,8 @@ make install-demo
 ```
 
 Use `compose.expose.yaml` only when host exposure is intentional. Use
-`compose.corpus.yaml` only for the test-corpus workflow described by that file.
+`compose.acceptance.yaml` only with a pinned, public-only corpus as described in the
+[acceptance runbook](acceptance-corpus.md); never mount an exporter checkout or held controls.
 The source Compose file builds a wheel-installed runtime image from local source,
 uses digest-pinned base/dependency images, and applies read-only filesystems,
 dropped capabilities, no-new-privileges, and bounded writable mounts to Anva

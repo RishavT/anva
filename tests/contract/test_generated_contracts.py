@@ -40,7 +40,7 @@ def test_contract_catalog_and_checked_in_generation_are_current() -> None:
     second = rendered_artifacts()
 
     assert first == second
-    assert len(first) == 24
+    assert len(first) == 28
     check_artifacts(first)
 
 
@@ -151,6 +151,49 @@ def test_external_contracts_never_expose_legacy_brain_sources() -> None:
 
     assert "brain_sources" not in rendered
     assert "anva_sources" in rendered
+
+
+@pytest.mark.contract
+def test_acceptance_contract_is_public_only_and_requires_retrieval_results() -> None:
+    corpus = SCHEMAS["acceptance-corpus"]
+    result = SCHEMAS["acceptance-result"]
+    rendered = json.dumps({"corpus": corpus, "result": result}, sort_keys=True).lower()
+
+    assert "oracle" not in rendered
+    assert "grader" not in rendered
+    corpus_properties = cast(dict[str, object], corpus["properties"])
+    assert set(corpus_properties) == {
+        "schema_version",
+        "corpus_id",
+        "generated_at",
+        "source_commit",
+        "files",
+        "limits",
+    }
+    result_properties = cast(dict[str, object], result["properties"])
+    artifacts = cast(dict[str, object], result_properties["artifacts"])
+    assert artifacts["minItems"] == 0
+    conditions = cast(list[dict[str, object]], result["allOf"])
+    successful_then = cast(dict[str, object], conditions[0]["then"])
+    successful_properties = cast(dict[str, object], successful_then["properties"])
+    successful_artifacts = cast(dict[str, object], successful_properties["artifacts"])
+    contains = cast(dict[str, object], successful_artifacts["contains"])
+    contains_properties = cast(dict[str, object], contains["properties"])
+    assert contains_properties["kind"] == {"const": "knowledge_retrieval_results"}
+
+    failed = {
+        "schema_version": "1.0",
+        "corpus_id": "failed-corpus",
+        "manifest_sha256": "a" * 64,
+        "source_fingerprint": "b" * 64,
+        "run_id": "failed-run",
+        "status": "FAILED",
+        "started_at": "2026-08-07T00:00:00Z",
+        "completed_at": "2026-08-07T00:01:00Z",
+        "artifacts": [],
+        "error": {"code": "runner_unavailable", "message": "Runner was unavailable"},
+    }
+    Draft202012Validator(result).validate(failed)
 
 
 @pytest.mark.contract

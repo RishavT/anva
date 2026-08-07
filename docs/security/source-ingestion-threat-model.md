@@ -17,6 +17,7 @@ model. Connector/parser/extractor registries are code-owned allowlists.
 | Threat | Control | Verification |
 | --- | --- | --- |
 | Path traversal or symlink race | Absolute allowlisted roots; root rejects symlinks; `openat`/`O_NOFOLLOW` on every component; regular files only | Hostile path, root/file symlink, and special-file tests |
+| Held-control or oracle ingestion during acceptance | A network-disabled adapter is the only raw-mount consumer; it verifies an operator-pinned public manifest and copies an exact allowlist into an ephemeral canonical volume | Contract, hostile inventory, connector, and resolved-Compose tests |
 | Source mutation | Connector exposes discover/fetch only; Compose corpus mount is `:ro` | Mount read-only flag plus before/after SHA-256 fingerprints |
 | Oversized or deeply nested input | File, entry, page, path, line, YAML token, node, scalar, and depth limits; unsafe discovery entries are isolated from siblings | Boundary, bomb, and partial hostile-path tests |
 | YAML alias bomb or unsafe tags | Anchors/aliases rejected during token scan; safe YAML 1.2 loader | Alias and GitHub workflow tests |
@@ -35,8 +36,9 @@ model. Connector/parser/extractor registries are code-owned allowlists.
 The filesystem connector has no external credential. Remote connectors require reviewed secret
 storage, egress restrictions, pagination/backoff, and provider-specific permission snapshots.
 Raw bytes currently reside in PostgreSQL and therefore follow database backup/retention policy.
-The local corpus override is development-only. Production mounts must be read-only, minimal, and
-separate by trust boundary.
+Acceptance input is a public-only export, not a repository checkout. The private exporter, held
+controls, and grader remain outside Anva's mounts and network. Production mounts must be read-only,
+minimal, and separate by trust boundary.
 
 On suspected source compromise, revoke the source immediately, preserve the correlation/run/job
 IDs and secret-safe failures, and follow the source ingestion runbook. Do not delete immutable
