@@ -92,7 +92,6 @@ markers = [
   "unit: isolated business and service behavior",
   "integration: persistence and infrastructure boundaries",
   "contract: externally visible request/response contracts",
-  "corpus: optional read-only external corpus acceptance test",
   "skill_eval: deterministic host-skill behavior and safety evaluation",
   "smoke: deployable-process smoke checks",
   "browser: Selenium browser-native product flows",

@@ -1,0 +1,95 @@
+{
+  "$id": "https://schemas.anva.dev/v1/acceptance-corpus.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "corpus_id": {
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$",
+      "type": "string"
+    },
+    "files": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "maxLength": 1000,
+            "minLength": 9,
+            "pattern": "^payload/(?!\\.{1,2}(?:/|$))(?!.*\\/\\.{1,2}(?:/|$))(?!.*\\\\)[^/\\u0000]+(?:/[^/\\u0000]+)*$",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "size_bytes": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "sha256",
+          "size_bytes"
+        ],
+        "type": "object"
+      },
+      "maxItems": 10000,
+      "minItems": 1,
+      "type": "array"
+    },
+    "generated_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "limits": {
+      "additionalProperties": false,
+      "properties": {
+        "max_depth": {
+          "maximum": 32,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_file_bytes": {
+          "maximum": 268435456,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_files": {
+          "maximum": 10000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_total_bytes": {
+          "maximum": 1073741824,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_files",
+        "max_total_bytes",
+        "max_file_bytes",
+        "max_depth"
+      ],
+      "type": "object"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "type": "string"
+    },
+    "source_commit": {
+      "pattern": "^[a-f0-9]{40}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "corpus_id",
+    "generated_at",
+    "source_commit",
+    "files",
+    "limits"
+  ],
+  "title": "Anva Public Acceptance Corpus Manifest",
+  "type": "object"
+}

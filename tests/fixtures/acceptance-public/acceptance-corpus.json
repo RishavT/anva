@@ -1,0 +1,19 @@
+{
+  "corpus_id": "anva-public-compose-smoke",
+  "files": [
+    {
+      "path": "payload/organization/decision.md",
+      "sha256": "ed7cd26f52a826b25ba96ad8139479025451f6ccf3df668a4a1740b3f2952aca",
+      "size_bytes": 64
+    }
+  ],
+  "generated_at": "2026-08-07T00:00:00Z",
+  "limits": {
+    "max_depth": 2,
+    "max_file_bytes": 1024,
+    "max_files": 1,
+    "max_total_bytes": 1024
+  },
+  "schema_version": "1.0",
+  "source_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}

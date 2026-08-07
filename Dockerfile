@@ -41,6 +41,7 @@ ARG ANVA_SOURCE=https://github.com/rishavt/anva
 COPY --from=wheel-builder /dist /dist
 RUN uv pip install --no-deps /dist/*.whl \
     && python -m anva.manage collectstatic --noinput \
+    && mkdir -p /app/acceptance/canonical \
     && chown -R anva:anva /app
 USER anva
 LABEL org.opencontainers.image.title="Anva" \

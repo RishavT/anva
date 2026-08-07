@@ -98,7 +98,6 @@ make contracts-check
 make skills-check
 make unit
 make integration
-make corpus
 make contract
 make smoke
 make browser
@@ -106,12 +105,24 @@ make coverage
 make check
 ```
 
-`make check` is the same entrypoint used by GitHub Actions. The optional `make corpus` target
-requires the sibling `../anva-test` repository and mounts it at `/fixtures/anva-test:ro`; it
-fingerprints representative files before and after a full ingestion. The integration suite uses a
+`make check` is the same entrypoint used by GitHub Actions. External acceptance uses a separately
+exported public bundle, never a sibling repository checkout. Pin its manifest, copy its allowlisted
+regular files through the network-disabled adapter, and verify the canonical volume:
+
+```bash
+export ANVA_ACCEPTANCE_INPUT_DIR=/absolute/path/to/public-input
+export ANVA_ACCEPTANCE_MANIFEST_SHA256=<64-lowercase-hex>
+make acceptance-canonicalize
+make acceptance-verify
+make acceptance-down
+```
+
+Only `acceptance-adapter` receives the raw bind mount. Product and runner services receive the
+ephemeral canonical volume read-only. See the
+[acceptance corpus runbook](docs/runbooks/acceptance-corpus.md). The integration suite uses a
 separate `anva-tests` Compose project with non-persistent `test-postgres` and `test-minio`
-services, never the development containers or data volumes. Remove that project after a
-local test session with `make test-down`.
+services, never the development containers or data volumes. Remove that project after a local
+test session with `make test-down`.
 
 To format source files:
 

@@ -1,0 +1,122 @@
+services:
+  acceptance-adapter:
+    image: ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.0}
+    build:
+      context: .
+      target: runtime
+      args:
+        ANVA_VERSION: ${ANVA_VERSION:-0.1.0}
+        ANVA_REVISION: ${ANVA_REVISION:-unknown}
+        ANVA_SOURCE: ${ANVA_SOURCE:-https://github.com/rishavt/anva}
+        SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH:-1756684800}
+    profiles: ["acceptance"]
+    user: "0:0"
+    command:
+      - anva
+      - acceptance
+      - canonicalize
+      - --raw-root
+      - /acceptance/raw
+      - --canonical-root
+      - /app/acceptance/canonical
+      - --manifest-sha256
+      - ${ANVA_ACCEPTANCE_MANIFEST_SHA256:-invalid-unpinned-manifest}
+      - --max-files
+      - ${ANVA_ACCEPTANCE_MAX_FILES:-1000}
+      - --max-total-bytes
+      - ${ANVA_ACCEPTANCE_MAX_TOTAL_BYTES:-67108864}
+      - --max-file-bytes
+      - ${ANVA_ACCEPTANCE_MAX_FILE_BYTES:-8388608}
+      - --max-depth
+      - ${ANVA_ACCEPTANCE_MAX_DEPTH:-16}
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    network_mode: none
+    mem_limit: 256m
+    memswap_limit: 256m
+    pids_limit: 64
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+      - /app/run:size=4m,mode=0700,uid=10001,gid=10001
+    volumes:
+      - type: bind
+        source: ${ANVA_ACCEPTANCE_INPUT_DIR:-/nonexistent-anva-public-input}
+        target: /acceptance/raw
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: volume
+        source: acceptance-canonical
+        target: /app/acceptance/canonical
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: "no"
+
+  api:
+    environment:
+      ANVA_FILESYSTEM_ALLOWED_ROOTS: /app/acceptance/canonical/payload
+    volumes:
+      - acceptance-canonical:/app/acceptance/canonical:ro
+
+  worker:
+    environment:
+      ANVA_FILESYSTEM_ALLOWED_ROOTS: /app/acceptance/canonical/payload
+    volumes:
+      - acceptance-canonical:/app/acceptance/canonical:ro
+
+  mcp:
+    environment:
+      ANVA_FILESYSTEM_ALLOWED_ROOTS: /app/acceptance/canonical/payload
+    volumes:
+      - acceptance-canonical:/app/acceptance/canonical:ro
+
+  cli:
+    environment:
+      ANVA_FILESYSTEM_ALLOWED_ROOTS: /app/acceptance/canonical/payload
+    volumes:
+      - acceptance-canonical:/app/acceptance/canonical:ro
+
+  acceptance-runner:
+    image: ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.0}
+    build:
+      context: .
+      target: runtime
+      args:
+        ANVA_VERSION: ${ANVA_VERSION:-0.1.0}
+        ANVA_REVISION: ${ANVA_REVISION:-unknown}
+        ANVA_SOURCE: ${ANVA_SOURCE:-https://github.com/rishavt/anva}
+        SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH:-1756684800}
+    profiles: ["acceptance"]
+    command:
+      - anva
+      - acceptance
+      - verify
+      - --canonical-root
+      - /app/acceptance/canonical
+      - --manifest-sha256
+      - ${ANVA_ACCEPTANCE_MANIFEST_SHA256:-invalid-unpinned-manifest}
+      - --source-fingerprint
+      - ${ANVA_ACCEPTANCE_SOURCE_FINGERPRINT:-invalid-unpinned-fingerprint}
+      - --canonical-manifest-sha256
+      - ${ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256:-invalid-unpinned-canonical-manifest}
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+      - /app/run:size=4m,mode=0700,uid=10001,gid=10001
+    volumes:
+      - acceptance-canonical:/app/acceptance/canonical:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: "no"
+
+volumes:
+  acceptance-canonical:

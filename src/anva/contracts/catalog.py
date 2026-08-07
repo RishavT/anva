@@ -1321,7 +1321,195 @@ GITHUB_PUBLICATION_SCHEMA = versioned_schema(
     ],
 )
 
+ACCEPTANCE_CORPUS_SCHEMA = versioned_schema(
+    "acceptance-corpus",
+    "Anva Public Acceptance Corpus Manifest",
+    {
+        "corpus_id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$",
+        },
+        "generated_at": DATE_TIME_FIELD,
+        "source_commit": COMMIT_FIELD,
+        "files": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 10_000,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "minLength": 9,
+                        "maxLength": 1_000,
+                        "pattern": (
+                            "^payload/(?!\\.{1,2}(?:/|$))(?!.*\\/\\.{1,2}(?:/|$))"
+                            "(?!.*\\\\)[^/\\u0000]+(?:/[^/\\u0000]+)*$"
+                        ),
+                    },
+                    "sha256": SHA256_FIELD,
+                    "size_bytes": {"type": "integer", "minimum": 0},
+                },
+                "required": ["path", "sha256", "size_bytes"],
+            },
+        },
+        "limits": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "max_files": {"type": "integer", "minimum": 1, "maximum": 10_000},
+                "max_total_bytes": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1_073_741_824,
+                },
+                "max_file_bytes": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 268_435_456,
+                },
+                "max_depth": {"type": "integer", "minimum": 1, "maximum": 32},
+            },
+            "required": [
+                "max_files",
+                "max_total_bytes",
+                "max_file_bytes",
+                "max_depth",
+            ],
+        },
+    },
+    ["corpus_id", "generated_at", "source_commit", "files", "limits"],
+)
+
+ACCEPTANCE_RESULT_SCHEMA = versioned_schema(
+    "acceptance-result",
+    "Anva Public Acceptance Result",
+    {
+        "corpus_id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$",
+        },
+        "manifest_sha256": SHA256_FIELD,
+        "source_fingerprint": SHA256_FIELD,
+        "run_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$",
+        },
+        "status": {"type": "string", "enum": ["COMPLETE", "PARTIAL", "FAILED"]},
+        "started_at": DATE_TIME_FIELD,
+        "completed_at": DATE_TIME_FIELD,
+        "artifacts": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 1_000,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": [
+                            "knowledge_retrieval_results",
+                            "assurance_report",
+                            "findings",
+                            "criterion_evidence",
+                            "audit_log",
+                            "browser_capture",
+                            "structured_agent_output",
+                            "run_metadata",
+                        ],
+                    },
+                    "path": {
+                        "type": "string",
+                        "minLength": 9,
+                        "maxLength": 1_000,
+                        "pattern": (
+                            "^results/(?!\\.{1,2}(?:/|$))(?!.*\\/\\.{1,2}(?:/|$))"
+                            "(?!.*\\\\)[^/\\u0000]+(?:/[^/\\u0000]+)*$"
+                        ),
+                    },
+                    "sha256": SHA256_FIELD,
+                    "size_bytes": {"type": "integer", "minimum": 0},
+                },
+                "required": ["kind", "path", "sha256", "size_bytes"],
+            },
+        },
+        "error": {
+            "oneOf": [
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "code": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+                        },
+                        "message": {"type": "string", "minLength": 1, "maxLength": 2_000},
+                    },
+                    "required": ["code", "message"],
+                },
+                {"type": "null"},
+            ]
+        },
+    },
+    [
+        "corpus_id",
+        "manifest_sha256",
+        "source_fingerprint",
+        "run_id",
+        "status",
+        "started_at",
+        "completed_at",
+        "artifacts",
+        "error",
+    ],
+)
+ACCEPTANCE_RESULT_SCHEMA["allOf"] = [
+    {
+        "if": {
+            "properties": {"status": {"enum": ["COMPLETE", "PARTIAL"]}},
+            "required": ["status"],
+        },
+        "then": {
+            "properties": {
+                "artifacts": {
+                    "contains": {
+                        "type": "object",
+                        "required": ["kind"],
+                        "properties": {"kind": {"const": "knowledge_retrieval_results"}},
+                    },
+                    "minContains": 1,
+                }
+            }
+        },
+    },
+    {
+        "if": {
+            "properties": {"status": {"const": "COMPLETE"}},
+            "required": ["status"],
+        },
+        "then": {"properties": {"error": {"type": "null"}}},
+    },
+    {
+        "if": {
+            "properties": {"status": {"const": "FAILED"}},
+            "required": ["status"],
+        },
+        "then": {
+            "properties": {
+                "error": {
+                    "type": "object",
+                    "required": ["code", "message"],
+                }
+            }
+        },
+    },
+]
+
 SCHEMAS: Final[dict[str, dict[str, object]]] = {
+    "acceptance-corpus": ACCEPTANCE_CORPUS_SCHEMA,
+    "acceptance-result": ACCEPTANCE_RESULT_SCHEMA,
     "context-packet": CONTEXT_PACKET_SCHEMA,
     "assurance-report": ASSURANCE_REPORT_SCHEMA,
     "manual-diff-artifact": DIFF_ARTIFACT_SCHEMA,
@@ -1405,6 +1593,44 @@ RETRIEVAL_CITATION_EXAMPLE: Final[dict[str, object]] = {
 }
 
 EXAMPLES: Final[dict[str, dict[str, object]]] = {
+    "acceptance-corpus": {
+        "schema_version": SCHEMA_VERSION,
+        "corpus_id": "halcyon-messy-organization-tst-008",
+        "generated_at": "2026-07-28T12:00:00Z",
+        "source_commit": "a" * 40,
+        "files": [
+            {
+                "path": "payload/organization/decisions/checkout.md",
+                "sha256": "b" * 64,
+                "size_bytes": 128,
+            }
+        ],
+        "limits": {
+            "max_files": 200,
+            "max_total_bytes": 10_485_760,
+            "max_file_bytes": 1_048_576,
+            "max_depth": 8,
+        },
+    },
+    "acceptance-result": {
+        "schema_version": SCHEMA_VERSION,
+        "corpus_id": "halcyon-messy-organization-tst-008",
+        "manifest_sha256": "c" * 64,
+        "source_fingerprint": "d" * 64,
+        "run_id": "tst008-codex-001",
+        "status": "COMPLETE",
+        "started_at": "2026-08-07T12:00:00Z",
+        "completed_at": "2026-08-07T12:05:00Z",
+        "artifacts": [
+            {
+                "kind": "knowledge_retrieval_results",
+                "path": "results/knowledge-retrieval-results.json",
+                "sha256": "e" * 64,
+                "size_bytes": 4096,
+            }
+        ],
+        "error": None,
+    },
     "assurance-report": {
         "schema_version": SCHEMA_VERSION,
         "report_id": "00000000-0000-4000-8000-000000000603",

@@ -31,9 +31,10 @@ EXPOSED_COMPOSE := $(COMPOSE) -f compose.yaml -f compose.expose.yaml
 RELEASE_COMPOSE := $(COMPOSE) -f compose.yaml -f compose.release.yaml
 TEST_COMPOSE := docker compose -p $(TEST_PROJECT)
 TEST_RUN := $(TEST_COMPOSE) --profile test run --rm --build test
-CORPUS_COMPOSE := $(TEST_COMPOSE) -f compose.yaml -f compose.corpus.yaml
+ACCEPTANCE_PROJECT ?= anva-acceptance
+ACCEPTANCE_COMPOSE := docker compose -p $(ACCEPTANCE_PROJECT) -f compose.yaml -f compose.acceptance.yaml
 
-.PHONY: help install-demo up up-exposed down uninstall uninstall-clean backup backup-verify restore migration-rehearsal rate-limit-cleanup release-build release-scan release-scan-gate release-manifest release-artifacts release-clean reset logs migrate migrations-check shell cli lock contracts contracts-check skills-render skills-package skills-check format format-check lint type unit integration corpus contract smoke browser coverage test test-down check ci
+.PHONY: help install-demo up up-exposed down uninstall uninstall-clean backup backup-verify restore migration-rehearsal rate-limit-cleanup release-build release-scan release-scan-gate release-manifest release-artifacts release-clean reset logs migrate migrations-check shell cli lock contracts contracts-check skills-render skills-package skills-check format format-check lint type unit integration acceptance-canonicalize acceptance-verify acceptance-down contract smoke browser coverage test test-down check ci
 
 help:
 	@echo "Anva development commands (all application tooling runs in Compose)"
@@ -51,7 +52,9 @@ help:
 	@echo "  make contracts     Regenerate versioned OpenAPI, MCP, schemas, and examples"
 	@echo "  make skills-check  Verify rendered skills, archives, checksums, and evals"
 	@echo "  make browser       Run the browser-native product journey in Chromium"
-	@echo "  make corpus        Ingest the sibling anva-test repo through a read-only mount"
+	@echo "  make acceptance-canonicalize  Copy one pinned public corpus into an isolated volume"
+	@echo "  make acceptance-verify  Verify the canonical corpus without the raw mount"
+	@echo "  make acceptance-down  Remove only the acceptance project's ephemeral resources"
 	@echo "  make test-down     Remove the isolated test project"
 	@echo "  make reset         Remove local containers and named data volumes"
 	@echo "  make logs          Follow service logs"
@@ -374,8 +377,17 @@ unit:
 integration:
 	$(TEST_RUN) pytest -m integration
 
-corpus:
-	$(CORPUS_COMPOSE) --profile test run --rm --build test pytest -m corpus
+acceptance-canonicalize:
+	$(ACCEPTANCE_COMPOSE) --profile acceptance run --rm --build acceptance-adapter
+
+acceptance-verify:
+	@test -n "$(ANVA_ACCEPTANCE_MANIFEST_SHA256)" || { echo "ANVA_ACCEPTANCE_MANIFEST_SHA256 is required"; exit 2; }
+	@test -n "$(ANVA_ACCEPTANCE_SOURCE_FINGERPRINT)" || { echo "ANVA_ACCEPTANCE_SOURCE_FINGERPRINT is required"; exit 2; }
+	@test -n "$(ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256)" || { echo "ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256 is required"; exit 2; }
+	$(ACCEPTANCE_COMPOSE) --profile acceptance run --rm acceptance-runner
+
+acceptance-down:
+	$(ACCEPTANCE_COMPOSE) --profile acceptance down --volumes --remove-orphans
 
 contract:
 	$(TEST_RUN) pytest -m contract

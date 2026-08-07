@@ -1,0 +1,19 @@
+{
+  "artifacts": [
+    {
+      "kind": "knowledge_retrieval_results",
+      "path": "results/knowledge-retrieval-results.json",
+      "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "size_bytes": 4096
+    }
+  ],
+  "completed_at": "2026-08-07T12:05:00Z",
+  "corpus_id": "halcyon-messy-organization-tst-008",
+  "error": null,
+  "manifest_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "run_id": "tst008-codex-001",
+  "schema_version": "1.0",
+  "source_fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "started_at": "2026-08-07T12:00:00Z",
+  "status": "COMPLETE"
+}

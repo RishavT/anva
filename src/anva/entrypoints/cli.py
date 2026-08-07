@@ -76,6 +76,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Delete one bounded batch of expired anonymous request counters",
     )
     purge_preauth.add_argument("--limit", type=_maintenance_batch_limit, default=1_000)
+    acceptance = subparsers.add_parser(
+        "acceptance",
+        help="Canonicalize or verify an oracle-isolated public acceptance corpus",
+    )
+    acceptance_commands = acceptance.add_subparsers(
+        dest="acceptance_command",
+        required=True,
+    )
+    acceptance_canonicalize = acceptance_commands.add_parser("canonicalize")
+    acceptance_canonicalize.add_argument("--raw-root", required=True, type=Path)
+    acceptance_canonicalize.add_argument("--canonical-root", required=True, type=Path)
+    acceptance_canonicalize.add_argument("--manifest-sha256", required=True)
+    acceptance_canonicalize.add_argument("--max-files", type=int, default=10_000)
+    acceptance_canonicalize.add_argument("--max-total-bytes", type=int, default=1_073_741_824)
+    acceptance_canonicalize.add_argument("--max-file-bytes", type=int, default=268_435_456)
+    acceptance_canonicalize.add_argument("--max-depth", type=int, default=32)
+    acceptance_verify = acceptance_commands.add_parser("verify")
+    acceptance_verify.add_argument("--canonical-root", required=True, type=Path)
+    acceptance_verify.add_argument("--manifest-sha256", required=True)
+    acceptance_verify.add_argument("--source-fingerprint", required=True)
+    acceptance_verify.add_argument("--canonical-manifest-sha256", required=True)
     source = subparsers.add_parser("source", help="Operate source connections through the API")
     source.add_argument(
         "--api-url",
@@ -929,12 +950,64 @@ def _skills_request(arguments: argparse.Namespace) -> int:
     return 0 if result["status"] not in {"unavailable", "unsupported", "drifted"} else 1
 
 
+def _acceptance_request(arguments: argparse.Namespace) -> int:
+    from anva.acceptance.corpus import (
+        AcceptanceCorpusError,
+        AdapterLimits,
+        canonicalize_corpus,
+        verify_canonical_corpus,
+    )
+
+    try:
+        if arguments.acceptance_command == "canonicalize":
+            result = canonicalize_corpus(
+                raw_root=arguments.raw_root,
+                canonical_root=arguments.canonical_root,
+                manifest_sha256=str(arguments.manifest_sha256),
+                operator_limits=AdapterLimits(
+                    max_files=int(arguments.max_files),
+                    max_total_bytes=int(arguments.max_total_bytes),
+                    max_file_bytes=int(arguments.max_file_bytes),
+                    max_depth=int(arguments.max_depth),
+                ),
+            )
+            payload = result.as_dict()
+            payload["status"] = "canonicalized"
+        elif arguments.acceptance_command == "verify":
+            payload = verify_canonical_corpus(
+                arguments.canonical_root,
+                expected_manifest_sha256=str(arguments.manifest_sha256),
+                expected_source_fingerprint=str(arguments.source_fingerprint),
+                expected_canonical_manifest_sha256=str(arguments.canonical_manifest_sha256),
+            ).as_dict()
+        else:
+            raise ValueError("Unknown acceptance command")
+    except AcceptanceCorpusError as error:
+        print(json.dumps({"code": error.code, "message": str(error)}, sort_keys=True))
+        return 2
+    except OSError:
+        print(
+            json.dumps(
+                {
+                    "code": "acceptance_io_rejected",
+                    "message": "Acceptance corpus I/O failed safely",
+                },
+                sort_keys=True,
+            )
+        )
+        return 2
+    print(json.dumps(payload, sort_keys=True))
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Execute one CLI command and return a process exit code."""
     arguments = build_parser().parse_args(argv)
     if arguments.command == "version":
         print(__version__)
         return 0
+    if arguments.command == "acceptance":
+        return _acceptance_request(arguments)
     if arguments.command == "source":
         return _source_request(arguments)
     if arguments.command in {"search", "context", "packet"}:

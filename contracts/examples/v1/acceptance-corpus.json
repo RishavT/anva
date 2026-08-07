@@ -1,0 +1,19 @@
+{
+  "corpus_id": "halcyon-messy-organization-tst-008",
+  "files": [
+    {
+      "path": "payload/organization/decisions/checkout.md",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "size_bytes": 128
+    }
+  ],
+  "generated_at": "2026-07-28T12:00:00Z",
+  "limits": {
+    "max_depth": 8,
+    "max_file_bytes": 1048576,
+    "max_files": 200,
+    "max_total_bytes": 10485760
+  },
+  "schema_version": "1.0",
+  "source_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}
