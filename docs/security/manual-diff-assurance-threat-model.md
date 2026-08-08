@@ -18,12 +18,13 @@ only at their exact persisted versions.
 | Evaluator decides readiness | Result schema has no outcome/readiness field; fixed server precedence over persisted checks/policy/gaps | Contract and deterministic-failure integration tests |
 | Fabricated citation | Diff citation must fall within exact old/new hunk range; source citation must belong to exact authorized context packet; evidence/criterion IDs are allowlisted | Unsupported citation integration test |
 | Stale review published | Current PR revision/head checked at start, claim, and submit; new revision stales prior active/completed run and cancels pending work | New-head and same-head metadata tests |
-| Queue theft or replay | Row lock with `SKIP LOCKED`, bounded lease/attempts, claimant and single-use token hash, exact identical-submit replay only | Claim/submit history tests |
+| Initiator self-review | Immutable run initiator actor/credential; claim skips every task initiated by the authenticated actor | Self-review and database-trigger tests |
+| Queue theft, identity switching, or replay | Dedicated `assurance.review`; every source boundary reauthorized; row lock with `SKIP LOCKED`; bounded lease/attempts; task bound to authenticated actor and exact credential; caller claimant is audit-only; single-use token hash; exact identical-submit replay only for the bound identity | Claim/submit, role, revoked/expired credential, and identity-switch tests |
 | Tenant graft | Central authorization plus composite `(organization_id, id)` foreign keys | Migration and PostgreSQL tests |
 | Historical rewrite | Content-addressed artifacts and update/delete triggers for assurance history | Direct update/delete rejection |
 | XSS or deployment claim through report | Markdown escaping, HTML escaping, prohibited-claim removal, fixed disclaimer | Golden and injection tests |
 | Silent knowledge mutation | Post-merge path creates cited proposals only; no accept/apply transition | Post-merge safety test |
-| Credential persistence | Secret-pattern rejection; claim token stored only as SHA-256 and returned once; evaluator packet excludes environment/DB credentials | Unit and integration canaries |
+| Credential persistence | Secret-pattern rejection; only credential UUIDs and authorization paths enter immutable audit/history; claim token stored only as SHA-256 and returned once; evaluator packet excludes environment/DB credentials | Audit-redaction and integration canaries |
 
 ## Incident response
 
@@ -39,4 +40,5 @@ persisted.
   approval.
 - A valid authorized source may itself contain incorrect or adversarial prose.
 - Storage retention and per-tenant quotas need production policy beyond input bounds.
-- Manual evaluator availability and reviewer identity assurance depend on deployment operations.
+- Manual evaluator availability depends on deployment operations; Anva provides a provider-neutral
+  external queue and does not embed or host a Codex/Claude evaluator.

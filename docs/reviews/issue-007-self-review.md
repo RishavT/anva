@@ -77,8 +77,9 @@ code or independently verify CI artifact bytes; it consumes exact deterministic 
 evidence metadata. Large/binary/combined/quoted-path diffs fail closed. There is no hosted evaluator
 provider, webhook adapter, GitHub check publisher, reviewer-identity federation, UI, automatic
 knowledge acceptance, retention quota, or proof of runtime/deployment safety in this slice.
-The manual evaluator queue currently requires the claiming principal to be inside the run's sealed
-input envelope; delegated evaluator identities need an explicit future federation design.
+The manual evaluator queue is provider-neutral and external: a distinct `assurance.review`
+principal must be authorized across every sealed source boundary, and the exact claiming actor and
+credential remain bound through submission. There is still no hosted evaluator provider.
 
 ## Verification
 

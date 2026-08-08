@@ -82,6 +82,8 @@ def _seed_product_records() -> tuple[Repository, KnowledgeEntity, KnowledgeAsser
     )
     run = AssuranceRun.objects.create(
         organization=organization,
+        initiated_by_actor_type="SYSTEM",
+        initiated_by_actor_id="test-fixture",
         repository=repository,
         repository_external_id=repository.external_id,
         pull_request_number=pull_request.number,

@@ -227,6 +227,9 @@ def request_assurance_run(
         run = AssuranceRun.objects.create(
             organization=organization,
             repository_external_id=repository.external_id,
+            initiated_by_actor_type=actor.actor_type,
+            initiated_by_actor_id=actor.actor_id,
+            initiated_by_credential_id=actor.credential_id,
             pull_request_number=pull_request_number,
             head_commit=head_commit,
             policy_version=policy_version,

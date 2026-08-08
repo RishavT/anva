@@ -207,13 +207,26 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.getenv("ANVA_API_URL", "http://localhost:8000/api/v1"),
     )
     evaluator_commands = evaluator.add_subparsers(dest="evaluator_command", required=True)
-    evaluator_claim = evaluator_commands.add_parser("claim")
+    evaluator_claim = evaluator_commands.add_parser(
+        "claim",
+        help="Claim with an assurance.review credential distinct from the run initiator",
+    )
     evaluator_claim.add_argument("--repository-id", required=True, type=uuid.UUID)
-    evaluator_claim.add_argument("--claimant", required=True)
+    evaluator_claim.add_argument(
+        "--claimant",
+        required=True,
+        help="Audit-only evaluator or provider display label",
+    )
     evaluator_claim.add_argument("--lease-seconds", type=int, default=900)
-    evaluator_submit = evaluator_commands.add_parser("submit")
+    evaluator_submit = evaluator_commands.add_parser(
+        "submit",
+        help="Submit with the exact actor and credential that claimed the task",
+    )
     evaluator_submit.add_argument("task_id", type=uuid.UUID)
-    evaluator_submit.add_argument("--claimant", required=True)
+    evaluator_submit.add_argument(
+        "--claimant",
+        help="Optional backwards-compatible display label; claim-time metadata is authoritative",
+    )
     evaluator_submit.add_argument("--result", required=True, type=Path)
     github = subparsers.add_parser("github", help="Configure or diagnose a GitHub App binding")
     github.add_argument(
@@ -486,10 +499,11 @@ def _evaluator_request(arguments: argparse.Namespace) -> int:
             return 2
         path = f"/evaluator-tasks/{arguments.task_id}/submit"
         payload = {
-            "claimant": arguments.claimant,
             "claim_token": claim_token,
             "result": _bounded_json_file(arguments.result),
         }
+        if arguments.claimant is not None:
+            payload["claimant"] = arguments.claimant
     else:
         raise ValueError("Unknown evaluator command")
     return _api_request(

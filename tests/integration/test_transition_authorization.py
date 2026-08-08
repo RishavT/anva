@@ -233,6 +233,8 @@ def test_assurance_transition_authorizes_before_every_return_or_validation() -> 
     caller = Organization.objects.create(slug="assure-caller", name="Assurance Caller")
     foreign_initial = AssuranceRun.objects.create(
         organization=owner,
+        initiated_by_actor_type="SYSTEM",
+        initiated_by_actor_id="test-fixture",
         repository_external_id="github:owner/repository",
         pull_request_number=7,
         head_commit="a" * 40,
@@ -240,6 +242,8 @@ def test_assurance_transition_authorizes_before_every_return_or_validation() -> 
     )
     foreign_terminal = AssuranceRun.objects.create(
         organization=owner,
+        initiated_by_actor_type="SYSTEM",
+        initiated_by_actor_id="test-fixture",
         repository_external_id="github:owner/repository",
         pull_request_number=7,
         head_commit="b" * 40,
@@ -304,6 +308,8 @@ def test_assurance_transition_authorizes_before_every_return_or_validation() -> 
 
     own = AssuranceRun.objects.create(
         organization=caller,
+        initiated_by_actor_type="SYSTEM",
+        initiated_by_actor_id="test-fixture",
         repository_external_id="github:caller/repository",
         pull_request_number=9,
         head_commit="c" * 40,

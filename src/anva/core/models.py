@@ -2235,6 +2235,9 @@ class AssuranceRun(RevisionedTenantModel):
         CANCELLED = "CANCELLED"
 
     repository_external_id = models.CharField(max_length=300)
+    initiated_by_actor_type = models.CharField(max_length=20)
+    initiated_by_actor_id = models.CharField(max_length=200)
+    initiated_by_credential_id = models.UUIDField(null=True, blank=True)
     pull_request_number = models.PositiveIntegerField()
     head_commit = models.CharField(max_length=64)
     evaluated_commit = models.CharField(max_length=64, blank=True)
@@ -2338,6 +2341,10 @@ class AssuranceRun(RevisionedTenantModel):
             models.CheckConstraint(
                 condition=Q(policy_version__gte=1),
                 name="core_assurance_policy_version_gte_1",
+            ),
+            models.CheckConstraint(
+                condition=~Q(initiated_by_actor_type="") & ~Q(initiated_by_actor_id=""),
+                name="core_assurance_initiator_present",
             ),
             models.CheckConstraint(
                 condition=Q(input_hash="") | Q(input_hash__regex=r"^[a-f0-9]{64}$"),
@@ -2447,6 +2454,9 @@ class EvaluatorTask(RevisionedTenantModel):
     )
     state = models.CharField(max_length=16, choices=State, default=State.PENDING)
     claimant = models.CharField(max_length=200, blank=True)
+    claimed_by_actor_type = models.CharField(max_length=20, blank=True)
+    claimed_by_actor_id = models.CharField(max_length=200, blank=True)
+    claimed_by_credential_id = models.UUIDField(null=True, blank=True)
     claim_token_hash = models.CharField(max_length=64, blank=True)
     lease_expires_at = models.DateTimeField(null=True, blank=True)
     attempt_count = models.PositiveIntegerField(default=0)
@@ -2471,6 +2481,30 @@ class EvaluatorTask(RevisionedTenantModel):
                 condition=Q(attempt_count__lte=F("max_attempts")),
                 name="core_evaluator_attempt_bound",
             ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        state__in=["PENDING", "CANCELLED"],
+                        attempt_count=0,
+                        claimant="",
+                        claimed_by_actor_type="",
+                        claimed_by_actor_id="",
+                        claimed_by_credential_id__isnull=True,
+                        claim_token_hash="",
+                        lease_expires_at__isnull=True,
+                    )
+                    | (
+                        Q(
+                            state__in=["CLAIMED", "SUBMITTED", "FAILED", "CANCELLED"],
+                            attempt_count__gte=1,
+                        )
+                        & ~Q(claimant="")
+                        & ~Q(claimed_by_actor_type="")
+                        & ~Q(claimed_by_actor_id="")
+                    )
+                ),
+                name="core_evaluator_claim_identity_coherent",
+            ),
         ]
 
 
@@ -2481,6 +2515,9 @@ class EvaluatorAttempt(UUIDModel):
     evaluator_task = models.ForeignKey(EvaluatorTask, on_delete=models.PROTECT)
     attempt = models.PositiveIntegerField()
     claimant = models.CharField(max_length=200)
+    claimed_by_actor_type = models.CharField(max_length=20)
+    claimed_by_actor_id = models.CharField(max_length=200)
+    claimed_by_credential_id = models.UUIDField(null=True, blank=True)
     event = models.CharField(max_length=24)
     request_hash = models.CharField(max_length=64)
     result_hash = models.CharField(max_length=64, blank=True)
@@ -2505,6 +2542,10 @@ class EvaluatorAttempt(UUIDModel):
             models.CheckConstraint(
                 condition=Q(request_hash__regex=r"^[a-f0-9]{64}$"),
                 name="core_evaluator_attempt_request_sha",
+            ),
+            models.CheckConstraint(
+                condition=~Q(claimed_by_actor_type="") & ~Q(claimed_by_actor_id=""),
+                name="core_evaluator_attempt_identity_present",
             ),
         ]
 
@@ -3290,6 +3331,7 @@ class AuditEvent(UUIDModel):
     organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
     actor_type = models.CharField(max_length=50)
     actor_id = models.CharField(max_length=200)
+    credential_id = models.UUIDField(null=True, blank=True)
     action = models.CharField(max_length=200)
     target_type = models.CharField(max_length=100)
     target_id = models.UUIDField()

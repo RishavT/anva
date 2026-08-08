@@ -1467,11 +1467,25 @@ def test_delayed_older_snapshot_cannot_regress_current_provider_head() -> None:
             id=current_results[0].result_identifiers["assurance_run_id"],
         )
         evaluator_task = EvaluatorTask.objects.get(assurance_run=current_run)
+        reviewer_role = Role.objects.create(
+            organization=tenant.organization,
+            code=Role.Code.REVIEWER,
+            name="Independent reviewer",
+        )
+        reviewer_user = User.objects.create(
+            email=f"provider-reviewer-{uuid.uuid4()}@example.test",
+            display_name="Provider freshness reviewer",
+        )
+        Membership.objects.create(
+            organization=tenant.organization,
+            user=reviewer_user,
+            role=reviewer_role,
+        )
         evaluator_actor = ActorContext(
             organization_id=tenant.organization.id,
-            actor_type="SERVICE",
-            actor_id=str(binding.installation.service_identity_id),
-            authorization_path=f"github-installation:{binding.installation_id}",
+            actor_type="USER",
+            actor_id=str(reviewer_user.id),
+            authorization_path="test-independent-reviewer",
             request_id=uuid.uuid4(),
         )
         claim = claim_evaluator_task(

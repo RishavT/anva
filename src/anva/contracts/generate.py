@@ -410,7 +410,15 @@ def openapi_document() -> dict[str, object]:
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "claimant": {"type": "string", "minLength": 1, "maxLength": 200},
+            "claimant": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "description": (
+                    "Audit-only evaluator/provider label; authenticated actor and "
+                    "credential identity own the claim."
+                ),
+            },
             "lease_seconds": {"type": "integer", "minimum": 60, "maximum": 3_600},
         },
         "required": ["claimant"],
@@ -419,11 +427,19 @@ def openapi_document() -> dict[str, object]:
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "claimant": {"type": "string", "minLength": 1, "maxLength": 200},
+            "claimant": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "description": (
+                    "Optional backwards-compatible display label. It is not an "
+                    "authorization factor; claim-time metadata remains authoritative."
+                ),
+            },
             "claim_token": {"type": "string", "minLength": 1, "maxLength": 200},
             "result": {"$ref": "#/components/schemas/evaluator-result"},
         },
-        "required": ["claimant", "claim_token", "result"],
+        "required": ["claim_token", "result"],
     }
     finding_decision_request = {
         "type": "object",
@@ -1806,6 +1822,10 @@ def openapi_document() -> dict[str, object]:
             "/repositories/{repository_id}/evaluator-tasks/claim": {
                 "post": {
                     "operationId": "claimManualEvaluatorTask",
+                    "description": (
+                        "Requires assurance.review. The run initiator is ineligible; "
+                        "source-scope authorization is rechecked before returning the request."
+                    ),
                     "parameters": [*mutation_parameters, repository_parameter],
                     "requestBody": {
                         "required": True,
@@ -1817,6 +1837,10 @@ def openapi_document() -> dict[str, object]:
             "/evaluator-tasks/{resource_id}/submit": {
                 "post": {
                     "operationId": "submitManualEvaluatorResult",
+                    "description": (
+                        "Requires the same active authenticated actor and credential that "
+                        "claimed the live lease."
+                    ),
                     "parameters": [*mutation_parameters, resource_parameter],
                     "requestBody": {
                         "required": True,

@@ -174,6 +174,7 @@ def test_manual_evaluator_claim_and_submit_http_adapters(client: Client) -> None
     claim = SimpleNamespace(
         task=SimpleNamespace(
             id=task_id,
+            claimant="fresh-agent",
             attempt_count=2,
             lease_expires_at=lease_expires,
         ),
@@ -214,7 +215,6 @@ def test_manual_evaluator_claim_and_submit_http_adapters(client: Client) -> None
             submit_url,
             data=json.dumps(
                 {
-                    "claimant": "fresh-agent",
                     "claim_token": "opaque-claim-token",
                     "result": {"schema_version": "1.0"},
                 }
@@ -236,6 +236,7 @@ def test_manual_evaluator_claim_and_submit_http_adapters(client: Client) -> None
     assert empty.json() == {"status": "EMPTY"}
     assert claimed.status_code == 200
     assert claimed.json()["task_id"] == str(task_id)
+    assert claimed.json()["claimant"] == "fresh-agent"
     assert claimed.json()["attempt"] == 2
     assert claimed.json()["lease_expires_at"] == lease_expires.isoformat()
     assert submitted.status_code == 201
@@ -244,6 +245,7 @@ def test_manual_evaluator_claim_and_submit_http_adapters(client: Client) -> None
     assert invalid.status_code == 400
     assert claim_task.call_args.kwargs["lease_seconds"] == 30
     assert submit.call_args.kwargs["task_id"] == task_id
+    assert submit.call_args.kwargs["claimant"] is None
     assert submit.call_args.kwargs["claim_token"] == "opaque-claim-token"  # noqa: S105
 
 

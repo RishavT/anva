@@ -244,8 +244,8 @@ Versioned work import, policy simulation, evidence submission, deterministic rep
 limitations are documented in
 [the intent/policy/evidence runbook](docs/runbooks/intent-policy-evidence.md).
 
-Manual diff ingestion, exact assurance starts, fresh evaluator claim/submit, reports, staleness,
-and post-merge proposal safety are documented in
+Manual diff ingestion, exact assurance starts, independent `assurance.review` actor/credential
+claim/submit, reports, staleness, and post-merge proposal safety are documented in
 [the manual-diff assurance runbook](docs/runbooks/manual-diff-assurance.md).
 
 GitHub App registration, repository binding, the isolated credential-bearing worker, status,
