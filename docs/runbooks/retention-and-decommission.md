@@ -4,6 +4,10 @@ MVP-013 implements organization-scoped retention and decommission operations.
 Authorization, idempotency, retained-data, caller-time rejection, tenant-bucket
 isolation, and fail-closed access tests pass in the exact source candidate
 `94231d7e...`. Manual interruption/recovery and human acceptance remain open.
+The post-MVP-013 issue 29 candidate additionally deletes exact owned accepted
+evidence bytes with a retryable storage lifecycle; this is local candidate
+evidence and does not change the identity of the historical MVP-013 release
+record.
 
 ## Authorization and audit expectations
 
@@ -40,12 +44,21 @@ only after confirming the target organization and policy.
 
 Evidence is eligible only when both its explicit `retention_expires_at` has
 passed and its completion time is older than the organization's configured
-minimum-retention cutoff. Current behavior appends expiration events for that
-eligible evidence and removes expired rate-limit buckets belonging only to the
-same organization; another tenant's buckets are untouched. It reports
-`source_content_deleted: 0`: source blobs and governed evidence are not
-hard-deleted by this operation. This is retention bookkeeping and access-state
-evolution, not proof of legal erasure.
+minimum-retention cutoff. Current candidate behavior appends expiration events
+for that eligible evidence, removes expired rate-limit buckets belonging only
+to the same organization, and then attempts physical deletion of linked
+accepted evidence bytes. It also deletes unlinked accepted blobs older than the
+organization cutoff. Selection is tenant-qualified and bounded to 10,000 blobs.
+`dry_run: true` reports candidates without changing retention state or deleting
+bytes.
+
+The response reports `evidence_blob_bytes_deleted` and
+`evidence_blob_bytes_delete_failed`. A successful object deletion preserves the
+authorization, blob metadata, evidence, retention event, and audit history and
+marks the blob `DELETED`; a storage failure remains `DELETE_FAILED` for retry.
+It still reports `source_content_deleted: 0`: source-ingestion content is not
+hard-deleted. This is bounded evidence-byte lifecycle management, not proof of
+legal erasure.
 
 ## Decommission an organization
 
@@ -75,17 +88,24 @@ proceeding:
 3. record the approvals and intended retention/legal-hold outcome; and
 4. warn users that access will be revoked.
 
-Current behavior revokes source access and disables memberships,
-service identities, repositories, scopes, and tokens before marking the
-organization decommissioned. Governed content and history are retained. The
-operation is therefore an access-revocation/deactivation workflow, not tenant
-hard deletion or a legal-erasure workflow.
+Current behavior revokes source access and disables memberships, service
+identities, repositories, scopes, and tokens before marking the organization
+decommissioned. The issue 29 candidate then attempts deletion of every
+tenant-qualified accepted evidence blob in `AVAILABLE` or `DELETE_FAILED`, up
+to the 10,000-blob safety bound, and reports successful and failed byte
+deletions separately. Governed content, blob metadata, and history are retained;
+source-ingestion content is not physically deleted. The operation is therefore
+access revocation plus bounded accepted-evidence byte deletion, not tenant hard
+deletion or a legal-erasure workflow.
 
 ## Validation and recovery
 
 After either operation, verify that the returned organization matches the
 request, audit/evidence records exist, expected access is denied, unrelated
-organizations remain usable, and metrics/logs show no unexpected failure.
+organizations remain usable, `evidence_blob_bytes_delete_failed` is zero or is
+explicitly escalated, and metrics/logs show no unexpected failure. Never mark a
+failed blob deleted or remove an object manually; deletion checks per-object
+ownership metadata and retry state.
 
 There is no API to undo decommissioning. Recovery may require an
 operator-controlled backup and an approved, isolated restoration procedure; a
@@ -100,9 +120,10 @@ disabled. Escalate rather than manually editing lifecycle fields.
   afterward until that product flow exists.
 - Scheduled policy execution, physical source deletion, backup expiry, legal
   hold, erasure attestation, and an approved restoration workflow are not
-  demonstrated.
+  demonstrated. Accepted evidence-byte deletion is not source deletion or
+  complete tenant erasure.
 - The operations are transaction-bounded and have deterministic replay
-  identities, but large-tenant timing and interruption/recovery exercises remain
-  open.
+  identities, and object deletion has retryable `DELETE_FAILED` state, but
+  large-tenant timing and manual interruption/recovery exercises remain open.
 - A successful HTTP status is not sufficient acceptance evidence; verify state,
   isolation, audit records, and retained/deleted data explicitly.

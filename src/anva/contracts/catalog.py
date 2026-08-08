@@ -449,6 +449,7 @@ EVIDENCE_ENTRY: Final[dict[str, object]] = {
             "maxLength": 2_000,
             "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*\\x00).*$",
         },
+        "artifact_blob_id": {"oneOf": [UUID_FIELD, {"type": "null"}]},
         "source_url": {
             "oneOf": [
                 {"type": "string", "format": "uri", "maxLength": 2_000},
@@ -536,6 +537,41 @@ EVIDENCE_MANIFEST_SCHEMA = versioned_schema(
         "entries",
     ],
     definitions={"evidence_entry": EVIDENCE_ENTRY},
+)
+
+EVIDENCE_UPLOAD_AUTHORIZATION_SCHEMA = versioned_schema(
+    "evidence-upload-authorization",
+    "Anva Evidence Upload Authorization Request",
+    {
+        "access_scope_id": UUID_FIELD,
+        "commit_sha": COMMIT_FIELD,
+        "filename": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": ("^(?!\\.{1,2}$)(?!.*[ .]$)[^/\\\\:\\x00-\\x1f\\x7f]+$"),
+        },
+        "declared_sha256": SHA256_FIELD,
+        "declared_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4096,
+        },
+        "idempotency_key": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 200,
+            "pattern": "^[^\\x00-\\x1f\\x7f]+$",
+        },
+    },
+    [
+        "access_scope_id",
+        "commit_sha",
+        "filename",
+        "declared_sha256",
+        "declared_size",
+        "idempotency_key",
+    ],
 )
 
 DIFF_CITATION: Final[dict[str, object]] = {
@@ -1514,6 +1550,7 @@ SCHEMAS: Final[dict[str, dict[str, object]]] = {
     "assurance-report": ASSURANCE_REPORT_SCHEMA,
     "manual-diff-artifact": DIFF_ARTIFACT_SCHEMA,
     "evidence-manifest": EVIDENCE_MANIFEST_SCHEMA,
+    "evidence-upload-authorization": EVIDENCE_UPLOAD_AUTHORIZATION_SCHEMA,
     "evaluator-request": EVALUATOR_REQUEST_SCHEMA,
     "evaluator-result": EVALUATOR_RESULT_SCHEMA,
     "finding": FINDING_SCHEMA,
@@ -1810,6 +1847,15 @@ EXAMPLES: Final[dict[str, dict[str, object]]] = {
                 "scenario": "unit",
             }
         ],
+    },
+    "evidence-upload-authorization": {
+        "schema_version": SCHEMA_VERSION,
+        "access_scope_id": "00000000-0000-4000-8000-000000000504",
+        "commit_sha": "a" * 40,
+        "filename": "evidence.zip",
+        "declared_sha256": "d" * 64,
+        "declared_size": 631,
+        "idempotency_key": "ci-run-17-tests-artifact",
     },
     "finding": FINDING_EXAMPLE,
     "evaluator-request": {

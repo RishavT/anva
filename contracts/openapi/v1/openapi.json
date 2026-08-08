@@ -1341,6 +1341,17 @@
                   }
                 ]
               },
+              "artifact_blob_id": {
+                "oneOf": [
+                  {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "artifact_reference": {
                 "maxLength": 2000,
                 "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*\\x00).*$",
@@ -1587,6 +1598,57 @@
           "entries"
         ],
         "title": "Anva Evidence Manifest",
+        "type": "object"
+      },
+      "evidence-upload-authorization": {
+        "$id": "https://schemas.anva.dev/v1/evidence-upload-authorization.schema.json",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "access_scope_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "commit_sha": {
+            "pattern": "^[a-f0-9]{40}$",
+            "type": "string"
+          },
+          "declared_sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "declared_size": {
+            "maximum": 4096,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "filename": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^(?!\\.{1,2}$)(?!.*[ .]$)[^/\\\\:\\x00-\\x1f\\x7f]+$",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 200,
+            "minLength": 16,
+            "pattern": "^[^\\x00-\\x1f\\x7f]+$",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "1.0",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "access_scope_id",
+          "commit_sha",
+          "filename",
+          "declared_sha256",
+          "declared_size",
+          "idempotency_key"
+        ],
+        "title": "Anva Evidence Upload Authorization Request",
         "type": "object"
       },
       "finding": {
@@ -3063,6 +3125,12 @@
         "description": "Recently authenticated human browser session; unsafe requests also require Django's X-CSRFToken header.",
         "in": "cookie",
         "name": "sessionid",
+        "type": "apiKey"
+      },
+      "evidenceUploadToken": {
+        "description": "Short-lived single-use opaque evidence-upload secret; required in addition to the normal actor bearer credential.",
+        "in": "header",
+        "name": "X-Anva-Evidence-Upload-Token",
         "type": "apiKey"
       }
     }
@@ -5075,6 +5143,137 @@
             "$ref": "#/components/responses/StructuredError"
           }
         }
+      }
+    },
+    "/evidence-upload-authorizations/{resource_id}/content": {
+      "put": {
+        "description": "Stream evidence bytes through bounded validation. Client filenames and content types are not trusted; rejected bytes are not retained.",
+        "operationId": "uploadEvidenceContent",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          },
+          {
+            "description": "Declared SHA-256; the server recomputes it from streamed bytes.",
+            "in": "header",
+            "name": "X-Anva-Content-SHA256",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "archive_summary": {
+                      "maxProperties": 32,
+                      "type": "object"
+                    },
+                    "authorization_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "detected_type": {
+                      "enum": [
+                        "application/json",
+                        "application/zip",
+                        "application/x-tar"
+                      ],
+                      "type": "string"
+                    },
+                    "evidence_blob_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "sha256": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
+                    "storage_state": {
+                      "const": "AVAILABLE",
+                      "type": "string"
+                    },
+                    "verified_size": {
+                      "maximum": 4096,
+                      "minimum": 1,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "evidence_blob_id",
+                    "authorization_id",
+                    "sha256",
+                    "verified_size",
+                    "detected_type",
+                    "archive_summary",
+                    "storage_state"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Evidence bytes were accepted and retained."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "413": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "415": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "422": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "429": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "503": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": [],
+            "evidenceUploadToken": []
+          }
+        ]
       }
     },
     "/findings/{resource_id}/dismiss": {
@@ -8106,6 +8305,244 @@
           },
           "201": {
             "description": "Tenant-scoped resource created."
+          },
+          "400": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "401": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "404": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "409": {
+            "$ref": "#/components/responses/StructuredError"
+          },
+          "429": {
+            "$ref": "#/components/responses/StructuredError"
+          }
+        }
+      }
+    },
+    "/repositories/{repository_id}/pull-requests/{pull_request_number}/evidence-upload-authorizations": {
+      "post": {
+        "description": "Issue one short-lived, single-use upload secret bound to the authenticated tenant, repository, scope, pull request, and commit. An exact replay returns metadata but never re-emits the secret.",
+        "operationId": "createEvidenceUploadAuthorization",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CorrelationId"
+          },
+          {
+            "in": "path",
+            "name": "repository_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pull_request_number",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/evidence-upload-authorization"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "access_scope_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "authorization_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "commit_sha": {
+                      "pattern": "^[a-f0-9]{40}$",
+                      "type": "string"
+                    },
+                    "declared_sha256": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
+                    "declared_size": {
+                      "maximum": 4096,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "expires_at": {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "pull_request_number": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "replayed": {
+                      "type": "boolean"
+                    },
+                    "repository_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "state": {
+                      "enum": [
+                        "ISSUED",
+                        "RECEIVING",
+                        "RECOVERING",
+                        "ACCEPTED",
+                        "REJECTED",
+                        "EXPIRED",
+                        "REVOKED"
+                      ],
+                      "type": "string"
+                    },
+                    "upload_path": {
+                      "pattern": "^/api/v1/evidence-upload-authorizations/[a-f0-9-]{36}/content$",
+                      "type": "string"
+                    },
+                    "upload_token": {
+                      "oneOf": [
+                        {
+                          "maxLength": 512,
+                          "minLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "authorization_id",
+                    "repository_id",
+                    "access_scope_id",
+                    "pull_request_number",
+                    "commit_sha",
+                    "declared_sha256",
+                    "declared_size",
+                    "state",
+                    "expires_at",
+                    "upload_path",
+                    "upload_token",
+                    "replayed"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Exact authorization replay; the original upload secret is not re-emitted."
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "access_scope_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "authorization_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "commit_sha": {
+                      "pattern": "^[a-f0-9]{40}$",
+                      "type": "string"
+                    },
+                    "declared_sha256": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
+                    "declared_size": {
+                      "maximum": 4096,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "expires_at": {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "pull_request_number": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "replayed": {
+                      "type": "boolean"
+                    },
+                    "repository_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "state": {
+                      "enum": [
+                        "ISSUED",
+                        "RECEIVING",
+                        "RECOVERING",
+                        "ACCEPTED",
+                        "REJECTED",
+                        "EXPIRED",
+                        "REVOKED"
+                      ],
+                      "type": "string"
+                    },
+                    "upload_path": {
+                      "pattern": "^/api/v1/evidence-upload-authorizations/[a-f0-9-]{36}/content$",
+                      "type": "string"
+                    },
+                    "upload_token": {
+                      "oneOf": [
+                        {
+                          "maxLength": 512,
+                          "minLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "authorization_id",
+                    "repository_id",
+                    "access_scope_id",
+                    "pull_request_number",
+                    "commit_sha",
+                    "declared_sha256",
+                    "declared_size",
+                    "state",
+                    "expires_at",
+                    "upload_path",
+                    "upload_token",
+                    "replayed"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Short-lived upload authorization issued."
           },
           "400": {
             "$ref": "#/components/responses/StructuredError"

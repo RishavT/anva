@@ -1,0 +1,9 @@
+{
+  "access_scope_id": "00000000-0000-4000-8000-000000000504",
+  "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "declared_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "declared_size": 631,
+  "filename": "evidence.zip",
+  "idempotency_key": "ci-run-17-tests-artifact",
+  "schema_version": "1.0"
+}

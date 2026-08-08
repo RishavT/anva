@@ -9,15 +9,17 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
 from django.conf import settings
-from django.db import transaction
-from django.db.models import F, OuterRef, Subquery
+from django.db import IntegrityError, transaction
+from django.db.models import F, OuterRef, Q, Subquery
 from django.utils import timezone
 
 from anva.core.exceptions import RateLimitExceededError, ResourceNotFoundError
 from anva.core.models import (
     AccessScope,
     Evidence,
+    EvidenceBlob,
     EvidenceRetentionEvent,
+    EvidenceUploadAuthorization,
     Membership,
     Organization,
     OrganizationProductSettings,
@@ -31,9 +33,16 @@ from anva.core.models import (
 from anva.core.services.authorization import Action, authorize_action
 from anva.core.services.context import ActorContext
 from anva.core.services.events import record_transition
+from anva.core.services.evidence_uploads import (
+    EvidenceUploadError,
+    cleanup_decommissioned_upload_authorizations,
+    delete_evidence_blob_bytes,
+)
 from anva.core.services.scopes import revoke_source_connection
 
 MAX_DECOMMISSION_SOURCES = 1_000
+MAX_EVIDENCE_BLOB_DELETIONS = 10_000
+MAX_DECOMMISSION_UPLOADS = 10_000
 MAX_PREAUTH_RATE_BUCKET_PURGE = 1_000
 
 
@@ -197,13 +206,185 @@ def purge_expired_pre_auth_rate_buckets(
     return deleted
 
 
+def _retention_blob_candidates(
+    *,
+    organization: Organization,
+    expiring_evidence_ids: list[uuid.UUID],
+    cutoff: datetime,
+    reference_time: datetime,
+) -> tuple[list[uuid.UUID], list[uuid.UUID]]:
+    """Resolve bounded exact-tenant byte deletions without changing retained history."""
+    latest_retention_state = EvidenceRetentionEvent.objects.filter(
+        organization=organization,
+        evidence_id=OuterRef("pk"),
+        occurred_at__lte=reference_time,
+    ).order_by("-occurred_at", "-id")
+    deletable_states = (
+        EvidenceBlob.StorageState.AVAILABLE,
+        EvidenceBlob.StorageState.DELETE_FAILED,
+    )
+    linked_ids = list(
+        Evidence.objects.filter(
+            organization=organization,
+            artifact_blob__storage_state__in=deletable_states,
+        )
+        .annotate(latest_retention_state=Subquery(latest_retention_state.values("state")[:1]))
+        .filter(
+            Q(id__in=expiring_evidence_ids)
+            | Q(latest_retention_state=Evidence.RetentionState.EXPIRED)
+        )
+        .order_by("artifact_blob_id")
+        .values_list("artifact_blob_id", flat=True)[: MAX_EVIDENCE_BLOB_DELETIONS + 1]
+    )
+    remaining = MAX_EVIDENCE_BLOB_DELETIONS + 1 - len(linked_ids)
+    unlinked_ids = list(
+        EvidenceBlob.objects.filter(
+            organization=organization,
+            evidence__isnull=True,
+            upload_authorization__state="ACCEPTED",
+            created_at__lte=cutoff,
+            storage_state__in=deletable_states,
+        )
+        .order_by("id")
+        .values_list("id", flat=True)[:remaining]
+    )
+    if len(linked_ids) + len(unlinked_ids) > MAX_EVIDENCE_BLOB_DELETIONS:
+        raise ValueError("Retention run exceeds the 10,000-blob deletion safety bound")
+    return linked_ids, unlinked_ids
+
+
+def _decommission_blob_candidates(*, organization: Organization) -> list[uuid.UUID]:
+    return list(
+        EvidenceBlob.objects.filter(organization=organization)
+        .exclude(storage_state=EvidenceBlob.StorageState.DELETED)
+        .order_by("id")
+        .values_list("id", flat=True)[:MAX_EVIDENCE_BLOB_DELETIONS]
+    )
+
+
+def _delete_blob_batch(
+    *,
+    organization_id: uuid.UUID,
+    blob_ids: list[uuid.UUID],
+    reason: str,
+    retention_cutoff: datetime | None = None,
+    retention_reference_time: datetime | None = None,
+) -> tuple[int, int]:
+    """Delete exact object bytes after the selecting transaction has committed."""
+    deleted = 0
+    failed = 0
+    for blob_id in blob_ids:
+        try:
+            if retention_cutoff is None:
+                delete_evidence_blob_bytes(
+                    organization_id=organization_id,
+                    blob_id=blob_id,
+                    reason=reason,
+                )
+            else:
+                delete_evidence_blob_bytes(
+                    organization_id=organization_id,
+                    blob_id=blob_id,
+                    reason=reason,
+                    retention_cutoff=retention_cutoff,
+                    retention_reference_time=retention_reference_time,
+                )
+        except (EvidenceUploadError, IntegrityError):
+            failed += 1
+        else:
+            deleted += 1
+    return deleted, failed
+
+
+def _finish_decommission_cleanup_attempt(
+    *,
+    organization: Organization,
+    run: RetentionRun,
+    upload_ids: list[uuid.UUID],
+    now: datetime,
+    summary: dict[str, object],
+) -> RetentionRun:
+    """Run one bounded cleanup batch and prove terminality before completion."""
+    upload_cleaned = upload_failed = deleted = failed = 0
+    blob_ids: list[uuid.UUID] = []
+    candidate_error = False
+    try:
+        upload_cleaned, upload_failed = cleanup_decommissioned_upload_authorizations(
+            organization_id=organization.id,
+            authorization_ids=upload_ids,
+        )
+        blob_ids = _decommission_blob_candidates(organization=organization)
+        deleted, failed = _delete_blob_batch(
+            organization_id=organization.id,
+            blob_ids=blob_ids,
+            reason="organization_decommission",
+        )
+    except Exception:  # Cleanup must make the durable run retryable.
+        candidate_error = True
+
+    with transaction.atomic():
+        locked_organization = Organization.objects.select_for_update().get(
+            id=organization.id,
+            lifecycle_state=Organization.LifecycleState.DECOMMISSIONED,
+        )
+        locked_run = RetentionRun.objects.select_for_update().get(
+            id=run.id,
+            organization=locked_organization,
+        )
+        remaining_blob = bool(
+            list(
+                EvidenceBlob.objects.select_for_update()
+                .filter(organization=locked_organization)
+                .exclude(storage_state=EvidenceBlob.StorageState.DELETED)
+                .values_list("id", flat=True)[:1]
+            )
+        )
+        remaining_upload = bool(
+            list(
+                EvidenceUploadAuthorization.objects.select_for_update()
+                .filter(
+                    organization=locked_organization,
+                    state__in=(
+                        EvidenceUploadAuthorization.State.ISSUED,
+                        EvidenceUploadAuthorization.State.RECEIVING,
+                        EvidenceUploadAuthorization.State.RECOVERING,
+                    ),
+                )
+                .values_list("id", flat=True)[:1]
+            )
+        )
+        cleanup_incomplete = bool(
+            candidate_error or failed or upload_failed or remaining_blob or remaining_upload
+        )
+        locked_run.summary = {
+            **summary,
+            "evidence_blob_candidates": len(blob_ids),
+            "evidence_blob_bytes_deleted": deleted,
+            "evidence_blob_bytes_delete_failed": failed,
+            "upload_objects_cleaned": upload_cleaned,
+            "upload_objects_cleanup_failed": upload_failed,
+            "cleanup_candidate_error": candidate_error,
+            "cleanup_remaining_blob_bytes": remaining_blob,
+            "cleanup_remaining_upload_objects": remaining_upload,
+        }
+        locked_run.state = (
+            RetentionRun.State.FAILED if cleanup_incomplete else RetentionRun.State.COMPLETED
+        )
+        locked_run.error_code = (
+            "DECOMMISSION_STORAGE_CLEANUP_RETRY_REQUIRED" if cleanup_incomplete else ""
+        )
+        locked_run.completed_at = now
+        locked_run.save(update_fields=["summary", "state", "error_code", "completed_at"])
+        return locked_run
+
+
 def run_retention(
     *,
     actor: ActorContext,
     reference_time: datetime | None = None,
     dry_run: bool = False,
 ) -> RetentionRun:
-    """Apply due evidence expiry and record exactly what was retained."""
+    """Apply due expiry, then delete exact tenant bytes outside the DB transaction."""
     now = reference_time or timezone.now()
     authorize_action(
         actor=actor,
@@ -285,11 +466,40 @@ def run_retention(
         ).count()
         if not dry_run:
             purge_expired_rate_buckets(organization=organization, now=now)
-        run.summary = {
+        initial_summary = {
             "evidence_expired": len(active_evidence_ids),
             "rate_buckets_deleted": expired_rate_buckets,
             "governed_history_retained": True,
             "source_content_deleted": 0,
+        }
+
+    linked_blob_ids, unlinked_blob_ids = _retention_blob_candidates(
+        organization=organization,
+        expiring_evidence_ids=active_evidence_ids,
+        cutoff=cutoff,
+        reference_time=now,
+    )
+    deleted = 0
+    failed = 0
+    if not dry_run:
+        deleted, failed = _delete_blob_batch(
+            organization_id=organization.id,
+            blob_ids=[*linked_blob_ids, *unlinked_blob_ids],
+            reason="retention_expired",
+            retention_cutoff=cutoff,
+            retention_reference_time=now,
+        )
+    with transaction.atomic():
+        run = RetentionRun.objects.select_for_update().get(
+            id=run.id,
+            organization=organization,
+        )
+        run.summary = {
+            **initial_summary,
+            "expired_linked_blob_candidates": len(linked_blob_ids),
+            "stale_unlinked_blob_candidates": len(unlinked_blob_ids),
+            "evidence_blob_bytes_deleted": deleted,
+            "evidence_blob_bytes_delete_failed": failed,
         }
         run.state = RetentionRun.State.COMPLETED
         run.completed_at = now
@@ -379,6 +589,38 @@ def decommission_organization(
                 expected_revision=source.revision,
             )
 
+        upload_authorizations = list(
+            EvidenceUploadAuthorization.objects.select_for_update()
+            .filter(
+                organization=organization,
+                state__in=(
+                    EvidenceUploadAuthorization.State.ISSUED,
+                    EvidenceUploadAuthorization.State.RECEIVING,
+                    EvidenceUploadAuthorization.State.RECOVERING,
+                ),
+            )
+            .order_by("id")[: MAX_DECOMMISSION_UPLOADS + 1]
+        )
+        if len(upload_authorizations) > MAX_DECOMMISSION_UPLOADS:
+            raise ValueError("Organization upload count exceeds the decommission safety bound")
+        recovering_upload_ids: list[uuid.UUID] = []
+        revoked_uploads = 0
+        for upload in upload_authorizations:
+            if upload.state == EvidenceUploadAuthorization.State.ISSUED:
+                upload.state = EvidenceUploadAuthorization.State.REVOKED
+                upload.failure_code = "UPLOAD_ORGANIZATION_DECOMMISSIONED"
+                upload.completed_at = now
+                upload.save(update_fields=["state", "failure_code", "completed_at"])
+                revoked_uploads += 1
+                continue
+            if upload.reserved_at is not None and now <= upload.reserved_at:
+                upload.reserved_at = upload.reserved_at + timedelta(microseconds=1)
+            else:
+                upload.reserved_at = now
+            upload.state = EvidenceUploadAuthorization.State.RECOVERING
+            upload.save(update_fields=["state", "reserved_at"])
+            recovering_upload_ids.append(upload.id)
+
         audit_actor = replace(actor, authorization_path="retention:organization-decommission")
         record_transition(
             organization=organization,
@@ -410,6 +652,7 @@ def decommission_organization(
                 organization=organization, is_active=True
             ).update(is_active=False, revision=F("revision") + 1, updated_at=now),
             "sources_revoked": len(sources),
+            "upload_authorizations_revoked": revoked_uploads,
         }
         record_transition(
             organization=organization,
@@ -423,12 +666,78 @@ def decommission_organization(
         organization.lifecycle_state = Organization.LifecycleState.DECOMMISSIONED
         organization.decommissioned_at = now
         organization.save(update_fields=["lifecycle_state", "decommissioned_at", "updated_at"])
-        run.summary = {
+
+    return _finish_decommission_cleanup_attempt(
+        organization=organization,
+        run=run,
+        upload_ids=recovering_upload_ids,
+        now=now,
+        summary={
             **counts,
             "governed_history_retained": True,
             "restoration_requires_operator_backup": True,
-        }
-        run.state = RetentionRun.State.COMPLETED
-        run.completed_at = now
-        run.save(update_fields=["summary", "state", "completed_at"])
-        return run
+        },
+    )
+
+
+def retry_decommission_cleanup(
+    *,
+    actor: ActorContext,
+    run_id: uuid.UUID,
+    reference_time: datetime | None = None,
+) -> RetentionRun:
+    """Retry decommission storage cleanup through a system-only inactive-tenant path."""
+    if (
+        actor.actor_type != "SYSTEM"
+        or actor.actor_id != "anva-retention-worker"
+        or actor.credential_id is not None
+        or actor.repository_id is not None
+        or Action.RETENTION_MANAGE.value not in actor.credential_actions
+    ):
+        raise ResourceNotFoundError("Governed record was not found")
+    now = reference_time or timezone.now()
+    with transaction.atomic():
+        organization = (
+            Organization.objects.select_for_update()
+            .filter(
+                id=actor.organization_id,
+                lifecycle_state=Organization.LifecycleState.DECOMMISSIONED,
+            )
+            .first()
+        )
+        if organization is None:
+            raise ResourceNotFoundError("Governed record was not found")
+        run = (
+            RetentionRun.objects.select_for_update()
+            .filter(
+                id=run_id,
+                organization=organization,
+                kind=RetentionRun.Kind.ORGANIZATION_DECOMMISSION,
+            )
+            .first()
+        )
+        if run is None:
+            raise ResourceNotFoundError("Governed record was not found")
+        if run.state == RetentionRun.State.COMPLETED:
+            return run
+        if (
+            run.state != RetentionRun.State.FAILED
+            or run.error_code != "DECOMMISSION_STORAGE_CLEANUP_RETRY_REQUIRED"
+        ):
+            raise ResourceNotFoundError("Governed record was not found")
+        upload_ids = list(
+            EvidenceUploadAuthorization.objects.filter(
+                organization=organization,
+                state=EvidenceUploadAuthorization.State.RECOVERING,
+            )
+            .order_by("id")
+            .values_list("id", flat=True)[:MAX_DECOMMISSION_UPLOADS]
+        )
+
+    return _finish_decommission_cleanup_attempt(
+        organization=organization,
+        run=run,
+        upload_ids=upload_ids,
+        now=now,
+        summary=run.summary,
+    )

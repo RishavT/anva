@@ -334,6 +334,7 @@ def ingest_manual_diff(
         "parser_version": PARSER_VERSION,
     }
     input_digest = content_hash(canonical_input)
+    organization = _organization(actor, for_update=True)
     pull_request = (
         PullRequest.objects.select_for_update()
         .filter(
@@ -343,7 +344,6 @@ def ingest_manual_diff(
         )
         .first()
     )
-    organization = _organization(actor, for_update=True)
     if pull_request is None:
         pull_request = PullRequest.objects.create(
             organization=organization,

@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 import pytest
 from django.contrib.sessions.backends.db import SessionStore
+from django.db import connection, transaction
 from django.test import Client, RequestFactory
 from django.utils import timezone
 
@@ -21,8 +25,10 @@ from anva.core.models import (
     AccessScope,
     AuditEvent,
     Evidence,
+    EvidenceBlob,
     EvidenceManifest,
     EvidenceRetentionEvent,
+    EvidenceUploadAuthorization,
     ImmutableArtifact,
     Membership,
     Organization,
@@ -38,11 +44,13 @@ from anva.core.models import (
 )
 from anva.core.services.authorization import Action, authorize_action
 from anva.core.services.context import ActorContext
+from anva.core.services.evidence_uploads import EvidenceUploadError, delete_evidence_blob_bytes
 from anva.core.services.operations import (
     decommission_organization,
     enforce_pre_auth_rate_limit,
     enforce_rate_limit,
     purge_expired_pre_auth_rate_buckets,
+    retry_decommission_cleanup,
     run_retention,
 )
 from anva.core.services.tokens import authenticate_bearer, issue_bootstrap_repository_token
@@ -152,10 +160,12 @@ def _evidence(
     expires_at: datetime,
     name: str,
     active_at: datetime,
+    artifact_blob: EvidenceBlob | None = None,
 ) -> Evidence:
     evidence = Evidence.objects.create(
         organization=tenant.organization,
         manifest=manifest,
+        artifact_blob=artifact_blob,
         commit_sha=manifest.commit_sha,
         kind=Evidence.Kind.TEST_RESULT,
         name=name,
@@ -163,7 +173,11 @@ def _evidence(
         producer_version="1.0",
         status=Evidence.Status.PASSED,
         completed_at=active_at,
-        content_hash=content_hash({"evidence": name}),
+        content_hash=(
+            artifact_blob.content_hash
+            if artifact_blob is not None
+            else content_hash({"evidence": name})
+        ),
         limitations=[],
         criterion_codes=["TESTS_PASS"],
         retention_class="default",
@@ -179,6 +193,57 @@ def _evidence(
         occurred_at=active_at,
     )
     return evidence
+
+
+def _evidence_blob(
+    tenant: OperationsTenant,
+    *,
+    created_at: datetime,
+    storage_state: str = EvidenceBlob.StorageState.AVAILABLE,
+) -> EvidenceBlob:
+    marker = uuid.uuid4().hex
+    authorization = EvidenceUploadAuthorization.objects.create(
+        organization=tenant.organization,
+        repository=tenant.repository,
+        access_scope=tenant.scope,
+        pull_request_number=1,
+        commit_sha="a" * 40,
+        filename=f"{marker}.zip",
+        declared_sha256=content_hash({"blob": marker}),
+        declared_size=128,
+        token_hash=content_hash({"token": marker}),
+        idempotency_hash=content_hash({"idempotency": marker}),
+        request_hash=content_hash({"request": marker}),
+        actor_type="SERVICE",
+        actor_id="release-operations-test",
+        issued_at=created_at,
+        expires_at=created_at + timedelta(minutes=10),
+    )
+    authorization.state = EvidenceUploadAuthorization.State.RECEIVING
+    authorization.object_key = f"evidence/v1/{marker}"
+    authorization.ownership_nonce_hash = content_hash({"owner": marker})
+    authorization.reserved_at = created_at
+    authorization.save(update_fields=["state", "object_key", "ownership_nonce_hash", "reserved_at"])
+    authorization.state = EvidenceUploadAuthorization.State.ACCEPTED
+    authorization.completed_at = created_at
+    authorization.save(update_fields=["state", "completed_at"])
+    failed = storage_state == EvidenceBlob.StorageState.DELETE_FAILED
+    return EvidenceBlob.objects.create(
+        organization=tenant.organization,
+        repository=tenant.repository,
+        access_scope=tenant.scope,
+        upload_authorization=authorization,
+        object_key=authorization.object_key,
+        content_hash=authorization.declared_sha256,
+        verified_size=128,
+        detected_media_type=EvidenceBlob.MediaType.ZIP,
+        archive_summary={"format": "ZIP", "member_count": 2},
+        inspection_version="test",
+        storage_state=storage_state,
+        deletion_reason="retention_expired" if failed else "",
+        storage_error_code="EVIDENCE_STORAGE_DELETE_FAILED" if failed else "",
+        created_at=created_at,
+    )
 
 
 @pytest.mark.integration
@@ -380,6 +445,10 @@ def test_retention_dry_run_is_idempotent_then_live_run_expires_only_due_evidence
         "rate_buckets_deleted": 1,
         "governed_history_retained": True,
         "source_content_deleted": 0,
+        "expired_linked_blob_candidates": 0,
+        "stale_unlinked_blob_candidates": 0,
+        "evidence_blob_bytes_deleted": 0,
+        "evidence_blob_bytes_delete_failed": 0,
     }
     assert EvidenceRetentionEvent.objects.filter(evidence=due).count() == 1
     assert RateLimitBucket.objects.filter(organization=tenant.organization).exists()
@@ -449,6 +518,312 @@ def test_retention_uses_latest_availability_event_when_expiring_evidence() -> No
         EvidenceRetentionEvent.objects.filter(evidence=evidence).latest("occurred_at", "id").state
         == Evidence.RetentionState.EXPIRED
     )
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_retention_deletes_only_exact_tenant_expired_and_stale_blob_bytes(
+    settings: object,
+) -> None:
+    settings.ANVA_RATE_LIMIT_ENABLED = True  # type: ignore[attr-defined]
+    tenant = _operations_tenant("retention-blobs")
+    OrganizationProductSettings.objects.create(
+        organization=tenant.organization,
+        retention_days=30,
+    )
+    other = _operations_tenant("retention-blobs-other")
+    reference_time = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
+    stale_at = reference_time - timedelta(days=31)
+    linked = _evidence_blob(tenant, created_at=stale_at)
+    retry = _evidence_blob(
+        tenant,
+        created_at=stale_at,
+        storage_state=EvidenceBlob.StorageState.DELETE_FAILED,
+    )
+    fresh = _evidence_blob(tenant, created_at=reference_time - timedelta(days=1))
+    foreign = _evidence_blob(other, created_at=stale_at)
+    _evidence(
+        tenant,
+        _evidence_manifest(tenant),
+        expires_at=reference_time,
+        name="linked due evidence",
+        active_at=stale_at,
+        artifact_blob=linked,
+    )
+    calls: list[tuple[uuid.UUID, uuid.UUID, str]] = []
+
+    def delete_bytes(
+        *,
+        organization_id: uuid.UUID,
+        blob_id: uuid.UUID,
+        reason: str,
+        retention_cutoff: datetime | None = None,
+        retention_reference_time: datetime | None = None,
+    ) -> EvidenceBlob:
+        assert not connection.in_atomic_block
+        assert retention_cutoff == reference_time - timedelta(days=30)
+        assert retention_reference_time == reference_time
+        calls.append((organization_id, blob_id, reason))
+        return EvidenceBlob.objects.get(id=blob_id, organization_id=organization_id)
+
+    with patch(
+        "anva.core.services.operations.delete_evidence_blob_bytes",
+        side_effect=delete_bytes,
+    ):
+        run = run_retention(actor=tenant.actor, reference_time=reference_time)
+        replay = run_retention(actor=tenant.actor, reference_time=reference_time)
+
+    assert replay.id == run.id
+    assert set(calls) == {
+        (tenant.organization.id, linked.id, "retention_expired"),
+        (tenant.organization.id, retry.id, "retention_expired"),
+    }
+    assert fresh.id not in {call[1] for call in calls}
+    assert foreign.id not in {call[1] for call in calls}
+    assert run.summary["expired_linked_blob_candidates"] == 1
+    assert run.summary["stale_unlinked_blob_candidates"] == 1
+    assert run.summary["evidence_blob_bytes_deleted"] == 2
+    assert Evidence.objects.filter(artifact_blob=linked).exists()
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_active_retention_renewal_wins_race_before_blob_deletion() -> None:
+    tenant = _operations_tenant("retention-renewal-race")
+    reference_time = timezone.now()
+    stale_at = reference_time - timedelta(days=31)
+    blob = _evidence_blob(tenant, created_at=stale_at)
+    evidence = _evidence(
+        tenant,
+        _evidence_manifest(tenant),
+        expires_at=reference_time - timedelta(days=1),
+        name="renewed evidence",
+        active_at=stale_at,
+        artifact_blob=blob,
+    )
+    EvidenceRetentionEvent.objects.create(
+        organization=tenant.organization,
+        evidence=evidence,
+        state=Evidence.RetentionState.EXPIRED,
+        reason="retention elapsed",
+        actor_type="SYSTEM",
+        actor_id="retention-worker",
+        occurred_at=reference_time,
+    )
+    renewal_inserted = threading.Event()
+    release_renewal = threading.Event()
+    deletion_started = threading.Event()
+
+    def renew() -> None:
+        try:
+            with transaction.atomic():
+                EvidenceRetentionEvent.objects.create(
+                    organization=tenant.organization,
+                    evidence=evidence,
+                    state=Evidence.RetentionState.ACTIVE,
+                    reason="legal hold renewed",
+                    actor_type="USER",
+                    actor_id=tenant.actor.actor_id,
+                    occurred_at=reference_time + timedelta(seconds=1),
+                )
+                renewal_inserted.set()
+                assert release_renewal.wait(timeout=10)
+        finally:
+            connection.close()
+
+    def delete() -> EvidenceBlob:
+        try:
+            deletion_started.set()
+            return delete_evidence_blob_bytes(
+                organization_id=tenant.organization.id,
+                blob_id=blob.id,
+                reason="retention_expired",
+                retention_cutoff=reference_time - timedelta(days=30),
+                retention_reference_time=reference_time,
+            )
+        finally:
+            connection.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        renewal = executor.submit(renew)
+        assert renewal_inserted.wait(timeout=10)
+        deletion = executor.submit(delete)
+        assert deletion_started.wait(timeout=10)
+        time.sleep(0.1)
+        assert not deletion.done()
+        release_renewal.set()
+        renewal.result(timeout=10)
+        with pytest.raises(EvidenceUploadError) as raised:
+            deletion.result(timeout=10)
+
+    blob.refresh_from_db()
+    assert raised.value.code == "EVIDENCE_BLOB_DELETE_INELIGIBLE"
+    assert blob.storage_state == EvidenceBlob.StorageState.AVAILABLE
+    assert (
+        EvidenceRetentionEvent.objects.filter(evidence=evidence).latest("occurred_at", "id").state
+        == Evidence.RetentionState.ACTIVE
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_decommission_deletes_all_and_only_exact_tenant_retryable_blob_bytes() -> None:
+    tenant = _operations_tenant("decommission-blobs")
+    other = _operations_tenant("decommission-blobs-other")
+    created_at = timezone.now() - timedelta(days=1)
+    available = _evidence_blob(tenant, created_at=created_at)
+    retry = _evidence_blob(
+        tenant,
+        created_at=created_at,
+        storage_state=EvidenceBlob.StorageState.DELETE_FAILED,
+    )
+    foreign = _evidence_blob(other, created_at=created_at)
+    calls: list[tuple[uuid.UUID, uuid.UUID, str]] = []
+
+    def delete_bytes(
+        *, organization_id: uuid.UUID, blob_id: uuid.UUID, reason: str
+    ) -> EvidenceBlob:
+        assert not connection.in_atomic_block
+        calls.append((organization_id, blob_id, reason))
+        current = EvidenceBlob.objects.get(id=blob_id, organization_id=organization_id)
+        current.storage_state = EvidenceBlob.StorageState.DELETE_PENDING
+        current.deletion_reason = reason
+        current.storage_error_code = ""
+        current.save(update_fields=["storage_state", "deletion_reason", "storage_error_code"])
+        current.storage_state = EvidenceBlob.StorageState.DELETED
+        current.deleted_at = timezone.now()
+        current.save(update_fields=["storage_state", "deleted_at"])
+        return current
+
+    with patch(
+        "anva.core.services.operations.delete_evidence_blob_bytes",
+        side_effect=delete_bytes,
+    ):
+        run = decommission_organization(
+            actor=tenant.actor,
+            confirmation=tenant.organization.slug,
+            acknowledgement=f"DECOMMISSION {tenant.organization.slug}",
+        )
+
+    assert set(calls) == {
+        (tenant.organization.id, available.id, "organization_decommission"),
+        (tenant.organization.id, retry.id, "organization_decommission"),
+    }
+    assert foreign.id not in {call[1] for call in calls}
+    assert run.summary["evidence_blob_candidates"] == 2
+    assert run.summary["evidence_blob_bytes_deleted"] == 2
+    assert run.summary["governed_history_retained"] is True
+    assert EvidenceBlob.objects.filter(id__in=[available.id, retry.id]).count() == 2
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_failed_decommission_cleanup_requires_system_retry_before_completion() -> None:
+    tenant = _operations_tenant("decommission-retry")
+    blob = _evidence_blob(tenant, created_at=timezone.now() - timedelta(days=1))
+    blob.storage_state = EvidenceBlob.StorageState.DELETE_PENDING
+    blob.deletion_reason = "retention_expired"
+    blob.save(update_fields=["storage_state", "deletion_reason"])
+    storage_failure = EvidenceUploadError(
+        "EVIDENCE_STORAGE_DELETE_FAILED",
+        "Evidence object storage is unavailable.",
+        503,
+    )
+
+    def fail_pending_delete(
+        *, organization_id: uuid.UUID, blob_id: uuid.UUID, reason: str
+    ) -> EvidenceBlob:
+        del reason
+        current = EvidenceBlob.objects.get(id=blob_id, organization_id=organization_id)
+        current.storage_state = EvidenceBlob.StorageState.DELETE_FAILED
+        current.storage_error_code = "EVIDENCE_STORAGE_DELETE_FAILED"
+        current.save(update_fields=["storage_state", "storage_error_code"])
+        raise storage_failure
+
+    with patch(
+        "anva.core.services.operations.delete_evidence_blob_bytes",
+        side_effect=fail_pending_delete,
+    ):
+        run = decommission_organization(
+            actor=tenant.actor,
+            confirmation=tenant.organization.slug,
+            acknowledgement=f"DECOMMISSION {tenant.organization.slug}",
+        )
+
+    assert run.state == RetentionRun.State.FAILED
+    assert run.error_code == "DECOMMISSION_STORAGE_CLEANUP_RETRY_REQUIRED"
+
+    system_actor = ActorContext(
+        organization_id=tenant.organization.id,
+        actor_type="SYSTEM",
+        actor_id="anva-retention-worker",
+        authorization_path="system:retention-worker",
+        request_id=uuid.uuid4(),
+        credential_actions=frozenset({Action.RETENTION_MANAGE.value}),
+    )
+
+    def delete_bytes(
+        *, organization_id: uuid.UUID, blob_id: uuid.UUID, reason: str
+    ) -> EvidenceBlob:
+        assert organization_id == tenant.organization.id
+        assert blob_id == blob.id
+        assert reason == "organization_decommission"
+        current = EvidenceBlob.objects.get(id=blob_id, organization_id=organization_id)
+        current.storage_state = EvidenceBlob.StorageState.DELETE_PENDING
+        current.deletion_reason = reason
+        current.storage_error_code = ""
+        current.save(update_fields=["storage_state", "deletion_reason", "storage_error_code"])
+        current.storage_state = EvidenceBlob.StorageState.DELETED
+        current.deleted_at = timezone.now()
+        current.save(update_fields=["storage_state", "deleted_at"])
+        return current
+
+    with patch(
+        "anva.core.services.operations.delete_evidence_blob_bytes",
+        side_effect=delete_bytes,
+    ):
+        retried = retry_decommission_cleanup(actor=system_actor, run_id=run.id)
+
+    assert retried.state == RetentionRun.State.COMPLETED
+    assert retried.error_code == ""
+    blob.refresh_from_db()
+    assert blob.storage_state == EvidenceBlob.StorageState.DELETED
+    replay = retry_decommission_cleanup(actor=system_actor, run_id=run.id)
+    assert replay.id == retried.id
+    assert replay.state == RetentionRun.State.COMPLETED
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_decommission_candidate_bound_error_is_durable_and_retryable() -> None:
+    tenant = _operations_tenant("decommission-bound")
+    with patch(
+        "anva.core.services.operations._decommission_blob_candidates",
+        side_effect=ValueError("simulated over-10k candidate bound"),
+    ):
+        run = decommission_organization(
+            actor=tenant.actor,
+            confirmation=tenant.organization.slug,
+            acknowledgement=f"DECOMMISSION {tenant.organization.slug}",
+        )
+
+    tenant.organization.refresh_from_db()
+    assert tenant.organization.lifecycle_state == Organization.LifecycleState.DECOMMISSIONED
+    assert run.state == RetentionRun.State.FAILED
+    assert run.error_code == "DECOMMISSION_STORAGE_CLEANUP_RETRY_REQUIRED"
+    assert run.summary["cleanup_candidate_error"] is True
+
+    system_actor = ActorContext(
+        organization_id=tenant.organization.id,
+        actor_type="SYSTEM",
+        actor_id="anva-retention-worker",
+        authorization_path="system:retention-worker",
+        request_id=uuid.uuid4(),
+        credential_actions=frozenset({Action.RETENTION_MANAGE.value}),
+    )
+    retried = retry_decommission_cleanup(actor=system_actor, run_id=run.id)
+    assert retried.state == RetentionRun.State.COMPLETED
+    assert retried.error_code == ""
 
 
 @pytest.mark.integration

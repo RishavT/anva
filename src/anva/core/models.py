@@ -4407,6 +4407,282 @@ class PolicyOverrideRevocation(UUIDModel):
         ]
 
 
+class EvidenceUploadAuthorization(UUIDModel):
+    """Short-lived, actor-bound authority to submit one bounded evidence object."""
+
+    class State(models.TextChoices):
+        ISSUED = "ISSUED"
+        RECEIVING = "RECEIVING"
+        RECOVERING = "RECOVERING"
+        ACCEPTED = "ACCEPTED"
+        REJECTED = "REJECTED"
+        EXPIRED = "EXPIRED"
+        REVOKED = "REVOKED"
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    repository = models.ForeignKey(Repository, on_delete=models.PROTECT)
+    access_scope = models.ForeignKey(AccessScope, on_delete=models.PROTECT)
+    pull_request_number = models.PositiveIntegerField()
+    commit_sha = models.CharField(max_length=40)
+    filename = models.CharField(max_length=128)
+    declared_sha256 = models.CharField(max_length=64)
+    declared_size = models.PositiveIntegerField()
+    token_hash = models.CharField(max_length=64, editable=False)
+    idempotency_hash = models.CharField(max_length=64, editable=False)
+    request_hash = models.CharField(max_length=64, editable=False)
+    actor_type = models.CharField(max_length=20)
+    actor_id = models.CharField(max_length=200)
+    credential_id = models.UUIDField(null=True, blank=True)
+    state = models.CharField(max_length=16, choices=State, default=State.ISSUED)
+    object_key = models.CharField(max_length=200, blank=True, editable=False)
+    ownership_nonce_hash = models.CharField(max_length=64, blank=True, editable=False)
+    failure_code = models.CharField(max_length=100, blank=True)
+    issued_at = models.DateTimeField(default=timezone.now, editable=False)
+    expires_at = models.DateTimeField()
+    reserved_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(
+                fields=["expires_at", "id"],
+                name="core_ev_upload_expiry_idx",
+                condition=Q(state="ISSUED"),
+            ),
+            models.Index(
+                fields=[
+                    "organization",
+                    "repository",
+                    "pull_request_number",
+                    "commit_sha",
+                ],
+                name="core_ev_upload_target_idx",
+            ),
+        ]
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_evidence_upload_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "repository", "id"],
+                name="core_evidence_upload_org_repo_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["token_hash"],
+                name="core_evidence_upload_token_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "repository", "idempotency_hash"],
+                name="core_evidence_upload_idem_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(commit_sha__regex=r"^[a-f0-9]{40}$"),
+                name="core_evidence_upload_commit_sha",
+            ),
+            models.CheckConstraint(
+                condition=Q(declared_sha256__regex=r"^[a-f0-9]{64}$"),
+                name="core_evidence_upload_declared_sha",
+            ),
+            models.CheckConstraint(
+                condition=Q(token_hash__regex=r"^[a-f0-9]{64}$"),  # noqa: S106
+                name="core_evidence_upload_token_sha",
+            ),
+            models.CheckConstraint(
+                condition=Q(idempotency_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_evidence_upload_idem_sha",
+            ),
+            models.CheckConstraint(
+                condition=Q(request_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_evidence_upload_request_sha",
+            ),
+            models.CheckConstraint(
+                condition=Q(ownership_nonce_hash="")
+                | Q(ownership_nonce_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_ev_upload_owner_sha",
+            ),
+            models.CheckConstraint(
+                condition=Q(pull_request_number__gte=1),
+                name="core_evidence_upload_pr_gte_1",
+            ),
+            models.CheckConstraint(
+                condition=Q(declared_size__gte=1, declared_size__lte=4_096),
+                name="core_evidence_upload_size_bound",
+            ),
+            models.CheckConstraint(
+                condition=Q(expires_at__gt=F("issued_at")),
+                name="core_evidence_upload_expiry_after_issue",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        state="ISSUED",
+                        object_key="",
+                        ownership_nonce_hash="",
+                        failure_code="",
+                        reserved_at__isnull=True,
+                        completed_at__isnull=True,
+                    )
+                    | Q(
+                        state="RECEIVING",
+                        ownership_nonce_hash__regex=r"^[a-f0-9]{64}$",
+                        failure_code="",
+                        reserved_at__isnull=False,
+                        completed_at__isnull=True,
+                    )
+                    | Q(
+                        state="RECOVERING",
+                        ownership_nonce_hash__regex=r"^[a-f0-9]{64}$",
+                        failure_code="",
+                        reserved_at__isnull=False,
+                        completed_at__isnull=True,
+                    )
+                    | Q(
+                        state="ACCEPTED",
+                        ownership_nonce_hash__regex=r"^[a-f0-9]{64}$",
+                        failure_code="",
+                        reserved_at__isnull=False,
+                        completed_at__isnull=False,
+                    )
+                    | (
+                        Q(
+                            state="REJECTED",
+                            ownership_nonce_hash__regex=r"^[a-f0-9]{64}$",
+                            reserved_at__isnull=False,
+                            completed_at__isnull=False,
+                        )
+                        & ~Q(failure_code="")
+                    )
+                    | (
+                        Q(
+                            state__in=["EXPIRED", "REVOKED"],
+                            object_key="",
+                            ownership_nonce_hash="",
+                            reserved_at__isnull=True,
+                            completed_at__isnull=False,
+                        )
+                        & ~Q(failure_code="")
+                    )
+                ),
+                name="core_evidence_upload_state_coherent",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        state__in=["ISSUED", "EXPIRED", "REVOKED"],
+                        object_key="",
+                        ownership_nonce_hash="",
+                    )
+                    | (
+                        Q(state__in=["RECEIVING", "RECOVERING", "ACCEPTED", "REJECTED"])
+                        & ~Q(object_key="")
+                    )
+                ),
+                name="core_evidence_upload_object_key_coherent",
+            ),
+        ]
+
+
+class EvidenceBlob(UUIDModel):
+    """Content-immutable verified object with a guarded physical-storage lifecycle."""
+
+    class MediaType(models.TextChoices):
+        JSON = "application/json"
+        ZIP = "application/zip"
+        TAR = "application/x-tar"
+
+    class StorageState(models.TextChoices):
+        AVAILABLE = "AVAILABLE"
+        DELETE_PENDING = "DELETE_PENDING"
+        DELETE_FAILED = "DELETE_FAILED"
+        DELETED = "DELETED"
+
+    organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
+    repository = models.ForeignKey(Repository, on_delete=models.PROTECT)
+    access_scope = models.ForeignKey(AccessScope, on_delete=models.PROTECT)
+    upload_authorization = models.OneToOneField(
+        EvidenceUploadAuthorization,
+        on_delete=models.PROTECT,
+    )
+    object_key = models.CharField(max_length=200, editable=False, unique=True)
+    content_hash = models.CharField(max_length=64, editable=False)
+    verified_size = models.PositiveIntegerField(editable=False)
+    detected_media_type = models.CharField(max_length=32, choices=MediaType, editable=False)
+    archive_summary = models.JSONField(default=dict, editable=False)
+    inspection_version = models.CharField(max_length=64, editable=False)
+    storage_state = models.CharField(
+        max_length=20,
+        choices=StorageState,
+        default=StorageState.AVAILABLE,
+    )
+    deletion_reason = models.CharField(max_length=100, blank=True)
+    storage_error_code = models.CharField(max_length=100, blank=True)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(
+                fields=["organization", "storage_state", "created_at", "id"],
+                name="core_ev_blob_storage_idx",
+            ),
+            models.Index(
+                fields=["organization", "repository", "content_hash"],
+                name="core_ev_blob_digest_idx",
+            ),
+        ]
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["organization", "id"],
+                name="core_evidence_blob_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "repository", "id"],
+                name="core_evidence_blob_org_repo_id_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(content_hash__regex=r"^[a-f0-9]{64}$"),
+                name="core_evidence_blob_content_sha",
+            ),
+            models.CheckConstraint(
+                condition=Q(verified_size__gte=1, verified_size__lte=4_096),
+                name="core_evidence_blob_size_bound",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        storage_state="AVAILABLE",
+                        deletion_reason="",
+                        storage_error_code="",
+                        deleted_at__isnull=True,
+                    )
+                    | Q(
+                        storage_state="DELETE_PENDING",
+                        storage_error_code="",
+                        deleted_at__isnull=True,
+                    )
+                    | (
+                        Q(
+                            storage_state="DELETE_FAILED",
+                            deleted_at__isnull=True,
+                        )
+                        & ~Q(deletion_reason="")
+                        & ~Q(storage_error_code="")
+                    )
+                    | (
+                        Q(
+                            storage_state="DELETED",
+                            storage_error_code="",
+                            deleted_at__isnull=False,
+                        )
+                        & ~Q(deletion_reason="")
+                    )
+                ),
+                name="core_evidence_blob_storage_coherent",
+            ),
+        ]
+
+
 class EvidenceManifest(UUIDModel):
     """Immutable schema-validated submission envelope; payloads are never executed."""
 
@@ -4491,6 +4767,12 @@ class Evidence(UUIDModel):
 
     organization = models.ForeignKey(Organization, on_delete=models.PROTECT)
     manifest = models.ForeignKey(EvidenceManifest, on_delete=models.PROTECT)
+    artifact_blob = models.OneToOneField(
+        EvidenceBlob,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+    )
     approval = models.ForeignKey(Approval, on_delete=models.PROTECT, null=True, blank=True)
     commit_sha = models.CharField(max_length=40)
     kind = models.CharField(max_length=32, choices=Kind)

@@ -16,6 +16,8 @@ from anva.core.logging import SecretRedactionFilter, StructuredJsonFormatter, re
     "message",
     [
         "Authorization: Bearer anva_v1.00000000-0000-4000-8000-000000000000.secret",
+        "X-Anva-Evidence-Upload-Token: "
+        "anva_upload_v1.00000000-0000-4000-8000-000000000000.upload-secret",
         "authorization=opaque-token",
         "X-Anva-Bootstrap-Secret: test-only-bootstrap-secret",
         "configured test-only-token-pepper accidentally emitted",
