@@ -78,8 +78,13 @@ and evidence archive SHA-256
 - [ ] Product threat model is reviewed.
 - [ ] Cross-tenant API/search/Canvas/MCP/artifact matrix passes.
 - [ ] Source and credential revocation matrix passes.
-- [ ] TST-007 prompt-injection and artifact-security cases pass through Anva,
-  not only through the fixture validator.
+- [ ] TST-007 artifact-security cases pass through Anva on the exact release
+  commit, not only through the fixture validator. The issue 29 local candidate
+  passes all six pinned byte classes, but freeze, independent review, merge, and
+  release indexing remain open.
+- [ ] The separate five-source prompt-injection corpus passes through the
+  product boundary with zero mutation or leakage; TST-007 artifact evidence
+  does not satisfy this gate.
 - [ ] Log, trace, metric, report, package and image secret-canary scans report
   zero leakage.
 - [x] Source vulnerability, secret, and misconfiguration scans exclude only the

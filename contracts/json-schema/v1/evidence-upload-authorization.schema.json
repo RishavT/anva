@@ -1,0 +1,51 @@
+{
+  "$id": "https://schemas.anva.dev/v1/evidence-upload-authorization.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "access_scope_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "commit_sha": {
+      "pattern": "^[a-f0-9]{40}$",
+      "type": "string"
+    },
+    "declared_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "declared_size": {
+      "maximum": 4096,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "filename": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^(?!\\.{1,2}$)(?!.*[ .]$)[^/\\\\:\\x00-\\x1f\\x7f]+$",
+      "type": "string"
+    },
+    "idempotency_key": {
+      "maxLength": 200,
+      "minLength": 16,
+      "pattern": "^[^\\x00-\\x1f\\x7f]+$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "access_scope_id",
+    "commit_sha",
+    "filename",
+    "declared_sha256",
+    "declared_size",
+    "idempotency_key"
+  ],
+  "title": "Anva Evidence Upload Authorization Request",
+  "type": "object"
+}

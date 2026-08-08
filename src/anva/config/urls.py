@@ -303,6 +303,17 @@ urlpatterns = [
         name="api-v1-evidence-submit",
     ),
     path(
+        "api/v1/repositories/<uuid:repository_id>/pull-requests/"
+        "<int:pull_request_number>/evidence-upload-authorizations",
+        core_views.evidence_upload_authorization,
+        name="api-v1-evidence-upload-authorization",
+    ),
+    path(
+        "api/v1/evidence-upload-authorizations/<uuid:authorization_id>/content",
+        core_views.evidence_upload_content,
+        name="api-v1-evidence-upload-content",
+    ),
+    path(
         "api/v1/evidence-manifests/<uuid:manifest_id>",
         core_views.evidence_manifest_detail,
         name="api-v1-evidence-manifest",

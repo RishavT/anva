@@ -20,6 +20,7 @@ from anva.core.models import (
     ApprovalRevocation,
     CriterionEvidence,
     Evidence,
+    EvidenceBlob,
     EvidenceManifest,
     EvidenceRetentionEvent,
     ImmutableArtifact,
@@ -172,6 +173,48 @@ def _validate_type_specific(
     return approval
 
 
+def resolve_evidence_artifact_blob(
+    *,
+    entry: dict[str, Any],
+    organization_id: uuid.UUID,
+    repository_id: uuid.UUID,
+    access_scope_id: uuid.UUID,
+    pull_request_number: int,
+    commit_sha: str,
+) -> EvidenceBlob | None:
+    """Lock one accepted blob and require its complete immutable evidence context."""
+    raw_blob_id = entry.get("artifact_blob_id")
+    if raw_blob_id is None:
+        return None
+    try:
+        blob_id = uuid.UUID(cast(str, raw_blob_id))
+    except (TypeError, ValueError):
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE) from None
+    blob = (
+        EvidenceBlob.objects.select_for_update(of=("self", "upload_authorization"))
+        .select_related("upload_authorization")
+        .filter(
+            id=blob_id,
+            organization_id=organization_id,
+            repository_id=repository_id,
+            access_scope_id=access_scope_id,
+            content_hash=cast(str, entry["content_hash"]),
+            storage_state=EvidenceBlob.StorageState.AVAILABLE,
+            upload_authorization__organization_id=organization_id,
+            upload_authorization__repository_id=repository_id,
+            upload_authorization__access_scope_id=access_scope_id,
+            upload_authorization__pull_request_number=pull_request_number,
+            upload_authorization__commit_sha=commit_sha,
+            upload_authorization__state="ACCEPTED",
+            evidence__isnull=True,
+        )
+        .first()
+    )
+    if blob is None:
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    return blob
+
+
 @transaction.atomic
 def submit_evidence_manifest(
     *,
@@ -251,6 +294,13 @@ def submit_evidence_manifest(
     evidence_ids = [uuid.UUID(cast(str, entry["evidence_id"])) for entry in entries]
     if len(evidence_ids) != len(set(evidence_ids)):
         raise ValueError("Evidence IDs must be unique within a manifest")
+    artifact_blob_ids = [
+        uuid.UUID(cast(str, entry["artifact_blob_id"]))
+        for entry in entries
+        if entry.get("artifact_blob_id") is not None
+    ]
+    if len(artifact_blob_ids) != len(set(artifact_blob_ids)):
+        raise ValueError("Evidence artifact blob IDs must be unique within a manifest")
     evidence_identities = [
         (
             cast(str, entry["content_hash"]),
@@ -267,7 +317,7 @@ def submit_evidence_manifest(
     ).exists():
         raise IdempotencyConflictError("Evidence ID was already used by another manifest")
 
-    validated: list[tuple[dict[str, Any], Approval | None]] = []
+    validated: list[tuple[dict[str, Any], Approval | None, EvidenceBlob | None]] = []
     for entry in entries:
         if (
             entry["producer"] != payload["producer"]
@@ -292,7 +342,15 @@ def submit_evidence_manifest(
             organization_id=organization.id,
             repository_id=repository.id,
         )
-        validated.append((entry, approval))
+        artifact_blob = resolve_evidence_artifact_blob(
+            entry=entry,
+            organization_id=organization.id,
+            repository_id=repository.id,
+            access_scope_id=access_scope.id,
+            pull_request_number=pull_request_number,
+            commit_sha=commit_sha,
+        )
+        validated.append((entry, approval, artifact_blob))
 
     artifact = ImmutableArtifact.objects.create(
         organization=organization,
@@ -320,11 +378,12 @@ def submit_evidence_manifest(
         payload_size=len(canonical_payload_bytes(payload)),
     )
     records: list[Evidence] = []
-    for entry, approval in validated:
+    for entry, approval, artifact_blob in validated:
         record = Evidence.objects.create(
             id=uuid.UUID(cast(str, entry["evidence_id"])),
             organization=organization,
             manifest=manifest,
+            artifact_blob=artifact_blob,
             approval=approval,
             commit_sha=commit_sha,
             kind=entry["kind"],

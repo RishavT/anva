@@ -40,7 +40,7 @@ def test_contract_catalog_and_checked_in_generation_are_current() -> None:
     second = rendered_artifacts()
 
     assert first == second
-    assert len(first) == 28
+    assert len(first) == 30
     check_artifacts(first)
 
 
@@ -67,6 +67,15 @@ def test_openapi_and_mcp_share_the_canonical_schemas() -> None:
             "description": (
                 "Recently authenticated human browser session; unsafe requests also "
                 "require Django's X-CSRFToken header."
+            ),
+        },
+        "evidenceUploadToken": {
+            "type": "apiKey",
+            "in": "header",
+            "name": "X-Anva-Evidence-Upload-Token",
+            "description": (
+                "Short-lived single-use opaque evidence-upload secret; required in "
+                "addition to the normal actor bearer credential."
             ),
         },
     }
@@ -249,6 +258,11 @@ def test_openapi_exposes_versioned_tenancy_and_authorization_boundaries() -> Non
         "/findings/{resource_id}/dismiss",
         "/policies/{resource_id}/override",
         "/repositories/{repository_id}/pull-requests/{pull_request_number}/evidence",
+        (
+            "/repositories/{repository_id}/pull-requests/{pull_request_number}/"
+            "evidence-upload-authorizations"
+        ),
+        "/evidence-upload-authorizations/{resource_id}/content",
         "/evidence-manifests/{resource_id}",
         "/policy-overrides/{resource_id}/revoke",
         "/source-connections/filesystem",

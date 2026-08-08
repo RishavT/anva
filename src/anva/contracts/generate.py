@@ -27,6 +27,81 @@ def openapi_document() -> dict[str, object]:
     mutation_parameters: list[dict[str, object]] = [
         {"$ref": "#/components/parameters/CorrelationId"},
     ]
+    upload_authorization_response_schema: dict[str, object] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "authorization_id": {"type": "string", "format": "uuid"},
+            "repository_id": {"type": "string", "format": "uuid"},
+            "access_scope_id": {"type": "string", "format": "uuid"},
+            "pull_request_number": {"type": "integer", "minimum": 1},
+            "commit_sha": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+            "declared_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+            "declared_size": {"type": "integer", "minimum": 1, "maximum": 4_096},
+            "state": {
+                "type": "string",
+                "enum": [
+                    "ISSUED",
+                    "RECEIVING",
+                    "ACCEPTED",
+                    "REJECTED",
+                    "EXPIRED",
+                    "REVOKED",
+                ],
+            },
+            "expires_at": {"type": "string", "format": "date-time"},
+            "upload_path": {
+                "type": "string",
+                "pattern": ("^/api/v1/evidence-upload-authorizations/[a-f0-9-]{36}/content$"),
+            },
+            "upload_token": {
+                "oneOf": [
+                    {"type": "string", "minLength": 32, "maxLength": 512},
+                    {"type": "null"},
+                ]
+            },
+            "replayed": {"type": "boolean"},
+        },
+        "required": [
+            "authorization_id",
+            "repository_id",
+            "access_scope_id",
+            "pull_request_number",
+            "commit_sha",
+            "declared_sha256",
+            "declared_size",
+            "state",
+            "expires_at",
+            "upload_path",
+            "upload_token",
+            "replayed",
+        ],
+    }
+    evidence_blob_response_schema: dict[str, object] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "evidence_blob_id": {"type": "string", "format": "uuid"},
+            "authorization_id": {"type": "string", "format": "uuid"},
+            "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+            "verified_size": {"type": "integer", "minimum": 1, "maximum": 4_096},
+            "detected_type": {
+                "type": "string",
+                "enum": ["application/json", "application/zip", "application/x-tar"],
+            },
+            "archive_summary": {"type": "object", "maxProperties": 32},
+            "storage_state": {"type": "string", "const": "AVAILABLE"},
+        },
+        "required": [
+            "evidence_blob_id",
+            "authorization_id",
+            "sha256",
+            "verified_size",
+            "detected_type",
+            "archive_summary",
+            "storage_state",
+        ],
+    }
     structured_errors: dict[str, object] = {
         "400": {"$ref": "#/components/responses/StructuredError"},
         "401": {"$ref": "#/components/responses/StructuredError"},
@@ -54,6 +129,30 @@ def openapi_document() -> dict[str, object]:
         "200": {"description": "Existing resource returned for an exact canonical replay."},
         "201": {"description": "Tenant-scoped resource created."},
         **structured_errors,
+    }
+    upload_authorization_responses: dict[str, object] = {
+        "200": {
+            "description": (
+                "Exact authorization replay; the original upload secret is not re-emitted."
+            ),
+            "content": {"application/json": {"schema": upload_authorization_response_schema}},
+        },
+        "201": {
+            "description": "Short-lived upload authorization issued.",
+            "content": {"application/json": {"schema": upload_authorization_response_schema}},
+        },
+        **structured_errors,
+    }
+    upload_responses: dict[str, object] = {
+        "201": {
+            "description": "Evidence bytes were accepted and retained.",
+            "content": {"application/json": {"schema": evidence_blob_response_schema}},
+        },
+        **structured_errors,
+        "413": {"$ref": "#/components/responses/StructuredError"},
+        "415": {"$ref": "#/components/responses/StructuredError"},
+        "422": {"$ref": "#/components/responses/StructuredError"},
+        "503": {"$ref": "#/components/responses/StructuredError"},
     }
     organization_parameter = {
         "name": "organization_id",
@@ -1094,6 +1193,77 @@ def openapi_document() -> dict[str, object]:
                     "responses": created_or_replayed_responses,
                 }
             },
+            (
+                "/repositories/{repository_id}/pull-requests/{pull_request_number}/"
+                "evidence-upload-authorizations"
+            ): {
+                "post": {
+                    "operationId": "createEvidenceUploadAuthorization",
+                    "description": (
+                        "Issue one short-lived, single-use upload secret bound to the "
+                        "authenticated tenant, repository, scope, pull request, and commit. "
+                        "An exact replay returns metadata but never re-emits the secret."
+                    ),
+                    "parameters": [
+                        *mutation_parameters,
+                        repository_parameter,
+                        {
+                            "name": "pull_request_number",
+                            "in": "path",
+                            "required": True,
+                            "schema": {"type": "integer", "minimum": 1},
+                        },
+                    ],
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": ("#/components/schemas/evidence-upload-authorization")
+                                }
+                            }
+                        },
+                    },
+                    "responses": upload_authorization_responses,
+                }
+            },
+            "/evidence-upload-authorizations/{resource_id}/content": {
+                "put": {
+                    "operationId": "uploadEvidenceContent",
+                    "description": (
+                        "Stream evidence bytes through bounded validation. Client filenames "
+                        "and content types are not trusted; rejected bytes are not retained."
+                    ),
+                    "security": [
+                        {"bearerAuth": [], "evidenceUploadToken": []},
+                    ],
+                    "parameters": [
+                        resource_parameter,
+                        {"$ref": "#/components/parameters/CorrelationId"},
+                        {
+                            "name": "X-Anva-Content-SHA256",
+                            "in": "header",
+                            "required": True,
+                            "schema": {
+                                "type": "string",
+                                "pattern": "^[a-f0-9]{64}$",
+                            },
+                            "description": (
+                                "Declared SHA-256; the server recomputes it from streamed bytes."
+                            ),
+                        },
+                    ],
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/octet-stream": {
+                                "schema": {"type": "string", "format": "binary"}
+                            }
+                        },
+                    },
+                    "responses": upload_responses,
+                }
+            },
             "/evidence-manifests/{resource_id}": {
                 "get": {
                     "operationId": "getEvidenceManifest",
@@ -1826,6 +1996,15 @@ def openapi_document() -> dict[str, object]:
                     "description": (
                         "Recently authenticated human browser session; unsafe requests also "
                         "require Django's X-CSRFToken header."
+                    ),
+                },
+                "evidenceUploadToken": {
+                    "type": "apiKey",
+                    "in": "header",
+                    "name": "X-Anva-Evidence-Upload-Token",
+                    "description": (
+                        "Short-lived single-use opaque evidence-upload secret; required in "
+                        "addition to the normal actor bearer credential."
                     ),
                 },
             },

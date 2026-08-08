@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timedelta
 from functools import wraps
-from typing import Any, cast
+from typing import IO, Any, cast
 
 from django.conf import settings
 from django.core.exceptions import RequestDataTooBig
@@ -17,6 +17,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.views.decorators.http import require_http_methods
 
+from anva.contracts.validation import validate_payload
 from anva.core.exceptions import (
     AuthenticationError,
     DomainOperationError,
@@ -239,6 +240,19 @@ def _json_body(request: HttpRequest) -> dict[str, object]:
     if not isinstance(payload, dict):
         raise ValueError("Request body must be an object")
     return payload
+
+
+def _stream_content_length(request: HttpRequest) -> int | None:
+    """Parse Content-Length without reading or buffering the upload body."""
+    raw = request.headers.get("Content-Length")
+    if raw is None or raw == "":
+        return None
+    if not raw.isascii() or not raw.isdecimal():
+        raise ValueError("Content-Length is invalid")
+    value = int(raw)
+    if value < 0:
+        raise ValueError("Content-Length is invalid")
+    return value
 
 
 def _diff_json_body(request: HttpRequest) -> dict[str, object]:
@@ -2284,6 +2298,104 @@ def evidence_submission(
             "created": result.created,
         },
         status=201 if result.created else 200,
+    )
+
+
+@api_errors
+@require_http_methods(["POST"])
+def evidence_upload_authorization(
+    request: HttpRequest,
+    repository_id: uuid.UUID,
+    pull_request_number: int,
+) -> JsonResponse:
+    """Issue a scoped upload secret without persisting or logging its raw value."""
+    from anva.core.services.evidence_uploads import (
+        EvidenceUploadError,
+        issue_upload_authorization,
+    )
+
+    actor = _actor(request)
+    payload = _json_body(request)
+    validate_payload("evidence-upload-authorization", payload)
+    try:
+        grant = issue_upload_authorization(
+            actor=actor,
+            repository_id=repository_id,
+            access_scope_id=uuid.UUID(_string(payload, "access_scope_id")),
+            pull_request_number=pull_request_number,
+            commit_sha=_string(payload, "commit_sha"),
+            filename=_string(payload, "filename"),
+            declared_sha256=_string(payload, "declared_sha256"),
+            declared_size=_integer(payload, "declared_size"),
+            idempotency_key=_string(payload, "idempotency_key"),
+        )
+    except EvidenceUploadError as error:
+        return _error(
+            error.code,
+            error.safe_message,
+            _correlation_id(request),
+            error.http_status,
+        )
+    authorization = grant.authorization
+    return JsonResponse(
+        {
+            "authorization_id": str(authorization.id),
+            "repository_id": str(repository_id),
+            "access_scope_id": str(authorization.access_scope_id),
+            "pull_request_number": pull_request_number,
+            "commit_sha": authorization.commit_sha,
+            "declared_sha256": authorization.declared_sha256,
+            "declared_size": authorization.declared_size,
+            "state": authorization.state,
+            "expires_at": authorization.expires_at.isoformat(),
+            "upload_path": (f"/api/v1/evidence-upload-authorizations/{authorization.id}/content"),
+            "upload_token": grant.raw_token,
+            "replayed": grant.replayed,
+        },
+        status=200 if grant.replayed else 201,
+    )
+
+
+@api_errors
+@require_http_methods(["PUT"])
+def evidence_upload_content(
+    request: HttpRequest,
+    authorization_id: uuid.UUID,
+) -> JsonResponse:
+    """Stream untrusted evidence bytes to the bounded accepted-only pipeline."""
+    from anva.core.services.evidence_uploads import (
+        EvidenceUploadError,
+        accept_evidence_upload,
+    )
+
+    actor = _actor(request)
+    try:
+        blob = accept_evidence_upload(
+            authorization_id=authorization_id,
+            raw_token=request.headers.get("X-Anva-Evidence-Upload-Token", ""),
+            actor=actor,
+            stream=cast(IO[bytes], request),
+            content_length=_stream_content_length(request),
+            expected_sha256=request.headers.get("X-Anva-Content-SHA256", ""),
+        )
+    except EvidenceUploadError as error:
+        return _error(
+            error.code,
+            error.safe_message,
+            _correlation_id(request),
+            error.http_status,
+        )
+    return JsonResponse(
+        {
+            "evidence_blob_id": str(blob.id),
+            "authorization_id": str(authorization_id),
+            "sha256": blob.content_hash,
+            "verified_size": blob.verified_size,
+            "detected_type": blob.detected_media_type,
+            "archive_summary": blob.archive_summary,
+            "storage_state": blob.storage_state,
+        },
+        status=201,
     )
 
 

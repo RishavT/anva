@@ -6,9 +6,11 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 import pytest
 from django.contrib.sessions.backends.db import SessionStore
+from django.db import connection
 from django.test import Client, RequestFactory
 from django.utils import timezone
 
@@ -21,8 +23,10 @@ from anva.core.models import (
     AccessScope,
     AuditEvent,
     Evidence,
+    EvidenceBlob,
     EvidenceManifest,
     EvidenceRetentionEvent,
+    EvidenceUploadAuthorization,
     ImmutableArtifact,
     Membership,
     Organization,
@@ -152,10 +156,12 @@ def _evidence(
     expires_at: datetime,
     name: str,
     active_at: datetime,
+    artifact_blob: EvidenceBlob | None = None,
 ) -> Evidence:
     evidence = Evidence.objects.create(
         organization=tenant.organization,
         manifest=manifest,
+        artifact_blob=artifact_blob,
         commit_sha=manifest.commit_sha,
         kind=Evidence.Kind.TEST_RESULT,
         name=name,
@@ -163,7 +169,11 @@ def _evidence(
         producer_version="1.0",
         status=Evidence.Status.PASSED,
         completed_at=active_at,
-        content_hash=content_hash({"evidence": name}),
+        content_hash=(
+            artifact_blob.content_hash
+            if artifact_blob is not None
+            else content_hash({"evidence": name})
+        ),
         limitations=[],
         criterion_codes=["TESTS_PASS"],
         retention_class="default",
@@ -179,6 +189,54 @@ def _evidence(
         occurred_at=active_at,
     )
     return evidence
+
+
+def _evidence_blob(
+    tenant: OperationsTenant,
+    *,
+    created_at: datetime,
+    storage_state: str = EvidenceBlob.StorageState.AVAILABLE,
+) -> EvidenceBlob:
+    marker = uuid.uuid4().hex
+    authorization = EvidenceUploadAuthorization.objects.create(
+        organization=tenant.organization,
+        repository=tenant.repository,
+        access_scope=tenant.scope,
+        pull_request_number=1,
+        commit_sha="a" * 40,
+        filename=f"{marker}.zip",
+        declared_sha256=content_hash({"blob": marker}),
+        declared_size=128,
+        token_hash=content_hash({"token": marker}),
+        idempotency_hash=content_hash({"idempotency": marker}),
+        request_hash=content_hash({"request": marker}),
+        actor_type="SERVICE",
+        actor_id="release-operations-test",
+        state=EvidenceUploadAuthorization.State.ACCEPTED,
+        object_key=f"evidence/v1/{marker}",
+        ownership_nonce_hash=content_hash({"owner": marker}),
+        issued_at=created_at,
+        expires_at=created_at + timedelta(minutes=10),
+        reserved_at=created_at,
+        completed_at=created_at,
+    )
+    failed = storage_state == EvidenceBlob.StorageState.DELETE_FAILED
+    return EvidenceBlob.objects.create(
+        organization=tenant.organization,
+        repository=tenant.repository,
+        access_scope=tenant.scope,
+        upload_authorization=authorization,
+        object_key=authorization.object_key,
+        content_hash=authorization.declared_sha256,
+        verified_size=128,
+        detected_media_type=EvidenceBlob.MediaType.ZIP,
+        archive_summary={"format": "ZIP", "member_count": 2},
+        inspection_version="test",
+        storage_state=storage_state,
+        deletion_reason="retention_expired" if failed else "",
+        storage_error_code="EVIDENCE_STORAGE_DELETE_FAILED" if failed else "",
+        created_at=created_at,
+    )
 
 
 @pytest.mark.integration
@@ -380,6 +438,10 @@ def test_retention_dry_run_is_idempotent_then_live_run_expires_only_due_evidence
         "rate_buckets_deleted": 1,
         "governed_history_retained": True,
         "source_content_deleted": 0,
+        "expired_linked_blob_candidates": 0,
+        "stale_unlinked_blob_candidates": 0,
+        "evidence_blob_bytes_deleted": 0,
+        "evidence_blob_bytes_delete_failed": 0,
     }
     assert EvidenceRetentionEvent.objects.filter(evidence=due).count() == 1
     assert RateLimitBucket.objects.filter(organization=tenant.organization).exists()
@@ -449,6 +511,108 @@ def test_retention_uses_latest_availability_event_when_expiring_evidence() -> No
         EvidenceRetentionEvent.objects.filter(evidence=evidence).latest("occurred_at", "id").state
         == Evidence.RetentionState.EXPIRED
     )
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_retention_deletes_only_exact_tenant_expired_and_stale_blob_bytes(
+    settings: object,
+) -> None:
+    settings.ANVA_RATE_LIMIT_ENABLED = True  # type: ignore[attr-defined]
+    tenant = _operations_tenant("retention-blobs")
+    OrganizationProductSettings.objects.create(
+        organization=tenant.organization,
+        retention_days=30,
+    )
+    other = _operations_tenant("retention-blobs-other")
+    reference_time = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
+    stale_at = reference_time - timedelta(days=31)
+    linked = _evidence_blob(tenant, created_at=stale_at)
+    retry = _evidence_blob(
+        tenant,
+        created_at=stale_at,
+        storage_state=EvidenceBlob.StorageState.DELETE_FAILED,
+    )
+    fresh = _evidence_blob(tenant, created_at=reference_time - timedelta(days=1))
+    foreign = _evidence_blob(other, created_at=stale_at)
+    _evidence(
+        tenant,
+        _evidence_manifest(tenant),
+        expires_at=reference_time,
+        name="linked due evidence",
+        active_at=stale_at,
+        artifact_blob=linked,
+    )
+    calls: list[tuple[uuid.UUID, uuid.UUID, str]] = []
+
+    def delete_bytes(
+        *, organization_id: uuid.UUID, blob_id: uuid.UUID, reason: str
+    ) -> EvidenceBlob:
+        assert not connection.in_atomic_block
+        calls.append((organization_id, blob_id, reason))
+        return EvidenceBlob.objects.get(id=blob_id, organization_id=organization_id)
+
+    with patch(
+        "anva.core.services.operations.delete_evidence_blob_bytes",
+        side_effect=delete_bytes,
+    ):
+        run = run_retention(actor=tenant.actor, reference_time=reference_time)
+        replay = run_retention(actor=tenant.actor, reference_time=reference_time)
+
+    assert replay.id == run.id
+    assert set(calls) == {
+        (tenant.organization.id, linked.id, "retention_expired"),
+        (tenant.organization.id, retry.id, "retention_expired"),
+    }
+    assert fresh.id not in {call[1] for call in calls}
+    assert foreign.id not in {call[1] for call in calls}
+    assert run.summary["expired_linked_blob_candidates"] == 1
+    assert run.summary["stale_unlinked_blob_candidates"] == 1
+    assert run.summary["evidence_blob_bytes_deleted"] == 2
+    assert Evidence.objects.filter(artifact_blob=linked).exists()
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_decommission_deletes_all_and_only_exact_tenant_retryable_blob_bytes() -> None:
+    tenant = _operations_tenant("decommission-blobs")
+    other = _operations_tenant("decommission-blobs-other")
+    created_at = timezone.now() - timedelta(days=1)
+    available = _evidence_blob(tenant, created_at=created_at)
+    retry = _evidence_blob(
+        tenant,
+        created_at=created_at,
+        storage_state=EvidenceBlob.StorageState.DELETE_FAILED,
+    )
+    foreign = _evidence_blob(other, created_at=created_at)
+    calls: list[tuple[uuid.UUID, uuid.UUID, str]] = []
+
+    def delete_bytes(
+        *, organization_id: uuid.UUID, blob_id: uuid.UUID, reason: str
+    ) -> EvidenceBlob:
+        assert not connection.in_atomic_block
+        calls.append((organization_id, blob_id, reason))
+        return EvidenceBlob.objects.get(id=blob_id, organization_id=organization_id)
+
+    with patch(
+        "anva.core.services.operations.delete_evidence_blob_bytes",
+        side_effect=delete_bytes,
+    ):
+        run = decommission_organization(
+            actor=tenant.actor,
+            confirmation=tenant.organization.slug,
+            acknowledgement=f"DECOMMISSION {tenant.organization.slug}",
+        )
+
+    assert set(calls) == {
+        (tenant.organization.id, available.id, "organization_decommission"),
+        (tenant.organization.id, retry.id, "organization_decommission"),
+    }
+    assert foreign.id not in {call[1] for call in calls}
+    assert run.summary["evidence_blob_candidates"] == 2
+    assert run.summary["evidence_blob_bytes_deleted"] == 2
+    assert run.summary["governed_history_retained"] is True
+    assert EvidenceBlob.objects.filter(id__in=[available.id, retry.id]).count() == 2
 
 
 @pytest.mark.integration

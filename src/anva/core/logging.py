@@ -20,6 +20,7 @@ SECRET_PATTERNS = (
     re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+"),
     re.compile(r"(?i)\bBasic\s+[A-Za-z0-9+/=]+"),
     re.compile(r"\banva_v1\.[0-9a-fA-F-]{36}\.[A-Za-z0-9_-]+"),
+    re.compile(r"\banva_upload_v1\.[0-9a-fA-F-]{36}\.[A-Za-z0-9_-]+"),
     re.compile(r"\bsk_(?:live|test)_[A-Za-z0-9_-]{8,}"),
     re.compile(r"\b(?:ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{12,})"),
     re.compile(r"\bgh[usro]_[A-Za-z0-9_]{20,}"),
