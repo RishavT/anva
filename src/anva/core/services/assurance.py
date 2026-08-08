@@ -1207,13 +1207,15 @@ def claim_evaluator_task(
         )
         .order_by("created_at", "id")
     )
+    excluded_task_ids: set[uuid.UUID] = set()
     task = candidates.first()
     while task is not None:
         run = task.assurance_run
         if run.initiated_by_actor_type == actor.actor_type and hmac.compare_digest(
             run.initiated_by_actor_id, actor.actor_id
         ):
-            task = candidates.exclude(id=task.id).first()
+            excluded_task_ids.add(task.id)
+            task = candidates.exclude(id__in=excluded_task_ids).first()
             continue
         try:
             scoped_actor = _authorize_evaluator_source_scope(
@@ -1222,7 +1224,8 @@ def claim_evaluator_task(
                 evaluator_scope=task.request_artifact.access_scope,
             )
         except ResourceNotFoundError:
-            task = candidates.exclude(id=task.id).first()
+            excluded_task_ids.add(task.id)
+            task = candidates.exclude(id__in=excluded_task_ids).first()
             continue
         run_revision = run.pull_request_revision
         if run_revision is None:
@@ -1230,7 +1233,8 @@ def claim_evaluator_task(
             task.failure_code = "MISSING_PULL_REQUEST_REVISION"
             task.revision += 1
             task.save(update_fields=["state", "failure_code", "revision", "updated_at"])
-            task = candidates.exclude(id=task.id).first()
+            excluded_task_ids.add(task.id)
+            task = candidates.exclude(id__in=excluded_task_ids).first()
             continue
         pr = run_revision.pull_request
         if run.state == AssuranceRun.State.STALE or pr.current_head_commit != run.head_commit:
@@ -1238,7 +1242,8 @@ def claim_evaluator_task(
             task.failure_code = "STALE_RUN"
             task.revision += 1
             task.save(update_fields=["state", "failure_code", "revision", "updated_at"])
-            task = candidates.exclude(id=task.id).first()
+            excluded_task_ids.add(task.id)
+            task = candidates.exclude(id__in=excluded_task_ids).first()
             continue
         break
     if task is None:

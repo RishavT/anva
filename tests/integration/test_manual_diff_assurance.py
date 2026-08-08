@@ -850,6 +850,21 @@ def test_initiator_is_not_a_reviewer_and_persisted_identities_are_immutable() ->
         reference_time=REFERENCE_TIME,
         deterministic_checks=_passing_checks(),
     )
+    second_ingested = _ingest(
+        actor=initiator,
+        repository=repository,
+        scope=scope,
+        number=48,
+        head="8" * 40,
+    )
+    second_started = start_assurance(
+        actor=initiator,
+        pull_request_revision_id=second_ingested.revision.id,
+        policy_version_ids=[policy_version_id],
+        reference_time=REFERENCE_TIME,
+        deterministic_checks=_passing_checks(),
+    )
+    assert second_started.created is True
     assert started.run.initiated_by_actor_type == initiator.actor_type
     assert started.run.initiated_by_actor_id == initiator.actor_id
     assert started.run.initiated_by_credential_id is None
