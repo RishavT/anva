@@ -96,6 +96,7 @@ def test_upload_openapi_requires_actor_and_separate_upload_secret() -> None:
         assert response_schema["properties"]["state"]["enum"] == [
             "ISSUED",
             "RECEIVING",
+            "RECOVERING",
             "ACCEPTED",
             "REJECTED",
             "EXPIRED",

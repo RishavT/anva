@@ -43,6 +43,7 @@ def openapi_document() -> dict[str, object]:
                 "enum": [
                     "ISSUED",
                     "RECEIVING",
+                    "RECOVERING",
                     "ACCEPTED",
                     "REJECTED",
                     "EXPIRED",

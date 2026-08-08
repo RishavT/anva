@@ -4413,6 +4413,7 @@ class EvidenceUploadAuthorization(UUIDModel):
     class State(models.TextChoices):
         ISSUED = "ISSUED"
         RECEIVING = "RECEIVING"
+        RECOVERING = "RECOVERING"
         ACCEPTED = "ACCEPTED"
         REJECTED = "REJECTED"
         EXPIRED = "EXPIRED"
@@ -4530,6 +4531,13 @@ class EvidenceUploadAuthorization(UUIDModel):
                         completed_at__isnull=True,
                     )
                     | Q(
+                        state="RECOVERING",
+                        ownership_nonce_hash__regex=r"^[a-f0-9]{64}$",
+                        failure_code="",
+                        reserved_at__isnull=False,
+                        completed_at__isnull=True,
+                    )
+                    | Q(
                         state="ACCEPTED",
                         ownership_nonce_hash__regex=r"^[a-f0-9]{64}$",
                         failure_code="",
@@ -4565,7 +4573,10 @@ class EvidenceUploadAuthorization(UUIDModel):
                         object_key="",
                         ownership_nonce_hash="",
                     )
-                    | (Q(state__in=["RECEIVING", "ACCEPTED", "REJECTED"]) & ~Q(object_key=""))
+                    | (
+                        Q(state__in=["RECEIVING", "RECOVERING", "ACCEPTED", "REJECTED"])
+                        & ~Q(object_key="")
+                    )
                 ),
                 name="core_evidence_upload_object_key_coherent",
             ),

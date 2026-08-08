@@ -14,7 +14,7 @@ from typing import IO
 from unittest.mock import patch
 
 import pytest
-from django.db import IntegrityError, connection
+from django.db import IntegrityError, connection, transaction
 from django.test import Client
 from django.utils import timezone
 
@@ -24,6 +24,7 @@ from anva.core.models import (
     EvidenceUploadAuthorization,
     Membership,
     Organization,
+    PullRequest,
     Repository,
     Role,
     User,
@@ -38,6 +39,7 @@ from anva.core.services.evidence_uploads import (
     recover_stale_upload_authorizations,
     revoke_upload_authorization,
 )
+from anva.core.services.operations import decommission_organization
 from anva.integrations.evidence_object_storage import (
     EvidenceObjectNotFoundError,
     EvidenceObjectOwnershipConflictError,
@@ -55,6 +57,7 @@ class UploadTenant:
     organization: Organization
     repository: Repository
     scope: AccessScope
+    pull_request: PullRequest
     actor: ActorContext
 
 
@@ -151,10 +154,17 @@ def make_tenant(label: str = "upload") -> UploadTenant:
         display_name="Evidence upload admin",
     )
     Membership.objects.create(organization=organization, user=user, role=role)
+    pull_request = PullRequest.objects.create(
+        organization=organization,
+        repository=repository,
+        number=17,
+        current_head_commit=HEAD,
+    )
     return UploadTenant(
         organization=organization,
         repository=repository,
         scope=scope,
+        pull_request=pull_request,
         actor=ActorContext(
             organization_id=organization.id,
             actor_type="USER",
@@ -274,6 +284,73 @@ def test_api_success_replay_and_idempotent_authorization_create_one_blob(client:
     assert authorization.state == EvidenceUploadAuthorization.State.ACCEPTED
     assert raw_token not in authorization.token_hash
     assert storage.put_calls == 1
+
+
+@pytest.mark.parametrize(("pull_request_number", "head"), [(18, HEAD), (17, "b" * 40)])
+def test_authorization_requires_real_current_pull_request_without_disclosure(
+    pull_request_number: int,
+    head: str,
+) -> None:
+    tenant = make_tenant("pr-binding")
+    value = evidence_json()
+
+    with pytest.raises(EvidenceUploadError) as raised:
+        issue_upload_authorization(
+            actor=tenant.actor,
+            repository_id=tenant.repository.id,
+            access_scope_id=tenant.scope.id,
+            pull_request_number=pull_request_number,
+            commit_sha=head,
+            filename="evidence.json",
+            declared_sha256=hashlib.sha256(value).hexdigest(),
+            declared_size=len(value),
+            idempotency_key=f"pr-binding-{pull_request_number}-{head}",
+        )
+
+    assert raised.value.code == "UPLOAD_AUTHORIZATION_UNAVAILABLE"
+    assert raised.value.http_status == 404
+    assert not EvidenceUploadAuthorization.objects.exists()
+
+
+def test_pull_request_head_update_wins_lock_before_authorization() -> None:
+    tenant = make_tenant("pr-head-race")
+    value = evidence_json()
+    head_locked = threading.Event()
+    release_head = threading.Event()
+    issue_started = threading.Event()
+
+    def move_head() -> None:
+        try:
+            with transaction.atomic():
+                pull_request = PullRequest.objects.select_for_update().get(
+                    id=tenant.pull_request.id
+                )
+                pull_request.current_head_commit = "b" * 40
+                pull_request.save(update_fields=["current_head_commit", "updated_at"])
+                head_locked.set()
+                assert release_head.wait(timeout=10)
+        finally:
+            connection.close()
+
+    def issue_stale_head() -> UploadAuthorizationGrant:
+        try:
+            issue_started.set()
+            return issue(tenant, value)
+        finally:
+            connection.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        moving = executor.submit(move_head)
+        assert head_locked.wait(timeout=10)
+        issuing = executor.submit(issue_stale_head)
+        assert issue_started.wait(timeout=10)
+        release_head.set()
+        moving.result(timeout=10)
+        with pytest.raises(EvidenceUploadError) as raised:
+            issuing.result(timeout=10)
+
+    assert raised.value.code == "UPLOAD_AUTHORIZATION_UNAVAILABLE"
+    assert not EvidenceUploadAuthorization.objects.exists()
 
 
 def test_concurrent_token_use_accepts_only_one_upload() -> None:
@@ -483,6 +560,8 @@ def test_cleanup_failure_stays_retryable_until_owned_bytes_are_deleted() -> None
     ):
         cleaned = recover_stale_upload_authorizations(
             actor=tenant.actor,
+            repository_id=tenant.repository.id,
+            access_scope_id=tenant.scope.id,
             before=timezone.now() + timedelta(seconds=1),
             limit=10,
         )
@@ -492,6 +571,133 @@ def test_cleanup_failure_stays_retryable_until_owned_bytes_are_deleted() -> None
     assert grant.authorization.state == EvidenceUploadAuthorization.State.REJECTED
     assert grant.authorization.failure_code == "UPLOAD_RECEIVING_STALE"
     assert not storage.objects
+
+
+def test_recovery_claim_wins_against_inflight_finalizer_without_accepting_bytes() -> None:
+    tenant = make_tenant("recovery-finalizer-race")
+    value = evidence_json()
+    grant = issue(tenant, value)
+    entered = threading.Event()
+    release = threading.Event()
+    storage = FakeEvidenceStorage(put_entered=entered, release_put=release)
+
+    def upload() -> EvidenceBlob:
+        try:
+            return accept(grant, tenant, value)
+        finally:
+            connection.close()
+
+    with patch(
+        "anva.core.services.evidence_uploads.EvidenceObjectStorage",
+        return_value=storage,
+    ):
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            finalizer = executor.submit(upload)
+            assert entered.wait(timeout=10)
+            cleaned = recover_stale_upload_authorizations(
+                actor=tenant.actor,
+                repository_id=tenant.repository.id,
+                access_scope_id=tenant.scope.id,
+                before=timezone.now() + timedelta(seconds=1),
+                limit=10,
+            )
+            release.set()
+            with pytest.raises(EvidenceStorageError):
+                finalizer.result(timeout=10)
+
+    grant.authorization.refresh_from_db()
+    assert cleaned == 1
+    assert grant.authorization.state == EvidenceUploadAuthorization.State.REJECTED
+    assert not storage.objects
+    assert not EvidenceBlob.objects.exists()
+
+
+def test_recovery_scope_cannot_delete_another_repository_upload() -> None:
+    tenant = make_tenant("recovery-boundary")
+    value = evidence_json()
+    grant = issue(tenant, value)
+    storage = FakeEvidenceStorage(
+        get_error=EvidenceStorageError("EVIDENCE_STORAGE_GET_FAILED"),
+        delete_error=EvidenceStorageError("EVIDENCE_STORAGE_DELETE_FAILED"),
+    )
+    with (
+        patch(
+            "anva.core.services.evidence_uploads.EvidenceObjectStorage",
+            return_value=storage,
+        ),
+        pytest.raises(EvidenceStorageError),
+    ):
+        accept(grant, tenant, value)
+
+    other_repository = Repository.objects.create(
+        organization=tenant.organization,
+        external_id=f"github:recovery-boundary/{uuid.uuid4()}",
+        name="Other repository",
+    )
+    other_scope = AccessScope.objects.create(
+        organization=tenant.organization,
+        name="other-scope",
+        all_memberships=True,
+        all_repositories=True,
+    )
+    storage.delete_error = None
+    with patch(
+        "anva.core.services.evidence_uploads.EvidenceObjectStorage",
+        return_value=storage,
+    ):
+        cleaned = recover_stale_upload_authorizations(
+            actor=tenant.actor,
+            repository_id=other_repository.id,
+            access_scope_id=other_scope.id,
+            before=timezone.now() + timedelta(seconds=1),
+            limit=10,
+        )
+
+    grant.authorization.refresh_from_db()
+    assert cleaned == 0
+    assert grant.authorization.state == EvidenceUploadAuthorization.State.RECEIVING
+    assert storage.objects
+    assert storage.delete_calls == 1
+
+
+def test_decommission_claims_inflight_upload_before_finalizer_can_accept() -> None:
+    tenant = make_tenant("decommission-finalizer-race")
+    value = evidence_json()
+    grant = issue(tenant, value)
+    entered = threading.Event()
+    release = threading.Event()
+    storage = FakeEvidenceStorage(put_entered=entered, release_put=release)
+
+    def upload() -> EvidenceBlob:
+        try:
+            return accept(grant, tenant, value)
+        finally:
+            connection.close()
+
+    with patch(
+        "anva.core.services.evidence_uploads.EvidenceObjectStorage",
+        return_value=storage,
+    ):
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            finalizer = executor.submit(upload)
+            assert entered.wait(timeout=10)
+            run = decommission_organization(
+                actor=tenant.actor,
+                confirmation=tenant.organization.slug,
+                acknowledgement=f"DECOMMISSION {tenant.organization.slug}",
+            )
+            release.set()
+            with pytest.raises(EvidenceStorageError):
+                finalizer.result(timeout=10)
+
+    grant.authorization.refresh_from_db()
+    tenant.organization.refresh_from_db()
+    assert run.state == "COMPLETED"
+    assert tenant.organization.lifecycle_state == Organization.LifecycleState.DECOMMISSIONED
+    assert grant.authorization.state == EvidenceUploadAuthorization.State.REJECTED
+    assert grant.authorization.failure_code == "UPLOAD_ORGANIZATION_DECOMMISSIONED"
+    assert not storage.objects
+    assert not EvidenceBlob.objects.exists()
 
 
 def test_secret_canary_and_upload_token_never_reach_response_or_logs(

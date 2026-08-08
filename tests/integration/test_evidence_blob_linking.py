@@ -7,6 +7,7 @@ from copy import deepcopy
 from datetime import timedelta
 
 import pytest
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from anva.contracts.catalog import EXAMPLES
@@ -27,6 +28,35 @@ from anva.core.services.context import ActorContext
 from anva.core.services.evidence import submit_evidence_manifest
 
 pytestmark = [pytest.mark.integration, pytest.mark.django_db]
+
+
+def test_upload_authorization_cannot_be_inserted_as_accepted() -> None:
+    organization, repository, scope, _actor = tenant("insert-accepted")
+    now = timezone.now()
+    marker = uuid.uuid4().hex
+    with pytest.raises(IntegrityError), transaction.atomic():
+        EvidenceUploadAuthorization.objects.create(  # type: ignore[misc]
+            organization=organization,
+            repository=repository,
+            access_scope=scope,
+            pull_request_number=17,
+            commit_sha="a" * 40,
+            filename="evidence.json",
+            declared_sha256="c" * 64,
+            declared_size=128,
+            token_hash=content_hash({"token": marker}),
+            idempotency_hash=content_hash({"idempotency": marker}),
+            request_hash=content_hash({"request": marker}),
+            actor_type="USER",
+            actor_id=marker,
+            state=EvidenceUploadAuthorization.State.ACCEPTED,
+            object_key=f"evidence/{organization.id}/{marker}",
+            ownership_nonce_hash=content_hash({"owner": marker}),
+            expires_at=now + timedelta(minutes=5),
+            reserved_at=now,
+            completed_at=now,
+        )
+    assert not EvidenceBlob.objects.filter(organization=organization).exists()
 
 
 def tenant(label: str) -> tuple[Organization, Repository, AccessScope, ActorContext]:
@@ -91,13 +121,16 @@ def accepted_blob(
         request_hash=content_hash({"request": marker}),
         actor_type="USER",
         actor_id=marker,
-        state=EvidenceUploadAuthorization.State.ACCEPTED,
-        object_key=object_key,
-        ownership_nonce_hash=content_hash({"owner": marker}),
         expires_at=now + timedelta(minutes=5),
-        reserved_at=now,
-        completed_at=now,
     )
+    authorization.state = EvidenceUploadAuthorization.State.RECEIVING
+    authorization.object_key = object_key
+    authorization.ownership_nonce_hash = content_hash({"owner": marker})
+    authorization.reserved_at = now
+    authorization.save(update_fields=["state", "object_key", "ownership_nonce_hash", "reserved_at"])
+    authorization.state = EvidenceUploadAuthorization.State.ACCEPTED
+    authorization.completed_at = now
+    authorization.save(update_fields=["state", "completed_at"])
     deleted = storage_state == EvidenceBlob.StorageState.DELETED
     return EvidenceBlob.objects.create(
         organization=organization,

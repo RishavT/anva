@@ -114,22 +114,26 @@ content.
 2. Confirm API readiness and the configured bucket using existing health and
    deployment checks. Verify endpoint/TLS/IAM configuration without printing
    credentials.
-3. Record counts and IDs for `RECEIVING`, `AVAILABLE`, `DELETE_PENDING`, and
-   `DELETE_FAILED` records in the affected tenant. Do not dump raw token hashes,
-   ownership hashes, object keys, or uploaded content into the incident record.
+3. Record counts and IDs for `RECEIVING`, `RECOVERING`, `AVAILABLE`,
+   `DELETE_PENDING`, and `DELETE_FAILED` records in the affected tenant. Do not
+   dump raw token hashes, ownership hashes, object keys, or uploaded content
+   into the incident record.
 4. For an interrupted upload, allow the bounded recovery service to delete only
    an object whose owner metadata matches the authorization. If cleanup fails,
    keep the row retry-visible; do not force `REJECTED`.
 5. For retention/decommission deletion failures, leave `DELETE_FAILED` intact.
-   A later approved retention/decommission run retries eligible exact objects.
+   A later approved retention run or the system-authorized inactive-tenant
+   decommission retry retries eligible exact objects. A decommission run remains
+   `FAILED`, never `COMPLETED`, while retryable object cleanup remains.
 6. Escalate ownership mismatch, unexpected object presence, repeated verification
    failure, or persistent cleanup failure as a security incident. Preserve safe
    object metadata and audit transitions before any approved destructive action.
 
 There is no public stale-upload recovery endpoint or scheduled recovery worker in
-this candidate. A persistent `RECEIVING` record therefore requires an approved,
-reviewed operator action; direct database edits and manual bucket deletion are
-not supported recovery procedures.
+this candidate. Recovery is explicitly bound to one authorized repository and
+access scope. A persistent `RECEIVING` or `RECOVERING` record therefore requires
+an approved, reviewed operator action; direct database edits and manual bucket
+deletion are not supported recovery procedures.
 
 ## Retention and decommission verification
 

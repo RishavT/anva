@@ -14,14 +14,18 @@ from typing import IO, Final
 
 from django.conf import settings
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.utils import timezone
 
-from anva.core.exceptions import IdempotencyConflictError
+from anva.core.exceptions import IdempotencyConflictError, ResourceNotFoundError
 from anva.core.models import (
     AccessScope,
+    Evidence,
     EvidenceBlob,
+    EvidenceRetentionEvent,
     EvidenceUploadAuthorization,
     Organization,
+    PullRequest,
     Repository,
     content_hash,
 )
@@ -36,6 +40,7 @@ from anva.core.services.events import record_transition
 from anva.core.services.evidence_archive import (
     _SAFE_MESSAGES,
     DEFAULT_UPLOAD_LIMITS,
+    GAP_ARCHIVE_BAD_FORMAT,
     GAP_ARCHIVE_PATH_INVALID,
     GAP_ARCHIVE_SPECIAL_FILE,
     GAP_MANIFEST_MALFORMED,
@@ -65,11 +70,13 @@ from anva.integrations.evidence_object_storage import (
 
 UPLOAD_TOKEN_PREFIX: Final = "anva_upload_v1"  # noqa: S105
 UPLOAD_AUTHORIZATION_TTL: Final = timedelta(minutes=10)
+RECOVERY_LEASE_TTL: Final = timedelta(minutes=10)
 INSPECTION_VERSION: Final = "tst-007-bounded-upload-v1"
 CLEANUP_RETRY_CODE: Final = "EVIDENCE_STORAGE_CLEANUP_RETRY_REQUIRED"
 
 __all__ = [
     "DEFAULT_UPLOAD_LIMITS",
+    "GAP_ARCHIVE_BAD_FORMAT",
     "GAP_ARCHIVE_PATH_INVALID",
     "GAP_ARCHIVE_SPECIAL_FILE",
     "GAP_MANIFEST_MALFORMED",
@@ -84,6 +91,7 @@ __all__ = [
     "UploadAuthorizationGrant",
     "UploadLimits",
     "accept_evidence_upload",
+    "cleanup_decommissioned_upload_authorizations",
     "delete_evidence_blob_bytes",
     "inspect_evidence_upload",
     "issue_upload_authorization",
@@ -195,10 +203,14 @@ def issue_upload_authorization(
         repository_id=repository_id,
         access_scope_id=access_scope_id,
     )
-    organization = Organization.objects.filter(
-        id=actor.organization_id,
-        lifecycle_state=Organization.LifecycleState.ACTIVE,
-    ).first()
+    organization = (
+        Organization.objects.select_for_update()
+        .filter(
+            id=actor.organization_id,
+            lifecycle_state=Organization.LifecycleState.ACTIVE,
+        )
+        .first()
+    )
     if organization is None:
         raise EvidenceUploadError("resource_not_found", NOT_FOUND_MESSAGE, 404)
     repository = get_tenant_record(
@@ -211,6 +223,20 @@ def issue_upload_authorization(
         record_id=access_scope_id,
         organization_id=actor.organization_id,
     )
+    pull_request = (
+        PullRequest.objects.select_for_update()
+        .filter(
+            organization=organization,
+            repository=repository,
+            number=pull_request_number,
+        )
+        .first()
+    )
+    if pull_request is None or not hmac.compare_digest(
+        pull_request.current_head_commit,
+        commit_sha,
+    ):
+        raise _authorization_unavailable()
     idempotency_hash = _keyed_hash(domain="evidence-upload-idempotency", value=idempotency_key)
     request_hash = content_hash(
         {
@@ -322,16 +348,25 @@ def _reserve_authorization(
 ) -> EvidenceUploadAuthorization:
     expired = False
     with transaction.atomic():
+        organization = (
+            Organization.objects.select_for_update()
+            .filter(
+                id=actor.organization_id,
+                lifecycle_state=Organization.LifecycleState.ACTIVE,
+            )
+            .first()
+        )
         authorization = (
             EvidenceUploadAuthorization.objects.select_for_update()
-            .select_related("organization", "repository", "access_scope")
+            .select_related("repository", "access_scope")
             .filter(id=authorization_id, organization_id=actor.organization_id)
             .first()
         )
         supplied_hash = _keyed_hash(domain="evidence-upload-token", value=raw_token)
         stored_hash = authorization.token_hash if authorization is not None else "0" * 64
         if (
-            authorization is None
+            organization is None
+            or authorization is None
             or _token_id(raw_token) != authorization_id
             or not hmac.compare_digest(stored_hash, supplied_hash)
             or not _actor_matches(authorization, actor)
@@ -352,7 +387,7 @@ def _reserve_authorization(
             authorization.completed_at = now
             authorization.save(update_fields=["state", "failure_code", "completed_at"])
             record_transition(
-                organization=authorization.organization,
+                organization=organization,
                 actor=audit_actor,
                 target_type="evidenceuploadauthorization",
                 target_id=authorization.id,
@@ -377,7 +412,7 @@ def _reserve_authorization(
                 ]
             )
             record_transition(
-                organization=authorization.organization,
+                organization=organization,
                 actor=audit_actor,
                 target_type="evidenceuploadauthorization",
                 target_id=authorization.id,
@@ -398,14 +433,22 @@ def revoke_upload_authorization(
     actor: ActorContext,
 ) -> EvidenceUploadAuthorization:
     """Revoke an unused grant without disclosing whether another tenant owns it."""
+    organization = (
+        Organization.objects.select_for_update()
+        .filter(
+            id=actor.organization_id,
+            lifecycle_state=Organization.LifecycleState.ACTIVE,
+        )
+        .first()
+    )
     authorization = (
         EvidenceUploadAuthorization.objects.select_for_update()
-        .select_related("organization")
         .filter(id=authorization_id, organization_id=actor.organization_id)
         .first()
     )
     if (
-        authorization is None
+        organization is None
+        or authorization is None
         or authorization.state != EvidenceUploadAuthorization.State.ISSUED
         or not _actor_matches(authorization, actor)
     ):
@@ -421,7 +464,7 @@ def revoke_upload_authorization(
     authorization.completed_at = timezone.now()
     authorization.save(update_fields=["state", "failure_code", "completed_at"])
     record_transition(
-        organization=authorization.organization,
+        organization=organization,
         actor=replace(actor, authorization_path=decision.authorization_path),
         target_type="evidenceuploadauthorization",
         target_id=authorization.id,
@@ -448,9 +491,18 @@ def _reject_reserved_authorization(
         failure_code[:100] if re.fullmatch(r"[A-Z0-9_]+", failure_code) else "UPLOAD_REJECTED"
     )
     with transaction.atomic():
+        organization = (
+            Organization.objects.select_for_update()
+            .filter(
+                id=actor.organization_id,
+                lifecycle_state=Organization.LifecycleState.ACTIVE,
+            )
+            .first()
+        )
+        if organization is None:
+            return
         authorization = (
             EvidenceUploadAuthorization.objects.select_for_update()
-            .select_related("organization")
             .filter(id=authorization_id, organization_id=actor.organization_id)
             .first()
         )
@@ -470,7 +522,7 @@ def _reject_reserved_authorization(
         authorization.completed_at = timezone.now()
         authorization.save(update_fields=["state", "failure_code", "completed_at"])
         record_transition(
-            organization=authorization.organization,
+            organization=organization,
             actor=replace(actor, authorization_path=decision.authorization_path),
             target_type="evidenceuploadauthorization",
             target_id=authorization.id,
@@ -640,10 +692,18 @@ def accept_evidence_upload(
 
         try:
             with transaction.atomic():
-                locked = (
-                    EvidenceUploadAuthorization.objects.select_for_update()
-                    .select_related("organization")
-                    .get(id=authorization.id, organization_id=actor.organization_id)
+                organization = (
+                    Organization.objects.select_for_update()
+                    .filter(
+                        id=actor.organization_id,
+                        lifecycle_state=Organization.LifecycleState.ACTIVE,
+                    )
+                    .first()
+                )
+                if organization is None:
+                    raise _authorization_unavailable()
+                locked = EvidenceUploadAuthorization.objects.select_for_update().get(
+                    id=authorization.id, organization_id=actor.organization_id
                 )
                 if (
                     locked.state != EvidenceUploadAuthorization.State.RECEIVING
@@ -658,7 +718,7 @@ def accept_evidence_upload(
                     access_scope_id=locked.access_scope_id,
                 )
                 blob = EvidenceBlob.objects.create(
-                    organization_id=locked.organization_id,
+                    organization=organization,
                     repository_id=locked.repository_id,
                     access_scope_id=locked.access_scope_id,
                     upload_authorization=locked,
@@ -674,7 +734,7 @@ def accept_evidence_upload(
                 locked.completed_at = timezone.now()
                 locked.save(update_fields=["state", "completed_at"])
                 record_transition(
-                    organization=locked.organization,
+                    organization=organization,
                     actor=replace(actor, authorization_path=decision.authorization_path),
                     target_type="evidenceuploadauthorization",
                     target_id=locked.id,
@@ -734,17 +794,33 @@ def delete_evidence_blob_bytes(
     organization_id: uuid.UUID,
     blob_id: uuid.UUID,
     reason: str,
+    retention_cutoff: datetime | None = None,
+    retention_reference_time: datetime | None = None,
 ) -> EvidenceBlob:
     """Delete exact blob bytes with a retryable, database-guarded lifecycle."""
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,99}", reason):
         raise ValueError("Deletion reason must be a stable lowercase code")
+    if (retention_cutoff is None) != (retention_reference_time is None):
+        raise ValueError("Retention cutoff and reference time must be supplied together")
     with transaction.atomic():
+        organization = Organization.objects.select_for_update().filter(id=organization_id).first()
+        if organization is None:
+            raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+        if (
+            retention_cutoff is not None
+            and organization.lifecycle_state != Organization.LifecycleState.ACTIVE
+        ):
+            raise EvidenceUploadError(
+                "EVIDENCE_BLOB_DELETE_INELIGIBLE",
+                "Evidence blob is not eligible for deletion.",
+                409,
+            )
         blob = get_tenant_record(
             queryset=EvidenceBlob.objects.select_for_update().select_related(
                 "upload_authorization"
             ),
             record_id=blob_id,
-            organization_id=organization_id,
+            organization_id=organization.id,
         )
         if blob.storage_state == EvidenceBlob.StorageState.DELETED:
             return blob
@@ -758,6 +834,36 @@ def delete_evidence_blob_bytes(
                 "Evidence blob deletion is already in progress.",
                 409,
             )
+        if retention_cutoff is not None and retention_reference_time is not None:
+            evidence = (
+                Evidence.objects.select_for_update()
+                .filter(organization=organization, artifact_blob=blob)
+                .first()
+            )
+            if evidence is None:
+                eligible = (
+                    blob.upload_authorization.state == EvidenceUploadAuthorization.State.ACCEPTED
+                    and blob.created_at <= retention_cutoff
+                )
+            else:
+                retention_events = list(
+                    EvidenceRetentionEvent.objects.select_for_update()
+                    .filter(organization=organization, evidence=evidence)
+                    .order_by("-occurred_at", "-id")
+                )
+                latest_state = retention_events[0].state if retention_events else None
+                eligible = (
+                    evidence.completed_at <= retention_cutoff
+                    and evidence.retention_expires_at is not None
+                    and evidence.retention_expires_at <= retention_reference_time
+                    and latest_state == Evidence.RetentionState.EXPIRED
+                )
+            if not eligible:
+                raise EvidenceUploadError(
+                    "EVIDENCE_BLOB_DELETE_INELIGIBLE",
+                    "Evidence blob is not eligible for deletion.",
+                    409,
+                )
         if blob.storage_state != EvidenceBlob.StorageState.DELETE_PENDING:
             blob.storage_state = EvidenceBlob.StorageState.DELETE_PENDING
             blob.deletion_reason = reason
@@ -779,6 +885,7 @@ def delete_evidence_blob_bytes(
             storage.delete(object_key=blob.object_key)
     except EvidenceStorageError as error:
         with transaction.atomic():
+            Organization.objects.select_for_update().get(id=organization_id)
             failed = EvidenceBlob.objects.select_for_update().get(
                 id=blob.id,
                 organization_id=organization_id,
@@ -789,6 +896,7 @@ def delete_evidence_blob_bytes(
         raise
 
     with transaction.atomic():
+        Organization.objects.select_for_update().get(id=organization_id)
         deleted = EvidenceBlob.objects.select_for_update().get(
             id=blob.id,
             organization_id=organization_id,
@@ -803,30 +911,191 @@ def delete_evidence_blob_bytes(
 def recover_stale_upload_authorizations(
     *,
     actor: ActorContext,
+    repository_id: uuid.UUID,
+    access_scope_id: uuid.UUID,
     before: datetime,
     limit: int = 100,
 ) -> int:
-    """Best-effort owned-object cleanup for bounded stale receiving attempts."""
+    """Claim and clean one exact repository/scope batch of stale upload attempts."""
     if not 1 <= limit <= 1_000:
         raise ValueError("limit must be between 1 and 1000")
-    candidates = list(
+    decision = authorize_action(
+        actor=actor,
+        action=Action.EVIDENCE_SUBMIT,
+        repository_id=repository_id,
+        access_scope_id=access_scope_id,
+    )
+    recovery_lease_cutoff = timezone.now() - RECOVERY_LEASE_TTL
+    candidate_ids = list(
         EvidenceUploadAuthorization.objects.filter(
             organization_id=actor.organization_id,
-            state=EvidenceUploadAuthorization.State.RECEIVING,
-            reserved_at__lt=before,
-        ).order_by("reserved_at", "id")[:limit]
+            repository_id=repository_id,
+            access_scope_id=access_scope_id,
+        )
+        .filter(
+            Q(
+                state=EvidenceUploadAuthorization.State.RECEIVING,
+                reserved_at__lt=before,
+            )
+            | Q(
+                state=EvidenceUploadAuthorization.State.RECOVERING,
+                reserved_at__lt=recovery_lease_cutoff,
+            )
+        )
+        .order_by("reserved_at", "id")
+        .values_list("id", flat=True)[:limit]
     )
     cleaned = 0
-    for authorization in candidates:
+    for authorization_id in candidate_ids:
+        lease_started_at = timezone.now()
+        with transaction.atomic():
+            organization = (
+                Organization.objects.select_for_update()
+                .filter(
+                    id=actor.organization_id,
+                    lifecycle_state=Organization.LifecycleState.ACTIVE,
+                )
+                .first()
+            )
+            if organization is None:
+                break
+            recovery_lease_cutoff = timezone.now() - RECOVERY_LEASE_TTL
+            authorization = (
+                EvidenceUploadAuthorization.objects.select_for_update()
+                .filter(
+                    id=authorization_id,
+                    organization=organization,
+                    repository_id=repository_id,
+                    access_scope_id=access_scope_id,
+                )
+                .filter(
+                    Q(
+                        state=EvidenceUploadAuthorization.State.RECEIVING,
+                        reserved_at__lt=before,
+                    )
+                    | Q(
+                        state=EvidenceUploadAuthorization.State.RECOVERING,
+                        reserved_at__lt=recovery_lease_cutoff,
+                    )
+                )
+                .first()
+            )
+            if authorization is None:
+                continue
+            from_state = authorization.state
+            authorization.state = EvidenceUploadAuthorization.State.RECOVERING
+            authorization.reserved_at = lease_started_at
+            authorization.save(update_fields=["state", "reserved_at"])
         try:
             storage = EvidenceObjectStorage()
             object_clean = _cleanup_owned_object(storage, authorization)
         except EvidenceUploadError:
             object_clean = False
-        _reject_reserved_authorization(
-            authorization_id=authorization.id,
-            actor=actor,
-            failure_code=("UPLOAD_RECEIVING_STALE" if object_clean else CLEANUP_RETRY_CODE),
-        )
-        cleaned += int(object_clean)
+        if not object_clean:
+            continue
+        with transaction.atomic():
+            organization = (
+                Organization.objects.select_for_update().filter(id=actor.organization_id).first()
+            )
+            if organization is None:
+                continue
+            locked = (
+                EvidenceUploadAuthorization.objects.select_for_update()
+                .filter(
+                    id=authorization.id,
+                    organization=organization,
+                    repository_id=repository_id,
+                    access_scope_id=access_scope_id,
+                    state=EvidenceUploadAuthorization.State.RECOVERING,
+                    reserved_at=lease_started_at,
+                )
+                .first()
+            )
+            if locked is None:
+                continue
+            locked.state = EvidenceUploadAuthorization.State.REJECTED
+            locked.failure_code = "UPLOAD_RECEIVING_STALE"
+            locked.completed_at = timezone.now()
+            locked.save(update_fields=["state", "failure_code", "completed_at"])
+            record_transition(
+                organization=organization,
+                actor=replace(actor, authorization_path=decision.authorization_path),
+                target_type="evidenceuploadauthorization",
+                target_id=locked.id,
+                from_state=from_state,
+                to_state=EvidenceUploadAuthorization.State.REJECTED,
+                revision=4,
+                metadata={"repository_id": str(repository_id)},
+            )
+            cleaned += 1
     return cleaned
+
+
+def cleanup_decommissioned_upload_authorizations(
+    *,
+    organization_id: uuid.UUID,
+    authorization_ids: list[uuid.UUID],
+) -> tuple[int, int]:
+    """System cleanup for upload objects claimed before tenant access was revoked."""
+    if len(authorization_ids) > 10_000:
+        raise ValueError("Decommission upload cleanup exceeds the 10,000-record bound")
+    cleaned = 0
+    failed = 0
+    for authorization_id in authorization_ids:
+        lease_started_at = timezone.now()
+        with transaction.atomic():
+            organization = (
+                Organization.objects.select_for_update()
+                .filter(
+                    id=organization_id,
+                    lifecycle_state=Organization.LifecycleState.DECOMMISSIONED,
+                )
+                .first()
+            )
+            if organization is None:
+                raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+            authorization = (
+                EvidenceUploadAuthorization.objects.select_for_update()
+                .filter(
+                    id=authorization_id,
+                    organization=organization,
+                    state=EvidenceUploadAuthorization.State.RECOVERING,
+                )
+                .first()
+            )
+            if authorization is None:
+                continue
+            if (
+                authorization.reserved_at is not None
+                and lease_started_at <= authorization.reserved_at
+            ):
+                lease_started_at = authorization.reserved_at + timedelta(microseconds=1)
+            authorization.reserved_at = lease_started_at
+            authorization.save(update_fields=["state", "reserved_at"])
+        try:
+            object_clean = _cleanup_owned_object(EvidenceObjectStorage(), authorization)
+        except EvidenceUploadError:
+            object_clean = False
+        if not object_clean:
+            failed += 1
+            continue
+        with transaction.atomic():
+            organization = Organization.objects.select_for_update().get(id=organization_id)
+            locked = (
+                EvidenceUploadAuthorization.objects.select_for_update()
+                .filter(
+                    id=authorization_id,
+                    organization=organization,
+                    state=EvidenceUploadAuthorization.State.RECOVERING,
+                    reserved_at=lease_started_at,
+                )
+                .first()
+            )
+            if locked is None:
+                continue
+            locked.state = EvidenceUploadAuthorization.State.REJECTED
+            locked.failure_code = "UPLOAD_ORGANIZATION_DECOMMISSIONED"
+            locked.completed_at = timezone.now()
+            locked.save(update_fields=["state", "failure_code", "completed_at"])
+            cleaned += 1
+    return cleaned, failed

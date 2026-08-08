@@ -7,12 +7,14 @@ import hashlib
 import io
 import json
 import stat
+import tarfile
 import zipfile
 from pathlib import Path
 
 import pytest
 
 from anva.core.services.evidence_uploads import (
+    GAP_ARCHIVE_BAD_FORMAT,
     GAP_ARCHIVE_PATH_INVALID,
     GAP_ARCHIVE_SPECIAL_FILE,
     GAP_MANIFEST_MALFORMED,
@@ -69,6 +71,31 @@ def safe_zip() -> bytes:
             ("artifacts/results.json", results, 0o600),
         ]
     )
+
+
+def safe_tar() -> bytes:
+    results = results_bytes()
+    manifest = canonical_json(
+        {
+            "schema_version": 1,
+            "head_sha": HEAD,
+            "results_path": "artifacts/results.json",
+            "content_hash": hashlib.sha256(results).hexdigest(),
+        }
+    )
+    output = io.BytesIO()
+    entries = (
+        ("artifacts/manifest.json", manifest),
+        ("artifacts/results.json", results),
+    )
+    with tarfile.open(fileobj=output, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+        for name, content in entries:
+            info = tarfile.TarInfo(name)
+            info.mode = 0o600
+            info.size = len(content)
+            archive.addfile(info, io.BytesIO(content))
+    logical_size = len(entries) * 1_024 + 1_024
+    return output.getvalue()[:logical_size]
 
 
 def inspect(
@@ -152,6 +179,43 @@ def test_safe_exact_two_member_zip_is_accepted_as_inert_bytes() -> None:
     assert inspected.detected_media_type == "application/zip"
     assert inspected.archive_summary["member_count"] == 2
     assert inspected.archive_summary["check_count"] == 1
+
+
+@pytest.mark.unit
+def test_safe_exact_two_member_tar_and_zero_record_padding_are_accepted() -> None:
+    value = safe_tar()
+
+    inspected = inspect(value)
+    padded = inspect(value + b"\x00" * 512)
+
+    assert inspected.detected_media_type == "application/x-tar"
+    assert inspected.archive_summary["member_count"] == 2
+    assert inspected.archive_summary["check_count"] == 1
+    assert padded.verified_size == len(value) + 512
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "trailer",
+    [
+        b"MZhostile-executable",
+        b"#!/bin/sh\nexit 0\n",
+        safe_zip(),
+        safe_tar()[:512],
+    ],
+    ids=["mz", "shebang", "zip", "tar"],
+)
+@pytest.mark.parametrize("archive", [safe_zip(), safe_tar()], ids=["zip", "tar"])
+def test_archive_trailing_executable_or_polyglot_bytes_fail_closed(
+    archive: bytes,
+    trailer: bytes,
+) -> None:
+    hostile = archive + trailer
+
+    with pytest.raises(EvidenceUploadError) as raised:
+        inspect(hostile)
+
+    assert raised.value.code == GAP_ARCHIVE_BAD_FORMAT
 
 
 @pytest.mark.unit

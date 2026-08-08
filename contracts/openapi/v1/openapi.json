@@ -8408,6 +8408,7 @@
                       "enum": [
                         "ISSUED",
                         "RECEIVING",
+                        "RECOVERING",
                         "ACCEPTED",
                         "REJECTED",
                         "EXPIRED",
@@ -8498,6 +8499,7 @@
                       "enum": [
                         "ISSUED",
                         "RECEIVING",
+                        "RECOVERING",
                         "ACCEPTED",
                         "REJECTED",
                         "EXPIRED",

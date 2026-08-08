@@ -8,6 +8,7 @@ import json
 import posixpath
 import re
 import stat
+import struct
 import tarfile
 import tempfile
 import unicodedata
@@ -98,6 +99,8 @@ _NESTED_ARCHIVE_SUFFIXES: Final = {
 }
 _EXECUTABLE_SUFFIXES: Final = {".bat", ".cmd", ".com", ".exe", ".ps1", ".sh"}
 _EXECUTABLE_MAGICS: Final = (b"#!", b"\x7fELF", b"MZ")
+_ZIP_EOCD: Final = struct.Struct("<4s4H2LH")
+_ZIP_LOCAL_HEADER: Final = struct.Struct("<4s5H3L2H")
 
 
 class EvidenceUploadError(DomainOperationError):
@@ -355,6 +358,85 @@ def _validate_archive_content(filename: str, content: bytes) -> None:
         raise _UnsafeUploadError(GAP_ARCHIVE_NESTED)
 
 
+def _strict_zip_layout(raw: bytes, members: list[zipfile.ZipInfo]) -> None:
+    """Require one ZIP from byte zero through an un-commented EOCD at EOF."""
+    if len(raw) < _ZIP_EOCD.size:
+        raise _UnsafeUploadError(GAP_ARCHIVE_BAD_FORMAT)
+    eocd_offset = len(raw) - _ZIP_EOCD.size
+    (
+        signature,
+        disk_number,
+        central_disk,
+        disk_entries,
+        total_entries,
+        central_size,
+        central_offset,
+        comment_length,
+    ) = _ZIP_EOCD.unpack_from(raw, eocd_offset)
+    if (
+        signature != b"PK\x05\x06"
+        or disk_number != 0
+        or central_disk != 0
+        or disk_entries != total_entries
+        or total_entries != len(members)
+        or comment_length != 0
+        or central_offset + central_size != eocd_offset
+    ):
+        raise _UnsafeUploadError(GAP_ARCHIVE_BAD_FORMAT)
+
+    cursor = 0
+    for info in sorted(members, key=lambda value: value.header_offset):
+        if info.header_offset != cursor or cursor + _ZIP_LOCAL_HEADER.size > central_offset:
+            raise _UnsafeUploadError(GAP_ARCHIVE_BAD_FORMAT)
+        (
+            local_signature,
+            _version,
+            local_flags,
+            local_compression,
+            _modified_time,
+            _modified_date,
+            _crc32,
+            local_compressed_size,
+            local_expanded_size,
+            filename_length,
+            extra_length,
+        ) = _ZIP_LOCAL_HEADER.unpack_from(raw, cursor)
+        if local_flags & 0x08:
+            raise _UnsafeUploadError(GAP_ARCHIVE_METADATA_REJECTED)
+        if (
+            local_signature != b"PK\x03\x04"
+            or local_flags != info.flag_bits
+            or local_compression != info.compress_type
+            or local_compressed_size != info.compress_size
+            or local_expanded_size != info.file_size
+            or extra_length != 0
+        ):
+            raise _UnsafeUploadError(GAP_ARCHIVE_BAD_FORMAT)
+        name_start = cursor + _ZIP_LOCAL_HEADER.size
+        name_end = name_start + filename_length
+        data_end = name_end + extra_length + info.compress_size
+        if data_end > central_offset:
+            raise _UnsafeUploadError(GAP_ARCHIVE_BAD_FORMAT)
+        try:
+            expected_name = info.orig_filename.encode(
+                "utf-8" if info.flag_bits & 0x800 else "cp437"
+            )
+        except UnicodeEncodeError as error:
+            raise _UnsafeUploadError(GAP_ARCHIVE_BAD_FORMAT) from error
+        if raw[name_start:name_end] != expected_name:
+            raise _UnsafeUploadError(GAP_ARCHIVE_BAD_FORMAT)
+        cursor = data_end
+    if cursor != central_offset:
+        raise _UnsafeUploadError(GAP_ARCHIVE_BAD_FORMAT)
+
+
+def _strict_tar_padding(raw: bytes, member_end: int) -> None:
+    """Permit only block-aligned zero record padding after the last TAR member."""
+    padding = raw[member_end:]
+    if len(padding) < 1_024 or len(padding) % 512 or any(padding):
+        raise _UnsafeUploadError(GAP_ARCHIVE_BAD_FORMAT)
+
+
 def _inspect_zip(
     spool: IO[bytes],
     *,
@@ -363,11 +445,14 @@ def _inspect_zip(
 ) -> dict[str, object]:
     try:
         spool.seek(0)
+        raw = spool.read(limits.max_upload_bytes + 1)
+        spool.seek(0)
         archive = zipfile.ZipFile(spool, mode="r")
         members = archive.infolist()
     except (zipfile.BadZipFile, EOFError, OSError, RuntimeError, zipfile.LargeZipFile) as error:
         raise _UnsafeUploadError(GAP_ARCHIVE_BAD_FORMAT) from error
     with archive:
+        _strict_zip_layout(raw, members)
         if archive.comment:
             raise _UnsafeUploadError(GAP_ARCHIVE_METADATA_REJECTED)
         if not 1 <= len(members) <= limits.max_archive_entries:
@@ -470,6 +555,7 @@ def _inspect_tar(
     contents: dict[str, bytes] = {}
     expanded_bytes = 0
     member_count = 0
+    expected_header_offset = 0
     with archive:
         try:
             while True:
@@ -492,6 +578,8 @@ def _inspect_tar(
                     or info.mode & 0o111
                 ):
                     raise _UnsafeUploadError(GAP_ARCHIVE_SPECIAL_FILE)
+                if info.offset != expected_header_offset or info.offset_data != info.offset + 512:
+                    raise _UnsafeUploadError(GAP_ARCHIVE_BAD_FORMAT)
                 if info.pax_headers or info.sparse is not None:
                     raise _UnsafeUploadError(GAP_ARCHIVE_METADATA_REJECTED)
                 if info.size > limits.max_member_expanded_bytes:
@@ -511,12 +599,15 @@ def _inspect_tar(
                     raise _UnsafeUploadError(GAP_ARCHIVE_BAD_FORMAT)
                 _validate_archive_content(canonical, content)
                 contents[canonical] = content
+                expected_header_offset = info.offset_data + ((info.size + 511) // 512) * 512
         except _UnsafeUploadError:
             raise
         except (tarfile.TarError, EOFError, OSError) as error:
             raise _UnsafeUploadError(GAP_ARCHIVE_BAD_FORMAT) from error
     if member_count == 0:
         raise _UnsafeUploadError(GAP_ARCHIVE_MEMBER_COUNT_EXCEEDED)
+    spool.seek(0)
+    _strict_tar_padding(spool.read(limits.max_upload_bytes + 1), expected_header_offset)
     manifest_hash, results_hash, check_count = _inspect_documents(
         contents,
         commit_sha=commit_sha,

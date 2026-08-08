@@ -38,31 +38,41 @@ null token; reuse of the idempotency key for different input is rejected.
 
 The state machine is:
 
-`ISSUED -> RECEIVING -> ACCEPTED|REJECTED`, with unused grants able to become
-`EXPIRED` or `REVOKED`. Reservation happens under a database row lock before any
-content validation result is disclosed, so concurrent consumers cannot use the
-same grant. A failed owned-object cleanup deliberately remains `RECEIVING` for
-bounded recovery instead of falsely claiming that no bytes remain.
+`ISSUED -> RECEIVING -> ACCEPTED|REJECTED` or
+`RECEIVING -> RECOVERING -> REJECTED`, with unused grants able to become
+`EXPIRED` or `REVOKED`. New rows can only be inserted as `ISSUED`. Reservation
+happens under an organization-then-authorization lock before any content
+validation result is disclosed, so concurrent consumers cannot use the same
+grant. A failed owned-object cleanup remains `RECOVERING` for bounded retry
+instead of falsely claiming that no bytes remain. A `RECOVERING` claim cannot
+be reclaimed until its independent ten-minute lease expires, even if a caller
+supplies a later stale-receiving cutoff.
+
+Security-sensitive writers use the lock order organization, repository/pull
+request, authorization/blob, then evidence/retention events. The same order is
+used by finalization, recovery, retention, and decommissioning.
 
 ## Threats, controls, and verification
 
 | Threat | Control | Verification |
 | --- | --- | --- |
 | Foreign tenant/repository/scope graft | Central `EVIDENCE_SUBMIT` authorization, tenant-qualified lookups, actor/credential binding, composite database foreign keys, and exact evidence/blob binding trigger | Cross-tenant authorization and direct database-graft tests |
-| Stale or other-commit bytes satisfy readiness | Authorization, inspected manifest/results, blob, evidence, PR, and manifest all require the same lowercase 40-character commit | Wrong-head fixtures and accepted-blob linking tests |
+| Stale or other-commit bytes satisfy readiness | Issuance locks the real tenant/repository/number PR and requires the requested commit to equal its current head; authorization, inspected manifest/results, blob, evidence, PR, and manifest all require that same lowercase 40-character commit | Missing/wrong-head, head-update race, and accepted-blob linking tests |
 | Token replay or concurrent double consumption | Ten-minute opaque single-use token, keyed hash at rest, row-locked `ISSUED -> RECEIVING` reservation, and stable unavailable response after consumption | Replay and concurrent-consumer integration tests |
 | Credential or oracle leakage | Upload token returned once, exact replay returns null, token and secret patterns are redacted, authorization happens before detailed validation, and errors omit bytes, token, object key, and storage endpoint | Secret-canary response/log tests and foreign/missing equivalence |
 | Declared metadata hides different bytes | Bounded streaming recomputes byte count and SHA-256; request header, authorization, uploaded bytes, object metadata, HEAD size, and bounded GET digest must agree | Size/digest mismatch and live MinIO verification tests |
 | Oversized request or decompression bomb | Outer, manifest, member, cumulative-expanded, compression-ratio, entry-count, path-depth, and chunk limits are enforced while reading | Boundary unit matrix and TST-007 oversized fixture |
 | Traversal or canonical path collision | POSIX-relative canonical paths only; absolute, drive, `..`, backslash, NUL, control, duplicate separator, noncanonical, duplicate, and Unicode/case canonical collisions reject | Hostile path matrix and TST-007 Glass fixture |
 | Link, device, FIFO, socket, or executable content escapes inspection | Links and special files reject; executable modes, executable suffixes, shebang/ELF/PE magic, and nested archive suffix/magic reject; no extraction or subprocess API is used | ZIP/TAR special-file and executable matrix |
-| Encrypted, ambiguous, or unsupported archive bypass | Media type is byte-sniffed; only JSON, ZIP and TAR are accepted; ZIP encryption, comments/extras, data-descriptor ambiguity, unsupported compression, and malformed metadata reject | Format/metadata unit tests |
+| Encrypted, ambiguous, polyglot, or unsupported archive bypass | Media type is byte-sniffed; only JSON, ZIP and TAR are accepted; ZIP encryption, comments/extras, data descriptors, non-contiguous records, unsupported compression, trailing bytes, malformed metadata, and non-zero TAR trailers reject | Format/metadata and archive-trailer unit tests |
 | Malformed or ambiguous JSON changes meaning | Duplicate-safe JSON decoding, closed exact schemas, bounded depth/text, exact results path, exact head, and recomputed results-content hash | Malformed/schema-invalid fixtures and contract tests |
 | Uploaded secret is retained or echoed | Actual bytes are scanned for configured credential patterns before storage; safe errors and structured redaction never include matching content | TST-007 Harbor fixture and log canary test |
 | Existing foreign object is overwritten or deleted | Random server-generated key, conditional `If-None-Match: *` PUT, per-authorization ownership metadata, and ownership-checked cleanup/delete | Precondition-conflict/no-delete integration test |
 | Truncated or corrupt object is marked accepted | Acceptance requires successful conditional PUT, HEAD metadata/size validation, and a bounded GET digest before the blob row and accepted transition commit | PUT/HEAD/GET failure tests and live MinIO path |
 | Database finalization fails after object write | Owned bytes are deleted before terminal rejection; cleanup failure remains retry-visible for bounded stale recovery | Injected database-failure and cleanup-recovery tests |
-| Retention deletes another tenant's bytes | Candidate selection is tenant-qualified and bounded to 10,000 blobs; deletion rechecks stored ownership metadata and uses an explicit pending/failed/deleted lifecycle | Retention/decommission isolation and retry tests |
+| Retention deletes bytes renewed or linked after candidate selection | Deletion locks organization, blob, linked evidence, and retention events, then revalidates current eligibility before `DELETE_PENDING`; ACTIVE retention insertion locks the same organization/blob order and requires AVAILABLE bytes | Concurrent renewal/deletion and binding tests |
+| Recovery or decommission races finalization | Recovery is exact-repository/scope authorized and atomically leases `RECOVERING` before storage cleanup; decommission claims ISSUED/RECEIVING rows before inactivation; finalization locks/rechecks the active organization first | Cross-repository recovery, recovery/finalizer, and decommission/finalizer race tests |
+| Retention deletes another tenant's bytes | Candidate selection is tenant-qualified and bounded to 10,000 blobs; deletion rechecks stored ownership metadata and uses an explicit pending/failed/deleted lifecycle | Retention/decommission isolation and system-retry tests |
 | Uploaded content triggers network or command execution | Inspector uses only bounded in-process parsing; it does not dereference URLs, extract members, import uploaded code, invoke Perl/Archive::Tar, or start subprocesses | Architecture guard and non-executing parser review |
 
 ## Fixed parser limits
@@ -109,9 +119,10 @@ mistake can destroy another object or make recovery state dishonest.
 - The live object-store exercise covers the configured S3-compatible MinIO
   boundary. Deployment-specific proxy, TLS, IAM, quota, replication, and outage
   behavior still require operational validation.
-- Bounded stale-receiving recovery exists as a service path but has no public
+- Bounded stale-upload recovery exists as a service path but has no public
   operator endpoint or scheduled-worker wiring in this candidate. Operators
-  must escalate persistent `RECEIVING` records rather than edit them.
+  must escalate persistent `RECEIVING`/`RECOVERING` records rather than edit
+  them.
 - Retention and decommission delete accepted evidence bytes but retain governed
   metadata/history and do not establish legal erasure.
 

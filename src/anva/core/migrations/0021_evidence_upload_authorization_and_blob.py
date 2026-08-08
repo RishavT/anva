@@ -51,6 +51,18 @@ DROP CONSTRAINT IF EXISTS evidence_upload_repository_tenant_fk;
 LIFECYCLE_SQL = """
 CREATE FUNCTION core_validate_evidence_upload_transition() RETURNS trigger AS $$
 BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW.state <> 'ISSUED'
+           OR NEW.object_key <> ''
+           OR NEW.ownership_nonce_hash <> ''
+           OR NEW.failure_code <> ''
+           OR NEW.reserved_at IS NOT NULL
+           OR NEW.completed_at IS NOT NULL THEN
+            RAISE EXCEPTION 'evidence upload authorization must be inserted as issued'
+            USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+    END IF;
     IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'evidence upload authorization cannot be deleted'
         USING ERRCODE = '23514';
@@ -99,6 +111,25 @@ BEGIN
             AND NEW.reserved_at IS NOT DISTINCT FROM OLD.reserved_at
             AND NEW.failure_code <> ''
             AND NEW.completed_at IS NOT NULL)
+        OR (OLD.state = 'RECEIVING' AND NEW.state = 'RECOVERING'
+            AND NEW.object_key IS NOT DISTINCT FROM OLD.object_key
+            AND NEW.ownership_nonce_hash IS NOT DISTINCT FROM OLD.ownership_nonce_hash
+            AND NEW.failure_code = ''
+            AND NEW.reserved_at IS NOT NULL
+            AND NEW.reserved_at >= OLD.reserved_at
+            AND NEW.completed_at IS NULL)
+        OR (OLD.state = 'RECOVERING' AND NEW.state = 'RECOVERING'
+            AND NEW.object_key IS NOT DISTINCT FROM OLD.object_key
+            AND NEW.ownership_nonce_hash IS NOT DISTINCT FROM OLD.ownership_nonce_hash
+            AND NEW.failure_code = ''
+            AND NEW.reserved_at > OLD.reserved_at
+            AND NEW.completed_at IS NULL)
+        OR (OLD.state = 'RECOVERING' AND NEW.state = 'REJECTED'
+            AND NEW.object_key IS NOT DISTINCT FROM OLD.object_key
+            AND NEW.ownership_nonce_hash IS NOT DISTINCT FROM OLD.ownership_nonce_hash
+            AND NEW.reserved_at IS NOT DISTINCT FROM OLD.reserved_at
+            AND NEW.failure_code <> ''
+            AND NEW.completed_at IS NOT NULL)
     ) THEN
         RAISE EXCEPTION 'invalid evidence upload authorization transition'
         USING ERRCODE = '23514';
@@ -108,7 +139,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER evidence_upload_transition
-BEFORE UPDATE OR DELETE ON core_evidenceuploadauthorization
+BEFORE INSERT OR UPDATE OR DELETE ON core_evidenceuploadauthorization
 FOR EACH ROW EXECUTE FUNCTION core_validate_evidence_upload_transition();
 
 CREATE FUNCTION core_validate_evidence_blob_change() RETURNS trigger AS $$
@@ -217,9 +248,43 @@ FOR EACH ROW EXECUTE FUNCTION core_validate_evidence_upload_binding();
 CREATE CONSTRAINT TRIGGER evidence_artifact_blob_binding
 AFTER INSERT ON core_evidence DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION core_validate_evidence_upload_binding();
+
+CREATE FUNCTION core_guard_active_retention_blob() RETURNS trigger AS $$
+BEGIN
+    IF NEW.state = 'ACTIVE' AND EXISTS (
+        SELECT 1 FROM core_evidence evidence
+        WHERE evidence.id = NEW.evidence_id
+          AND evidence.organization_id = NEW.organization_id
+          AND evidence.artifact_blob_id IS NOT NULL
+    ) THEN
+        PERFORM 1 FROM core_organization organization
+        WHERE organization.id = NEW.organization_id
+        FOR KEY SHARE;
+        PERFORM 1
+        FROM core_evidence evidence
+        JOIN core_evidenceblob blob ON blob.id = evidence.artifact_blob_id
+        WHERE evidence.id = NEW.evidence_id
+          AND evidence.organization_id = NEW.organization_id
+          AND blob.organization_id = NEW.organization_id
+          AND blob.storage_state = 'AVAILABLE'
+        FOR KEY SHARE OF blob;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'active evidence retention requires available blob bytes'
+            USING ERRCODE = '23514';
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER evidence_active_retention_blob_guard
+BEFORE INSERT ON core_evidenceretentionevent
+FOR EACH ROW EXECUTE FUNCTION core_guard_active_retention_blob();
 """
 
 DROP_BINDING_SQL = """
+DROP TRIGGER IF EXISTS evidence_active_retention_blob_guard ON core_evidenceretentionevent;
+DROP FUNCTION IF EXISTS core_guard_active_retention_blob();
 DROP TRIGGER IF EXISTS evidence_artifact_blob_binding ON core_evidence;
 DROP TRIGGER IF EXISTS evidence_blob_authorization_binding ON core_evidenceblob;
 DROP FUNCTION IF EXISTS core_validate_evidence_upload_binding();
@@ -261,6 +326,7 @@ class Migration(migrations.Migration):
                         choices=[
                             ("ISSUED", "Issued"),
                             ("RECEIVING", "Receiving"),
+                            ("RECOVERING", "Recovering"),
                             ("ACCEPTED", "Accepted"),
                             ("REJECTED", "Rejected"),
                             ("EXPIRED", "Expired"),
@@ -536,6 +602,13 @@ class Migration(migrations.Migration):
                         completed_at__isnull=True,
                     )
                     | Q(
+                        state="RECOVERING",
+                        ownership_nonce_hash__regex=r"^[a-f0-9]{64}$",
+                        failure_code="",
+                        reserved_at__isnull=False,
+                        completed_at__isnull=True,
+                    )
+                    | Q(
                         state="ACCEPTED",
                         ownership_nonce_hash__regex=r"^[a-f0-9]{64}$",
                         failure_code="",
@@ -574,7 +647,10 @@ class Migration(migrations.Migration):
                         object_key="",
                         ownership_nonce_hash="",
                     )
-                    | (Q(state__in=["RECEIVING", "ACCEPTED", "REJECTED"]) & ~Q(object_key=""))
+                    | (
+                        Q(state__in=["RECEIVING", "RECOVERING", "ACCEPTED", "REJECTED"])
+                        & ~Q(object_key="")
+                    )
                 ),
                 name="core_evidence_upload_object_key_coherent",
             ),
