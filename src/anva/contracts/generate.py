@@ -432,14 +432,14 @@ def openapi_document() -> dict[str, object]:
                 "minLength": 1,
                 "maxLength": 200,
                 "description": (
-                    "Audit-only label; it does not replace the exact authenticated "
-                    "actor and credential used to claim the task."
+                    "Optional backwards-compatible display label. It is not an "
+                    "authorization factor; claim-time metadata remains authoritative."
                 ),
             },
             "claim_token": {"type": "string", "minLength": 1, "maxLength": 200},
             "result": {"$ref": "#/components/schemas/evaluator-result"},
         },
-        "required": ["claimant", "claim_token", "result"],
+        "required": ["claim_token", "result"],
     }
     finding_decision_request = {
         "type": "object",

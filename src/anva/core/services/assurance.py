@@ -2193,11 +2193,13 @@ def submit_evaluator_result(
     *,
     actor: ActorContext,
     task_id: uuid.UUID,
-    claimant: str,
+    claimant: str | None = None,
     claim_token: str,
     result: dict[str, object],
 ) -> AssuranceCompletion:
     """Validate one manual review, merge findings, compute readiness, and render."""
+    if claimant is not None:
+        _normalized_text(claimant, name="claimant", maximum=200)
     if not claim_token or len(claim_token) > 200:
         raise LeaseConflictError("Evaluator claim is invalid")
     task = get_tenant_record_for_update(
@@ -2240,7 +2242,6 @@ def submit_evaluator_result(
     expected_token_hash = hashlib.sha256(claim_token.encode()).hexdigest()
     if (
         task.state != EvaluatorTask.State.CLAIMED
-        or task.claimant != claimant
         or task.lease_expires_at is None
         or task.lease_expires_at <= timezone.now()
         or not hmac.compare_digest(task.claim_token_hash, expected_token_hash)
@@ -2389,7 +2390,7 @@ def submit_evaluator_result(
         organization=run.organization,
         evaluator_task=task,
         attempt=task.attempt_count,
-        claimant=claimant,
+        claimant=task.claimant,
         claimed_by_actor_type=actor.actor_type,
         claimed_by_actor_id=actor.actor_id,
         claimed_by_credential_id=actor.credential_id,

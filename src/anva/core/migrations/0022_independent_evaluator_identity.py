@@ -61,7 +61,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER evaluatortask_claim_identity_guard
-BEFORE UPDATE OF claimed_by_actor_type, claimed_by_actor_id, claimed_by_credential_id
+BEFORE UPDATE
 ON core_evaluatortask
 FOR EACH ROW EXECUTE FUNCTION core_guard_evaluator_claim_identity();
 
@@ -176,11 +176,24 @@ class Migration(migrations.Migration):
             constraint=models.CheckConstraint(
                 condition=(
                     models.Q(
+                        state__in=["PENDING", "CANCELLED"],
+                        attempt_count=0,
+                        claimant="",
                         claimed_by_actor_type="",
                         claimed_by_actor_id="",
                         claimed_by_credential_id__isnull=True,
+                        claim_token_hash="",
+                        lease_expires_at__isnull=True,
                     )
-                    | (~models.Q(claimed_by_actor_type="") & ~models.Q(claimed_by_actor_id=""))
+                    | (
+                        models.Q(
+                            state__in=["CLAIMED", "SUBMITTED", "FAILED", "CANCELLED"],
+                            attempt_count__gte=1,
+                        )
+                        & ~models.Q(claimant="")
+                        & ~models.Q(claimed_by_actor_type="")
+                        & ~models.Q(claimed_by_actor_id="")
+                    )
                 ),
                 name="core_evaluator_claim_identity_coherent",
             ),

@@ -5016,7 +5016,7 @@
                     "type": "string"
                   },
                   "claimant": {
-                    "description": "Audit-only label; it does not replace the exact authenticated actor and credential used to claim the task.",
+                    "description": "Optional backwards-compatible display label. It is not an authorization factor; claim-time metadata remains authoritative.",
                     "maxLength": 200,
                     "minLength": 1,
                     "type": "string"
@@ -5026,7 +5026,6 @@
                   }
                 },
                 "required": [
-                  "claimant",
                   "claim_token",
                   "result"
                 ],

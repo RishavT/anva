@@ -225,8 +225,7 @@ def build_parser() -> argparse.ArgumentParser:
     evaluator_submit.add_argument("task_id", type=uuid.UUID)
     evaluator_submit.add_argument(
         "--claimant",
-        required=True,
-        help="Audit-only label used on the corresponding claim",
+        help="Optional backwards-compatible display label; claim-time metadata is authoritative",
     )
     evaluator_submit.add_argument("--result", required=True, type=Path)
     github = subparsers.add_parser("github", help="Configure or diagnose a GitHub App binding")
@@ -500,10 +499,11 @@ def _evaluator_request(arguments: argparse.Namespace) -> int:
             return 2
         path = f"/evaluator-tasks/{arguments.task_id}/submit"
         payload = {
-            "claimant": arguments.claimant,
             "claim_token": claim_token,
             "result": _bounded_json_file(arguments.result),
         }
+        if arguments.claimant is not None:
+            payload["claimant"] = arguments.claimant
     else:
         raise ValueError("Unknown evaluator command")
     return _api_request(

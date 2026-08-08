@@ -2484,11 +2484,24 @@ class EvaluatorTask(RevisionedTenantModel):
             models.CheckConstraint(
                 condition=(
                     Q(
+                        state__in=["PENDING", "CANCELLED"],
+                        attempt_count=0,
+                        claimant="",
                         claimed_by_actor_type="",
                         claimed_by_actor_id="",
                         claimed_by_credential_id__isnull=True,
+                        claim_token_hash="",
+                        lease_expires_at__isnull=True,
                     )
-                    | (~Q(claimed_by_actor_type="") & ~Q(claimed_by_actor_id=""))
+                    | (
+                        Q(
+                            state__in=["CLAIMED", "SUBMITTED", "FAILED", "CANCELLED"],
+                            attempt_count__gte=1,
+                        )
+                        & ~Q(claimant="")
+                        & ~Q(claimed_by_actor_type="")
+                        & ~Q(claimed_by_actor_id="")
+                    )
                 ),
                 name="core_evaluator_claim_identity_coherent",
             ),

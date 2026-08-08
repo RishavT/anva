@@ -861,6 +861,15 @@ def test_initiator_is_not_a_reviewer_and_persisted_identities_are_immutable() ->
         )
         is None
     )
+    with pytest.raises(DatabaseError, match="core_evaluator_claim_identity_coherent"):
+        with transaction.atomic():
+            EvaluatorTask.objects.filter(id=started.evaluator_task.id).update(
+                state=EvaluatorTask.State.CLAIMED,
+                claimant="forged-provider-label",
+                claim_token_hash="f" * 64,
+                lease_expires_at=timezone.now() + timedelta(minutes=5),
+                attempt_count=1,
+            )
 
     reviewer = _reviewer_actor(organization, label="identity-reviewer")
     claim = claim_evaluator_task(
@@ -960,11 +969,23 @@ def test_submit_rejects_same_service_actor_using_a_different_credential() -> Non
     completed = submit_evaluator_result(
         actor=first_actor,
         task_id=started.evaluator_task.id,
-        claimant="same-provider-label",
+        claimant="different-display-label",
         claim_token=claim.claim_token,
         result=result,
     )
     assert completed.run.state == AssuranceRun.State.COMPLETED
+    replayed = submit_evaluator_result(
+        actor=first_actor,
+        task_id=started.evaluator_task.id,
+        claim_token=claim.claim_token,
+        result=result,
+    )
+    assert replayed.created is False
+    submitted_attempt = EvaluatorAttempt.objects.get(
+        evaluator_task=claim.task,
+        event="SUBMITTED",
+    )
+    assert submitted_attempt.claimant == "same-provider-label"
     assert set(
         EvaluatorAttempt.objects.filter(evaluator_task=claim.task).values_list(
             "claimed_by_credential_id", flat=True

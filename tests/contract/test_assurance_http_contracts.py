@@ -215,7 +215,6 @@ def test_manual_evaluator_claim_and_submit_http_adapters(client: Client) -> None
             submit_url,
             data=json.dumps(
                 {
-                    "claimant": "fresh-agent",
                     "claim_token": "opaque-claim-token",
                     "result": {"schema_version": "1.0"},
                 }
@@ -246,6 +245,7 @@ def test_manual_evaluator_claim_and_submit_http_adapters(client: Client) -> None
     assert invalid.status_code == 400
     assert claim_task.call_args.kwargs["lease_seconds"] == 30
     assert submit.call_args.kwargs["task_id"] == task_id
+    assert submit.call_args.kwargs["claimant"] is None
     assert submit.call_args.kwargs["claim_token"] == "opaque-claim-token"  # noqa: S105
 
 

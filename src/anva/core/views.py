@@ -1938,7 +1938,7 @@ def evaluator_task_submit(request: HttpRequest, task_id: uuid.UUID) -> JsonRespo
     payload = _closed_payload(
         _diff_json_body(request),
         allowed=frozenset({"claimant", "claim_token", "result"}),
-        required=frozenset({"claimant", "claim_token", "result"}),
+        required=frozenset({"claim_token", "result"}),
     )
     result_payload = payload["result"]
     if not isinstance(result_payload, dict):
@@ -1946,7 +1946,7 @@ def evaluator_task_submit(request: HttpRequest, task_id: uuid.UUID) -> JsonRespo
     completion = submit_evaluator_result(
         actor=_actor(request),
         task_id=task_id,
-        claimant=_string(payload, "claimant"),
+        claimant=_optional_string(payload, "claimant"),
         claim_token=_string(payload, "claim_token"),
         result=cast(dict[str, object], result_payload),
     )

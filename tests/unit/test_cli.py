@@ -690,8 +690,6 @@ def test_evaluator_submit_reads_claim_token_only_from_environment(
                 "evaluator",
                 "submit",
                 str(task_id),
-                "--claimant",
-                "review-agent",
                 "--result",
                 str(result_file),
             ]
@@ -701,6 +699,7 @@ def test_evaluator_submit_reads_claim_token_only_from_environment(
     request = open_url.call_args.args[0]
     body = json.loads(request.data)
     assert body["claim_token"] == os.environ["ANVA_EVALUATOR_CLAIM_TOKEN"]
+    assert "claimant" not in body
     assert "CANARY-CLAIM-TOKEN" not in capsys.readouterr().out
 
 
@@ -825,8 +824,6 @@ def test_evaluator_cli_submit_fails_closed_without_claim_token(
             "evaluator",
             "submit",
             str(uuid.uuid4()),
-            "--claimant",
-            "fresh-review-agent",
             "--result",
             str(result_file),
         ]
