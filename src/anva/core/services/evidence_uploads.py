@@ -890,6 +890,14 @@ def delete_evidence_blob_bytes(
                 id=blob.id,
                 organization_id=organization_id,
             )
+            if failed.storage_state == EvidenceBlob.StorageState.DELETED:
+                return failed
+            if failed.storage_state != EvidenceBlob.StorageState.DELETE_PENDING:
+                raise EvidenceUploadError(
+                    "EVIDENCE_BLOB_DELETE_IN_PROGRESS",
+                    "Evidence blob deletion is already in progress.",
+                    409,
+                ) from error
             failed.storage_state = EvidenceBlob.StorageState.DELETE_FAILED
             failed.storage_error_code = error.code
             failed.save(update_fields=["storage_state", "storage_error_code"])
@@ -901,6 +909,18 @@ def delete_evidence_blob_bytes(
             id=blob.id,
             organization_id=organization_id,
         )
+        if deleted.storage_state == EvidenceBlob.StorageState.DELETED:
+            return deleted
+        if deleted.storage_state == EvidenceBlob.StorageState.DELETE_FAILED:
+            deleted.storage_state = EvidenceBlob.StorageState.DELETE_PENDING
+            deleted.storage_error_code = ""
+            deleted.save(update_fields=["storage_state", "storage_error_code"])
+        if deleted.storage_state != EvidenceBlob.StorageState.DELETE_PENDING:
+            raise EvidenceUploadError(
+                "EVIDENCE_BLOB_DELETE_IN_PROGRESS",
+                "Evidence blob deletion is already in progress.",
+                409,
+            )
         deleted.storage_state = EvidenceBlob.StorageState.DELETED
         deleted.deleted_at = timezone.now()
         deleted.storage_error_code = ""

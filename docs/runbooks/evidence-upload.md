@@ -138,7 +138,7 @@ deletion are not supported recovery procedures.
 ## Retention and decommission verification
 
 Retention and decommission select at most 10,000 tenant-qualified blob records
-per operation and report:
+per cleanup attempt and report:
 
 - `evidence_blob_candidates` where applicable;
 - `evidence_blob_bytes_deleted`; and
@@ -149,6 +149,12 @@ storage state to `DELETED` while keeping authorization, blob metadata, evidence,
 retention events, and audit history. `source_content_deleted: 0` still means
 source-ingestion content was not physically erased. These operations are not a
 legal-erasure attestation.
+
+Decommission considers every state except `DELETED`, including an already
+`DELETE_PENDING` object. Before completion it locks the organization and proves
+that no non-deleted blob or nonterminal upload object remains. A candidate
+error, failed/pending deletion, or additional batch keeps the run `FAILED` and
+eligible for the system-authorized retry; completed retries are idempotent.
 
 ## Evidence to preserve and escalation
 

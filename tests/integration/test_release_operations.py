@@ -685,7 +685,15 @@ def test_decommission_deletes_all_and_only_exact_tenant_retryable_blob_bytes() -
     ) -> EvidenceBlob:
         assert not connection.in_atomic_block
         calls.append((organization_id, blob_id, reason))
-        return EvidenceBlob.objects.get(id=blob_id, organization_id=organization_id)
+        current = EvidenceBlob.objects.get(id=blob_id, organization_id=organization_id)
+        current.storage_state = EvidenceBlob.StorageState.DELETE_PENDING
+        current.deletion_reason = reason
+        current.storage_error_code = ""
+        current.save(update_fields=["storage_state", "deletion_reason", "storage_error_code"])
+        current.storage_state = EvidenceBlob.StorageState.DELETED
+        current.deleted_at = timezone.now()
+        current.save(update_fields=["storage_state", "deleted_at"])
+        return current
 
     with patch(
         "anva.core.services.operations.delete_evidence_blob_bytes",
@@ -713,14 +721,28 @@ def test_decommission_deletes_all_and_only_exact_tenant_retryable_blob_bytes() -
 def test_failed_decommission_cleanup_requires_system_retry_before_completion() -> None:
     tenant = _operations_tenant("decommission-retry")
     blob = _evidence_blob(tenant, created_at=timezone.now() - timedelta(days=1))
+    blob.storage_state = EvidenceBlob.StorageState.DELETE_PENDING
+    blob.deletion_reason = "retention_expired"
+    blob.save(update_fields=["storage_state", "deletion_reason"])
     storage_failure = EvidenceUploadError(
         "EVIDENCE_STORAGE_DELETE_FAILED",
         "Evidence object storage is unavailable.",
         503,
     )
+
+    def fail_pending_delete(
+        *, organization_id: uuid.UUID, blob_id: uuid.UUID, reason: str
+    ) -> EvidenceBlob:
+        del reason
+        current = EvidenceBlob.objects.get(id=blob_id, organization_id=organization_id)
+        current.storage_state = EvidenceBlob.StorageState.DELETE_FAILED
+        current.storage_error_code = "EVIDENCE_STORAGE_DELETE_FAILED"
+        current.save(update_fields=["storage_state", "storage_error_code"])
+        raise storage_failure
+
     with patch(
         "anva.core.services.operations.delete_evidence_blob_bytes",
-        side_effect=storage_failure,
+        side_effect=fail_pending_delete,
     ):
         run = decommission_organization(
             actor=tenant.actor,
@@ -766,6 +788,42 @@ def test_failed_decommission_cleanup_requires_system_retry_before_completion() -
     assert retried.error_code == ""
     blob.refresh_from_db()
     assert blob.storage_state == EvidenceBlob.StorageState.DELETED
+    replay = retry_decommission_cleanup(actor=system_actor, run_id=run.id)
+    assert replay.id == retried.id
+    assert replay.state == RetentionRun.State.COMPLETED
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_decommission_candidate_bound_error_is_durable_and_retryable() -> None:
+    tenant = _operations_tenant("decommission-bound")
+    with patch(
+        "anva.core.services.operations._decommission_blob_candidates",
+        side_effect=ValueError("simulated over-10k candidate bound"),
+    ):
+        run = decommission_organization(
+            actor=tenant.actor,
+            confirmation=tenant.organization.slug,
+            acknowledgement=f"DECOMMISSION {tenant.organization.slug}",
+        )
+
+    tenant.organization.refresh_from_db()
+    assert tenant.organization.lifecycle_state == Organization.LifecycleState.DECOMMISSIONED
+    assert run.state == RetentionRun.State.FAILED
+    assert run.error_code == "DECOMMISSION_STORAGE_CLEANUP_RETRY_REQUIRED"
+    assert run.summary["cleanup_candidate_error"] is True
+
+    system_actor = ActorContext(
+        organization_id=tenant.organization.id,
+        actor_type="SYSTEM",
+        actor_id="anva-retention-worker",
+        authorization_path="system:retention-worker",
+        request_id=uuid.uuid4(),
+        credential_actions=frozenset({Action.RETENTION_MANAGE.value}),
+    )
+    retried = retry_decommission_cleanup(actor=system_actor, run_id=run.id)
+    assert retried.state == RetentionRun.State.COMPLETED
+    assert retried.error_code == ""
 
 
 @pytest.mark.integration
