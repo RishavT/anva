@@ -1001,7 +1001,30 @@ def github_repository_binding_revoke(
 @api_errors
 @require_http_methods(["POST"])
 def bootstrap(request: HttpRequest) -> JsonResponse:
-    payload = _json_body(request)
+    payload = _closed_payload(
+        _json_body(request),
+        allowed=frozenset(
+            {
+                "organization_slug",
+                "organization_name",
+                "admin_email",
+                "admin_display_name",
+                "repository_external_id",
+                "repository_name",
+                "independent_reviewer_name",
+            }
+        ),
+        required=frozenset(
+            {
+                "organization_slug",
+                "organization_name",
+                "admin_email",
+                "admin_display_name",
+                "repository_external_id",
+                "repository_name",
+            }
+        ),
+    )
     result = bootstrap_local_organization(
         supplied_secret=request.headers.get("X-Anva-Bootstrap-Secret", ""),
         organization_slug=_string(payload, "organization_slug"),
@@ -1010,20 +1033,29 @@ def bootstrap(request: HttpRequest) -> JsonResponse:
         admin_display_name=_string(payload, "admin_display_name"),
         repository_external_id=_string(payload, "repository_external_id"),
         repository_name=_string(payload, "repository_name"),
+        independent_reviewer_name=_optional_string(payload, "independent_reviewer_name"),
     )
-    return JsonResponse(
-        {
-            "organization_id": str(result.organization.id),
-            "user_id": str(result.user.id),
-            "membership_id": str(result.membership.id),
-            "repository_id": str(result.repository.id),
-            "service_identity_id": str(result.service_identity.id),
-            "token_id": str(result.issued_token.record.id),
-            "token": result.issued_token.plaintext,
-            "expires_at": result.issued_token.record.expires_at.isoformat(),
-        },
-        status=201,
-    )
+    response: dict[str, object] = {
+        "organization_id": str(result.organization.id),
+        "user_id": str(result.user.id),
+        "membership_id": str(result.membership.id),
+        "repository_id": str(result.repository.id),
+        "service_identity_id": str(result.service_identity.id),
+        "access_scope_id": str(result.access_scope.id),
+        "token_id": str(result.issued_token.record.id),
+        "token": result.issued_token.plaintext,
+        "expires_at": result.issued_token.record.expires_at.isoformat(),
+    }
+    if result.reviewer_service_identity is not None and result.reviewer_issued_token is not None:
+        response.update(
+            {
+                "reviewer_service_identity_id": str(result.reviewer_service_identity.id),
+                "reviewer_token_id": str(result.reviewer_issued_token.record.id),
+                "reviewer_token": result.reviewer_issued_token.plaintext,
+                "reviewer_expires_at": (result.reviewer_issued_token.record.expires_at.isoformat()),
+            }
+        )
+    return JsonResponse(response, status=201)
 
 
 @api_errors

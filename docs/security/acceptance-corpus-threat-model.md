@@ -13,6 +13,13 @@ credentials. Product services and the runner cross a different boundary through 
 volume and never receive the raw mount. The filesystem connector begins at the canonical `payload/`
 directory so the generated control manifest is not ingested.
 
+Product acceptance is split across four mutually constrained runner processes. The start process
+may receive the bootstrap/initiator credential and write the private resume/credential locations;
+the claim and submit processes receive only reviewer authentication plus the handoff/result mounts;
+the finalizer receives initiator authentication plus the result mount. The external evaluator is a
+separate trust boundary and receives the public review request, not product credentials or private
+scoring material. The disconnected private scorer is not part of this Compose topology.
+
 ## Security invariants
 
 | Threat | Fail-closed control |
@@ -28,15 +35,21 @@ directory so the generated control manifest is not ingested.
 | Product reads raw or control metadata | Only the adapter has the raw mount; product/runner mounts are canonical and read-only; connector root is `payload/` |
 | Adapter exfiltrates input | `network_mode: none`, no credentials, read-only root, dropped capabilities, `no-new-privileges`, and bounded tmpfs |
 | Results smuggle private grading truth into Anva | The public result schema permits only run identity/status and checksummed public artifacts; private grading occurs elsewhere |
+| Capability-less root cannot clean an image-seeded volume | Adapter runs as the fixed unprivileged image owner `10001:10001`; Compose and Dockerfile identity are tested together; chmod/unlink cleanup remains fail-closed |
+| Runner bypasses a supported boundary | Runner imports no product model/service and uses only documented HTTP plus the official Streamable HTTP MCP client |
+| Initiator evaluates its own change | Bootstrap optionally emits a distinct service identity with only `ASSURANCE_REVIEW`; reviewer claim/submit run in separate services without the initiator credential |
+| A review targets a substituted run or head | Handoff and external result must match the precommitted run/task/request/organization/head; a newer head forces `STALE` and cannot finalize |
+| Resume state becomes a credential cache | Closed state stores only allowlisted UUIDs and 40/64-character hashes in a mode-`0600` file under a private directory; one-time credentials and claim material use separate mode-`0600` handoffs |
+| One-time upload secret is lost on restart | Replay discloses only an opaque authorization ID; runner derives a fresh bounded idempotency key and never persists an upload token |
+| Partial or substituted output is published | Write a private sibling tree, validate the public result contract, hash every artifact, fsync, chmod read-only, and atomically rename; reject an existing destination or any private marker |
+| Runner gains host control | Phase services have no Docker socket, raw corpus, oracle, or grader mount; root filesystem is read-only, capabilities are dropped, and memory/PID/tmpfs/log growth is bounded |
 
 ## Residual and deferred risk
 
 An operator with Docker or host filesystem authority can replace mounts, images, or environment
 values and must be handled by independent evidence capture. The Compose foundation does not itself
-prove a private exporter correctly excluded every sensitive byte, does not execute sealed native
-agents, and does not grade outputs. Those gates require independent bundle commitments, resolved
-Compose/image identities, cross-surface canary scans, disconnected grading, and fresh reviewers.
-The adapter uses UID 0 solely because Docker initializes a fresh named-volume root with root
-ownership. All Linux capabilities are dropped, privilege escalation is disabled, the root
-filesystem is read-only, and only the canonical volume is writable; a rootless-volume provisioning
-mechanism would reduce this residual privilege further.
+prove a private exporter correctly excluded every sensitive byte, execute Codex/Claude or another
+native coding host, measure human timing, or grade outputs with private controls. Those gates require
+independent bundle commitments, resolved Compose/image identities, cross-surface canary scans,
+disconnected grading, and fresh reviewers. A host administrator can still inspect process memory or
+private handoff files; operator access to those locations remains a privileged trust assumption.

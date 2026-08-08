@@ -15,6 +15,7 @@ from anva.core.exceptions import AuthenticationError, ResourceNotFoundError
 from anva.core.models import (
     AccessGrant,
     AccessScope,
+    AccessScopeServiceIdentity,
     Membership,
     Organization,
     Repository,
@@ -39,6 +40,9 @@ class BootstrapResult:
     repository: Repository
     service_identity: ServiceIdentity
     issued_token: IssuedRepositoryToken
+    access_scope: AccessScope
+    reviewer_service_identity: ServiceIdentity | None = None
+    reviewer_issued_token: IssuedRepositoryToken | None = None
 
 
 def bootstrap_local_organization(
@@ -50,6 +54,7 @@ def bootstrap_local_organization(
     admin_display_name: str,
     repository_external_id: str,
     repository_name: str,
+    independent_reviewer_name: str | None = None,
 ) -> BootstrapResult:
     """Create the only initial organization and emit a one-time repository token."""
     if not hmac.compare_digest(supplied_secret, str(settings.BOOTSTRAP_SECRET)):
@@ -110,7 +115,6 @@ def bootstrap_local_organization(
             all_service_identities=True,
             all_repositories=True,
         )
-        del scope
         actions = frozenset(Action)
         AccessGrant.objects.bulk_create(
             [
@@ -130,6 +134,36 @@ def bootstrap_local_organization(
             actions=actions,
             expires_at=timezone.now() + timedelta(days=7),
         )
+        reviewer_service_identity = None
+        reviewer_issued_token = None
+        if independent_reviewer_name is not None:
+            normalized_reviewer_name = independent_reviewer_name.strip()
+            if not normalized_reviewer_name:
+                raise ValueError("Independent reviewer name cannot be blank")
+            reviewer_service_identity = ServiceIdentity.objects.create(
+                organization=organization,
+                name=normalized_reviewer_name,
+                issuer=settings.TOKEN_ISSUER,
+                audience=settings.TOKEN_AUDIENCE,
+            )
+            AccessScopeServiceIdentity.objects.create(
+                organization=organization,
+                access_scope=scope,
+                service_identity=reviewer_service_identity,
+            )
+            AccessGrant.objects.create(
+                organization=organization,
+                service_identity=reviewer_service_identity,
+                repository=repository,
+                action=Action.ASSURANCE_REVIEW.value,
+            )
+            reviewer_issued_token = issue_bootstrap_repository_token(
+                organization=organization,
+                repository=repository,
+                service_identity=reviewer_service_identity,
+                actions=frozenset({Action.ASSURANCE_REVIEW}),
+                expires_at=timezone.now() + timedelta(days=7),
+            )
         actor = ActorContext(
             organization_id=organization.id,
             actor_type="USER",
@@ -159,4 +193,7 @@ def bootstrap_local_organization(
             repository=repository,
             service_identity=service_identity,
             issued_token=issued,
+            access_scope=scope,
+            reviewer_service_identity=reviewer_service_identity,
+            reviewer_issued_token=reviewer_issued_token,
         )

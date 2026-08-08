@@ -46,8 +46,8 @@ when it does not match those preserved identities.
 `acceptance-adapter` has a read-only root filesystem, all capabilities dropped,
 `no-new-privileges`, bounded tmpfs, and `network_mode: none`. It alone receives the raw bind mount.
 Its container is additionally limited to 256 MiB memory, no swap above that limit, and 64 PIDs.
-It uses UID 0 without Linux capabilities only to initialize Docker's root-owned fresh named-volume
-root, then seals copied files and directories read-only for the non-root product services.
+It uses the image's fixed unprivileged UID/GID `10001:10001`, which owns Docker's image-seeded
+named-volume root, then seals copied files and directories read-only for the product services.
 It refuses a non-empty canonical volume. API, worker, MCP, CLI, and the acceptance runner receive
 only `/app/acceptance/canonical` read-only, and the supported filesystem connector is restricted to
 its `payload/` child.
@@ -57,6 +57,60 @@ sorted file inventory. It also writes `canonical-manifest.json` outside the conn
 reports that file's SHA-256. Preserve those identities with the later public `acceptance-result`
 document. That result must include a checksummed `knowledge_retrieval_results` artifact; its
 contents remain public run output, not grading truth.
+
+## Run the product acceptance phases
+
+Pre-create private host directories with mode `0700`, and preserve the exact product commit plus
+all three corpus pins outside the runner. `acceptance-start` bootstraps a distinct initiator and
+least-privilege reviewer, syncs the canonical source, exercises search/context through real MCP,
+queries Canvas through HTTP, imports work and policy, uploads verified evidence bytes, evaluates
+PR 817, and proves that a newer PR 818 head makes its earlier run stale. It then stops at
+`AWAITING_EXTERNAL_REVIEW`.
+
+```sh
+export ANVA_REVISION=<exact-40-character-product-commit>
+export ANVA_ACCEPTANCE_STATE_DIR=/private/path/state
+export ANVA_ACCEPTANCE_CREDENTIAL_DIR=/private/path/credentials
+export ANVA_ACCEPTANCE_HANDOFF_DIR=/private/path/handoff
+export ANVA_ACCEPTANCE_REVIEW_RESULT_DIR=/private/path/reviewer
+export ANVA_ACCEPTANCE_RESULTS_DIR=/private/path/results
+
+make acceptance-start
+```
+
+The one-time credential file is mode `0600`; the resume record contains only allowlisted opaque
+UUIDs and hashes. Load each credential into its named environment variable without printing it.
+Use the reviewer credential only for the two reviewer phases:
+
+```sh
+export ANVA_ACCEPTANCE_REVIEWER_TOKEN=<reviewer-credential>
+make acceptance-review-request
+```
+
+Give the resulting mode-`0600` handoff to an independent evaluator. That evaluator receives only
+the public request, writes a public `evaluator-result` version `1.0` document to
+`$ANVA_ACCEPTANCE_REVIEW_RESULT_DIR/result.json`, and must not receive the initiator credential,
+raw corpus, private oracle, or grader. Submit from a fresh process:
+
+```sh
+make acceptance-review-submit
+unset ANVA_ACCEPTANCE_REVIEWER_TOKEN
+export ANVA_ACCEPTANCE_TOKEN=<initiator-credential>
+make acceptance-finalize
+```
+
+Submission authenticates the distinct reviewer and consumes the claim handoff. Finalization
+requires a completed, non-stale assurance run for the exact current head, retrieves the final
+public API/MCP views, and atomically publishes a read-only result directory containing JSONL,
+JSON, `acceptance-result.json`, and `SHA256SUMS`. Verify the checksums before copying results out.
+Each phase is a separate hardened Compose service with a read-only root, all capabilities dropped,
+no privilege escalation, bounded memory/PIDs/tmpfs/logs, and only the phase-specific mounts.
+No phase receives the Docker socket, raw corpus, private scorer, oracle, or grader.
+
+The first run precommits a reference instant after the bounded ingestion window, persists its hash,
+and reuses it on every retry. A new run may precommit a different instant and therefore receives a
+different UUIDv5 run namespace. Re-run a stopped phase with the same state, exact pins, product
+commit, and appropriate credential; never edit the resume record or copy credentials into it.
 
 ## Fail closed and clean up
 

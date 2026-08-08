@@ -6,6 +6,7 @@ import argparse
 import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import cast
 
 from jsonschema import Draft202012Validator
 
@@ -1305,6 +1306,11 @@ def openapi_document() -> dict[str, object]:
             "/bootstrap": {
                 "post": {
                     "operationId": "bootstrapOrganization",
+                    "description": (
+                        "Create the one initial tenant and return one-time credentials. "
+                        "When independent_reviewer_name is supplied, a distinct least-privilege "
+                        "assurance reviewer credential is emitted once and stored only as a hash."
+                    ),
                     "security": [],
                     "parameters": [
                         {
@@ -1315,7 +1321,110 @@ def openapi_document() -> dict[str, object]:
                         },
                         {"$ref": "#/components/parameters/CorrelationId"},
                     ],
-                    "responses": created_responses,
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": False,
+                                    "properties": {
+                                        name: {"type": "string", "minLength": 1, "maxLength": 300}
+                                        for name in (
+                                            "organization_slug",
+                                            "organization_name",
+                                            "admin_email",
+                                            "admin_display_name",
+                                            "repository_external_id",
+                                            "repository_name",
+                                            "independent_reviewer_name",
+                                        )
+                                    },
+                                    "required": [
+                                        "organization_slug",
+                                        "organization_name",
+                                        "admin_email",
+                                        "admin_display_name",
+                                        "repository_external_id",
+                                        "repository_name",
+                                    ],
+                                }
+                            }
+                        },
+                    },
+                    "responses": cast(
+                        dict[str, object],
+                        {
+                            **created_responses,
+                            "201": {
+                                "description": "Initial tenant and one-time credential created.",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "additionalProperties": False,
+                                            "properties": {
+                                                "organization_id": {
+                                                    "type": "string",
+                                                    "format": "uuid",
+                                                },
+                                                "user_id": {"type": "string", "format": "uuid"},
+                                                "membership_id": {
+                                                    "type": "string",
+                                                    "format": "uuid",
+                                                },
+                                                "repository_id": {
+                                                    "type": "string",
+                                                    "format": "uuid",
+                                                },
+                                                "service_identity_id": {
+                                                    "type": "string",
+                                                    "format": "uuid",
+                                                },
+                                                "access_scope_id": {
+                                                    "type": "string",
+                                                    "format": "uuid",
+                                                },
+                                                "token_id": {"type": "string", "format": "uuid"},
+                                                "token": {"type": "string", "minLength": 32},
+                                                "expires_at": {
+                                                    "type": "string",
+                                                    "format": "date-time",
+                                                },
+                                                "reviewer_service_identity_id": {
+                                                    "type": "string",
+                                                    "format": "uuid",
+                                                },
+                                                "reviewer_token_id": {
+                                                    "type": "string",
+                                                    "format": "uuid",
+                                                },
+                                                "reviewer_token": {
+                                                    "type": "string",
+                                                    "minLength": 32,
+                                                },
+                                                "reviewer_expires_at": {
+                                                    "type": "string",
+                                                    "format": "date-time",
+                                                },
+                                            },
+                                            "required": [
+                                                "organization_id",
+                                                "user_id",
+                                                "membership_id",
+                                                "repository_id",
+                                                "service_identity_id",
+                                                "access_scope_id",
+                                                "token_id",
+                                                "token",
+                                                "expires_at",
+                                            ],
+                                        }
+                                    }
+                                },
+                            },
+                        },
+                    ),
                 }
             },
             "/organizations/{organization_id}": {

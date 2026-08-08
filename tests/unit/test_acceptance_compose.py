@@ -18,7 +18,12 @@ def test_only_adapter_mounts_raw_acceptance_input() -> None:
 
     assert compose_text.count("target: /acceptance/raw") == 1
     assert adapter["network_mode"] == "none"
-    assert adapter["user"] == "0:0"
+    # The runtime image seeds the named volume as the unprivileged ``anva``
+    # user. Root with every capability dropped cannot write or chmod that
+    # root-owned-by-anva mount and would turn the first write failure into an
+    # unprovable-cleanup failure. Keep the adapter on the owning uid instead.
+    assert adapter["user"] == "10001:10001"
+    assert adapter["user"] != "0:0"
     assert adapter["read_only"] is True
     assert adapter["cap_drop"] == ["ALL"]
     assert adapter["security_opt"] == ["no-new-privileges:true"]
@@ -112,6 +117,87 @@ def test_acceptance_make_targets_are_scoped_and_cleanup_ephemeral_volume() -> No
 @pytest.mark.unit
 def test_runtime_image_owns_fresh_canonical_volume_seed_path() -> None:
     dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+    compose = cast(
+        dict[str, object],
+        yaml.safe_load(Path("compose.acceptance.yaml").read_text(encoding="utf-8")),
+    )
+    services = cast(dict[str, dict[str, object]], compose["services"])
 
+    assert "groupadd --gid 10001 anva" in dockerfile
+    assert "useradd --uid 10001 --gid anva" in dockerfile
     assert "mkdir -p /app/acceptance/canonical" in dockerfile
     assert "chown -R anva:anva /app" in dockerfile
+    assert "USER anva" in dockerfile
+    assert services["acceptance-adapter"]["user"] == "10001:10001"
+
+
+@pytest.mark.unit
+def test_product_acceptance_phases_have_disjoint_hardened_mounts() -> None:
+    text = Path("compose.acceptance.yaml").read_text(encoding="utf-8")
+    document = cast(dict[str, object], yaml.safe_load(text))
+    services = cast(dict[str, dict[str, object]], document["services"])
+    phase_names = (
+        "acceptance-product-start",
+        "acceptance-review-request",
+        "acceptance-review-submit",
+        "acceptance-product-finalize",
+    )
+    targets: dict[str, set[str]] = {}
+    for name in phase_names:
+        service = services[name]
+        assert service["read_only"] is True
+        assert service["privileged"] is False
+        assert service["cap_drop"] == ["ALL"]
+        assert service["security_opt"] == ["no-new-privileges:true"]
+        assert service["mem_limit"] == "512m"
+        assert service["memswap_limit"] == "512m"
+        assert service["pids_limit"] == 96
+        rendered = str(service).casefold()
+        assert "/acceptance/raw" not in rendered
+        assert "docker.sock" not in rendered
+        assert "private-oracle" not in rendered
+        assert "private-grader" not in rendered
+        volumes = cast(list[object], service["volumes"])
+        targets[name] = {
+            cast(str, volume["target"]) for volume in volumes if isinstance(volume, dict)
+        }
+        assert "acceptance-canonical:/app/acceptance/canonical:ro" in volumes
+        command = cast(list[str], service["command"])
+        assert command[:2] == ["anva", "acceptance"]
+        assert not {"sh", "bash", "/bin/sh", "/bin/bash"} & set(command)
+
+    assert targets["acceptance-product-start"] == {
+        "/acceptance/state",
+        "/acceptance/credentials",
+    }
+    assert targets["acceptance-review-request"] == {
+        "/acceptance/state",
+        "/acceptance/handoff",
+    }
+    assert targets["acceptance-review-submit"] == {
+        "/acceptance/state",
+        "/acceptance/handoff",
+        "/acceptance/reviewer",
+    }
+    assert targets["acceptance-product-finalize"] == {
+        "/acceptance/state",
+        "/acceptance/results",
+    }
+    assert text.count("target: /acceptance/credentials") == 1
+    assert text.count("target: /acceptance/results") == 1
+    assert "grader" not in " ".join(phase_names)
+
+
+@pytest.mark.unit
+def test_product_acceptance_make_targets_use_scoped_compose_services() -> None:
+    makefile = Path("Makefile").read_text(encoding="utf-8")
+
+    for target, service in (
+        ("acceptance-start", "acceptance-product-start"),
+        ("acceptance-review-request", "acceptance-review-request"),
+        ("acceptance-review-submit", "acceptance-review-submit"),
+        ("acceptance-finalize", "acceptance-product-finalize"),
+    ):
+        body = makefile.split(f"\n{target}:\n", 1)[1].split("\n\n", 1)[0]
+        assert f"run --rm --no-deps {service}" in body
+        assert "prune" not in body

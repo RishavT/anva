@@ -34,7 +34,7 @@ TEST_RUN := $(TEST_COMPOSE) --profile test run --rm --build test
 ACCEPTANCE_PROJECT ?= anva-acceptance
 ACCEPTANCE_COMPOSE := docker compose -p $(ACCEPTANCE_PROJECT) -f compose.yaml -f compose.acceptance.yaml
 
-.PHONY: help install-demo up up-exposed down uninstall uninstall-clean backup backup-verify restore migration-rehearsal rate-limit-cleanup release-build release-scan release-scan-gate release-manifest release-artifacts release-clean reset logs migrate migrations-check shell cli lock contracts contracts-check skills-render skills-package skills-check format format-check lint type unit integration acceptance-canonicalize acceptance-verify acceptance-down contract smoke browser coverage test test-down check ci
+.PHONY: help install-demo up up-exposed down uninstall uninstall-clean backup backup-verify restore migration-rehearsal rate-limit-cleanup release-build release-scan release-scan-gate release-manifest release-artifacts release-clean reset logs migrate migrations-check shell cli lock contracts contracts-check skills-render skills-package skills-check format format-check lint type unit integration acceptance-canonicalize acceptance-verify acceptance-start acceptance-review-request acceptance-review-submit acceptance-finalize acceptance-down contract smoke browser coverage test test-down check ci
 
 help:
 	@echo "Anva development commands (all application tooling runs in Compose)"
@@ -54,6 +54,10 @@ help:
 	@echo "  make browser       Run the browser-native product journey in Chromium"
 	@echo "  make acceptance-canonicalize  Copy one pinned public corpus into an isolated volume"
 	@echo "  make acceptance-verify  Verify the canonical corpus without the raw mount"
+	@echo "  make acceptance-start  Run product acceptance until independent review"
+	@echo "  make acceptance-review-request  Seal an independent evaluator handoff"
+	@echo "  make acceptance-review-submit  Submit an externally authored evaluator result"
+	@echo "  make acceptance-finalize  Atomically seal public deterministic results"
 	@echo "  make acceptance-down  Remove only the acceptance project's ephemeral resources"
 	@echo "  make test-down     Remove the isolated test project"
 	@echo "  make reset         Remove local containers and named data volumes"
@@ -385,6 +389,30 @@ acceptance-verify:
 	@test -n "$(ANVA_ACCEPTANCE_SOURCE_FINGERPRINT)" || { echo "ANVA_ACCEPTANCE_SOURCE_FINGERPRINT is required"; exit 2; }
 	@test -n "$(ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256)" || { echo "ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256 is required"; exit 2; }
 	$(ACCEPTANCE_COMPOSE) --profile acceptance run --rm acceptance-runner
+
+acceptance-start:
+	@test -n "$(ANVA_ACCEPTANCE_MANIFEST_SHA256)" || { echo "ANVA_ACCEPTANCE_MANIFEST_SHA256 is required"; exit 2; }
+	@test -n "$(ANVA_ACCEPTANCE_SOURCE_FINGERPRINT)" || { echo "ANVA_ACCEPTANCE_SOURCE_FINGERPRINT is required"; exit 2; }
+	@test -n "$(ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256)" || { echo "ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256 is required"; exit 2; }
+	@test -n "$(ANVA_ACCEPTANCE_STATE_DIR)" || { echo "ANVA_ACCEPTANCE_STATE_DIR is required"; exit 2; }
+	@test -n "$(ANVA_ACCEPTANCE_CREDENTIAL_DIR)" || { echo "ANVA_ACCEPTANCE_CREDENTIAL_DIR is required"; exit 2; }
+	$(ACCEPTANCE_COMPOSE) up -d --wait api worker mcp
+	$(ACCEPTANCE_COMPOSE) --profile acceptance run --rm --no-deps acceptance-product-start
+
+acceptance-review-request:
+	@test -n "$(ANVA_ACCEPTANCE_REVIEWER_TOKEN)" || { echo "ANVA_ACCEPTANCE_REVIEWER_TOKEN is required"; exit 2; }
+	@test -n "$(ANVA_ACCEPTANCE_HANDOFF_DIR)" || { echo "ANVA_ACCEPTANCE_HANDOFF_DIR is required"; exit 2; }
+	$(ACCEPTANCE_COMPOSE) --profile acceptance run --rm --no-deps acceptance-review-request
+
+acceptance-review-submit:
+	@test -n "$(ANVA_ACCEPTANCE_REVIEWER_TOKEN)" || { echo "ANVA_ACCEPTANCE_REVIEWER_TOKEN is required"; exit 2; }
+	@test -n "$(ANVA_ACCEPTANCE_REVIEW_RESULT_DIR)" || { echo "ANVA_ACCEPTANCE_REVIEW_RESULT_DIR is required"; exit 2; }
+	$(ACCEPTANCE_COMPOSE) --profile acceptance run --rm --no-deps acceptance-review-submit
+
+acceptance-finalize:
+	@test -n "$(ANVA_ACCEPTANCE_TOKEN)" || { echo "ANVA_ACCEPTANCE_TOKEN is required"; exit 2; }
+	@test -n "$(ANVA_ACCEPTANCE_RESULTS_DIR)" || { echo "ANVA_ACCEPTANCE_RESULTS_DIR is required"; exit 2; }
+	$(ACCEPTANCE_COMPOSE) --profile acceptance run --rm --no-deps acceptance-product-finalize
 
 acceptance-down:
 	$(ACCEPTANCE_COMPOSE) --profile acceptance down --volumes --remove-orphans

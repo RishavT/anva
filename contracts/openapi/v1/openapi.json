@@ -3526,6 +3526,7 @@
     },
     "/bootstrap": {
       "post": {
+        "description": "Create the one initial tenant and return one-time credentials. When independent_reviewer_name is supplied, a distinct least-privilege assurance reviewer credential is emitted once and stored only as a hash.",
         "operationId": "bootstrapOrganization",
         "parameters": [
           {
@@ -3541,9 +3542,138 @@
             "$ref": "#/components/parameters/CorrelationId"
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "admin_display_name": {
+                    "maxLength": 300,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "admin_email": {
+                    "maxLength": 300,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "independent_reviewer_name": {
+                    "maxLength": 300,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "organization_name": {
+                    "maxLength": 300,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "organization_slug": {
+                    "maxLength": 300,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "repository_external_id": {
+                    "maxLength": 300,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "repository_name": {
+                    "maxLength": 300,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "organization_slug",
+                  "organization_name",
+                  "admin_email",
+                  "admin_display_name",
+                  "repository_external_id",
+                  "repository_name"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "201": {
-            "description": "Tenant-scoped resource created."
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "access_scope_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "expires_at": {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "membership_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "organization_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "repository_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "reviewer_expires_at": {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "reviewer_service_identity_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "reviewer_token": {
+                      "minLength": 32,
+                      "type": "string"
+                    },
+                    "reviewer_token_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "service_identity_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "token": {
+                      "minLength": 32,
+                      "type": "string"
+                    },
+                    "token_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "user_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "organization_id",
+                    "user_id",
+                    "membership_id",
+                    "repository_id",
+                    "service_identity_id",
+                    "access_scope_id",
+                    "token_id",
+                    "token",
+                    "expires_at"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Initial tenant and one-time credential created."
           },
           "400": {
             "$ref": "#/components/responses/StructuredError"

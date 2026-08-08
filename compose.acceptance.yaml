@@ -1,3 +1,36 @@
+x-acceptance-product: &acceptance-product
+  image: ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.0}
+  build:
+    context: .
+    target: runtime
+    args:
+      ANVA_VERSION: ${ANVA_VERSION:-0.1.0}
+      ANVA_REVISION: ${ANVA_REVISION:-unknown}
+      ANVA_SOURCE: ${ANVA_SOURCE:-https://github.com/rishavt/anva}
+      SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH:-1756684800}
+  profiles: ["acceptance"]
+  user: "${ANVA_HOST_UID:-10001}:${ANVA_HOST_GID:-10001}"
+  read_only: true
+  privileged: false
+  cap_drop: ["ALL"]
+  security_opt: ["no-new-privileges:true"]
+  mem_limit: 512m
+  memswap_limit: 512m
+  pids_limit: 96
+  tmpfs:
+    - /tmp:size=32m,mode=1777,noexec,nosuid,nodev
+    - /app/run:size=8m,mode=0700,uid=10001,gid=10001,noexec,nosuid,nodev
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+  restart: "no"
+
+x-acceptance-environment: &acceptance-environment
+  ANVA_API_URL: http://api:8000/api/v1
+  ANVA_MCP_URL: http://mcp:8001/mcp
+
 services:
   acceptance-adapter:
     image: ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.0}
@@ -10,7 +43,7 @@ services:
         ANVA_SOURCE: ${ANVA_SOURCE:-https://github.com/rishavt/anva}
         SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH:-1756684800}
     profiles: ["acceptance"]
-    user: "0:0"
+    user: "10001:10001"
     command:
       - anva
       - acceptance
@@ -117,6 +150,165 @@ services:
         max-size: "10m"
         max-file: "3"
     restart: "no"
+
+  acceptance-product-start:
+    <<: *acceptance-product
+    environment:
+      <<: *acceptance-environment
+      ANVA_BOOTSTRAP_SECRET: ${ANVA_BOOTSTRAP_SECRET:-}
+      ANVA_ACCEPTANCE_TOKEN: ${ANVA_ACCEPTANCE_TOKEN:-}
+    command:
+      - anva
+      - acceptance
+      - start
+      - --canonical-root
+      - /app/acceptance/canonical
+      - --state
+      - /acceptance/state/resume.json
+      - --output
+      - /acceptance/results/sealed
+      - --credential-output
+      - /acceptance/credentials/credentials.json
+      - --manifest-sha256
+      - ${ANVA_ACCEPTANCE_MANIFEST_SHA256:-invalid-unpinned-manifest}
+      - --source-fingerprint
+      - ${ANVA_ACCEPTANCE_SOURCE_FINGERPRINT:-invalid-unpinned-fingerprint}
+      - --canonical-manifest-sha256
+      - ${ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256:-invalid-unpinned-canonical-manifest}
+      - --product-commit
+      - ${ANVA_REVISION:-unknown}
+    volumes:
+      - acceptance-canonical:/app/acceptance/canonical:ro
+      - type: bind
+        source: ${ANVA_ACCEPTANCE_STATE_DIR:-/nonexistent-anva-acceptance-state}
+        target: /acceptance/state
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${ANVA_ACCEPTANCE_CREDENTIAL_DIR:-/nonexistent-anva-acceptance-credentials}
+        target: /acceptance/credentials
+        bind:
+          create_host_path: false
+
+  acceptance-review-request:
+    <<: *acceptance-product
+    environment:
+      <<: *acceptance-environment
+      ANVA_ACCEPTANCE_REVIEWER_TOKEN: ${ANVA_ACCEPTANCE_REVIEWER_TOKEN:-}
+    command:
+      - anva
+      - acceptance
+      - review-request
+      - --canonical-root
+      - /app/acceptance/canonical
+      - --state
+      - /acceptance/state/resume.json
+      - --output
+      - /acceptance/results/sealed
+      - --handoff
+      - /acceptance/handoff/review.json
+      - --manifest-sha256
+      - ${ANVA_ACCEPTANCE_MANIFEST_SHA256:-invalid-unpinned-manifest}
+      - --source-fingerprint
+      - ${ANVA_ACCEPTANCE_SOURCE_FINGERPRINT:-invalid-unpinned-fingerprint}
+      - --canonical-manifest-sha256
+      - ${ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256:-invalid-unpinned-canonical-manifest}
+      - --product-commit
+      - ${ANVA_REVISION:-unknown}
+    volumes:
+      - acceptance-canonical:/app/acceptance/canonical:ro
+      - type: bind
+        source: ${ANVA_ACCEPTANCE_STATE_DIR:-/nonexistent-anva-acceptance-state}
+        target: /acceptance/state
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${ANVA_ACCEPTANCE_HANDOFF_DIR:-/nonexistent-anva-acceptance-handoff}
+        target: /acceptance/handoff
+        bind:
+          create_host_path: false
+
+  acceptance-review-submit:
+    <<: *acceptance-product
+    environment:
+      <<: *acceptance-environment
+      ANVA_ACCEPTANCE_REVIEWER_TOKEN: ${ANVA_ACCEPTANCE_REVIEWER_TOKEN:-}
+    command:
+      - anva
+      - acceptance
+      - review-submit
+      - --canonical-root
+      - /app/acceptance/canonical
+      - --state
+      - /acceptance/state/resume.json
+      - --output
+      - /acceptance/results/sealed
+      - --handoff
+      - /acceptance/handoff/review.json
+      - --result
+      - /acceptance/reviewer/result.json
+      - --manifest-sha256
+      - ${ANVA_ACCEPTANCE_MANIFEST_SHA256:-invalid-unpinned-manifest}
+      - --source-fingerprint
+      - ${ANVA_ACCEPTANCE_SOURCE_FINGERPRINT:-invalid-unpinned-fingerprint}
+      - --canonical-manifest-sha256
+      - ${ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256:-invalid-unpinned-canonical-manifest}
+      - --product-commit
+      - ${ANVA_REVISION:-unknown}
+    volumes:
+      - acceptance-canonical:/app/acceptance/canonical:ro
+      - type: bind
+        source: ${ANVA_ACCEPTANCE_STATE_DIR:-/nonexistent-anva-acceptance-state}
+        target: /acceptance/state
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${ANVA_ACCEPTANCE_HANDOFF_DIR:-/nonexistent-anva-acceptance-handoff}
+        target: /acceptance/handoff
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${ANVA_ACCEPTANCE_REVIEW_RESULT_DIR:-/nonexistent-anva-review-result}
+        target: /acceptance/reviewer
+        read_only: true
+        bind:
+          create_host_path: false
+
+  acceptance-product-finalize:
+    <<: *acceptance-product
+    environment:
+      <<: *acceptance-environment
+      ANVA_ACCEPTANCE_TOKEN: ${ANVA_ACCEPTANCE_TOKEN:-}
+    command:
+      - anva
+      - acceptance
+      - finalize
+      - --canonical-root
+      - /app/acceptance/canonical
+      - --state
+      - /acceptance/state/resume.json
+      - --output
+      - /acceptance/results/sealed
+      - --manifest-sha256
+      - ${ANVA_ACCEPTANCE_MANIFEST_SHA256:-invalid-unpinned-manifest}
+      - --source-fingerprint
+      - ${ANVA_ACCEPTANCE_SOURCE_FINGERPRINT:-invalid-unpinned-fingerprint}
+      - --canonical-manifest-sha256
+      - ${ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256:-invalid-unpinned-canonical-manifest}
+      - --product-commit
+      - ${ANVA_REVISION:-unknown}
+    volumes:
+      - acceptance-canonical:/app/acceptance/canonical:ro
+      - type: bind
+        source: ${ANVA_ACCEPTANCE_STATE_DIR:-/nonexistent-anva-acceptance-state}
+        target: /acceptance/state
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${ANVA_ACCEPTANCE_RESULTS_DIR:-/nonexistent-anva-acceptance-results}
+        target: /acceptance/results
+        bind:
+          create_host_path: false
 
 volumes:
   acceptance-canonical:
