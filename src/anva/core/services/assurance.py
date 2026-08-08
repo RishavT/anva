@@ -21,9 +21,11 @@ from anva.core.exceptions import (
     IdempotencyConflictError,
     LeaseConflictError,
     ResourceNotFoundError,
+    TenantBoundaryError,
 )
 from anva.core.models import (
     AcceptanceCriterion,
+    AccessScope,
     AssuranceCheck,
     AssuranceKnowledgeProposal,
     AssuranceReport,
@@ -192,6 +194,124 @@ def _authorize_assurance(
         access_scope_id=access_scope_id,
     )
     return replace(actor, authorization_path=decision.authorization_path)
+
+
+def _authorize_assurance_review(
+    *, actor: ActorContext, repository_id: uuid.UUID, access_scope_id: uuid.UUID | None = None
+) -> ActorContext:
+    decision = authorize_action(
+        actor=actor,
+        action=Action.ASSURANCE_REVIEW,
+        repository_id=repository_id,
+        access_scope_id=access_scope_id,
+    )
+    return replace(actor, authorization_path=decision.authorization_path)
+
+
+def _authorize_evaluator_source_scope(
+    *, actor: ActorContext, repository_id: uuid.UUID, evaluator_scope: AccessScope | None
+) -> ActorContext:
+    """Authorize every source boundary before exposing a sealed evaluator request."""
+    if evaluator_scope is None:
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    frontier = list(evaluator_scope.derived_from.all().order_by("id"))
+    visited: set[uuid.UUID] = set()
+    leaf_scope_ids: set[uuid.UUID] = set()
+    while frontier:
+        scope = frontier.pop()
+        if scope.id in visited:
+            continue
+        visited.add(scope.id)
+        parents = list(scope.derived_from.all().order_by("id"))
+        if parents:
+            frontier.extend(parents)
+        else:
+            leaf_scope_ids.add(scope.id)
+    if not leaf_scope_ids:
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    authorized_actor = actor
+    for scope_id in sorted(leaf_scope_ids):
+        authorized_actor = _authorize_assurance_review(
+            actor=authorized_actor,
+            repository_id=repository_id,
+            access_scope_id=scope_id,
+        )
+    return authorized_actor
+
+
+def _create_evaluator_artifact(
+    *,
+    actor: ActorContext,
+    task: EvaluatorTask,
+    kind: str,
+    schema_name: str,
+    payload: dict[str, object],
+    require_claim_identity: bool = True,
+) -> ImmutableArtifact:
+    """Persist queue output after source-boundary review authorization succeeded."""
+    if task.request_artifact.access_scope_id is None:
+        raise ValueError("Evaluator request artifact must have an access scope")
+    if require_claim_identity and (
+        task.claimed_by_actor_type != actor.actor_type
+        or not hmac.compare_digest(task.claimed_by_actor_id, actor.actor_id)
+        or task.claimed_by_credential_id != actor.credential_id
+    ):
+        raise LeaseConflictError("Evaluator claim is invalid or expired")
+    if schema_name == "evaluator-result":
+        request = cast(dict[str, object], task.request_artifact.payload)
+        if (
+            payload.get("request_id") != request.get("request_id")
+            or request.get("assurance_run_id") != str(task.assurance_run_id)
+            or payload.get("commit_sha") != task.assurance_run.head_commit
+        ):
+            raise IdempotencyConflictError("Evaluator result does not match the exact request")
+    elif schema_name == "assurance-report" and payload.get("assurance_run_id") != str(
+        task.assurance_run_id
+    ):
+        raise IdempotencyConflictError("Assurance report does not match the exact task")
+    validate_payload(schema_name, payload)
+    if payload.get("schema_version") != "1.0":
+        raise ValueError("Artifact schema_version metadata must match payload schema_version")
+    digest = content_hash(payload)
+    organization = _organization(actor, for_update=True)
+    artifact = ImmutableArtifact.objects.filter(
+        organization=organization,
+        kind=kind,
+        content_hash=digest,
+    ).first()
+    if artifact is not None:
+        if artifact.access_scope_id != task.request_artifact.access_scope_id:
+            raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+        if (
+            artifact.schema_name != schema_name
+            or artifact.schema_version != "1.0"
+            or artifact.revision != 1
+        ):
+            raise TenantBoundaryError(
+                "Artifact content identity cannot be reused with different metadata"
+            )
+        return artifact
+    artifact = ImmutableArtifact.objects.create(
+        organization=organization,
+        kind=kind,
+        schema_name=schema_name,
+        schema_version="1.0",
+        revision=1,
+        payload=payload,
+        content_hash=digest,
+        access_scope_id=task.request_artifact.access_scope_id,
+    )
+    record_transition(
+        organization=organization,
+        actor=actor,
+        target_type="immutable_artifact",
+        target_id=artifact.id,
+        from_state="",
+        to_state="CREATED",
+        revision=artifact.revision,
+        metadata={"kind": kind, "content_hash": digest},
+    )
+    return artifact
 
 
 def _normalized_text(value: str, *, name: str, maximum: int, required: bool = True) -> str:
@@ -864,6 +984,9 @@ def start_assurance(
     scalar_policy_version = max(cast(int, item["version"]) for item in policy_versions)
     run = AssuranceRun.objects.create(
         organization=organization,
+        initiated_by_actor_type=actor.actor_type,
+        initiated_by_actor_id=actor.actor_id,
+        initiated_by_credential_id=actor.credential_id,
         repository_external_id=repository.external_id,
         repository=repository,
         pull_request_number=revision.pull_request.number,
@@ -1028,7 +1151,7 @@ def claim_evaluator_task(
     claimant = _normalized_text(claimant, name="claimant", maximum=200)
     if lease_seconds < 60 or lease_seconds > 3_600:
         raise ValueError("lease_seconds must be between 60 and 3600")
-    actor = _authorize_assurance(actor=actor, repository_id=repository_id)
+    actor = _authorize_assurance_review(actor=actor, repository_id=repository_id)
     repository = get_tenant_record(
         queryset=Repository.objects.filter(is_active=True),
         record_id=repository_id,
@@ -1037,7 +1160,7 @@ def claim_evaluator_task(
     now = timezone.now()
     exhausted_tasks = list(
         EvaluatorTask.objects.select_for_update(of=("self",))
-        .select_related("organization", "assurance_run", "request_artifact")
+        .select_related("organization", "assurance_run", "request_artifact__access_scope")
         .filter(
             organization_id=actor.organization_id,
             repository=repository,
@@ -1048,11 +1171,16 @@ def claim_evaluator_task(
         .order_by("created_at", "id")
     )
     for exhausted in exhausted_tasks:
+        if (
+            exhausted.assurance_run.initiated_by_actor_type == actor.actor_type
+            and hmac.compare_digest(exhausted.assurance_run.initiated_by_actor_id, actor.actor_id)
+        ):
+            continue
         try:
-            scoped_actor = _authorize_assurance(
+            scoped_actor = _authorize_evaluator_source_scope(
                 actor=actor,
                 repository_id=repository.id,
-                access_scope_id=exhausted.request_artifact.access_scope_id,
+                evaluator_scope=exhausted.request_artifact.access_scope,
             )
         except ResourceNotFoundError:
             continue
@@ -1066,7 +1194,7 @@ def claim_evaluator_task(
         .select_related(
             "organization",
             "assurance_run__pull_request_revision__pull_request",
-            "request_artifact",
+            "request_artifact__access_scope",
         )
         .filter(
             organization_id=actor.organization_id,
@@ -1081,16 +1209,21 @@ def claim_evaluator_task(
     )
     task = candidates.first()
     while task is not None:
+        run = task.assurance_run
+        if run.initiated_by_actor_type == actor.actor_type and hmac.compare_digest(
+            run.initiated_by_actor_id, actor.actor_id
+        ):
+            task = candidates.exclude(id=task.id).first()
+            continue
         try:
-            scoped_actor = _authorize_assurance(
+            scoped_actor = _authorize_evaluator_source_scope(
                 actor=actor,
                 repository_id=repository.id,
-                access_scope_id=task.request_artifact.access_scope_id,
+                evaluator_scope=task.request_artifact.access_scope,
             )
         except ResourceNotFoundError:
             task = candidates.exclude(id=task.id).first()
             continue
-        run = task.assurance_run
         run_revision = run.pull_request_revision
         if run_revision is None:
             task.state = EvaluatorTask.State.CANCELLED
@@ -1119,6 +1252,9 @@ def claim_evaluator_task(
     token = secrets.token_urlsafe(32)
     task.state = EvaluatorTask.State.CLAIMED
     task.claimant = claimant
+    task.claimed_by_actor_type = actor.actor_type
+    task.claimed_by_actor_id = actor.actor_id
+    task.claimed_by_credential_id = actor.credential_id
     task.claim_token_hash = hashlib.sha256(token.encode()).hexdigest()
     task.lease_expires_at = now + timedelta(seconds=lease_seconds)
     task.attempt_count += 1
@@ -1127,6 +1263,9 @@ def claim_evaluator_task(
         update_fields=[
             "state",
             "claimant",
+            "claimed_by_actor_type",
+            "claimed_by_actor_id",
+            "claimed_by_credential_id",
             "claim_token_hash",
             "lease_expires_at",
             "attempt_count",
@@ -1139,6 +1278,9 @@ def claim_evaluator_task(
         evaluator_task=task,
         attempt=task.attempt_count,
         claimant=claimant,
+        claimed_by_actor_type=actor.actor_type,
+        claimed_by_actor_id=actor.actor_id,
+        claimed_by_credential_id=actor.credential_id,
         event="CLAIMED",
         request_hash=task.request_artifact.content_hash,
     )
@@ -1150,7 +1292,7 @@ def claim_evaluator_task(
         from_state=prior_claim_state,
         to_state=EvaluatorTask.State.CLAIMED,
         revision=task.revision,
-        metadata={"lease_owner": claimant},
+        metadata={"claimant_label": claimant},
     )
     return EvaluatorClaim(
         task=task,
@@ -1983,14 +2125,13 @@ def _finalize_evaluator_failure(
         "markdown": markdown,
         "html": rendered_html,
     }
-    artifact, _ = create_artifact(
+    artifact = _create_evaluator_artifact(
         actor=actor,
-        repository_id=run.repository_id,
-        access_scope_id=access_scope_id,
+        task=task,
         kind=ImmutableArtifact.Kind.ASSURANCE_REPORT,
         schema_name="assurance-report",
-        schema_version="1.0",
         payload=report_payload,
+        require_claim_identity=False,
     )
     AssuranceReport.objects.get_or_create(
         id=report_id,
@@ -2011,6 +2152,9 @@ def _finalize_evaluator_failure(
         event="EXHAUSTED",
         defaults={
             "claimant": task.claimant,
+            "claimed_by_actor_type": task.claimed_by_actor_type,
+            "claimed_by_actor_id": task.claimed_by_actor_id,
+            "claimed_by_credential_id": task.claimed_by_credential_id,
             "request_hash": task.request_artifact.content_hash,
             "safe_error_code": failure_code,
         },
@@ -2066,12 +2210,18 @@ def submit_evaluator_result(
         record_id=task_id,
         organization_id=actor.organization_id,
     )
-    actor = _authorize_assurance(
+    actor = _authorize_evaluator_source_scope(
         actor=actor,
         repository_id=task.repository_id,
-        access_scope_id=task.request_artifact.access_scope_id,
+        evaluator_scope=task.request_artifact.access_scope,
     )
     result_digest = content_hash(result)
+    if (
+        task.claimed_by_actor_type != actor.actor_type
+        or not hmac.compare_digest(task.claimed_by_actor_id, actor.actor_id)
+        or task.claimed_by_credential_id != actor.credential_id
+    ):
+        raise LeaseConflictError("Evaluator claim is invalid or expired")
     if task.state == EvaluatorTask.State.SUBMITTED and task.result_artifact is not None:
         if task.result_artifact.content_hash != result_digest:
             raise IdempotencyConflictError("Evaluator task was submitted with different content")
@@ -2131,13 +2281,11 @@ def submit_evaluator_result(
     access_scope_id = task.request_artifact.access_scope_id
     if access_scope_id is None:
         raise ValueError("Evaluator request artifact must have an access scope")
-    result_artifact, _ = create_artifact(
+    result_artifact = _create_evaluator_artifact(
         actor=actor,
-        repository_id=task.repository_id,
-        access_scope_id=access_scope_id,
+        task=task,
         kind=ImmutableArtifact.Kind.EVALUATOR_RESULT,
         schema_name="evaluator-result",
-        schema_version="1.0",
         payload=result,
     )
     findings = _merge_findings(actor=actor, run=run, payloads=finding_payloads)
@@ -2203,13 +2351,11 @@ def submit_evaluator_result(
         "markdown": markdown,
         "html": rendered_html,
     }
-    report_artifact, _ = create_artifact(
+    report_artifact = _create_evaluator_artifact(
         actor=actor,
-        repository_id=task.repository_id,
-        access_scope_id=access_scope_id,
+        task=task,
         kind=ImmutableArtifact.Kind.ASSURANCE_REPORT,
         schema_name="assurance-report",
-        schema_version="1.0",
         payload=report_payload,
     )
     report = AssuranceReport.objects.create(
@@ -2244,6 +2390,9 @@ def submit_evaluator_result(
         evaluator_task=task,
         attempt=task.attempt_count,
         claimant=claimant,
+        claimed_by_actor_type=actor.actor_type,
+        claimed_by_actor_id=actor.actor_id,
+        claimed_by_credential_id=actor.credential_id,
         event="SUBMITTED",
         request_hash=task.request_artifact.content_hash,
         result_hash=result_artifact.content_hash,

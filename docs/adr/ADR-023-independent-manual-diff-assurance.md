@@ -26,6 +26,14 @@ explicit safety instructions, and version identities. Submit accepts only the cl
 The server validates every diff coordinate, context-citation UUID, evidence UUID, criterion code,
 commit, request, tenant, evaluator version, and prompt version before persisting it.
 
+The run stores an immutable initiating actor and credential. Claim/submit require the separate
+`assurance.review` action, and the initiator is ineligible to review its own run. Anva authorizes an
+external reviewer against every immutable source boundary without expanding the sealed artifact
+scope. A claim binds the task and append-only attempt to the authenticated actor and exact
+repository credential; the caller-supplied claimant is only an audited display/provider label.
+Submit and identical-result replay reject actor or credential switching, including a second token
+for the same service identity. Revoked and expired credentials fail closed.
+
 The evaluator emits observations, never readiness. Server precedence is:
 
 1. stale exact input -> `STALE`;
@@ -53,4 +61,5 @@ PR/diff/evaluator text is hostile retained data. It is bounded and secret-scanne
 persistence, separated from evaluator instructions, never interpolated into shell commands, and
 HTML-escaped. PostgreSQL composite tenant foreign keys and immutable update/delete triggers protect
 all revision, chunk, occurrence, decision, evaluator-attempt, readiness, report, and proposal-link
-history.
+history. Database triggers also prevent changes to the run initiator and a live task's claim
+identity; each attempt snapshots the claim identity and is append-only.

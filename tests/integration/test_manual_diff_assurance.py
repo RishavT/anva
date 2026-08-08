@@ -13,11 +13,14 @@ from django.utils import timezone
 
 from anva.contracts import validate_payload
 from anva.contracts.catalog import EXAMPLES
-from anva.core.exceptions import ResourceNotFoundError
+from anva.core.exceptions import AuthenticationError, LeaseConflictError, ResourceNotFoundError
 from anva.core.models import (
+    AccessGrant,
     AccessScope,
+    AccessScopeServiceIdentity,
     AssuranceReport,
     AssuranceRun,
+    AuditEvent,
     DiffChunk,
     EvaluatorAttempt,
     EvaluatorTask,
@@ -29,7 +32,9 @@ from anva.core.models import (
     Organization,
     PullRequest,
     Repository,
+    RepositoryAccessToken,
     Role,
+    ServiceIdentity,
     User,
 )
 from anva.core.services.assurance import (
@@ -44,11 +49,13 @@ from anva.core.services.assurance import (
     start_assurance,
     submit_evaluator_result,
 )
+from anva.core.services.authorization import Action
 from anva.core.services.context import ActorContext
 from anva.core.services.evaluators import FakeEvaluator, FakeScenario
 from anva.core.services.evidence import map_criterion_evidence, submit_evidence_manifest
 from anva.core.services.intent import import_work_item
 from anva.core.services.policies import import_policy
+from anva.core.services.tokens import authenticate_bearer, issue_bootstrap_repository_token
 
 REFERENCE_TIME = datetime(2026, 7, 28, 12, tzinfo=UTC)
 MANUAL_DIFF = """diff --git a/src/auth/service.py b/src/auth/service.py
@@ -58,6 +65,18 @@ MANUAL_DIFF = """diff --git a/src/auth/service.py b/src/auth/service.py
 -old
 +new
 """
+
+
+def _passing_checks() -> list[dict[str, object]]:
+    return [
+        {
+            "code": "TESTS_PASS",
+            "status": "PASSED",
+            "blocking": True,
+            "summary": "Exact-head deterministic tests passed.",
+            "evidence_ids": [],
+        }
+    ]
 
 
 def _tenant() -> tuple[Organization, Repository, AccessScope, ActorContext]:
@@ -95,6 +114,64 @@ def _tenant() -> tuple[Organization, Repository, AccessScope, ActorContext]:
         source_ip_hash="a" * 64,
     )
     return organization, repository, scope, actor
+
+
+def _reviewer_actor(organization: Organization, *, label: str = "reviewer") -> ActorContext:
+    role, _ = Role.objects.get_or_create(
+        organization=organization,
+        code=Role.Code.REVIEWER,
+        defaults={"name": "Independent reviewer"},
+    )
+    user = User.objects.create(
+        email=f"{label}-{uuid.uuid4()}@example.test",
+        display_name="Independent assurance reviewer",
+    )
+    Membership.objects.create(organization=organization, user=user, role=role)
+    return ActorContext(
+        organization_id=organization.id,
+        actor_type="USER",
+        actor_id=str(user.id),
+        authorization_path="untrusted-reviewer-claim",
+        request_id=uuid.uuid4(),
+        source_ip_hash="c" * 64,
+    )
+
+
+def _service_reviewer_credentials(
+    organization: Organization,
+    repository: Repository,
+    scope: AccessScope,
+    *,
+    count: int,
+) -> tuple[ServiceIdentity, list[tuple[RepositoryAccessToken, ActorContext]]]:
+    service = ServiceIdentity.objects.create(
+        organization=organization,
+        name="External evaluator",
+        issuer="anva-test",
+        audience="anva-test-api",
+    )
+    AccessGrant.objects.create(
+        organization=organization,
+        service_identity=service,
+        repository=repository,
+        action=Action.ASSURANCE_REVIEW.value,
+    )
+    AccessScopeServiceIdentity.objects.create(
+        organization=organization,
+        access_scope=scope,
+        service_identity=service,
+    )
+    credentials: list[tuple[RepositoryAccessToken, ActorContext]] = []
+    for _index in range(count):
+        issued = issue_bootstrap_repository_token(
+            organization=organization,
+            repository=repository,
+            service_identity=service,
+            actions=frozenset({Action.ASSURANCE_REVIEW}),
+            expires_at=timezone.now() + timedelta(hours=1),
+        )
+        credentials.append((issued.record, authenticate_bearer(f"Bearer {issued.plaintext}")))
+    return service, credentials
 
 
 def _policy(
@@ -152,6 +229,10 @@ def _complete(
     scenario: FakeScenario,
     checks: list[dict[str, object]] | None = None,
 ) -> AssuranceCompletion:
+    reviewer = _reviewer_actor(
+        Organization.objects.get(id=actor.organization_id),
+        label="completion-reviewer",
+    )
     evaluator = FakeEvaluator(scenario)
     started = start_assurance(
         actor=actor,
@@ -173,14 +254,14 @@ def _complete(
         trigger_key="1" * 64,
     )
     claim = claim_evaluator_task(
-        actor=actor,
+        actor=reviewer,
         repository_id=repository.id,
         claimant="fresh-review-agent",
     )
     assert claim is not None
     result = evaluator.evaluate(claim.request)
     return submit_evaluator_result(
-        actor=actor,
+        actor=reviewer,
         task_id=started.evaluator_task.id,
         claimant="fresh-review-agent",
         claim_token=claim.claim_token,
@@ -251,8 +332,9 @@ def test_exact_replay_manual_queue_report_and_new_revision_staleness() -> None:
     assert duplicate.run.id == started.run.id
     assert started.run.limitations.count(REQUIREMENT_TRACEABILITY_LIMITATION) == 1
 
+    reviewer = _reviewer_actor(organization, label="exact-replay-reviewer")
     claim = claim_evaluator_task(
-        actor=actor,
+        actor=reviewer,
         repository_id=repository.id,
         claimant="fresh-review-agent",
     )
@@ -265,14 +347,14 @@ def test_exact_replay_manual_queue_report_and_new_revision_staleness() -> None:
         f"000 evaluator limitation {index:03d}" for index in range(MAX_LIMITATIONS + 5)
     ]
     completed = submit_evaluator_result(
-        actor=actor,
+        actor=reviewer,
         task_id=claim.task.id,
         claimant="fresh-review-agent",
         claim_token=claim.claim_token,
         result=result,
     )
     replayed = submit_evaluator_result(
-        actor=actor,
+        actor=reviewer,
         task_id=claim.task.id,
         claimant="fresh-review-agent",
         claim_token=claim.claim_token,
@@ -346,8 +428,9 @@ def test_deterministic_failure_wins_and_unsupported_citation_cannot_interfere() 
         ],
         evaluator_version=evaluator.version,
     )
+    reviewer = _reviewer_actor(organization, label="deterministic-reviewer")
     claim = claim_evaluator_task(
-        actor=actor,
+        actor=reviewer,
         repository_id=repository.id,
         claimant="fresh-review-agent",
     )
@@ -356,7 +439,7 @@ def test_deterministic_failure_wins_and_unsupported_citation_cannot_interfere() 
     malicious["findings"][0]["citations"][0]["path"] = "private/not-authorized.py"  # type: ignore[index]
     with pytest.raises(ValueError, match="outside the exact diff"):
         submit_evaluator_result(
-            actor=actor,
+            actor=reviewer,
             task_id=started.evaluator_task.id,
             claimant="fresh-review-agent",
             claim_token=claim.claim_token,
@@ -365,7 +448,7 @@ def test_deterministic_failure_wins_and_unsupported_citation_cannot_interfere() 
 
     valid = evaluator.evaluate(claim.request)
     completed = submit_evaluator_result(
-        actor=actor,
+        actor=reviewer,
         task_id=started.evaluator_task.id,
         claimant="fresh-review-agent",
         claim_token=claim.claim_token,
@@ -473,9 +556,10 @@ def test_expired_manual_evaluator_retries_end_in_a_deterministic_failure_report(
         ],
         evaluator_version="manual-evaluator-v1",
     )
+    reviewer = _reviewer_actor(organization, label="retry-reviewer")
     for attempt in range(1, 4):
         claim = claim_evaluator_task(
-            actor=actor,
+            actor=reviewer,
             repository_id=repository.id,
             claimant=f"review-agent-{attempt}",
             lease_seconds=60,
@@ -487,7 +571,7 @@ def test_expired_manual_evaluator_retries_end_in_a_deterministic_failure_report(
 
     assert (
         claim_evaluator_task(
-            actor=actor,
+            actor=reviewer,
             repository_id=repository.id,
             claimant="review-agent-final",
         )
@@ -554,7 +638,7 @@ def test_reobservation_preserves_human_finding_decision() -> None:
 
 @pytest.mark.integration
 @pytest.mark.django_db
-def test_evaluator_scope_is_actor_sealed_and_check_evidence_must_resolve() -> None:
+def test_evaluator_scope_admits_independent_reviewer_and_check_evidence_must_resolve() -> None:
     organization, repository, scope, actor = _tenant()
     policy_version_id = _policy(organization, repository, scope, actor)
     ingested = _ingest(
@@ -586,6 +670,7 @@ def test_evaluator_scope_is_actor_sealed_and_check_evidence_must_resolve() -> No
         pull_request_number=31,
     ).exists()
 
+    evaluator = FakeEvaluator(FakeScenario.SUCCESS_NO_FINDINGS)
     started = start_assurance(
         actor=actor,
         pull_request_revision_id=ingested.revision.id,
@@ -600,6 +685,7 @@ def test_evaluator_scope_is_actor_sealed_and_check_evidence_must_resolve() -> No
                 "evidence_ids": [],
             }
         ],
+        evaluator_version=evaluator.version,
     )
     second_user = User.objects.create(
         email=f"other-{uuid.uuid4()}@example.test",
@@ -619,29 +705,28 @@ def test_evaluator_scope_is_actor_sealed_and_check_evidence_must_resolve() -> No
         source_ip_hash="b" * 64,
     )
 
-    assert (
-        claim_evaluator_task(
-            actor=second_actor,
-            repository_id=repository.id,
-            claimant="other-review-agent",
-        )
-        is None
-    )
     claim = claim_evaluator_task(
-        actor=actor,
+        actor=second_actor,
         repository_id=repository.id,
-        claimant="sealed-review-agent",
+        claimant="other-review-agent",
     )
     assert claim is not None
-    result = FakeEvaluator(FakeScenario.SUCCESS_NO_FINDINGS).evaluate(claim.request)
-    with pytest.raises(ResourceNotFoundError):
+    result = evaluator.evaluate(claim.request)
+    with pytest.raises(LeaseConflictError, match="invalid or expired"):
         submit_evaluator_result(
-            actor=second_actor,
+            actor=actor,
             task_id=started.evaluator_task.id,
-            claimant="sealed-review-agent",
+            claimant="other-review-agent",
             claim_token=claim.claim_token,
             result=result,
         )
+    submit_evaluator_result(
+        actor=second_actor,
+        task_id=started.evaluator_task.id,
+        claimant="other-review-agent",
+        claim_token=claim.claim_token,
+        result=result,
+    )
 
 
 @pytest.mark.integration
@@ -727,15 +812,16 @@ def test_inflight_run_ignores_later_evidence_mapping_for_same_head() -> None:
     )
     assert any(mapping.assessment == "GAP" for mapping in later.mappings)
 
+    reviewer = _reviewer_actor(organization, label="evidence-reviewer")
     claim = claim_evaluator_task(
-        actor=actor,
+        actor=reviewer,
         repository_id=repository.id,
         claimant="exact-evidence-review-agent",
     )
     assert claim is not None
     result = evaluator.evaluate(claim.request)
     completed = submit_evaluator_result(
-        actor=actor,
+        actor=reviewer,
         task_id=started.evaluator_task.id,
         claimant="exact-evidence-review-agent",
         claim_token=claim.claim_token,
@@ -743,6 +829,230 @@ def test_inflight_run_ignores_later_evidence_mapping_for_same_head() -> None:
     )
 
     assert "EVIDENCE_GAP_TESTS_PASS" not in completed.readiness.reason_codes
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_initiator_is_not_a_reviewer_and_persisted_identities_are_immutable() -> None:
+    organization, repository, scope, initiator = _tenant()
+    policy_version_id = _policy(organization, repository, scope, initiator)
+    ingested = _ingest(
+        actor=initiator,
+        repository=repository,
+        scope=scope,
+        number=47,
+        head="9" * 40,
+    )
+    started = start_assurance(
+        actor=initiator,
+        pull_request_revision_id=ingested.revision.id,
+        policy_version_ids=[policy_version_id],
+        reference_time=REFERENCE_TIME,
+        deterministic_checks=_passing_checks(),
+    )
+    assert started.run.initiated_by_actor_type == initiator.actor_type
+    assert started.run.initiated_by_actor_id == initiator.actor_id
+    assert started.run.initiated_by_credential_id is None
+    assert (
+        claim_evaluator_task(
+            actor=initiator,
+            repository_id=repository.id,
+            claimant="same-person-different-label",
+        )
+        is None
+    )
+
+    reviewer = _reviewer_actor(organization, label="identity-reviewer")
+    claim = claim_evaluator_task(
+        actor=reviewer,
+        repository_id=repository.id,
+        claimant="provider-display-label",
+    )
+    assert claim is not None
+    claim.task.refresh_from_db()
+    attempt = EvaluatorAttempt.objects.get(
+        evaluator_task=claim.task,
+        event="CLAIMED",
+    )
+    assert claim.task.claimant == "provider-display-label"
+    assert claim.task.claimed_by_actor_type == reviewer.actor_type
+    assert claim.task.claimed_by_actor_id == reviewer.actor_id
+    assert claim.task.claimed_by_credential_id is None
+    assert attempt.claimant == "provider-display-label"
+    assert attempt.claimed_by_actor_type == reviewer.actor_type
+    assert attempt.claimed_by_actor_id == reviewer.actor_id
+    assert attempt.claimed_by_credential_id is None
+
+    with pytest.raises(DatabaseError, match="initiator identity is immutable"):
+        with transaction.atomic():
+            AssuranceRun.objects.filter(id=started.run.id).update(
+                initiated_by_actor_id=str(uuid.uuid4())
+            )
+    with pytest.raises(DatabaseError, match="claim identity cannot be switched"):
+        with transaction.atomic():
+            EvaluatorTask.objects.filter(id=claim.task.id).update(
+                claimed_by_actor_id=str(uuid.uuid4())
+            )
+    with pytest.raises(DatabaseError, match="immutable"):
+        with transaction.atomic():
+            EvaluatorAttempt.objects.filter(id=attempt.id).update(
+                claimed_by_actor_id=str(uuid.uuid4())
+            )
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_submit_rejects_same_service_actor_using_a_different_credential() -> None:
+    organization, repository, scope, initiator = _tenant()
+    policy_version_id = _policy(organization, repository, scope, initiator)
+    ingested = _ingest(
+        actor=initiator,
+        repository=repository,
+        scope=scope,
+        number=53,
+        head="6" * 40,
+    )
+    evaluator = FakeEvaluator(FakeScenario.SUCCESS_NO_FINDINGS)
+    started = start_assurance(
+        actor=initiator,
+        pull_request_revision_id=ingested.revision.id,
+        policy_version_ids=[policy_version_id],
+        reference_time=REFERENCE_TIME,
+        deterministic_checks=_passing_checks(),
+        evaluator_version=evaluator.version,
+    )
+    service, credentials = _service_reviewer_credentials(
+        organization,
+        repository,
+        scope,
+        count=2,
+    )
+    first_token, first_actor = credentials[0]
+    _second_token, second_actor = credentials[1]
+    claim = claim_evaluator_task(
+        actor=first_actor,
+        repository_id=repository.id,
+        claimant="same-provider-label",
+    )
+    assert claim is not None
+    assert claim.task.claimed_by_actor_id == str(service.id)
+    assert claim.task.claimed_by_credential_id == first_token.id
+    claim_audit = AuditEvent.objects.get(
+        organization=organization,
+        target_type="evaluatortask",
+        target_id=claim.task.id,
+        to_state=EvaluatorTask.State.CLAIMED,
+    )
+    assert claim_audit.actor_id == str(service.id)
+    assert claim_audit.credential_id == first_token.id
+    assert claim_audit.metadata == {"claimant_label": "same-provider-label"}
+    assert claim.claim_token not in str(claim_audit.metadata)
+    result = evaluator.evaluate(claim.request)
+
+    with pytest.raises(LeaseConflictError, match="invalid or expired"):
+        submit_evaluator_result(
+            actor=second_actor,
+            task_id=started.evaluator_task.id,
+            claimant="same-provider-label",
+            claim_token=claim.claim_token,
+            result=result,
+        )
+    completed = submit_evaluator_result(
+        actor=first_actor,
+        task_id=started.evaluator_task.id,
+        claimant="same-provider-label",
+        claim_token=claim.claim_token,
+        result=result,
+    )
+    assert completed.run.state == AssuranceRun.State.COMPLETED
+    assert set(
+        EvaluatorAttempt.objects.filter(evaluator_task=claim.task).values_list(
+            "claimed_by_credential_id", flat=True
+        )
+    ) == {first_token.id}
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_revoked_and_expired_reviewer_credentials_cannot_submit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    organization, repository, scope, initiator = _tenant()
+    policy_version_id = _policy(organization, repository, scope, initiator)
+    evaluator = FakeEvaluator(FakeScenario.SUCCESS_NO_FINDINGS)
+    _service, credentials = _service_reviewer_credentials(
+        organization,
+        repository,
+        scope,
+        count=2,
+    )
+
+    first = _ingest(
+        actor=initiator,
+        repository=repository,
+        scope=scope,
+        number=59,
+        head="7" * 40,
+    )
+    first_started = start_assurance(
+        actor=initiator,
+        pull_request_revision_id=first.revision.id,
+        policy_version_ids=[policy_version_id],
+        reference_time=REFERENCE_TIME,
+        deterministic_checks=_passing_checks(),
+        evaluator_version=evaluator.version,
+    )
+    revoked_token, revoked_actor = credentials[0]
+    revoked_claim = claim_evaluator_task(
+        actor=revoked_actor,
+        repository_id=repository.id,
+        claimant="external-provider",
+    )
+    assert revoked_claim is not None
+    RepositoryAccessToken.objects.filter(id=revoked_token.id).update(revoked_at=timezone.now())
+    with pytest.raises(AuthenticationError):
+        submit_evaluator_result(
+            actor=revoked_actor,
+            task_id=first_started.evaluator_task.id,
+            claimant="external-provider",
+            claim_token=revoked_claim.claim_token,
+            result=evaluator.evaluate(revoked_claim.request),
+        )
+
+    second = _ingest(
+        actor=initiator,
+        repository=repository,
+        scope=scope,
+        number=61,
+        head="0" * 40,
+    )
+    second_started = start_assurance(
+        actor=initiator,
+        pull_request_revision_id=second.revision.id,
+        policy_version_ids=[policy_version_id],
+        reference_time=REFERENCE_TIME,
+        deterministic_checks=_passing_checks(),
+        evaluator_version=evaluator.version,
+    )
+    expired_token, expired_actor = credentials[1]
+    expired_claim = claim_evaluator_task(
+        actor=expired_actor,
+        repository_id=repository.id,
+        claimant="external-provider",
+    )
+    assert expired_claim is not None
+    monkeypatch.setattr(
+        "anva.core.services.authorization.timezone.now",
+        lambda: expired_token.expires_at + timedelta(seconds=1),
+    )
+    with pytest.raises(AuthenticationError):
+        submit_evaluator_result(
+            actor=expired_actor,
+            task_id=second_started.evaluator_task.id,
+            claimant="external-provider",
+            claim_token=expired_claim.claim_token,
+            result=evaluator.evaluate(expired_claim.request),
+        )
 
 
 @pytest.mark.integration
@@ -776,8 +1086,9 @@ def test_maximum_evaluator_shape_completes_with_bounded_replayable_report() -> N
         prompt_version="assurance-prompt-v1",
         trigger_key="8" * 64,
     )
+    reviewer = _reviewer_actor(organization, label="maximum-shape-reviewer")
     claim = claim_evaluator_task(
-        actor=actor,
+        actor=reviewer,
         repository_id=repository.id,
         claimant="maximum-shape-review-agent",
     )
@@ -810,14 +1121,14 @@ def test_maximum_evaluator_shape_completes_with_bounded_replayable_report() -> N
     validate_payload("evaluator-result", result)
 
     completed = submit_evaluator_result(
-        actor=actor,
+        actor=reviewer,
         task_id=claim.task.id,
         claimant="maximum-shape-review-agent",
         claim_token=claim.claim_token,
         result=result,
     )
     replayed = submit_evaluator_result(
-        actor=actor,
+        actor=reviewer,
         task_id=claim.task.id,
         claimant="maximum-shape-review-agent",
         claim_token=claim.claim_token,

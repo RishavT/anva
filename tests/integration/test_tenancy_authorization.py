@@ -167,10 +167,14 @@ def assert_hidden(operation: Callable[[], object]) -> None:
         (Role.Code.ORG_ADMIN, Action.TOKEN_MANAGE, True),
         (Role.Code.KNOWLEDGE_ADMIN, Action.SCOPE_MANAGE, True),
         (Role.Code.TECHNICAL_OWNER, Action.ASSURANCE_EXECUTE, True),
+        (Role.Code.TECHNICAL_OWNER, Action.ASSURANCE_REVIEW, False),
         (Role.Code.PRODUCT_OWNER, Action.KNOWLEDGE_REVIEW, True),
         (Role.Code.DEVELOPER, Action.ASSURANCE_EXECUTE, True),
+        (Role.Code.DEVELOPER, Action.ASSURANCE_REVIEW, False),
         (Role.Code.REVIEWER, Action.KNOWLEDGE_REVIEW, True),
+        (Role.Code.REVIEWER, Action.ASSURANCE_REVIEW, True),
         (Role.Code.SECURITY_REVIEWER, Action.FINDING_DISMISS, True),
+        (Role.Code.SECURITY_REVIEWER, Action.ASSURANCE_REVIEW, True),
         (Role.Code.VIEWER, Action.SEARCH, True),
         (Role.Code.VIEWER, Action.POLICY_VIEW, True),
         (Role.Code.VIEWER, Action.EVIDENCE_VIEW, True),
@@ -985,6 +989,8 @@ def test_unauthorized_actor_cannot_review_dismiss_or_override() -> None:
     )
     assurance = AssuranceRun.objects.create(
         organization=tenant.organization,
+        initiated_by_actor_type="SYSTEM",
+        initiated_by_actor_id="test-fixture",
         repository_external_id=tenant.repository.external_id,
         pull_request_number=17,
         head_commit="a" * 40,
@@ -1103,6 +1109,8 @@ def test_assurance_transition_reauthorizes_every_attached_artifact(
     )
     run = AssuranceRun.objects.create(
         organization=tenant.organization,
+        initiated_by_actor_type="SYSTEM",
+        initiated_by_actor_id="test-fixture",
         repository_external_id=tenant.repository.external_id,
         pull_request_number=91,
         head_commit="d" * 40,

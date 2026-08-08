@@ -25,7 +25,10 @@ the previous current result.
 
 ## Manual evaluator
 
-Claim into a fresh, context-limited review process:
+Claim into a fresh, context-limited review process with a separate `assurance.review` principal.
+The initiating actor cannot claim its own run. Anva rechecks the reviewer against every sealed
+source boundary, then persists the authenticated actor and exact repository credential on the task
+and append-only attempt. `--claimant` is only an audited provider/display label; it is not identity.
 
 ```bash
 docker compose --profile tools run --rm \
@@ -45,6 +48,11 @@ docker compose --profile tools run --rm \
   -e ANVA_TOKEN -e ANVA_EVALUATOR_CLAIM_TOKEN cli anva evaluator submit \
   <task-uuid> --claimant review-agent-7 --result /fixtures/evaluator-result.json
 ```
+
+Submit with the same still-active `ANVA_TOKEN` credential that performed the claim. A token for the
+same service identity is not interchangeable: rotation, revocation, expiry, or switching to another
+credential requires the lease to expire and a new claim attempt. Exact identical-result replay is
+available only to that bound actor and credential.
 
 ## Inspect and recover
 

@@ -98,6 +98,8 @@ def test_cross_organization_foreign_keys_fail_in_postgresql() -> None:
         with transaction.atomic():
             AssuranceRun.objects.create(
                 organization=first,
+                initiated_by_actor_type="SYSTEM",
+                initiated_by_actor_id="test-fixture",
                 repository_external_id="github:first/repository",
                 pull_request_number=1,
                 head_commit="a" * 40,

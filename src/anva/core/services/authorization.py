@@ -49,6 +49,7 @@ class Action(StrEnum):
     KNOWLEDGE_REVIEW = "knowledge.review"
     ASSURANCE_VIEW = "assurance.view"
     ASSURANCE_EXECUTE = "assurance.execute"
+    ASSURANCE_REVIEW = "assurance.review"
     AUDIT_VIEW = "audit.view"
     FINDING_DISMISS = "finding.dismiss"
     POLICY_OVERRIDE = "policy.override"
@@ -141,12 +142,14 @@ ROLE_ACTIONS: dict[str, frozenset[Action]] = {
             Action.KNOWLEDGE_REVIEW,
             Action.WORK_APPROVE,
             Action.CANVAS_MANAGE,
+            Action.ASSURANCE_REVIEW,
         }
     ),
     Role.Code.SECURITY_REVIEWER: VIEW_ACTIONS
     | frozenset(
         {
             Action.AUDIT_VIEW,
+            Action.ASSURANCE_REVIEW,
             Action.KNOWLEDGE_PROPOSE,
             Action.FINDING_DISMISS,
             Action.POLICY_OVERRIDE,

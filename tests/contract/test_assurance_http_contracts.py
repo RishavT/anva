@@ -174,6 +174,7 @@ def test_manual_evaluator_claim_and_submit_http_adapters(client: Client) -> None
     claim = SimpleNamespace(
         task=SimpleNamespace(
             id=task_id,
+            claimant="fresh-agent",
             attempt_count=2,
             lease_expires_at=lease_expires,
         ),
@@ -236,6 +237,7 @@ def test_manual_evaluator_claim_and_submit_http_adapters(client: Client) -> None
     assert empty.json() == {"status": "EMPTY"}
     assert claimed.status_code == 200
     assert claimed.json()["task_id"] == str(task_id)
+    assert claimed.json()["claimant"] == "fresh-agent"
     assert claimed.json()["attempt"] == 2
     assert claimed.json()["lease_expires_at"] == lease_expires.isoformat()
     assert submitted.status_code == 201

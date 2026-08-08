@@ -314,6 +314,20 @@ def test_openapi_exposes_versioned_tenancy_and_authorization_boundaries() -> Non
     assert "readiness" not in properties
     assert "outcome" not in properties
 
+    claim_operation = cast(
+        dict[str, object],
+        cast(
+            dict[str, object],
+            paths["/repositories/{repository_id}/evaluator-tasks/claim"],
+        )["post"],
+    )
+    submit_operation = cast(
+        dict[str, object],
+        cast(dict[str, object], paths["/evaluator-tasks/{resource_id}/submit"])["post"],
+    )
+    assert "run initiator is ineligible" in str(claim_operation["description"])
+    assert "same active authenticated actor and credential" in str(submit_operation["description"])
+
     simulation = cast(
         dict[str, object],
         cast(dict[str, object], paths["/policies/simulate"])["post"],

@@ -4988,6 +4988,7 @@
     },
     "/evaluator-tasks/{resource_id}/submit": {
       "post": {
+        "description": "Requires the same active authenticated actor and credential that claimed the live lease.",
         "operationId": "submitManualEvaluatorResult",
         "parameters": [
           {
@@ -5015,6 +5016,7 @@
                     "type": "string"
                   },
                   "claimant": {
+                    "description": "Audit-only label; it does not replace the exact authenticated actor and credential used to claim the task.",
                     "maxLength": 200,
                     "minLength": 1,
                     "type": "string"
@@ -7929,6 +7931,7 @@
     },
     "/repositories/{repository_id}/evaluator-tasks/claim": {
       "post": {
+        "description": "Requires assurance.review. The run initiator is ineligible; source-scope authorization is rechecked before returning the request.",
         "operationId": "claimManualEvaluatorTask",
         "parameters": [
           {
@@ -7951,6 +7954,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "claimant": {
+                    "description": "Audit-only evaluator/provider label; authenticated actor and credential identity own the claim.",
                     "maxLength": 200,
                     "minLength": 1,
                     "type": "string"

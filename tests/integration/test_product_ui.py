@@ -495,6 +495,8 @@ def test_assurance_detail_and_audit_filters_present_exact_bounded_evidence() -> 
     )
     run = AssuranceRun.objects.create(
         organization=repository.organization,
+        initiated_by_actor_type="SYSTEM",
+        initiated_by_actor_id="test-fixture",
         repository=repository,
         repository_external_id=repository.external_id,
         pull_request_number=pull_request.number,
@@ -728,6 +730,8 @@ def test_product_pages_filter_hidden_revoked_source_packet_proposal_audit_and_ev
     )
     hidden_run = AssuranceRun.objects.create(
         organization=organization,
+        initiated_by_actor_type="SYSTEM",
+        initiated_by_actor_id="test-fixture",
         repository=repository,
         repository_external_id=repository.external_id,
         pull_request_number=77,
@@ -737,6 +741,8 @@ def test_product_pages_filter_hidden_revoked_source_packet_proposal_audit_and_ev
     )
     visible_run = AssuranceRun.objects.create(
         organization=organization,
+        initiated_by_actor_type="SYSTEM",
+        initiated_by_actor_id="test-fixture",
         repository=repository,
         repository_external_id=repository.external_id,
         pull_request_number=78,

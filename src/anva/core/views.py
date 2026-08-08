@@ -1921,6 +1921,7 @@ def evaluator_task_claim(request: HttpRequest, repository_id: uuid.UUID) -> Json
     return JsonResponse(
         {
             "task_id": str(claim.task.id),
+            "claimant": claim.task.claimant,
             "attempt": claim.task.attempt_count,
             "lease_expires_at": claim.task.lease_expires_at.isoformat()
             if claim.task.lease_expires_at

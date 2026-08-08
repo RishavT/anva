@@ -172,14 +172,35 @@ def _completed_bound_run() -> tuple[AssuranceRun, FakeGitHubClient]:
         prompt_version="github-publication-test",
         trigger_key="7" * 64,
     )
+    reviewer_role = Role.objects.create(
+        organization=organization,
+        code=Role.Code.REVIEWER,
+        name="Independent reviewer",
+    )
+    reviewer_user = User.objects.create(
+        email=f"github-reviewer-{uuid.uuid4()}@example.test",
+        display_name="Independent publication reviewer",
+    )
+    Membership.objects.create(
+        organization=organization,
+        user=reviewer_user,
+        role=reviewer_role,
+    )
+    reviewer = ActorContext(
+        organization_id=organization.id,
+        actor_type="USER",
+        actor_id=str(reviewer_user.id),
+        authorization_path="test-independent-reviewer",
+        request_id=uuid.uuid4(),
+    )
     claim = claim_evaluator_task(
-        actor=actor,
+        actor=reviewer,
         repository_id=repository.id,
         claimant="independent-reviewer",
     )
     assert claim is not None
     completion = submit_evaluator_result(
-        actor=actor,
+        actor=reviewer,
         task_id=started.evaluator_task.id,
         claimant="independent-reviewer",
         claim_token=claim.claim_token,
