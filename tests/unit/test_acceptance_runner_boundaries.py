@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 from collections.abc import Mapping
 from copy import deepcopy
@@ -18,7 +19,15 @@ from anva.acceptance.client import APIResponse
 from anva.acceptance.corpus import canonicalize_corpus
 from anva.acceptance.export import AcceptanceExportError
 from anva.acceptance.provenance import REQUIRED_LAUNCH_SERVICES, package_sha256
-from anva.acceptance.runner import AcceptanceRunner, AcceptanceRunnerError, RunnerConfig
+from anva.acceptance.runner import (
+    AcceptanceRunner,
+    AcceptanceRunnerError,
+    RunnerConfig,
+    _read_secret_handoff,
+    _recover_secret_handoff,
+    _secret_handoff_pending_path,
+    _write_secret_handoff,
+)
 from anva.acceptance.state import ResumeState, load_state
 from anva.contracts.catalog import EXAMPLES
 
@@ -370,6 +379,84 @@ def _runner(
 
 
 @pytest.mark.unit
+def test_secret_handoff_publication_is_atomic_and_restart_reconciles_pending(
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "handoff"
+    parent.mkdir(mode=0o700)
+    path = parent / "review.json"
+    pending = _secret_handoff_pending_path(path)
+    payload: dict[str, object] = {"schema_version": 1, "opaque": "secret-material"}
+
+    pending.write_bytes(b'{"schema_version":')
+    pending.chmod(0o600)
+    assert _recover_secret_handoff(path) is None
+    assert not pending.exists()
+
+    with patch("anva.acceptance.runner.os.link", side_effect=RuntimeError("pre-publish")):
+        with pytest.raises(RuntimeError, match="pre-publish"):
+            _write_secret_handoff(path, payload)
+    assert not path.exists()
+    assert not pending.exists()
+
+    original_unlink = Path.unlink
+
+    def crash_after_publish(target: Path, missing_ok: bool = False) -> None:
+        if target == pending and path.exists():
+            raise RuntimeError("post-publish")
+        original_unlink(target, missing_ok=missing_ok)
+
+    with patch.object(Path, "unlink", crash_after_publish):
+        with pytest.raises(RuntimeError, match="post-publish"):
+            _write_secret_handoff(path, payload)
+    assert path.stat().st_ino == pending.stat().st_ino
+    assert path.stat().st_nlink == 2
+
+    assert _read_secret_handoff(path) == payload
+    assert path.stat().st_nlink == 1
+    assert not pending.exists()
+
+
+@pytest.mark.unit
+def test_secret_handoff_recovery_rejects_links_and_handles_owned_final_files(
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "handoff"
+    parent.mkdir(mode=0o700)
+    path = parent / "review.json"
+    pending = _secret_handoff_pending_path(path)
+    payload: dict[str, object] = {"schema_version": 1, "opaque": "secret-material"}
+
+    target = parent / "target"
+    target.write_text("outside", encoding="utf-8")
+    pending.symlink_to(target)
+    with pytest.raises(AcceptanceRunnerError, match="pending path is unsafe"):
+        _recover_secret_handoff(path)
+    assert pending.is_symlink()
+    pending.unlink()
+
+    target.chmod(0o600)
+    os.link(target, path)
+    with pytest.raises(AcceptanceRunnerError, match="unsafe"):
+        _recover_secret_handoff(path)
+    assert path.exists() and target.exists()
+    path.unlink()
+    target.unlink()
+
+    _write_secret_handoff(path, payload)
+    original = path.read_bytes()
+    with pytest.raises(AcceptanceRunnerError, match="must not already exist"):
+        _write_secret_handoff(path, {"replacement": True})
+    assert path.read_bytes() == original
+    path.unlink()
+
+    path.write_bytes(b'{"schema_version":')
+    path.chmod(0o600)
+    assert _recover_secret_handoff(path) is None
+    assert not path.exists()
+
+
+@pytest.mark.unit
 def test_runner_rejects_unpinned_product_or_unbounded_sync_before_work(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -470,15 +557,22 @@ def test_bootstrap_crash_after_server_commit_recovers_exact_request(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runner, product = _runner(tmp_path, monkeypatch)
+
+    def leave_partial_handoff(path: Path, _payload: dict[str, object]) -> None:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.write_bytes(b'{"schema_version":')
+        path.chmod(0o600)
+        raise RuntimeError("injected crash after bootstrap commit")
+
     with patch(
         "anva.acceptance.runner._write_secret_handoff",
-        side_effect=RuntimeError("injected crash after bootstrap commit"),
+        side_effect=leave_partial_handoff,
     ):
         with pytest.raises(RuntimeError, match="injected crash"):
             runner.start(bootstrap_secret="bootstrap-material", token=None)
     assert load_state(runner.config.state_path).status == "BOOTSTRAP_PREPARED"
     assert runner.config.credential_output is not None
-    assert not runner.config.credential_output.exists()
+    assert runner.config.credential_output.is_file()
 
     resumed = AcceptanceRunner(runner.config).start(
         bootstrap_secret="bootstrap-material", token=None
@@ -522,15 +616,22 @@ def test_review_and_finalize_crash_boundaries_are_restart_safe(
     runner.start(bootstrap_secret="bootstrap-material", token=None)
     handoff_path = tmp_path / "handoff" / "review.json"
 
+    def leave_partial_handoff(path: Path, _payload: dict[str, object]) -> None:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.write_bytes(b'{"schema_version":')
+        path.chmod(0o600)
+        raise RuntimeError("injected crash after claim")
+
     with patch(
         "anva.acceptance.runner._write_secret_handoff",
-        side_effect=RuntimeError("injected crash after claim"),
+        side_effect=leave_partial_handoff,
     ):
         with pytest.raises(RuntimeError, match="injected crash"):
             runner.create_review_handoff(
                 reviewer_token="reviewer-token-material", output=handoff_path
             )
     assert load_state(runner.config.state_path).status == "REVIEW_CLAIMING"
+    assert handoff_path.is_file()
     original_save = AcceptanceRunner._save
     handoff_state_crashed = False
 

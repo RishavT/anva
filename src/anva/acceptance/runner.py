@@ -138,41 +138,163 @@ def _normalized_source_matches(value: object, expected_text: str) -> tuple[bool,
     return _contains_exact_text(normalized, expected_text), content_hash
 
 
-def _write_secret_handoff(path: Path, payload: dict[str, object]) -> None:
-    if path.exists() or path.is_symlink():
-        raise AcceptanceRunnerError("Secret handoff path must not already exist")
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if path.parent.is_symlink() or stat.S_IMODE(path.parent.stat().st_mode) & 0o077:
+def _secret_handoff_pending_path(path: Path) -> Path:
+    return path.with_name(f".{path.name}.anva-pending")
+
+
+def _secret_handoff_parent(path: Path, *, create: bool) -> os.stat_result:
+    if create:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        parent = path.parent.lstat()
+    except FileNotFoundError as error:
+        raise AcceptanceRunnerError("Secret handoff directory is unavailable") from error
+    if (
+        not stat.S_ISDIR(parent.st_mode)
+        or parent.st_uid != os.geteuid()
+        or stat.S_IMODE(parent.st_mode) & 0o077
+    ):
         raise AcceptanceRunnerError("Secret handoff directory is unsafe")
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    return parent
+
+
+def _fsync_secret_handoff_parent(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path.parent, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _secure_owned_handoff_file(info: os.stat_result, *, links: frozenset[int]) -> bool:
+    return (
+        stat.S_ISREG(info.st_mode)
+        and info.st_uid == os.geteuid()
+        and stat.S_IMODE(info.st_mode) == 0o600
+        and info.st_nlink in links
+    )
+
+
+def _cleanup_secret_handoff_pending(path: Path) -> None:
+    pending = _secret_handoff_pending_path(path)
+    try:
+        pending_info = pending.lstat()
+    except FileNotFoundError:
+        return
+    if not _secure_owned_handoff_file(pending_info, links=frozenset({1, 2})):
+        raise AcceptanceRunnerError("Secret handoff pending path is unsafe")
+    try:
+        final_info = path.lstat()
+    except FileNotFoundError:
+        final_info = None
+    if pending_info.st_nlink == 2:
+        if (
+            final_info is None
+            or not _secure_owned_handoff_file(final_info, links=frozenset({2}))
+            or (pending_info.st_dev, pending_info.st_ino) != (final_info.st_dev, final_info.st_ino)
+        ):
+            raise AcceptanceRunnerError("Secret handoff pending hard link is unsafe")
+    pending.unlink()
+    _fsync_secret_handoff_parent(path)
+
+
+def _discard_owned_incomplete_handoff(path: Path, info: os.stat_result) -> None:
+    if not _secure_owned_handoff_file(info, links=frozenset({1})):
+        raise AcceptanceRunnerError("External-review handoff is unsafe")
+    path.unlink()
+    _fsync_secret_handoff_parent(path)
+
+
+def _load_secret_handoff(path: Path, *, recover_incomplete: bool) -> dict[str, object] | None:
+    _secret_handoff_parent(path, create=False)
+    _cleanup_secret_handoff_pending(path)
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    if not _secure_owned_handoff_file(info, links=frozenset({1})):
+        raise AcceptanceRunnerError("External-review handoff is unsafe")
+    if info.st_size > 1_500_000:
+        if recover_incomplete:
+            _discard_owned_incomplete_handoff(path, info)
+            return None
+        raise AcceptanceRunnerError("External-review handoff exceeds its bound")
+    raw = path.read_bytes()
+    try:
+        value = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        if recover_incomplete:
+            _discard_owned_incomplete_handoff(path, info)
+            return None
+        raise AcceptanceRunnerError("External-review handoff is invalid") from error
+    if not isinstance(value, dict):
+        if recover_incomplete:
+            _discard_owned_incomplete_handoff(path, info)
+            return None
+        raise AcceptanceRunnerError("External-review handoff is invalid")
+    return cast(dict[str, object], value)
+
+
+def _recover_secret_handoff(path: Path) -> dict[str, object] | None:
+    try:
+        path.parent.lstat()
+    except FileNotFoundError:
+        return None
+    return _load_secret_handoff(path, recover_incomplete=True)
+
+
+def _write_secret_handoff(path: Path, payload: dict[str, object]) -> None:
+    _secret_handoff_parent(path, create=True)
+    _cleanup_secret_handoff_pending(path)
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        raise AcceptanceRunnerError("Secret handoff path must not already exist")
+    pending = _secret_handoff_pending_path(path)
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    descriptor = os.open(pending, flags, 0o600)
+    published = False
     try:
         with os.fdopen(descriptor, "wb") as stream:
             stream.write((json.dumps(payload, sort_keys=True) + "\n").encode())
             stream.flush()
+            os.fchmod(stream.fileno(), 0o600)
             os.fsync(stream.fileno())
-        path.chmod(0o600)
+        info = pending.lstat()
+        if not _secure_owned_handoff_file(info, links=frozenset({1})):
+            raise AcceptanceRunnerError("Secret handoff pending path is unsafe")
+        os.link(pending, path, follow_symlinks=False)
+        published = True
+        _fsync_secret_handoff_parent(path)
+        pending.unlink()
+        _fsync_secret_handoff_parent(path)
     except BaseException:
-        path.unlink(missing_ok=True)
+        if not published:
+            try:
+                info = pending.lstat()
+            except FileNotFoundError:
+                pass
+            else:
+                if _secure_owned_handoff_file(info, links=frozenset({1})):
+                    pending.unlink()
+                    _fsync_secret_handoff_parent(path)
         raise
 
 
 def _read_secret_handoff(path: Path) -> dict[str, object]:
-    if (
-        path.parent.is_symlink()
-        or not path.parent.is_dir()
-        or stat.S_IMODE(path.parent.stat().st_mode) & 0o077
-        or path.is_symlink()
-        or not path.is_file()
-        or stat.S_IMODE(path.stat().st_mode) & 0o077
-    ):
-        raise AcceptanceRunnerError("External-review handoff is unsafe")
-    raw = path.read_bytes()
-    if len(raw) > 1_500_000:
-        raise AcceptanceRunnerError("External-review handoff exceeds its bound")
-    value = json.loads(raw)
-    if not isinstance(value, dict):
-        raise AcceptanceRunnerError("External-review handoff is invalid")
-    return cast(dict[str, object], value)
+    value = _load_secret_handoff(path, recover_incomplete=False)
+    if value is None:
+        raise AcceptanceRunnerError("External-review handoff is unavailable")
+    return value
 
 
 class AcceptanceRunner:
@@ -467,9 +589,11 @@ class AcceptanceRunner:
 
     def _reconcile_bootstrap_handoff(self, state: ResumeState) -> tuple[PublicAPI, str] | None:
         path = self.config.credential_output
-        if path is None or not path.exists():
+        if path is None:
             return None
-        handoff = _read_secret_handoff(path)
+        handoff = _recover_secret_handoff(path)
+        if handoff is None:
+            return None
         if (
             handoff.get("schema_version") != 1
             or handoff.get("run_id") != state.run_id
@@ -955,14 +1079,14 @@ class AcceptanceRunner:
             return state
         if state.status not in {"AWAITING_EXTERNAL_REVIEW", "REVIEW_CLAIMING"}:
             raise AcceptanceRunnerError("Acceptance run is not awaiting external review")
-        if output.exists() or output.is_symlink():
-            handoff = _read_secret_handoff(output)
+        recovered_handoff = _recover_secret_handoff(output)
+        if recovered_handoff is not None:
             if (
-                handoff.get("run_id") != state.run_id
-                or handoff.get("task_id") != state.identities["evaluator_task_id"]
+                recovered_handoff.get("run_id") != state.run_id
+                or recovered_handoff.get("task_id") != state.identities["evaluator_task_id"]
             ):
                 raise AcceptanceRunnerError("External-review handoff identity is invalid")
-            state.hashes["review_handoff_sha256"] = sha256_bytes(canonical_bytes(handoff))
+            state.hashes["review_handoff_sha256"] = sha256_bytes(canonical_bytes(recovered_handoff))
             state.status = "REVIEW_CLAIMED"
             self._save(state)
             return state
