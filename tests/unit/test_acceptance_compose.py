@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import shutil
+import subprocess
 from pathlib import Path
 from typing import cast
 
@@ -78,6 +81,8 @@ def test_product_and_runner_receive_only_read_only_canonical_volume() -> None:
     assert runner["volumes"] == ["acceptance-canonical:/app/acceptance/canonical:ro"]
     assert runner["read_only"] is True
     assert runner["cap_drop"] == ["ALL"]
+    assert runner["user"] == "10001:10001"
+    assert runner["network_mode"] == "none"
     assert "/acceptance/raw" not in str(runner)
     command = cast(list[str], runner["command"])
     assert command == [
@@ -152,6 +157,8 @@ def test_product_acceptance_phases_have_disjoint_hardened_mounts() -> None:
         assert service["mem_limit"] == "512m"
         assert service["memswap_limit"] == "512m"
         assert service["pids_limit"] == 96
+        assert service["user"] == "10001:10001"
+        assert service["networks"] == ["acceptance-edge"]
         rendered = str(service).casefold()
         assert "/acceptance/raw" not in rendered
         assert "docker.sock" not in rendered
@@ -201,3 +208,47 @@ def test_product_acceptance_make_targets_use_scoped_compose_services() -> None:
         body = makefile.split(f"\n{target}:\n", 1)[1].split("\n\n", 1)[0]
         assert f"run --rm --no-deps {service}" in body
         assert "prune" not in body
+        assert 'test -n "$(ANVA_REVISION)"' in body
+        assert 'test -n "$(ANVA_IMAGE_SHA256)"' in body
+
+
+@pytest.mark.unit
+def test_resolved_acceptance_compose_enforces_edge_backend_separation() -> None:
+    docker = shutil.which("docker")
+    if docker is None:
+        pytest.skip("Docker CLI is unavailable for resolved Compose validation")
+    completed = subprocess.run(  # noqa: S603 - executable resolved by shutil.which
+        [
+            docker,
+            "compose",
+            "-f",
+            "compose.yaml",
+            "-f",
+            "compose.acceptance.yaml",
+            "--profile",
+            "acceptance",
+            "config",
+            "--format",
+            "json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    services = cast(dict[str, dict[str, object]], json.loads(completed.stdout)["services"])
+    phases = (
+        "acceptance-product-start",
+        "acceptance-review-request",
+        "acceptance-review-submit",
+        "acceptance-product-finalize",
+    )
+    for name in phases:
+        assert services[name]["user"] == "10001:10001"
+        assert set(cast(dict[str, object], services[name]["networks"])) == {"acceptance-edge"}
+    for name in ("postgres", "minio", "worker", "migrate"):
+        assert set(cast(dict[str, object], services[name]["networks"])) == {"acceptance-backend"}
+    for name in ("api", "mcp"):
+        assert set(cast(dict[str, object], services[name]["networks"])) == {
+            "acceptance-backend",
+            "acceptance-edge",
+        }

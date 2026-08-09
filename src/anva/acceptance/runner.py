@@ -17,7 +17,13 @@ from typing import cast
 from anva import __version__
 from anva.acceptance.client import MCPBoundary, PublicAPI, StreamableHTTPMCP
 from anva.acceptance.corpus import CANONICAL_MANIFEST_NAME, verify_canonical_corpus
-from anva.acceptance.export import canonical_bytes, seal_results, sha256_bytes
+from anva.acceptance.export import (
+    canonical_bytes,
+    seal_results,
+    sha256_bytes,
+    verify_sealed_results,
+)
+from anva.acceptance.provenance import AcceptanceProvenanceError, attest_build_provenance
 from anva.acceptance.state import ResumeState, load_state, save_state
 from anva.contracts.validation import validate_payload
 
@@ -41,6 +47,8 @@ class RunnerConfig:
     source_fingerprint: str
     canonical_manifest_sha256: str
     product_commit: str
+    product_image_sha256: str
+    build_provenance_path: Path = Path("/app/anva-build-provenance.json")
     credential_output: Path | None = None
     sync_timeout_seconds: int = 300
 
@@ -136,9 +144,22 @@ class AcceptanceRunner:
     def __init__(self, config: RunnerConfig) -> None:
         if COMMIT_PATTERN.fullmatch(config.product_commit) is None:
             raise AcceptanceRunnerError("Product commit must be exact 40-character lowercase hex")
+        if re.fullmatch(r"[a-f0-9]{64}", config.product_image_sha256) is None or not any(
+            character != "0" for character in config.product_image_sha256
+        ):
+            raise AcceptanceRunnerError("Product image must be pinned by a non-zero SHA-256 digest")
         if not 1 <= config.sync_timeout_seconds <= 3_600:
             raise AcceptanceRunnerError("Source sync timeout is outside its bound")
         self.config = config
+        try:
+            provenance = attest_build_provenance(
+                config.build_provenance_path,
+                expected_commit=config.product_commit,
+                expected_image_sha256=config.product_image_sha256,
+            )
+        except AcceptanceProvenanceError as error:
+            raise AcceptanceRunnerError(str(error)) from error
+        self.product_package_sha256 = provenance["package_sha256"]
         self.corpus = verify_canonical_corpus(
             config.canonical_root,
             expected_manifest_sha256=config.manifest_sha256,
@@ -148,7 +169,115 @@ class AcceptanceRunner:
         manifest = _canonical_manifest(config.canonical_root)
         self.corpus_commit = _string(manifest, "source_commit")
         self.corpus_generated_at = _string(manifest, "generated_at")
+        files = manifest.get("files")
+        if not isinstance(files, list) or not files:
+            raise AcceptanceRunnerError("Canonical manifest has no semantic source inventory")
+        expected_sources: list[tuple[str, str]] = []
+        for item in files[:10]:
+            if not isinstance(item, dict):
+                raise AcceptanceRunnerError("Canonical semantic source inventory is invalid")
+            path = _string(cast(dict[str, object], item), "path")
+            digest = _string(cast(dict[str, object], item), "sha256")
+            if not path.startswith("payload/") or re.fullmatch(r"[a-f0-9]{64}", digest) is None:
+                raise AcceptanceRunnerError("Canonical semantic source inventory is invalid")
+            expected_sources.append((path.removeprefix("payload/"), digest))
+        self.expected_sources = tuple(expected_sources)
         self.namespace = uuid.uuid5(uuid.NAMESPACE_URL, self.corpus.source_fingerprint)
+
+    def _semantic_query(self) -> str:
+        fragments = ["organization goals products decisions systems requirements"]
+        for relative, _digest in self.expected_sources:
+            path = self.config.canonical_root / "payload" / relative
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as error:
+                raise AcceptanceRunnerError("Canonical semantic source is unreadable") from error
+            fragments.append(relative.replace("/", " "))
+            fragments.append(" ".join(text.split())[:240])
+        return " ".join(fragments)[:500]
+
+    def _validate_semantic_journey(
+        self,
+        state: ResumeState,
+        *,
+        search: dict[str, object],
+        context: dict[str, object],
+        canvas: dict[str, object],
+    ) -> None:
+        if set(search) != {"contract_version", "tool", "data", "next_cursor"} or (
+            search.get("contract_version") != "1" or search.get("tool") != "anva.search"
+        ):
+            raise AcceptanceRunnerError("MCP search contract envelope is invalid")
+        if set(context) != {"contract_version", "tool", "data"} or (
+            context.get("contract_version") != "1"
+            or context.get("tool") != "anva.get_context_packet"
+        ):
+            raise AcceptanceRunnerError("MCP context contract envelope is invalid")
+        search_data = search.get("data")
+        results = search_data.get("results") if isinstance(search_data, dict) else None
+        if not isinstance(results, list) or not results:
+            raise AcceptanceRunnerError("Canonical source was not retrievable through MCP search")
+        context_data = context.get("data")
+        packet = context_data.get("packet") if isinstance(context_data, dict) else None
+        items = packet.get("items") if isinstance(packet, dict) else None
+        if not isinstance(items, list) or not items:
+            raise AcceptanceRunnerError("Canonical source was absent from the context packet")
+        citations = [
+            citation
+            for item in items
+            if isinstance(item, dict)
+            for citation in cast(list[object], item.get("anva_sources", []))
+            if isinstance(citation, dict)
+        ]
+        for relative, digest in self.expected_sources:
+            search_match = any(
+                isinstance(item, dict)
+                and item.get("content_hash") == digest
+                and str(item.get("canonical_url", "")).endswith(relative)
+                for item in results
+            )
+            citation_match = any(
+                item.get("source_content_hash") == digest
+                and str(item.get("canonical_url", "")).endswith(relative)
+                and all(
+                    isinstance(item.get(key), str) and item.get(key)
+                    for key in (
+                        "source_location_id",
+                        "source_observation_id",
+                        "access_snapshot_id",
+                    )
+                )
+                for item in citations
+            )
+            if not search_match or not citation_match:
+                raise AcceptanceRunnerError(
+                    "Canonical source path, content hash, or citation was not preserved"
+                )
+        nodes = canvas.get("nodes")
+        edges = canvas.get("edges")
+        repositories = canvas.get("repositories")
+        counts = canvas.get("counts")
+        if (
+            canvas.get("schema_version") != "1"
+            or not isinstance(nodes, list)
+            or not nodes
+            or not isinstance(edges, list)
+            or not isinstance(repositories, list)
+            or not any(
+                isinstance(item, dict) and item.get("id") == state.identities["repository_id"]
+                for item in repositories
+            )
+            or not isinstance(counts, dict)
+            or counts != {"nodes": len(nodes), "edges": len(edges)}
+            or not any(
+                isinstance(node, dict)
+                and isinstance(node.get("provenance"), dict)
+                and cast(dict[str, object], node["provenance"]).get("kind") == "SOURCE_BACKED"
+                and state.identities["repository_id"] in node.get("repository_ids", [])
+                for node in nodes
+            )
+        ):
+            raise AcceptanceRunnerError("Canvas lacks non-empty source-backed organization data")
 
     def _new_state(self, *, reference_time: str | None = None) -> ResumeState:
         committed_reference = reference_time or _run_reference_time(
@@ -157,17 +286,20 @@ class AcceptanceRunner:
             sync_timeout_seconds=self.config.sync_timeout_seconds,
         )
         run_uuid = _uuid(self.namespace, f"acceptance-run:{committed_reference}")
-        return ResumeState(
+        state = ResumeState(
             corpus_id=self.corpus.corpus_id,
             run_id=f"anva:{run_uuid}",
             reference_time=committed_reference,
             product_version=__version__,
+            status="BOOTSTRAP_PREPARED",
             hashes={
                 "manifest_sha256": self.corpus.manifest_sha256,
                 "source_fingerprint": self.corpus.source_fingerprint,
                 "canonical_manifest_sha256": self.corpus.canonical_manifest_sha256,
                 "canonical_input_sha256": self.corpus.canonical_manifest_sha256,
                 "product_commit": self.config.product_commit,
+                "product_image_sha256": self.config.product_image_sha256,
+                "product_package_sha256": self.product_package_sha256,
                 "corpus_commit": self.corpus_commit,
                 "reference_time_sha256": sha256_bytes(committed_reference.encode()),
                 "base_commit": _hash40(f"{self.corpus.source_fingerprint}:base"),
@@ -175,6 +307,30 @@ class AcceptanceRunner:
                 "new_head_commit": _hash40(f"{self.corpus.source_fingerprint}:new-head"),
             },
         )
+        state.hashes["bootstrap_idempotency_sha256"] = sha256_bytes(
+            f"bootstrap:{state.run_id}".encode()
+        )
+        state.hashes["bootstrap_request_sha256"] = sha256_bytes(
+            canonical_bytes(self._bootstrap_payload(state, include_idempotency=False))
+        )
+        return state
+
+    def _bootstrap_payload(
+        self, state: ResumeState, *, include_idempotency: bool = True
+    ) -> dict[str, object]:
+        slug = f"anva-acceptance-{state.hashes['reference_time_sha256'][:12]}"
+        payload: dict[str, object] = {
+            "organization_slug": slug,
+            "organization_name": f"Anva Acceptance {self.corpus.corpus_id}",
+            "admin_email": f"{slug}@anva.invalid",
+            "admin_display_name": "Anva acceptance operator",
+            "repository_external_id": f"acceptance:{self.corpus.source_fingerprint}",
+            "repository_name": self.corpus.corpus_id,
+            "independent_reviewer_name": "Independent acceptance evaluator",
+        }
+        if include_idempotency:
+            payload["idempotency_key"] = state.hashes["bootstrap_idempotency_sha256"]
+        return payload
 
     def _load_matching_state(self) -> ResumeState:
         state = load_state(self.config.state_path)
@@ -197,21 +353,12 @@ class AcceptanceRunner:
     def _bootstrap(self, bootstrap_secret: str, state: ResumeState) -> tuple[PublicAPI, str]:
         if not bootstrap_secret:
             raise AcceptanceRunnerError("Bootstrap secret is required for a fresh run")
-        slug = f"anva-acceptance-{state.hashes['reference_time_sha256'][:12]}"
         response = (
             PublicAPI(self.config.api_url)
             .request(
                 "POST",
                 "/bootstrap",
-                payload={
-                    "organization_slug": slug,
-                    "organization_name": f"Anva Acceptance {self.corpus.corpus_id}",
-                    "admin_email": f"{slug}@anva.invalid",
-                    "admin_display_name": "Anva acceptance operator",
-                    "repository_external_id": f"acceptance:{self.corpus.source_fingerprint}",
-                    "repository_name": self.corpus.corpus_id,
-                    "independent_reviewer_name": "Independent acceptance evaluator",
-                },
+                payload=self._bootstrap_payload(state),
                 headers={"X-Anva-Bootstrap-Secret": bootstrap_secret},
                 expected=frozenset({201}),
             )
@@ -219,6 +366,10 @@ class AcceptanceRunner:
         )
         token = _string(response, "token")
         reviewer_token = _string(response, "reviewer_token")
+        if response.get("bootstrap_request_sha256") != state.hashes["bootstrap_request_sha256"]:
+            raise AcceptanceRunnerError(
+                "Recovered bootstrap does not match the precommitted request"
+            )
         for key in ("organization_id", "repository_id", "access_scope_id"):
             state.identities[key] = _string(response, key)
         if self.config.credential_output is None:
@@ -227,12 +378,39 @@ class AcceptanceRunner:
             self.config.credential_output,
             {
                 "schema_version": 1,
+                "run_id": state.run_id,
+                "bootstrap_request_sha256": state.hashes["bootstrap_request_sha256"],
+                "organization_id": state.identities["organization_id"],
+                "repository_id": state.identities["repository_id"],
+                "access_scope_id": state.identities["access_scope_id"],
                 "anva_token": token,
                 "reviewer_token": reviewer_token,
                 "expires_at": _string(response, "expires_at"),
                 "reviewer_expires_at": _string(response, "reviewer_expires_at"),
             },
         )
+        state.status = "PREPARING"
+        self._save(state)
+        return PublicAPI(self.config.api_url, token), token
+
+    def _reconcile_bootstrap_handoff(self, state: ResumeState) -> tuple[PublicAPI, str] | None:
+        path = self.config.credential_output
+        if path is None or not path.exists():
+            return None
+        handoff = _read_secret_handoff(path)
+        if (
+            handoff.get("schema_version") != 1
+            or handoff.get("run_id") != state.run_id
+            or handoff.get("bootstrap_request_sha256") != state.hashes["bootstrap_request_sha256"]
+        ):
+            raise AcceptanceRunnerError("Bootstrap credential handoff does not match this run")
+        for key in ("organization_id", "repository_id", "access_scope_id"):
+            state.identities[key] = _string(handoff, key)
+        token = _string(handoff, "anva_token")
+        _string(handoff, "reviewer_token")
+        _string(handoff, "expires_at")
+        _string(handoff, "reviewer_expires_at")
+        state.status = "PREPARING"
         self._save(state)
         return PublicAPI(self.config.api_url, token), token
 
@@ -250,7 +428,7 @@ class AcceptanceRunner:
             if selected is not None:
                 status = selected.get("state")
                 if status in TERMINAL_SYNC_STATES:
-                    if status not in {"COMPLETED", "PARTIALLY_COMPLETED"}:
+                    if status != "COMPLETED":
                         raise AcceptanceRunnerError("Canonical source sync failed")
                     return
             time.sleep(0.5)
@@ -517,14 +695,22 @@ class AcceptanceRunner:
     def start(self, *, bootstrap_secret: str | None, token: str | None) -> ResumeState:
         if self.config.state_path.exists():
             state = self._load_matching_state()
-            if state.status != "PREPARING":
+            if state.status == "BOOTSTRAP_PREPARED":
+                reconciled = self._reconcile_bootstrap_handoff(state)
+                if reconciled is None:
+                    api, active_token = self._bootstrap(bootstrap_secret or "", state)
+                else:
+                    api, active_token = reconciled
+            elif state.status != "PREPARING":
                 return state
-            if not token:
-                raise AcceptanceRunnerError("ANVA_ACCEPTANCE_TOKEN is required to resume")
-            api = PublicAPI(self.config.api_url, token)
-            active_token = token
+            else:
+                if not token:
+                    raise AcceptanceRunnerError("ANVA_ACCEPTANCE_TOKEN is required to resume")
+                api = PublicAPI(self.config.api_url, token)
+                active_token = token
         else:
             state = self._new_state()
+            self._save(state)
             api, active_token = self._bootstrap(bootstrap_secret or "", state)
         mcp: MCPBoundary = StreamableHTTPMCP(self.config.mcp_url, active_token)
 
@@ -555,17 +741,17 @@ class AcceptanceRunner:
             state.identities["source_connection_id"],
             state.identities["sync_run_id"],
         )
-        mcp.call(
+        search = mcp.call(
             "anva.search",
             {
                 "contract_version": "1",
                 "repository_id": state.identities["repository_id"],
-                "query": "organization goals products decisions systems requirements",
+                "query": self._semantic_query(),
                 "phase": "PREPARE",
                 "limit": 50,
             },
         )
-        mcp.call(
+        context = mcp.call(
             "anva.get_context_packet",
             {
                 "contract_version": "1",
@@ -582,7 +768,7 @@ class AcceptanceRunner:
                 },
             },
         )
-        api.request(
+        canvas = api.request(
             "POST",
             "/canvas/query",
             payload={
@@ -592,6 +778,12 @@ class AcceptanceRunner:
                 "node_limit": 300,
                 "edge_limit": 600,
             },
+        ).payload
+        self._validate_semantic_journey(
+            state,
+            search=search,
+            context=context,
+            canvas=canvas,
         )
 
         work = api.request(
@@ -682,13 +874,41 @@ class AcceptanceRunner:
 
     def create_review_handoff(self, *, reviewer_token: str, output: Path) -> ResumeState:
         state = self._load_matching_state()
-        if state.status != "AWAITING_EXTERNAL_REVIEW":
+        if state.status == "REVIEW_CLAIMED":
+            handoff = _read_secret_handoff(output)
+            if sha256_bytes(canonical_bytes(handoff)) != state.hashes.get("review_handoff_sha256"):
+                raise AcceptanceRunnerError(
+                    "External-review handoff does not match the resume record"
+                )
+            return state
+        if state.status not in {"AWAITING_EXTERNAL_REVIEW", "REVIEW_CLAIMING"}:
             raise AcceptanceRunnerError("Acceptance run is not awaiting external review")
+        if output.exists() or output.is_symlink():
+            handoff = _read_secret_handoff(output)
+            if (
+                handoff.get("run_id") != state.run_id
+                or handoff.get("task_id") != state.identities["evaluator_task_id"]
+            ):
+                raise AcceptanceRunnerError("External-review handoff identity is invalid")
+            state.hashes["review_handoff_sha256"] = sha256_bytes(canonical_bytes(handoff))
+            state.status = "REVIEW_CLAIMED"
+            self._save(state)
+            return state
+        if state.status == "AWAITING_EXTERNAL_REVIEW":
+            state.hashes["review_claim_idempotency_sha256"] = sha256_bytes(
+                f"review-claim:{state.run_id}:{state.identities['evaluator_task_id']}".encode()
+            )
+            state.status = "REVIEW_CLAIMING"
+            self._save(state)
         api = PublicAPI(self.config.api_url, reviewer_token)
         claim = api.request(
             "POST",
             f"/repositories/{state.identities['repository_id']}/evaluator-tasks/claim",
-            payload={"claimant": "independent-acceptance-evaluator", "lease_seconds": 3600},
+            payload={
+                "claimant": "independent-acceptance-evaluator",
+                "lease_seconds": 3600,
+                "claim_idempotency_key": state.hashes["review_claim_idempotency_sha256"],
+            },
         ).payload
         if (
             claim.get("status") == "EMPTY"
@@ -707,15 +927,13 @@ class AcceptanceRunner:
         }
         _write_secret_handoff(output, handoff)
         state.hashes["review_handoff_sha256"] = sha256_bytes(canonical_bytes(handoff))
+        state.status = "REVIEW_CLAIMED"
         self._save(state)
         return state
 
-    def submit_review(
-        self, *, reviewer_token: str, handoff_path: Path, result_path: Path
-    ) -> ResumeState:
-        state = self._load_matching_state()
-        if state.status != "AWAITING_EXTERNAL_REVIEW":
-            raise AcceptanceRunnerError("Acceptance run is not awaiting external review")
+    def _validated_review_inputs(
+        self, state: ResumeState, handoff_path: Path, result_path: Path
+    ) -> tuple[dict[str, object], dict[str, object], str]:
         handoff = _read_secret_handoff(handoff_path)
         if sha256_bytes(canonical_bytes(handoff)) != state.hashes.get("review_handoff_sha256"):
             raise AcceptanceRunnerError("External-review handoff does not match the resume record")
@@ -744,6 +962,31 @@ class AcceptanceRunner:
             or result.get("commit_sha") != state.hashes["head_commit"]
         ):
             raise AcceptanceRunnerError("External evaluator result does not match the exact run")
+        return handoff, result, sha256_bytes(canonical_bytes(result))
+
+    def submit_review(
+        self, *, reviewer_token: str, handoff_path: Path, result_path: Path
+    ) -> ResumeState:
+        state = self._load_matching_state()
+        if state.status in {"EXTERNAL_REVIEW_SUBMITTED", "COMPLETE"}:
+            if handoff_path.exists() or handoff_path.is_symlink():
+                _handoff, _result, digest = self._validated_review_inputs(
+                    state, handoff_path, result_path
+                )
+                if digest != state.hashes.get("review_result_sha256"):
+                    raise AcceptanceRunnerError(
+                        "External evaluator result does not match the submitted review"
+                    )
+                handoff_path.unlink()
+            return state
+        if state.status not in {"REVIEW_CLAIMED", "REVIEW_SUBMITTING"}:
+            raise AcceptanceRunnerError("Acceptance run does not have a claimed external review")
+        handoff, result, result_digest = self._validated_review_inputs(
+            state, handoff_path, result_path
+        )
+        if state.status == "REVIEW_CLAIMED":
+            state.status = "REVIEW_SUBMITTING"
+            self._save(state)
         response = (
             PublicAPI(self.config.api_url, reviewer_token)
             .request(
@@ -757,7 +1000,7 @@ class AcceptanceRunner:
         if _string(response, "assurance_run_id") != state.identities["assurance_run_id"]:
             raise AcceptanceRunnerError("External evaluator submission returned the wrong run")
         state.identities["report_id"] = _string(response, "report_id")
-        state.hashes["review_result_sha256"] = sha256_bytes(canonical_bytes(result))
+        state.hashes["review_result_sha256"] = result_digest
         state.status = "EXTERNAL_REVIEW_SUBMITTED"
         self._save(state)
         handoff_path.unlink(missing_ok=True)
@@ -766,9 +1009,17 @@ class AcceptanceRunner:
     def finalize(self, *, token: str, mcp: MCPBoundary | None = None) -> ResumeState:
         state = self._load_matching_state()
         if state.status == "COMPLETE":
+            observed = self._verify_existing_seal(state)
+            if observed != state.hashes.get("sealed_manifest_sha256"):
+                raise AcceptanceRunnerError("Sealed acceptance manifest no longer matches state")
             return state
         if state.status != "EXTERNAL_REVIEW_SUBMITTED":
             raise AcceptanceRunnerError("Authenticated external review has not been submitted")
+        if self.config.output_root.exists() or self.config.output_root.is_symlink():
+            state.hashes["sealed_manifest_sha256"] = self._verify_existing_seal(state)
+            state.status = "COMPLETE"
+            self._save(state)
+            return state
         api = PublicAPI(self.config.api_url, token)
         run = api.request("GET", f"/assurance-runs/{state.identities['assurance_run_id']}").payload
         if (
@@ -783,7 +1034,7 @@ class AcceptanceRunner:
             {
                 "contract_version": "1",
                 "repository_id": state.identities["repository_id"],
-                "query": "organization goals products decisions systems requirements",
+                "query": self._semantic_query(),
                 "phase": "ASSURANCE",
                 "limit": 50,
             },
@@ -822,6 +1073,12 @@ class AcceptanceRunner:
         findings = api.request(
             "GET", f"/assurance-runs/{state.identities['assurance_run_id']}/findings"
         ).payload
+        self._validate_semantic_journey(
+            state,
+            search=search,
+            context=context,
+            canvas=canvas,
+        )
         sealed_hash = seal_results(
             output_root=self.config.output_root,
             corpus_id=state.corpus_id,
@@ -832,11 +1089,15 @@ class AcceptanceRunner:
             completed_at=state.reference_time,
             product_version=state.product_version,
             product_commit=state.hashes["product_commit"],
+            product_image_sha256=state.hashes["product_image_sha256"],
+            product_package_sha256=state.hashes["product_package_sha256"],
             corpus_commit=state.hashes["corpus_commit"],
+            canonical_manifest_sha256=state.hashes["canonical_manifest_sha256"],
             canonical_input_sha256=state.hashes["canonical_input_sha256"],
             head_commit=state.hashes["head_commit"],
             assurance_input_sha256=state.hashes["input_hash"],
             reference_time_sha256=state.hashes["reference_time_sha256"],
+            review_result_sha256=state.hashes["review_result_sha256"],
             search_output=search,
             context_output=context,
             canvas_output=canvas,
@@ -847,3 +1108,24 @@ class AcceptanceRunner:
         state.status = "COMPLETE"
         self._save(state)
         return state
+
+    def _verify_existing_seal(self, state: ResumeState) -> str:
+        return verify_sealed_results(
+            output_root=self.config.output_root,
+            corpus_id=state.corpus_id,
+            manifest_sha256=state.hashes["manifest_sha256"],
+            source_fingerprint=state.hashes["source_fingerprint"],
+            run_id=state.run_id,
+            reference_time=state.reference_time,
+            product_version=state.product_version,
+            product_commit=state.hashes["product_commit"],
+            product_image_sha256=state.hashes["product_image_sha256"],
+            product_package_sha256=state.hashes["product_package_sha256"],
+            corpus_commit=state.hashes["corpus_commit"],
+            canonical_input_sha256=state.hashes["canonical_input_sha256"],
+            canonical_manifest_sha256=state.hashes["canonical_manifest_sha256"],
+            head_commit=state.hashes["head_commit"],
+            assurance_input_sha256=state.hashes["input_hash"],
+            reference_time_sha256=state.hashes["reference_time_sha256"],
+            review_result_sha256=state.hashes["review_result_sha256"],
+        )

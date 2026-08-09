@@ -111,3 +111,51 @@ def test_opt_in_reviewer_is_distinct_least_privilege_and_token_is_never_persiste
         sort_keys=True,
     )
     assert reviewer_token not in persisted
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+@override_settings(BOOTSTRAP_SECRET="acceptance-bootstrap-secret")
+def test_exact_bootstrap_retry_revokes_and_reissues_only_precommitted_credentials() -> None:
+    client = Client(HTTP_X_ANVA_BOOTSTRAP_SECRET="acceptance-bootstrap-secret")
+    payload = {**_payload(reviewer=True), "idempotency_key": "a" * 64}
+    first = client.post(
+        "/api/v1/bootstrap",
+        data=json.dumps(payload),
+        content_type="application/json",
+    )
+    assert first.status_code == 201, first.json()
+    original = first.json()
+
+    recovered = client.post(
+        "/api/v1/bootstrap",
+        data=json.dumps(payload),
+        content_type="application/json",
+    )
+    assert recovered.status_code == 201
+    replacement = recovered.json()
+    assert replacement["recovered"] is True
+    assert replacement["bootstrap_request_sha256"] == original["bootstrap_request_sha256"]
+    assert replacement["organization_id"] == original["organization_id"]
+    assert replacement["token_id"] != original["token_id"]
+    assert replacement["reviewer_token_id"] != original["reviewer_token_id"]
+    assert RepositoryAccessToken.objects.get(id=original["token_id"]).revoked_at is not None
+    assert (
+        RepositoryAccessToken.objects.get(id=original["reviewer_token_id"]).revoked_at is not None
+    )
+    assert (
+        authenticate_bearer(f"Bearer {replacement['token']}").actor_id
+        == replacement["service_identity_id"]
+    )
+    assert (
+        authenticate_bearer(f"Bearer {replacement['reviewer_token']}").actor_id
+        == (replacement["reviewer_service_identity_id"])
+    )
+
+    mismatched = client.post(
+        "/api/v1/bootstrap",
+        data=json.dumps({**payload, "repository_name": "Mismatched"}),
+        content_type="application/json",
+    )
+    assert mismatched.status_code == 404
+    assert authenticate_bearer(f"Bearer {replacement['token']}")

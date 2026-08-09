@@ -37,10 +37,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 FROM base AS runtime
 ARG ANVA_VERSION=0.1.0
 ARG ANVA_REVISION=unknown
+ARG ANVA_IMAGE_SHA256=0000000000000000000000000000000000000000000000000000000000000000
 ARG ANVA_SOURCE=https://github.com/rishavt/anva
 COPY --from=wheel-builder /dist /dist
 RUN uv pip install --no-deps /dist/*.whl \
     && python -m anva.manage collectstatic --noinput \
+    && ANVA_BUILD_REVISION="${ANVA_REVISION}" ANVA_BUILD_IMAGE_SHA256="${ANVA_IMAGE_SHA256}" \
+       python -c 'import json, os; from pathlib import Path; from anva.acceptance.provenance import package_sha256; root = Path(__import__("anva").__file__).resolve().parent; output = Path("/app/anva-build-provenance.json"); output.write_text(json.dumps({"schema_version": 1, "product_commit": os.environ["ANVA_BUILD_REVISION"], "image_sha256": os.environ["ANVA_BUILD_IMAGE_SHA256"], "package_sha256": package_sha256(root)}, separators=(",", ":"), sort_keys=True) + "\n", encoding="utf-8"); output.chmod(0o444)' \
     && mkdir -p /app/acceptance/canonical \
     && chown -R anva:anva /app
 USER anva

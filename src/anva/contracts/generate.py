@@ -1309,7 +1309,9 @@ def openapi_document() -> dict[str, object]:
                     "description": (
                         "Create the one initial tenant and return one-time credentials. "
                         "When independent_reviewer_name is supplied, a distinct least-privilege "
-                        "assurance reviewer credential is emitted once and stored only as a hash."
+                        "assurance reviewer credential is emitted once and stored only as a hash. "
+                        "An exact idempotency retry revokes and reissues only the bound "
+                        "credentials."
                     ),
                     "security": [],
                     "parameters": [
@@ -1329,16 +1331,26 @@ def openapi_document() -> dict[str, object]:
                                     "type": "object",
                                     "additionalProperties": False,
                                     "properties": {
-                                        name: {"type": "string", "minLength": 1, "maxLength": 300}
-                                        for name in (
-                                            "organization_slug",
-                                            "organization_name",
-                                            "admin_email",
-                                            "admin_display_name",
-                                            "repository_external_id",
-                                            "repository_name",
-                                            "independent_reviewer_name",
-                                        )
+                                        **{
+                                            name: {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 300,
+                                            }
+                                            for name in (
+                                                "organization_slug",
+                                                "organization_name",
+                                                "admin_email",
+                                                "admin_display_name",
+                                                "repository_external_id",
+                                                "repository_name",
+                                                "independent_reviewer_name",
+                                            )
+                                        },
+                                        "idempotency_key": {
+                                            "type": "string",
+                                            "pattern": "^[a-f0-9]{64}$",
+                                        },
                                     },
                                     "required": [
                                         "organization_slug",
@@ -1391,6 +1403,11 @@ def openapi_document() -> dict[str, object]:
                                                     "type": "string",
                                                     "format": "date-time",
                                                 },
+                                                "bootstrap_request_sha256": {
+                                                    "type": "string",
+                                                    "pattern": "^[a-f0-9]{64}$",
+                                                },
+                                                "recovered": {"type": "boolean"},
                                                 "reviewer_service_identity_id": {
                                                     "type": "string",
                                                     "format": "uuid",
@@ -1418,6 +1435,8 @@ def openapi_document() -> dict[str, object]:
                                                 "token_id",
                                                 "token",
                                                 "expires_at",
+                                                "bootstrap_request_sha256",
+                                                "recovered",
                                             ],
                                         }
                                     }

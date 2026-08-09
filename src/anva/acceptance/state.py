@@ -14,8 +14,12 @@ from typing import cast
 STATE_SCHEMA_VERSION = 1
 STATE_STATUSES = frozenset(
     {
+        "BOOTSTRAP_PREPARED",
         "PREPARING",
         "AWAITING_EXTERNAL_REVIEW",
+        "REVIEW_CLAIMING",
+        "REVIEW_CLAIMED",
+        "REVIEW_SUBMITTING",
         "EXTERNAL_REVIEW_SUBMITTED",
         "COMPLETE",
     }
@@ -54,11 +58,16 @@ HASH_KEYS = frozenset(
         "head_commit",
         "new_head_commit",
         "reference_time_sha256",
+        "bootstrap_idempotency_sha256",
+        "bootstrap_request_sha256",
         "diff_hash",
         "input_hash",
+        "review_claim_idempotency_sha256",
         "review_handoff_sha256",
         "review_result_sha256",
         "sealed_manifest_sha256",
+        "product_image_sha256",
+        "product_package_sha256",
     }
 )
 

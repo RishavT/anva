@@ -3526,7 +3526,7 @@
     },
     "/bootstrap": {
       "post": {
-        "description": "Create the one initial tenant and return one-time credentials. When independent_reviewer_name is supplied, a distinct least-privilege assurance reviewer credential is emitted once and stored only as a hash.",
+        "description": "Create the one initial tenant and return one-time credentials. When independent_reviewer_name is supplied, a distinct least-privilege assurance reviewer credential is emitted once and stored only as a hash. An exact idempotency retry revokes and reissues only the bound credentials.",
         "operationId": "bootstrapOrganization",
         "parameters": [
           {
@@ -3556,6 +3556,10 @@
                   "admin_email": {
                     "maxLength": 300,
                     "minLength": 1,
+                    "type": "string"
+                  },
+                  "idempotency_key": {
+                    "pattern": "^[a-f0-9]{64}$",
                     "type": "string"
                   },
                   "independent_reviewer_name": {
@@ -3609,6 +3613,10 @@
                       "format": "uuid",
                       "type": "string"
                     },
+                    "bootstrap_request_sha256": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
                     "expires_at": {
                       "format": "date-time",
                       "type": "string"
@@ -3620,6 +3628,9 @@
                     "organization_id": {
                       "format": "uuid",
                       "type": "string"
+                    },
+                    "recovered": {
+                      "type": "boolean"
                     },
                     "repository_id": {
                       "format": "uuid",
@@ -3667,7 +3678,9 @@
                     "access_scope_id",
                     "token_id",
                     "token",
-                    "expires_at"
+                    "expires_at",
+                    "bootstrap_request_sha256",
+                    "recovered"
                   ],
                   "type": "object"
                 }

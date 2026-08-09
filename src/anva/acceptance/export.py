@@ -25,6 +25,14 @@ FORBIDDEN_MARKERS = (
     "oracle-manifest",
     "test_only_tst_008_private_oracle",
 )
+SEALED_ARTIFACTS = {
+    "results/knowledge-retrieval-results.jsonl": "knowledge_retrieval_results",
+    "results/context-metadata.json": "structured_agent_output",
+    "results/canvas.json": "browser_capture",
+    "results/assurance-report.json": "assurance_report",
+    "results/findings.json": "findings",
+    "results/run-metadata.json": "run_metadata",
+}
 
 
 class AcceptanceExportError(ValueError):
@@ -75,6 +83,8 @@ def _normalized_search_records(payload: Mapping[str, object]) -> list[dict[str, 
     results = data.get("results")
     if not isinstance(results, list):
         raise AcceptanceExportError("MCP search output is invalid")
+    if not results:
+        raise AcceptanceExportError("MCP search output must contain public retrieval evidence")
     normalized: list[dict[str, object]] = []
     for rank, raw in enumerate(results, start=1):
         if not isinstance(raw, dict):
@@ -82,15 +92,15 @@ def _normalized_search_records(payload: Mapping[str, object]) -> list[dict[str, 
         allowed = {
             key: raw[key]
             for key in (
-                "id",
-                "source_chunk_id",
-                "source_revision_id",
+                "chunk_id",
                 "content_hash",
-                "path",
-                "locator",
-                "score",
-                "freshness",
-                "citation_id",
+                "pointer",
+                "canonical_url",
+                "source_location_id",
+                "source_observation_id",
+                "access_snapshot_id",
+                "observed_at",
+                "explanation",
             )
             if key in raw
         }
@@ -104,6 +114,8 @@ def _normalized_canvas(payload: Mapping[str, object]) -> dict[str, object]:
     edges = payload.get("edges")
     if not isinstance(nodes, list) or not isinstance(edges, list):
         raise AcceptanceExportError("Canvas output is invalid")
+    if not nodes:
+        raise AcceptanceExportError("Canvas output must contain a public organizational node")
 
     def fields(record: object, names: tuple[str, ...]) -> dict[str, object]:
         if not isinstance(record, dict):
@@ -112,7 +124,21 @@ def _normalized_canvas(payload: Mapping[str, object]) -> dict[str, object]:
 
     return {
         "nodes": sorted(
-            (fields(item, ("id", "type", "label", "repository_id", "freshness")) for item in nodes),
+            (
+                fields(
+                    item,
+                    (
+                        "id",
+                        "type",
+                        "label",
+                        "canonical_key",
+                        "repository_ids",
+                        "freshness",
+                        "provenance",
+                    ),
+                )
+                for item in nodes
+            ),
             key=lambda item: (str(item.get("type", "")), str(item.get("id", ""))),
         ),
         "edges": sorted(
@@ -141,11 +167,15 @@ def seal_results(
     completed_at: str,
     product_version: str,
     product_commit: str,
+    product_image_sha256: str,
+    product_package_sha256: str,
     corpus_commit: str,
+    canonical_manifest_sha256: str,
     canonical_input_sha256: str,
     head_commit: str,
     assurance_input_sha256: str,
     reference_time_sha256: str,
+    review_result_sha256: str,
     search_output: Mapping[str, object],
     context_output: Mapping[str, object],
     canvas_output: Mapping[str, object],
@@ -159,11 +189,15 @@ def seal_results(
         manifest_sha256,
         source_fingerprint,
         product_commit,
+        product_image_sha256,
+        product_package_sha256,
         corpus_commit,
+        canonical_manifest_sha256,
         canonical_input_sha256,
         head_commit,
         assurance_input_sha256,
         reference_time_sha256,
+        review_result_sha256,
     ):
         if HASH_PATTERN.fullmatch(digest) is None:
             raise AcceptanceExportError("Acceptance provenance hash is invalid")
@@ -174,11 +208,41 @@ def seal_results(
     temporary.mkdir(mode=0o700)
     try:
         retrieval = _jsonl(_normalized_search_records(search_output))
+        context_data = context_output.get("data")
+        packet = context_data.get("packet") if isinstance(context_data, dict) else None
+        items = packet.get("items") if isinstance(packet, dict) else None
+        if not isinstance(items, list) or not items:
+            raise AcceptanceExportError("Context output must contain public context items")
+        citations = [
+            citation
+            for item in items
+            if isinstance(item, dict)
+            for citation in cast(list[object], item.get("anva_sources", []))
+            if isinstance(citation, dict)
+        ]
+        if not citations:
+            raise AcceptanceExportError("Context output must contain public source citations")
         context = canonical_bytes(
             {
                 "content_hash": sha256_bytes(canonical_bytes(dict(context_output))),
                 "tool": context_output.get("tool"),
                 "contract_version": context_output.get("contract_version"),
+                "item_count": len(items),
+                "citations": [
+                    {
+                        key: citation[key]
+                        for key in (
+                            "canonical_url",
+                            "locator",
+                            "source_content_hash",
+                            "source_location_id",
+                            "source_observation_id",
+                            "access_snapshot_id",
+                        )
+                        if key in citation
+                    }
+                    for citation in citations
+                ],
             }
         )
         canvas = canonical_bytes(_normalized_canvas(canvas_output))
@@ -206,13 +270,20 @@ def seal_results(
         metadata = canonical_bytes(
             {
                 "schema_version": 1,
-                "product": {"name": "anva", "version": product_version, "commit": product_commit},
+                "product": {
+                    "name": "anva",
+                    "version": product_version,
+                    "commit": product_commit,
+                    "image_sha256": product_image_sha256,
+                    "package_sha256": product_package_sha256,
+                },
                 "corpus": {
                     "id": corpus_id,
                     "commit": corpus_commit,
                     "manifest_sha256": manifest_sha256,
                     "source_fingerprint": source_fingerprint,
                     "canonical_input_sha256": canonical_input_sha256,
+                    "canonical_manifest_sha256": canonical_manifest_sha256,
                 },
                 "assurance_head_commit": head_commit,
                 "run": {
@@ -220,6 +291,7 @@ def seal_results(
                     "reference_time": started_at,
                     "reference_time_sha256": reference_time_sha256,
                     "assurance_input_sha256": assurance_input_sha256,
+                    "external_review_result_sha256": review_result_sha256,
                 },
                 "ranking": {
                     "order": "server-returned-rank",
@@ -258,7 +330,9 @@ def seal_results(
         sums = [(sha256_bytes(value), relative) for relative, _kind, value in values] + [
             (sha256_bytes(manifest_bytes), "acceptance-result.json")
         ]
-        sums_bytes = "".join(f"{digest}  {path}\n" for digest, path in sorted(sums)).encode()
+        sums_bytes = "".join(
+            f"{digest}  {path}\n" for digest, path in sorted(sums, key=lambda item: item[1])
+        ).encode()
         _write_new(temporary / "SHA256SUMS", sums_bytes)
         for directory in sorted(
             (path for path in temporary.rglob("*") if path.is_dir()), reverse=True
@@ -290,3 +364,130 @@ def seal_results(
             temporary.chmod(stat.S_IRWXU)
             shutil.rmtree(temporary)
         raise
+
+
+def _sealed_file(root: Path, relative: str, *, maximum: int = 2_000_000) -> bytes:
+    path = root / relative
+    if (
+        path.is_symlink()
+        or not path.is_file()
+        or stat.S_IMODE(path.stat().st_mode) & 0o222
+        or path.stat().st_size > maximum
+    ):
+        raise AcceptanceExportError("Existing sealed acceptance output is unsafe")
+    raw = path.read_bytes()
+    _assert_public(raw)
+    return raw
+
+
+def verify_sealed_results(
+    *,
+    output_root: Path,
+    corpus_id: str,
+    manifest_sha256: str,
+    source_fingerprint: str,
+    run_id: str,
+    reference_time: str,
+    product_version: str,
+    product_commit: str,
+    product_image_sha256: str,
+    product_package_sha256: str,
+    corpus_commit: str,
+    canonical_input_sha256: str,
+    canonical_manifest_sha256: str,
+    head_commit: str,
+    assurance_input_sha256: str,
+    reference_time_sha256: str,
+    review_result_sha256: str,
+) -> str:
+    """Verify and adopt only the exact immutable tree a prior finalize published."""
+    if (
+        output_root.is_symlink()
+        or not output_root.is_dir()
+        or stat.S_IMODE(output_root.stat().st_mode) & 0o222
+    ):
+        raise AcceptanceExportError("Existing sealed acceptance output is unsafe")
+    expected_files = {*SEALED_ARTIFACTS, "acceptance-result.json", "SHA256SUMS"}
+    observed_files = {
+        path.relative_to(output_root).as_posix()
+        for path in output_root.rglob("*")
+        if path.is_file() or path.is_symlink()
+    }
+    if observed_files != expected_files:
+        raise AcceptanceExportError("Existing sealed acceptance inventory is invalid")
+    values = {relative: _sealed_file(output_root, relative) for relative in expected_files}
+    expected_sums = "".join(
+        f"{sha256_bytes(values[relative])}  {relative}\n"
+        for relative in sorted(expected_files - {"SHA256SUMS"})
+    ).encode()
+    if values["SHA256SUMS"] != expected_sums:
+        raise AcceptanceExportError("Existing sealed acceptance checksums are invalid")
+    try:
+        envelope = json.loads(values["acceptance-result.json"])
+        metadata = json.loads(values["results/run-metadata.json"])
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise AcceptanceExportError("Existing sealed acceptance metadata is invalid") from error
+    if not isinstance(envelope, dict) or not isinstance(metadata, dict):
+        raise AcceptanceExportError("Existing sealed acceptance metadata is invalid")
+    validate_payload("acceptance-result", envelope)
+    expected_envelope = {
+        "corpus_id": corpus_id,
+        "manifest_sha256": manifest_sha256,
+        "source_fingerprint": source_fingerprint,
+        "run_id": run_id,
+        "status": "COMPLETE",
+        "started_at": reference_time,
+        "completed_at": reference_time,
+        "error": None,
+    }
+    if any(envelope.get(key) != value for key, value in expected_envelope.items()):
+        raise AcceptanceExportError("Existing sealed acceptance identity is invalid")
+    artifacts = envelope.get("artifacts")
+    if not isinstance(artifacts, list) or len(artifacts) != len(SEALED_ARTIFACTS):
+        raise AcceptanceExportError("Existing sealed acceptance artifacts are invalid")
+    expected_artifacts = {
+        relative: {
+            "kind": kind,
+            "path": relative,
+            "sha256": sha256_bytes(values[relative]),
+            "size_bytes": len(values[relative]),
+        }
+        for relative, kind in SEALED_ARTIFACTS.items()
+    }
+    observed_artifacts = {
+        str(item.get("path")): item for item in artifacts if isinstance(item, dict)
+    }
+    if observed_artifacts != expected_artifacts:
+        raise AcceptanceExportError("Existing sealed acceptance artifacts are invalid")
+    expected_metadata = {
+        "schema_version": 1,
+        "product": {
+            "name": "anva",
+            "version": product_version,
+            "commit": product_commit,
+            "image_sha256": product_image_sha256,
+            "package_sha256": product_package_sha256,
+        },
+        "corpus": {
+            "id": corpus_id,
+            "commit": corpus_commit,
+            "manifest_sha256": manifest_sha256,
+            "source_fingerprint": source_fingerprint,
+            "canonical_input_sha256": canonical_input_sha256,
+            "canonical_manifest_sha256": canonical_manifest_sha256,
+        },
+        "assurance_head_commit": head_commit,
+        "run": {
+            "id": run_id,
+            "reference_time": reference_time,
+            "reference_time_sha256": reference_time_sha256,
+            "assurance_input_sha256": assurance_input_sha256,
+            "external_review_result_sha256": review_result_sha256,
+        },
+    }
+    if any(metadata.get(key) != value for key, value in expected_metadata.items()):
+        raise AcceptanceExportError("Existing sealed acceptance provenance is invalid")
+    ranking = metadata.get("ranking")
+    if not isinstance(ranking, dict) or ranking.get("result_count", 0) < 1:
+        raise AcceptanceExportError("Existing sealed acceptance retrieval is invalid")
+    return sha256_bytes(values["acceptance-result.json"])

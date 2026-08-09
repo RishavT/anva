@@ -10,14 +10,19 @@ from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
+from unittest.mock import patch
 
 import pytest
 
 from anva.acceptance.client import APIResponse
 from anva.acceptance.corpus import canonicalize_corpus
+from anva.acceptance.export import AcceptanceExportError
+from anva.acceptance.provenance import package_sha256
 from anva.acceptance.runner import AcceptanceRunner, AcceptanceRunnerError, RunnerConfig
-from anva.acceptance.state import load_state
+from anva.acceptance.state import ResumeState, load_state
 from anva.contracts.catalog import EXAMPLES
+
+SOURCE_SHA256 = "ed7cd26f52a826b25ba96ad8139479025451f6ccf3df668a4a1740b3f2952aca"
 
 
 def _id(number: int) -> str:
@@ -43,6 +48,13 @@ class FakeProduct:
         self.calls.append((method, path, token, payload))
         if path == "/bootstrap":
             assert token is None
+            assert payload is not None
+            request_payload = {
+                key: value for key, value in payload.items() if key != "idempotency_key"
+            }
+            request_hash = hashlib.sha256(
+                (json.dumps(request_payload, separators=(",", ":"), sort_keys=True) + "\n").encode()
+            ).hexdigest()
             return APIResponse(
                 201,
                 {
@@ -53,6 +65,8 @@ class FakeProduct:
                     "reviewer_token": "reviewer-token-material",
                     "expires_at": "2026-08-04T12:00:00Z",
                     "reviewer_expires_at": "2026-08-04T12:00:00Z",
+                    "bootstrap_request_sha256": request_hash,
+                    "recovered": False,
                 },
             )
         assert token in {"initiator-token-material", "reviewer-token-material"}
@@ -66,8 +80,21 @@ class FakeProduct:
             return APIResponse(
                 200,
                 {
-                    "nodes": [{"id": _id(41), "type": "GOAL", "label": "Connected goal"}],
+                    "schema_version": "1",
+                    "repositories": [{"id": _id(2), "name": "acceptance"}],
+                    "nodes": [
+                        {
+                            "id": _id(41),
+                            "type": "GOAL",
+                            "label": "Checkout ownership",
+                            "canonical_key": "checkout",
+                            "repository_ids": [_id(2)],
+                            "freshness": "CURRENT",
+                            "provenance": {"kind": "SOURCE_BACKED"},
+                        }
+                    ],
                     "edges": [],
+                    "counts": {"nodes": 1, "edges": 0},
                     "truncated": False,
                 },
             )
@@ -209,10 +236,10 @@ class FakeMCP:
                 "data": {
                     "results": [
                         {
-                            "id": "opaque",
-                            "content_hash": "6" * 64,
-                            "path": "docs/knowledge/current.md",
-                            "score": 1.0,
+                            "chunk_id": _id(42),
+                            "content_hash": SOURCE_SHA256,
+                            "pointer": "/",
+                            "canonical_url": "file:///canonical/organization/decision.md",
                         }
                     ]
                 },
@@ -221,7 +248,27 @@ class FakeMCP:
         return {
             "contract_version": "1",
             "tool": tool_name,
-            "data": {"packet_id": _id(40), "created": False, "packet": {}},
+            "data": {
+                "packet_id": _id(40),
+                "created": False,
+                "packet": {
+                    "items": [
+                        {
+                            "item_id": _id(43),
+                            "anva_sources": [
+                                {
+                                    "canonical_url": ("file:///canonical/organization/decision.md"),
+                                    "locator": "/",
+                                    "source_content_hash": SOURCE_SHA256,
+                                    "source_location_id": _id(44),
+                                    "source_observation_id": _id(45),
+                                    "access_snapshot_id": _id(46),
+                                }
+                            ],
+                        }
+                    ]
+                },
+            },
         }
 
 
@@ -246,6 +293,21 @@ def _runner(
         "anva.acceptance.runner.StreamableHTTPMCP",
         lambda _url, _token: fake_mcp,
     )
+    provenance = tmp_path / "anva-build-provenance.json"
+    provenance.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "product_commit": "d" * 40,
+                "image_sha256": "e" * 64,
+                "package_sha256": package_sha256(
+                    Path(__file__).resolve().parents[2] / "src" / "anva"
+                ),
+            }
+        ),
+        encoding="utf-8",
+    )
+    provenance.chmod(0o444)
     runner = AcceptanceRunner(
         RunnerConfig(
             api_url="http://api:8000/api/v1",
@@ -257,6 +319,8 @@ def _runner(
             source_fingerprint=corpus.source_fingerprint,
             canonical_manifest_sha256=corpus.canonical_manifest_sha256,
             product_commit="d" * 40,
+            product_image_sha256="e" * 64,
+            build_provenance_path=provenance,
             credential_output=tmp_path / "credentials" / "credentials.json",
             sync_timeout_seconds=1,
         )
@@ -358,4 +422,164 @@ def test_public_runner_pauses_for_external_review_rejects_tamper_and_seals(
     ).lower()
     assert b"token-material" not in all_public
     assert b"private-oracle" not in all_public
+
+
+@pytest.mark.unit
+def test_bootstrap_crash_after_server_commit_recovers_exact_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner, product = _runner(tmp_path, monkeypatch)
+    with patch(
+        "anva.acceptance.runner._write_secret_handoff",
+        side_effect=RuntimeError("injected crash after bootstrap commit"),
+    ):
+        with pytest.raises(RuntimeError, match="injected crash"):
+            runner.start(bootstrap_secret="bootstrap-material", token=None)
+    assert load_state(runner.config.state_path).status == "BOOTSTRAP_PREPARED"
+    assert runner.config.credential_output is not None
+    assert not runner.config.credential_output.exists()
+
+    resumed = AcceptanceRunner(runner.config).start(
+        bootstrap_secret="bootstrap-material", token=None
+    )
+    assert resumed.status == "AWAITING_EXTERNAL_REVIEW"
+    assert sum(path == "/bootstrap" for _method, path, _token, _body in product.calls) == 2
+
+
+@pytest.mark.unit
+def test_bootstrap_crash_after_handoff_reconciles_without_second_bootstrap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner, product = _runner(tmp_path, monkeypatch)
+    original_save = AcceptanceRunner._save
+    crashed = False
+
+    def crash_after_handoff(self: AcceptanceRunner, state: ResumeState) -> None:
+        nonlocal crashed
+        if getattr(state, "status", None) == "PREPARING" and not crashed:
+            crashed = True
+            raise RuntimeError("injected crash after credential handoff")
+        original_save(self, state)
+
+    with patch.object(AcceptanceRunner, "_save", crash_after_handoff):
+        with pytest.raises(RuntimeError, match="injected crash"):
+            runner.start(bootstrap_secret="bootstrap-material", token=None)
+    assert load_state(runner.config.state_path).status == "BOOTSTRAP_PREPARED"
+    assert runner.config.credential_output is not None
+    assert runner.config.credential_output.is_file()
+
+    resumed = AcceptanceRunner(runner.config).start(bootstrap_secret=None, token=None)
+    assert resumed.status == "AWAITING_EXTERNAL_REVIEW"
+    assert sum(path == "/bootstrap" for _method, path, _token, _body in product.calls) == 1
+
+
+@pytest.mark.unit
+def test_review_and_finalize_crash_boundaries_are_restart_safe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner, product = _runner(tmp_path, monkeypatch)
+    runner.start(bootstrap_secret="bootstrap-material", token=None)
+    handoff_path = tmp_path / "handoff" / "review.json"
+
+    with patch(
+        "anva.acceptance.runner._write_secret_handoff",
+        side_effect=RuntimeError("injected crash after claim"),
+    ):
+        with pytest.raises(RuntimeError, match="injected crash"):
+            runner.create_review_handoff(
+                reviewer_token="reviewer-token-material", output=handoff_path
+            )
+    assert load_state(runner.config.state_path).status == "REVIEW_CLAIMING"
+    original_save = AcceptanceRunner._save
+    handoff_state_crashed = False
+
+    def crash_after_review_handoff(self: AcceptanceRunner, state: ResumeState) -> None:
+        nonlocal handoff_state_crashed
+        if state.status == "REVIEW_CLAIMED" and not handoff_state_crashed:
+            handoff_state_crashed = True
+            raise RuntimeError("injected crash after review handoff")
+        original_save(self, state)
+
+    with patch.object(AcceptanceRunner, "_save", crash_after_review_handoff):
+        with pytest.raises(RuntimeError, match="injected crash"):
+            runner.create_review_handoff(
+                reviewer_token="reviewer-token-material", output=handoff_path
+            )
+    assert handoff_path.is_file()
+    assert load_state(runner.config.state_path).status == "REVIEW_CLAIMING"
+    runner.create_review_handoff(reviewer_token="reviewer-token-material", output=handoff_path)
+    claim_payloads = [
+        body
+        for _method, path, _token, body in product.calls
+        if path.endswith("/evaluator-tasks/claim")
+    ]
+    assert len(claim_payloads) == 2
+    assert claim_payloads[0] == claim_payloads[1]
+
+    handoff = json.loads(handoff_path.read_bytes())
+    result_path = tmp_path / "external-result.json"
+    result = deepcopy(EXAMPLES["evaluator-result"])
+    result.update(
+        {
+            "request_id": cast(dict[str, object], handoff["request"])["request_id"],
+            "organization_id": _id(1),
+            "commit_sha": product.manual_heads[0],
+            "completion": "COMPLETE",
+            "evaluator_version": "external-acceptance-v1",
+            "prompt_version": "acceptance-review-v1",
+            "findings": [],
+            "limitations": [],
+            "evaluated_at": "2026-08-07T00:00:00Z",
+        }
+    )
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+    original_save = AcceptanceRunner._save
+    crashed = False
+
+    def crash_after_submit(self: AcceptanceRunner, state: ResumeState) -> None:
+        nonlocal crashed
+        if getattr(state, "status", None) == "EXTERNAL_REVIEW_SUBMITTED" and not crashed:
+            crashed = True
+            raise RuntimeError("injected crash after review submission")
+        original_save(self, state)
+
+    with patch.object(AcceptanceRunner, "_save", crash_after_submit):
+        with pytest.raises(RuntimeError, match="injected crash"):
+            runner.submit_review(
+                reviewer_token="reviewer-token-material",
+                handoff_path=handoff_path,
+                result_path=result_path,
+            )
+    assert load_state(runner.config.state_path).status == "REVIEW_SUBMITTING"
+    submitted = AcceptanceRunner(runner.config).submit_review(
+        reviewer_token="reviewer-token-material",
+        handoff_path=handoff_path,
+        result_path=result_path,
+    )
+    assert submitted.status == "EXTERNAL_REVIEW_SUBMITTED"
+
+    original_save = AcceptanceRunner._save
+    with patch.object(
+        AcceptanceRunner,
+        "_save",
+        side_effect=lambda state: (
+            (_ for _ in ()).throw(RuntimeError("injected crash after seal"))
+            if state.status == "COMPLETE"
+            else original_save(runner, state)
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="injected crash"):
+            runner.finalize(token="initiator-token-material", mcp=FakeMCP())
+    assert load_state(runner.config.state_path).status == "EXTERNAL_REVIEW_SUBMITTED"
+    calls_before_adoption = len(product.calls)
+    complete = AcceptanceRunner(runner.config).finalize(token="initiator-token-material")
+    assert complete.status == "COMPLETE"
+    assert len(product.calls) == calls_before_adoption
+
+    metadata = runner.config.output_root / "results" / "run-metadata.json"
+    metadata.chmod(0o600)
+    metadata.write_bytes(metadata.read_bytes() + b" ")
+    metadata.chmod(0o400)
+    with pytest.raises(AcceptanceExportError, match="checksum"):
+        AcceptanceRunner(runner.config).finalize(token="initiator-token-material")
     assert load_state(runner.config.state_path).hashes["sealed_manifest_sha256"]

@@ -6,10 +6,12 @@ x-acceptance-product: &acceptance-product
     args:
       ANVA_VERSION: ${ANVA_VERSION:-0.1.0}
       ANVA_REVISION: ${ANVA_REVISION:-unknown}
+      ANVA_IMAGE_SHA256: ${ANVA_IMAGE_SHA256:-0000000000000000000000000000000000000000000000000000000000000000}
       ANVA_SOURCE: ${ANVA_SOURCE:-https://github.com/rishavt/anva}
       SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH:-1756684800}
   profiles: ["acceptance"]
-  user: "${ANVA_HOST_UID:-10001}:${ANVA_HOST_GID:-10001}"
+  user: "10001:10001"
+  networks: [acceptance-edge]
   read_only: true
   privileged: false
   cap_drop: ["ALL"]
@@ -32,6 +34,18 @@ x-acceptance-environment: &acceptance-environment
   ANVA_MCP_URL: http://mcp:8001/mcp
 
 services:
+  postgres:
+    networks: [acceptance-backend]
+
+  minio:
+    networks: [acceptance-backend]
+
+  minio-init:
+    networks: [acceptance-backend]
+
+  migrate:
+    networks: [acceptance-backend]
+
   acceptance-adapter:
     image: ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.0}
     build:
@@ -40,6 +54,7 @@ services:
       args:
         ANVA_VERSION: ${ANVA_VERSION:-0.1.0}
         ANVA_REVISION: ${ANVA_REVISION:-unknown}
+        ANVA_IMAGE_SHA256: ${ANVA_IMAGE_SHA256:-0000000000000000000000000000000000000000000000000000000000000000}
         ANVA_SOURCE: ${ANVA_SOURCE:-https://github.com/rishavt/anva}
         SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH:-1756684800}
     profiles: ["acceptance"]
@@ -94,24 +109,28 @@ services:
       ANVA_FILESYSTEM_ALLOWED_ROOTS: /app/acceptance/canonical/payload
     volumes:
       - acceptance-canonical:/app/acceptance/canonical:ro
+    networks: [acceptance-backend, acceptance-edge]
 
   worker:
     environment:
       ANVA_FILESYSTEM_ALLOWED_ROOTS: /app/acceptance/canonical/payload
     volumes:
       - acceptance-canonical:/app/acceptance/canonical:ro
+    networks: [acceptance-backend]
 
   mcp:
     environment:
       ANVA_FILESYSTEM_ALLOWED_ROOTS: /app/acceptance/canonical/payload
     volumes:
       - acceptance-canonical:/app/acceptance/canonical:ro
+    networks: [acceptance-backend, acceptance-edge]
 
   cli:
     environment:
       ANVA_FILESYSTEM_ALLOWED_ROOTS: /app/acceptance/canonical/payload
     volumes:
       - acceptance-canonical:/app/acceptance/canonical:ro
+    networks: [acceptance-backend]
 
   acceptance-runner:
     image: ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.0}
@@ -121,6 +140,7 @@ services:
       args:
         ANVA_VERSION: ${ANVA_VERSION:-0.1.0}
         ANVA_REVISION: ${ANVA_REVISION:-unknown}
+        ANVA_IMAGE_SHA256: ${ANVA_IMAGE_SHA256:-0000000000000000000000000000000000000000000000000000000000000000}
         ANVA_SOURCE: ${ANVA_SOURCE:-https://github.com/rishavt/anva}
         SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH:-1756684800}
     profiles: ["acceptance"]
@@ -137,6 +157,8 @@ services:
       - --canonical-manifest-sha256
       - ${ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256:-invalid-unpinned-canonical-manifest}
     read_only: true
+    user: "10001:10001"
+    network_mode: none
     cap_drop: ["ALL"]
     security_opt: ["no-new-privileges:true"]
     tmpfs:
@@ -177,6 +199,8 @@ services:
       - ${ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256:-invalid-unpinned-canonical-manifest}
       - --product-commit
       - ${ANVA_REVISION:-unknown}
+      - --product-image-sha256
+      - ${ANVA_IMAGE_SHA256:-invalid-unpinned-image}
     volumes:
       - acceptance-canonical:/app/acceptance/canonical:ro
       - type: bind
@@ -215,6 +239,8 @@ services:
       - ${ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256:-invalid-unpinned-canonical-manifest}
       - --product-commit
       - ${ANVA_REVISION:-unknown}
+      - --product-image-sha256
+      - ${ANVA_IMAGE_SHA256:-invalid-unpinned-image}
     volumes:
       - acceptance-canonical:/app/acceptance/canonical:ro
       - type: bind
@@ -255,6 +281,8 @@ services:
       - ${ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256:-invalid-unpinned-canonical-manifest}
       - --product-commit
       - ${ANVA_REVISION:-unknown}
+      - --product-image-sha256
+      - ${ANVA_IMAGE_SHA256:-invalid-unpinned-image}
     volumes:
       - acceptance-canonical:/app/acceptance/canonical:ro
       - type: bind
@@ -297,6 +325,8 @@ services:
       - ${ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256:-invalid-unpinned-canonical-manifest}
       - --product-commit
       - ${ANVA_REVISION:-unknown}
+      - --product-image-sha256
+      - ${ANVA_IMAGE_SHA256:-invalid-unpinned-image}
     volumes:
       - acceptance-canonical:/app/acceptance/canonical:ro
       - type: bind
@@ -312,3 +342,9 @@ services:
 
 volumes:
   acceptance-canonical:
+
+networks:
+  acceptance-backend:
+    internal: true
+  acceptance-edge:
+    internal: true

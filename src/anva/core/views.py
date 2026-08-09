@@ -1012,6 +1012,7 @@ def bootstrap(request: HttpRequest) -> JsonResponse:
                 "repository_external_id",
                 "repository_name",
                 "independent_reviewer_name",
+                "idempotency_key",
             }
         ),
         required=frozenset(
@@ -1034,6 +1035,7 @@ def bootstrap(request: HttpRequest) -> JsonResponse:
         repository_external_id=_string(payload, "repository_external_id"),
         repository_name=_string(payload, "repository_name"),
         independent_reviewer_name=_optional_string(payload, "independent_reviewer_name"),
+        idempotency_key=_optional_string(payload, "idempotency_key"),
     )
     response: dict[str, object] = {
         "organization_id": str(result.organization.id),
@@ -1045,6 +1047,8 @@ def bootstrap(request: HttpRequest) -> JsonResponse:
         "token_id": str(result.issued_token.record.id),
         "token": result.issued_token.plaintext,
         "expires_at": result.issued_token.record.expires_at.isoformat(),
+        "bootstrap_request_sha256": result.request_sha256,
+        "recovered": result.recovered,
     }
     if result.reviewer_service_identity is not None and result.reviewer_issued_token is not None:
         response.update(
@@ -1939,7 +1943,7 @@ def assurance_start(
 def evaluator_task_claim(request: HttpRequest, repository_id: uuid.UUID) -> JsonResponse:
     payload = _closed_payload(
         _json_body(request),
-        allowed=frozenset({"claimant", "lease_seconds"}),
+        allowed=frozenset({"claimant", "lease_seconds", "claim_idempotency_key"}),
         required=frozenset({"claimant"}),
     )
     claim = claim_evaluator_task(
@@ -1947,6 +1951,7 @@ def evaluator_task_claim(request: HttpRequest, repository_id: uuid.UUID) -> Json
         repository_id=repository_id,
         claimant=_string(payload, "claimant"),
         lease_seconds=_optional_integer(payload, "lease_seconds", 900),
+        claim_idempotency_key=_optional_string(payload, "claim_idempotency_key"),
     )
     if claim is None:
         return JsonResponse({"status": "EMPTY"}, status=200)

@@ -225,8 +225,13 @@ def test_bootstrap_exposes_scope_and_opt_in_independent_reviewer_once() -> None:
 
     assert "access_scope_id" in cast(list[str], response_schema["required"])
     assert "independent_reviewer_name" in request_properties
+    assert cast(dict[str, object], request_properties["idempotency_key"])["pattern"] == (
+        "^[a-f0-9]{64}$"
+    )
     assert "independent_reviewer_name" not in cast(list[str], request_schema["required"])
     assert cast(dict[str, object], response_properties["reviewer_token"])["minLength"] == 32
+    assert "bootstrap_request_sha256" in cast(list[str], response_schema["required"])
+    assert "recovered" in cast(list[str], response_schema["required"])
     assert operation["security"] == []
     assert "least-privilege" in cast(str, operation["description"])
 

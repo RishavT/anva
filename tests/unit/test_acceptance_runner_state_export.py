@@ -98,23 +98,25 @@ def _seal(root: Path, *, corpus_id: str = "halcyon-messy-organization-tst-008") 
         completed_at="2026-07-28T12:00:00Z",
         product_version="0.1.0",
         product_commit="c" * 40,
+        product_image_sha256="1" * 64,
+        product_package_sha256="2" * 64,
         corpus_commit="d" * 40,
+        canonical_manifest_sha256="3" * 64,
         canonical_input_sha256="e" * 64,
         head_commit="f" * 40,
         assurance_input_sha256="7" * 64,
         reference_time_sha256="8" * 64,
+        review_result_sha256="4" * 64,
         search_output={
             "contract_version": "1",
             "tool": "anva.search",
             "data": {
                 "results": [
                     {
-                        "id": "opaque-result",
-                        "source_revision_id": "opaque-revision",
+                        "chunk_id": "opaque-result",
                         "content_hash": "9" * 64,
-                        "path": "docs/knowledge/current.md",
-                        "locator": "line:7",
-                        "score": 0.92,
+                        "pointer": "line:7",
+                        "canonical_url": "file:///docs/knowledge/current.md",
                         "content": "sensitive source body must not be exported",
                     }
                 ]
@@ -123,7 +125,21 @@ def _seal(root: Path, *, corpus_id: str = "halcyon-messy-organization-tst-008") 
         context_output={
             "contract_version": "1",
             "tool": "anva.get_context_packet",
-            "data": {"packet": {"body": "content-minimized"}},
+            "data": {
+                "packet": {
+                    "items": [
+                        {
+                            "anva_sources": [
+                                {
+                                    "canonical_url": "file:///docs/knowledge/current.md",
+                                    "locator": "line:7",
+                                    "source_content_hash": "9" * 64,
+                                }
+                            ]
+                        }
+                    ]
+                }
+            },
         },
         canvas_output={
             "nodes": [{"id": "node-1", "type": "GOAL", "label": "Connected product goal"}],

@@ -2457,6 +2457,7 @@ class EvaluatorTask(RevisionedTenantModel):
     claimed_by_actor_type = models.CharField(max_length=20, blank=True)
     claimed_by_actor_id = models.CharField(max_length=200, blank=True)
     claimed_by_credential_id = models.UUIDField(null=True, blank=True)
+    claim_idempotency_sha256 = models.CharField(max_length=64, blank=True)
     claim_token_hash = models.CharField(max_length=64, blank=True)
     lease_expires_at = models.DateTimeField(null=True, blank=True)
     attempt_count = models.PositiveIntegerField(default=0)
@@ -2476,6 +2477,18 @@ class EvaluatorTask(RevisionedTenantModel):
             models.UniqueConstraint(
                 fields=["organization", "id"],
                 name="core_evaluator_task_org_id_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "claim_idempotency_sha256"],
+                condition=~Q(claim_idempotency_sha256=""),
+                name="core_evaluator_claim_idem_unique",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(claim_idempotency_sha256="")
+                    | Q(claim_idempotency_sha256__regex=r"^[a-f0-9]{64}$")
+                ),
+                name="core_evaluator_claim_idem_sha",
             ),
             models.CheckConstraint(
                 condition=Q(attempt_count__lte=F("max_attempts")),
@@ -3870,6 +3883,57 @@ class RepositoryAccessToken(UUIDModel):
             models.UniqueConstraint(
                 fields=["token_hash"],
                 name="core_repository_token_hash_unique",
+            ),
+        ]
+
+
+class BootstrapRecovery(UUIDModel):
+    """Exact-request recovery handle for a one-time local bootstrap."""
+
+    organization = models.OneToOneField(Organization, on_delete=models.PROTECT)
+    request_sha256 = models.CharField(max_length=64, unique=True)
+    idempotency_sha256 = models.CharField(max_length=64, unique=True)
+    user = models.ForeignKey(User, on_delete=models.PROTECT)
+    membership = models.ForeignKey(Membership, on_delete=models.PROTECT)
+    repository = models.ForeignKey(Repository, on_delete=models.PROTECT)
+    service_identity = models.ForeignKey(
+        ServiceIdentity,
+        on_delete=models.PROTECT,
+        related_name="bootstrap_recoveries",
+    )
+    access_scope = models.ForeignKey(AccessScope, on_delete=models.PROTECT)
+    reviewer_service_identity = models.ForeignKey(
+        ServiceIdentity,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="reviewer_bootstrap_recoveries",
+    )
+    issued_token = models.ForeignKey(
+        RepositoryAccessToken,
+        on_delete=models.PROTECT,
+        related_name="initiator_bootstrap_recoveries",
+    )
+    reviewer_issued_token = models.ForeignKey(
+        RepositoryAccessToken,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="reviewer_bootstrap_recoveries",
+    )
+    recovery_count = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.CheckConstraint(
+                condition=Q(request_sha256__regex=r"^[a-f0-9]{64}$"),
+                name="core_bootstrap_request_sha",
+            ),
+            models.CheckConstraint(
+                condition=Q(idempotency_sha256__regex=r"^[a-f0-9]{64}$"),
+                name="core_bootstrap_idem_sha",
             ),
         ]
 
