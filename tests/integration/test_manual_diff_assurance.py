@@ -337,8 +337,20 @@ def test_exact_replay_manual_queue_report_and_new_revision_staleness() -> None:
         actor=reviewer,
         repository_id=repository.id,
         claimant="fresh-review-agent",
+        claim_idempotency_key="9" * 64,
     )
     assert claim is not None
+    recovered_claim = claim_evaluator_task(
+        actor=reviewer,
+        repository_id=repository.id,
+        claimant="fresh-review-agent",
+        claim_idempotency_key="9" * 64,
+    )
+    assert recovered_claim is not None
+    assert recovered_claim.task.id == claim.task.id
+    assert recovered_claim.task.attempt_count == claim.task.attempt_count
+    assert recovered_claim.claim_token != claim.claim_token
+    claim = recovered_claim
     serialized_request = str(claim.request)
     assert "claim_token" not in serialized_request
     assert "ANVA_DATABASE_URL" not in serialized_request

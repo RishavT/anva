@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
+import json
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
@@ -15,6 +18,8 @@ from anva.core.exceptions import AuthenticationError, ResourceNotFoundError
 from anva.core.models import (
     AccessGrant,
     AccessScope,
+    AccessScopeServiceIdentity,
+    BootstrapRecovery,
     Membership,
     Organization,
     Repository,
@@ -39,6 +44,19 @@ class BootstrapResult:
     repository: Repository
     service_identity: ServiceIdentity
     issued_token: IssuedRepositoryToken
+    access_scope: AccessScope
+    reviewer_service_identity: ServiceIdentity | None = None
+    reviewer_issued_token: IssuedRepositoryToken | None = None
+    request_sha256: str | None = None
+    recovered: bool = False
+
+
+SHA256_PATTERN = re.compile(r"^[a-f0-9]{64}$")
+
+
+def _bootstrap_request_sha256(payload: dict[str, str | None]) -> str:
+    rendered = (json.dumps(payload, separators=(",", ":"), sort_keys=True) + "\n").encode()
+    return hashlib.sha256(rendered).hexdigest()
 
 
 def bootstrap_local_organization(
@@ -50,6 +68,8 @@ def bootstrap_local_organization(
     admin_display_name: str,
     repository_external_id: str,
     repository_name: str,
+    independent_reviewer_name: str | None = None,
+    idempotency_key: str | None = None,
 ) -> BootstrapResult:
     """Create the only initial organization and emit a one-time repository token."""
     if not hmac.compare_digest(supplied_secret, str(settings.BOOTSTRAP_SECRET)):
@@ -64,12 +84,96 @@ def bootstrap_local_organization(
     }
     if any(not value.strip() for value in required):
         raise ValueError("Every bootstrap field is required")
+    if idempotency_key is not None and SHA256_PATTERN.fullmatch(idempotency_key) is None:
+        raise ValueError("Bootstrap idempotency key must be a SHA-256 digest")
+    request_sha256 = _bootstrap_request_sha256(
+        {
+            "organization_slug": organization_slug,
+            "organization_name": organization_name,
+            "admin_email": admin_email,
+            "admin_display_name": admin_display_name,
+            "repository_external_id": repository_external_id,
+            "repository_name": repository_name,
+            "independent_reviewer_name": independent_reviewer_name,
+        }
+    )
 
     with transaction.atomic():
         with connection.cursor() as cursor:
             cursor.execute("SELECT pg_advisory_xact_lock(%s)", [0x414E5641])
         if Organization.objects.exists():
-            raise ResourceNotFoundError("Governed record was not found")
+            recovery = None
+            if idempotency_key is not None:
+                recovery = (
+                    BootstrapRecovery.objects.select_for_update(of=("self",))
+                    .select_related(
+                        "organization",
+                        "user",
+                        "membership",
+                        "repository",
+                        "service_identity",
+                        "access_scope",
+                        "reviewer_service_identity",
+                        "issued_token",
+                        "reviewer_issued_token",
+                    )
+                    .filter(idempotency_sha256=idempotency_key)
+                    .first()
+                )
+            if recovery is None or not hmac.compare_digest(recovery.request_sha256, request_sha256):
+                raise ResourceNotFoundError("Governed record was not found")
+            now = timezone.now()
+            if recovery.issued_token.revoked_at is None:
+                recovery.issued_token.revoked_at = now
+                recovery.issued_token.save(update_fields=["revoked_at"])
+            issued = issue_bootstrap_repository_token(
+                organization=recovery.organization,
+                repository=recovery.repository,
+                service_identity=recovery.service_identity,
+                actions=frozenset(Action),
+                expires_at=now + timedelta(days=7),
+            )
+            reviewer_issued_token = None
+            if recovery.reviewer_service_identity is not None:
+                if (
+                    recovery.reviewer_issued_token is not None
+                    and recovery.reviewer_issued_token.revoked_at is None
+                ):
+                    recovery.reviewer_issued_token.revoked_at = now
+                    recovery.reviewer_issued_token.save(update_fields=["revoked_at"])
+                reviewer_issued_token = issue_bootstrap_repository_token(
+                    organization=recovery.organization,
+                    repository=recovery.repository,
+                    service_identity=recovery.reviewer_service_identity,
+                    actions=frozenset({Action.ASSURANCE_REVIEW}),
+                    expires_at=now + timedelta(days=7),
+                )
+            recovery.issued_token = issued.record
+            recovery.reviewer_issued_token = (
+                reviewer_issued_token.record if reviewer_issued_token is not None else None
+            )
+            recovery.recovery_count += 1
+            recovery.save(
+                update_fields=[
+                    "issued_token",
+                    "reviewer_issued_token",
+                    "recovery_count",
+                    "updated_at",
+                ]
+            )
+            return BootstrapResult(
+                organization=recovery.organization,
+                user=recovery.user,
+                membership=recovery.membership,
+                repository=recovery.repository,
+                service_identity=recovery.service_identity,
+                issued_token=issued,
+                access_scope=recovery.access_scope,
+                reviewer_service_identity=recovery.reviewer_service_identity,
+                reviewer_issued_token=reviewer_issued_token,
+                request_sha256=request_sha256,
+                recovered=True,
+            )
 
         organization = Organization.objects.create(
             slug=organization_slug,
@@ -110,7 +214,6 @@ def bootstrap_local_organization(
             all_service_identities=True,
             all_repositories=True,
         )
-        del scope
         actions = frozenset(Action)
         AccessGrant.objects.bulk_create(
             [
@@ -130,6 +233,36 @@ def bootstrap_local_organization(
             actions=actions,
             expires_at=timezone.now() + timedelta(days=7),
         )
+        reviewer_service_identity = None
+        reviewer_issued_token = None
+        if independent_reviewer_name is not None:
+            normalized_reviewer_name = independent_reviewer_name.strip()
+            if not normalized_reviewer_name:
+                raise ValueError("Independent reviewer name cannot be blank")
+            reviewer_service_identity = ServiceIdentity.objects.create(
+                organization=organization,
+                name=normalized_reviewer_name,
+                issuer=settings.TOKEN_ISSUER,
+                audience=settings.TOKEN_AUDIENCE,
+            )
+            AccessScopeServiceIdentity.objects.create(
+                organization=organization,
+                access_scope=scope,
+                service_identity=reviewer_service_identity,
+            )
+            AccessGrant.objects.create(
+                organization=organization,
+                service_identity=reviewer_service_identity,
+                repository=repository,
+                action=Action.ASSURANCE_REVIEW.value,
+            )
+            reviewer_issued_token = issue_bootstrap_repository_token(
+                organization=organization,
+                repository=repository,
+                service_identity=reviewer_service_identity,
+                actions=frozenset({Action.ASSURANCE_REVIEW}),
+                expires_at=timezone.now() + timedelta(days=7),
+            )
         actor = ActorContext(
             organization_id=organization.id,
             actor_type="USER",
@@ -152,6 +285,22 @@ def bootstrap_local_organization(
                 "token_id": str(issued.record.id),
             },
         )
+        if idempotency_key is not None:
+            BootstrapRecovery.objects.create(
+                organization=organization,
+                request_sha256=request_sha256,
+                idempotency_sha256=idempotency_key,
+                user=user,
+                membership=membership,
+                repository=repository,
+                service_identity=service_identity,
+                access_scope=scope,
+                reviewer_service_identity=reviewer_service_identity,
+                issued_token=issued.record,
+                reviewer_issued_token=(
+                    reviewer_issued_token.record if reviewer_issued_token is not None else None
+                ),
+            )
         return BootstrapResult(
             organization=organization,
             user=user,
@@ -159,4 +308,8 @@ def bootstrap_local_organization(
             repository=repository,
             service_identity=service_identity,
             issued_token=issued,
+            access_scope=scope,
+            reviewer_service_identity=reviewer_service_identity,
+            reviewer_issued_token=reviewer_issued_token,
+            request_sha256=request_sha256,
         )

@@ -1146,11 +1146,17 @@ def claim_evaluator_task(
     repository_id: uuid.UUID,
     claimant: str,
     lease_seconds: int = 900,
+    claim_idempotency_key: str | None = None,
 ) -> EvaluatorClaim | None:
     """Claim one pending or expired manual evaluator task with a single-use secret."""
     claimant = _normalized_text(claimant, name="claimant", maximum=200)
     if lease_seconds < 60 or lease_seconds > 3_600:
         raise ValueError("lease_seconds must be between 60 and 3600")
+    if (
+        claim_idempotency_key is not None
+        and re.fullmatch(r"[a-f0-9]{64}", claim_idempotency_key) is None
+    ):
+        raise ValueError("claim_idempotency_key must be a SHA-256 digest")
     actor = _authorize_assurance_review(actor=actor, repository_id=repository_id)
     repository = get_tenant_record(
         queryset=Repository.objects.filter(is_active=True),
@@ -1158,6 +1164,45 @@ def claim_evaluator_task(
         organization_id=actor.organization_id,
     )
     now = timezone.now()
+    if claim_idempotency_key is not None:
+        prior = (
+            EvaluatorTask.objects.select_for_update(of=("self",))
+            .select_related("request_artifact")
+            .filter(
+                organization_id=actor.organization_id,
+                repository=repository,
+                claim_idempotency_sha256=claim_idempotency_key,
+            )
+            .first()
+        )
+        if prior is not None:
+            same_claim = (
+                prior.state == EvaluatorTask.State.CLAIMED
+                and prior.claimant == claimant
+                and prior.claimed_by_actor_type == actor.actor_type
+                and hmac.compare_digest(prior.claimed_by_actor_id, actor.actor_id)
+                and prior.claimed_by_credential_id == actor.credential_id
+            )
+            if not same_claim:
+                raise LeaseConflictError("Evaluator claim idempotency key is already bound")
+            if prior.lease_expires_at is not None and prior.lease_expires_at > now:
+                token = secrets.token_urlsafe(32)
+                prior.claim_token_hash = hashlib.sha256(token.encode()).hexdigest()
+                prior.lease_expires_at = now + timedelta(seconds=lease_seconds)
+                prior.revision += 1
+                prior.save(
+                    update_fields=[
+                        "claim_token_hash",
+                        "lease_expires_at",
+                        "revision",
+                        "updated_at",
+                    ]
+                )
+                return EvaluatorClaim(
+                    task=prior,
+                    claim_token=token,
+                    request=cast(dict[str, object], prior.request_artifact.payload),
+                )
     exhausted_tasks = list(
         EvaluatorTask.objects.select_for_update(of=("self",))
         .select_related("organization", "assurance_run", "request_artifact__access_scope")
@@ -1260,6 +1305,7 @@ def claim_evaluator_task(
     task.claimed_by_actor_type = actor.actor_type
     task.claimed_by_actor_id = actor.actor_id
     task.claimed_by_credential_id = actor.credential_id
+    task.claim_idempotency_sha256 = claim_idempotency_key or ""
     task.claim_token_hash = hashlib.sha256(token.encode()).hexdigest()
     task.lease_expires_at = now + timedelta(seconds=lease_seconds)
     task.attempt_count += 1
@@ -1271,6 +1317,7 @@ def claim_evaluator_task(
             "claimed_by_actor_type",
             "claimed_by_actor_id",
             "claimed_by_credential_id",
+            "claim_idempotency_sha256",
             "claim_token_hash",
             "lease_expires_at",
             "attempt_count",

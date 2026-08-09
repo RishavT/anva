@@ -97,6 +97,59 @@ def build_parser() -> argparse.ArgumentParser:
     acceptance_verify.add_argument("--manifest-sha256", required=True)
     acceptance_verify.add_argument("--source-fingerprint", required=True)
     acceptance_verify.add_argument("--canonical-manifest-sha256", required=True)
+    acceptance_common = argparse.ArgumentParser(add_help=False)
+    acceptance_common.add_argument(
+        "--api-url", default=os.getenv("ANVA_API_URL", "http://api:8000/api/v1")
+    )
+    acceptance_common.add_argument(
+        "--mcp-url", default=os.getenv("ANVA_MCP_URL", "http://mcp:8001/mcp")
+    )
+    acceptance_common.add_argument("--canonical-root", required=True, type=Path)
+    acceptance_common.add_argument("--state", required=True, type=Path)
+    acceptance_common.add_argument("--output", required=True, type=Path)
+    acceptance_common.add_argument("--manifest-sha256", required=True)
+    acceptance_common.add_argument("--source-fingerprint", required=True)
+    acceptance_common.add_argument("--canonical-manifest-sha256", required=True)
+    acceptance_common.add_argument("--product-commit", required=True)
+    acceptance_common.add_argument("--product-image-sha256", required=True)
+    acceptance_common.add_argument("--product-image-reference", required=True)
+    acceptance_common.add_argument("--build-input-sha256", required=True)
+    acceptance_common.add_argument("--launch-service", required=True)
+    acceptance_common.add_argument(
+        "--build-provenance",
+        type=Path,
+        default=Path("/app/anva-build-provenance.json"),
+    )
+    acceptance_common.add_argument(
+        "--launch-manifest",
+        type=Path,
+        default=Path("/acceptance/launch/manifest.json"),
+    )
+    acceptance_start = acceptance_commands.add_parser(
+        "start",
+        parents=[acceptance_common],
+        help="Run public product operations until independent review is required",
+    )
+    acceptance_start.add_argument("--credential-output", required=True, type=Path)
+    acceptance_start.add_argument("--sync-timeout-seconds", type=int, default=300)
+    acceptance_review_request = acceptance_commands.add_parser(
+        "review-request",
+        parents=[acceptance_common],
+        help="Claim the pending task as an independently authenticated evaluator",
+    )
+    acceptance_review_request.add_argument("--handoff", required=True, type=Path)
+    acceptance_review_submit = acceptance_commands.add_parser(
+        "review-submit",
+        parents=[acceptance_common],
+        help="Submit an external evaluator result for its exact authenticated claim",
+    )
+    acceptance_review_submit.add_argument("--handoff", required=True, type=Path)
+    acceptance_review_submit.add_argument("--result", required=True, type=Path)
+    acceptance_commands.add_parser(
+        "finalize",
+        parents=[acceptance_common],
+        help="Seal deterministic public results after authenticated external review",
+    )
     source = subparsers.add_parser("source", help="Operate source connections through the API")
     source.add_argument(
         "--api-url",
@@ -965,6 +1018,7 @@ def _skills_request(arguments: argparse.Namespace) -> int:
 
 
 def _acceptance_request(arguments: argparse.Namespace) -> int:
+    from anva.acceptance.client import AcceptanceBoundaryError
     from anva.acceptance.corpus import (
         AcceptanceCorpusError,
         AdapterLimits,
@@ -995,9 +1049,87 @@ def _acceptance_request(arguments: argparse.Namespace) -> int:
                 expected_canonical_manifest_sha256=str(arguments.canonical_manifest_sha256),
             ).as_dict()
         else:
-            raise ValueError("Unknown acceptance command")
+            from anva.acceptance.runner import AcceptanceRunner, RunnerConfig
+
+            config = RunnerConfig(
+                api_url=str(arguments.api_url),
+                mcp_url=str(arguments.mcp_url),
+                canonical_root=arguments.canonical_root,
+                state_path=arguments.state,
+                output_root=arguments.output,
+                manifest_sha256=str(arguments.manifest_sha256),
+                source_fingerprint=str(arguments.source_fingerprint),
+                canonical_manifest_sha256=str(arguments.canonical_manifest_sha256),
+                product_commit=str(arguments.product_commit),
+                product_image_sha256=str(arguments.product_image_sha256),
+                product_image_reference=str(arguments.product_image_reference),
+                build_input_sha256=str(arguments.build_input_sha256),
+                launch_service=str(arguments.launch_service),
+                build_provenance_path=arguments.build_provenance,
+                launch_manifest_path=arguments.launch_manifest,
+                credential_output=getattr(arguments, "credential_output", None),
+                sync_timeout_seconds=int(getattr(arguments, "sync_timeout_seconds", 300)),
+            )
+            runner = AcceptanceRunner(config)
+            command = str(arguments.acceptance_command)
+            if command == "start":
+                state = runner.start(
+                    bootstrap_secret=os.getenv("ANVA_BOOTSTRAP_SECRET"),
+                    token=os.getenv("ANVA_ACCEPTANCE_TOKEN"),
+                )
+            elif command == "review-request":
+                reviewer_token = os.getenv("ANVA_ACCEPTANCE_REVIEWER_TOKEN", "")
+                if not reviewer_token:
+                    raise ValueError("ANVA_ACCEPTANCE_REVIEWER_TOKEN is required")
+                state = runner.create_review_handoff(
+                    reviewer_token=reviewer_token,
+                    output=arguments.handoff,
+                )
+            elif command == "review-submit":
+                reviewer_token = os.getenv("ANVA_ACCEPTANCE_REVIEWER_TOKEN", "")
+                if not reviewer_token:
+                    raise ValueError("ANVA_ACCEPTANCE_REVIEWER_TOKEN is required")
+                state = runner.submit_review(
+                    reviewer_token=reviewer_token,
+                    handoff_path=arguments.handoff,
+                    result_path=arguments.result,
+                )
+            elif command == "finalize":
+                token = os.getenv("ANVA_ACCEPTANCE_TOKEN", "")
+                if not token:
+                    raise ValueError("ANVA_ACCEPTANCE_TOKEN is required")
+                state = runner.finalize(token=token)
+            else:
+                raise ValueError("Unknown acceptance command")
+            payload = {
+                "status": state.status,
+                "run_id": state.run_id,
+                "state_path": str(arguments.state),
+            }
     except AcceptanceCorpusError as error:
         print(json.dumps({"code": error.code, "message": str(error)}, sort_keys=True))
+        return 2
+    except AcceptanceBoundaryError:
+        print(
+            json.dumps(
+                {
+                    "code": "acceptance_boundary_rejected",
+                    "message": "Acceptance product boundary failed safely",
+                },
+                sort_keys=True,
+            )
+        )
+        return 2
+    except (json.JSONDecodeError, ValueError):
+        print(
+            json.dumps(
+                {
+                    "code": "acceptance_rejected",
+                    "message": "Acceptance operation failed safely",
+                },
+                sort_keys=True,
+            )
+        )
         return 2
     except OSError:
         print(

@@ -206,6 +206,37 @@ def test_acceptance_contract_is_public_only_and_requires_retrieval_results() -> 
 
 
 @pytest.mark.contract
+def test_bootstrap_exposes_scope_and_opt_in_independent_reviewer_once() -> None:
+    document = openapi_document()
+    paths = cast(dict[str, object], document["paths"])
+    path = cast(dict[str, object], paths["/bootstrap"])
+    operation = cast(dict[str, object], path["post"])
+    request_body = cast(dict[str, object], operation["requestBody"])
+    request_content = cast(dict[str, object], request_body["content"])
+    request_media = cast(dict[str, object], request_content["application/json"])
+    request_schema = cast(dict[str, object], request_media["schema"])
+    responses = cast(dict[str, object], operation["responses"])
+    created = cast(dict[str, object], responses["201"])
+    created_content = cast(dict[str, object], created["content"])
+    created_media = cast(dict[str, object], created_content["application/json"])
+    response_schema = cast(dict[str, object], created_media["schema"])
+    request_properties = cast(dict[str, object], request_schema["properties"])
+    response_properties = cast(dict[str, object], response_schema["properties"])
+
+    assert "access_scope_id" in cast(list[str], response_schema["required"])
+    assert "independent_reviewer_name" in request_properties
+    assert cast(dict[str, object], request_properties["idempotency_key"])["pattern"] == (
+        "^[a-f0-9]{64}$"
+    )
+    assert "independent_reviewer_name" not in cast(list[str], request_schema["required"])
+    assert cast(dict[str, object], response_properties["reviewer_token"])["minLength"] == 32
+    assert "bootstrap_request_sha256" in cast(list[str], response_schema["required"])
+    assert "recovered" in cast(list[str], response_schema["required"])
+    assert operation["security"] == []
+    assert "least-privilege" in cast(str, operation["description"])
+
+
+@pytest.mark.contract
 def test_openapi_exposes_versioned_tenancy_and_authorization_boundaries() -> None:
     paths = cast(dict[str, object], openapi_document()["paths"])
 
