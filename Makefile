@@ -4,6 +4,7 @@ ANVA_IMAGE_REPOSITORY ?= anva
 ANVA_VERSION ?= 0.1.0
 ANVA_REVISION ?= $(shell git rev-parse --verify HEAD 2>/dev/null)
 ANVA_IMAGE_SHA256 ?=
+ANVA_BUILD_INPUT_SHA256 ?=
 ANVA_IMAGE_REF := $(ANVA_IMAGE_REPOSITORY):$(ANVA_VERSION)
 REHEARSAL_PROJECT ?= $(COMPOSE_PROJECT)-migration-rehearsal
 override OPERATIONS_LOCK_CONTAINER := $(COMPOSE_PROJECT)-operations-lock
@@ -26,7 +27,7 @@ override REHEARSAL_COMPOSE := \
 	ANVA_MINIO_ROOT_PASSWORD=anva-rehearsal-only \
 	docker compose -f compose.yaml -p $(REHEARSAL_PROJECT)
 TRIVY_SOURCE_SKIPS := --skip-dirs /workspace/.git --skip-dirs /workspace/.secrets --skip-dirs /workspace/secrets --skip-dirs /workspace/backups --skip-dirs /workspace/release --skip-dirs /workspace/.venv --skip-dirs /workspace/.pytest_cache --skip-dirs /workspace/.mypy_cache --skip-dirs /workspace/.ruff_cache --skip-dirs /workspace/htmlcov --skip-files /workspace/.env
-export ANVA_IMAGE_REPOSITORY ANVA_VERSION ANVA_REVISION ANVA_IMAGE_SHA256
+export ANVA_IMAGE_REPOSITORY ANVA_VERSION ANVA_REVISION ANVA_IMAGE_SHA256 ANVA_BUILD_INPUT_SHA256
 COMPOSE := docker compose -p $(COMPOSE_PROJECT)
 EXPOSED_COMPOSE := $(COMPOSE) -f compose.yaml -f compose.expose.yaml
 RELEASE_COMPOSE := $(COMPOSE) -f compose.yaml -f compose.release.yaml
@@ -394,6 +395,8 @@ acceptance-verify:
 acceptance-start:
 	@test -n "$(ANVA_REVISION)" || { echo "ANVA_REVISION is required"; exit 2; }
 	@test -n "$(ANVA_IMAGE_SHA256)" || { echo "ANVA_IMAGE_SHA256 is required"; exit 2; }
+	@test -n "$(ANVA_BUILD_INPUT_SHA256)" || { echo "ANVA_BUILD_INPUT_SHA256 is required"; exit 2; }
+	@test -n "$(ANVA_ACCEPTANCE_LAUNCH_MANIFEST)" || { echo "ANVA_ACCEPTANCE_LAUNCH_MANIFEST is required"; exit 2; }
 	@test -n "$(ANVA_ACCEPTANCE_MANIFEST_SHA256)" || { echo "ANVA_ACCEPTANCE_MANIFEST_SHA256 is required"; exit 2; }
 	@test -n "$(ANVA_ACCEPTANCE_SOURCE_FINGERPRINT)" || { echo "ANVA_ACCEPTANCE_SOURCE_FINGERPRINT is required"; exit 2; }
 	@test -n "$(ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256)" || { echo "ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256 is required"; exit 2; }
@@ -405,6 +408,8 @@ acceptance-start:
 acceptance-review-request:
 	@test -n "$(ANVA_REVISION)" || { echo "ANVA_REVISION is required"; exit 2; }
 	@test -n "$(ANVA_IMAGE_SHA256)" || { echo "ANVA_IMAGE_SHA256 is required"; exit 2; }
+	@test -n "$(ANVA_BUILD_INPUT_SHA256)" || { echo "ANVA_BUILD_INPUT_SHA256 is required"; exit 2; }
+	@test -n "$(ANVA_ACCEPTANCE_LAUNCH_MANIFEST)" || { echo "ANVA_ACCEPTANCE_LAUNCH_MANIFEST is required"; exit 2; }
 	@test -n "$(ANVA_ACCEPTANCE_REVIEWER_TOKEN)" || { echo "ANVA_ACCEPTANCE_REVIEWER_TOKEN is required"; exit 2; }
 	@test -n "$(ANVA_ACCEPTANCE_HANDOFF_DIR)" || { echo "ANVA_ACCEPTANCE_HANDOFF_DIR is required"; exit 2; }
 	$(ACCEPTANCE_COMPOSE) --profile acceptance run --rm --no-deps acceptance-review-request
@@ -412,6 +417,8 @@ acceptance-review-request:
 acceptance-review-submit:
 	@test -n "$(ANVA_REVISION)" || { echo "ANVA_REVISION is required"; exit 2; }
 	@test -n "$(ANVA_IMAGE_SHA256)" || { echo "ANVA_IMAGE_SHA256 is required"; exit 2; }
+	@test -n "$(ANVA_BUILD_INPUT_SHA256)" || { echo "ANVA_BUILD_INPUT_SHA256 is required"; exit 2; }
+	@test -n "$(ANVA_ACCEPTANCE_LAUNCH_MANIFEST)" || { echo "ANVA_ACCEPTANCE_LAUNCH_MANIFEST is required"; exit 2; }
 	@test -n "$(ANVA_ACCEPTANCE_REVIEWER_TOKEN)" || { echo "ANVA_ACCEPTANCE_REVIEWER_TOKEN is required"; exit 2; }
 	@test -n "$(ANVA_ACCEPTANCE_REVIEW_RESULT_DIR)" || { echo "ANVA_ACCEPTANCE_REVIEW_RESULT_DIR is required"; exit 2; }
 	$(ACCEPTANCE_COMPOSE) --profile acceptance run --rm --no-deps acceptance-review-submit
@@ -419,6 +426,8 @@ acceptance-review-submit:
 acceptance-finalize:
 	@test -n "$(ANVA_REVISION)" || { echo "ANVA_REVISION is required"; exit 2; }
 	@test -n "$(ANVA_IMAGE_SHA256)" || { echo "ANVA_IMAGE_SHA256 is required"; exit 2; }
+	@test -n "$(ANVA_BUILD_INPUT_SHA256)" || { echo "ANVA_BUILD_INPUT_SHA256 is required"; exit 2; }
+	@test -n "$(ANVA_ACCEPTANCE_LAUNCH_MANIFEST)" || { echo "ANVA_ACCEPTANCE_LAUNCH_MANIFEST is required"; exit 2; }
 	@test -n "$(ANVA_ACCEPTANCE_TOKEN)" || { echo "ANVA_ACCEPTANCE_TOKEN is required"; exit 2; }
 	@test -n "$(ANVA_ACCEPTANCE_RESULTS_DIR)" || { echo "ANVA_ACCEPTANCE_RESULTS_DIR is required"; exit 2; }
 	$(ACCEPTANCE_COMPOSE) --profile acceptance run --rm --no-deps acceptance-product-finalize

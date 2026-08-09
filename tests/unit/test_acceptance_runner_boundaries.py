@@ -17,7 +17,7 @@ import pytest
 from anva.acceptance.client import APIResponse
 from anva.acceptance.corpus import canonicalize_corpus
 from anva.acceptance.export import AcceptanceExportError
-from anva.acceptance.provenance import package_sha256
+from anva.acceptance.provenance import REQUIRED_LAUNCH_SERVICES, package_sha256
 from anva.acceptance.runner import AcceptanceRunner, AcceptanceRunnerError, RunnerConfig
 from anva.acceptance.state import ResumeState, load_state
 from anva.contracts.catalog import EXAMPLES
@@ -294,20 +294,44 @@ def _runner(
         lambda _url, _token: fake_mcp,
     )
     provenance = tmp_path / "anva-build-provenance.json"
+    package_digest = package_sha256(Path(__file__).resolve().parents[2] / "src" / "anva")
     provenance.write_text(
         json.dumps(
             {
                 "schema_version": 1,
                 "product_commit": "d" * 40,
-                "image_sha256": "e" * 64,
-                "package_sha256": package_sha256(
-                    Path(__file__).resolve().parents[2] / "src" / "anva"
-                ),
+                "build_input_sha256": "b" * 64,
+                "package_sha256": package_digest,
             }
         ),
         encoding="utf-8",
     )
     provenance.chmod(0o444)
+    launch_manifest = tmp_path / "launch-manifest.json"
+    launch_manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "anva-docker-launch",
+                "product_commit": "d" * 40,
+                "build_input_sha256": "b" * 64,
+                "package_sha256": package_digest,
+                "engine_image_id": f"sha256:{'e' * 64}",
+                "image_reference": "anva:test",
+                "resolved_compose_sha256": "a" * 64,
+                "services": {
+                    service: {
+                        "config_sha256": "f" * 64,
+                        "engine_image_id": f"sha256:{'e' * 64}",
+                        "image_reference": "anva:test",
+                    }
+                    for service in REQUIRED_LAUNCH_SERVICES
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    launch_manifest.chmod(0o444)
     runner = AcceptanceRunner(
         RunnerConfig(
             api_url="http://api:8000/api/v1",
@@ -320,7 +344,11 @@ def _runner(
             canonical_manifest_sha256=corpus.canonical_manifest_sha256,
             product_commit="d" * 40,
             product_image_sha256="e" * 64,
+            product_image_reference="anva:test",
+            build_input_sha256="b" * 64,
+            launch_service="acceptance-product-start",
             build_provenance_path=provenance,
+            launch_manifest_path=launch_manifest,
             credential_output=tmp_path / "credentials" / "credentials.json",
             sync_timeout_seconds=1,
         )

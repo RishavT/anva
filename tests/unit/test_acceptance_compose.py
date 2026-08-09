@@ -176,19 +176,23 @@ def test_product_acceptance_phases_have_disjoint_hardened_mounts() -> None:
     assert targets["acceptance-product-start"] == {
         "/acceptance/state",
         "/acceptance/credentials",
+        "/acceptance/launch/manifest.json",
     }
     assert targets["acceptance-review-request"] == {
         "/acceptance/state",
         "/acceptance/handoff",
+        "/acceptance/launch/manifest.json",
     }
     assert targets["acceptance-review-submit"] == {
         "/acceptance/state",
         "/acceptance/handoff",
         "/acceptance/reviewer",
+        "/acceptance/launch/manifest.json",
     }
     assert targets["acceptance-product-finalize"] == {
         "/acceptance/state",
         "/acceptance/results",
+        "/acceptance/launch/manifest.json",
     }
     assert text.count("target: /acceptance/credentials") == 1
     assert text.count("target: /acceptance/results") == 1
@@ -210,6 +214,8 @@ def test_product_acceptance_make_targets_use_scoped_compose_services() -> None:
         assert "prune" not in body
         assert 'test -n "$(ANVA_REVISION)"' in body
         assert 'test -n "$(ANVA_IMAGE_SHA256)"' in body
+        assert 'test -n "$(ANVA_BUILD_INPUT_SHA256)"' in body
+        assert 'test -n "$(ANVA_ACCEPTANCE_LAUNCH_MANIFEST)"' in body
 
 
 @pytest.mark.unit

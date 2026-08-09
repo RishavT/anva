@@ -6,7 +6,7 @@ x-acceptance-product: &acceptance-product
     args:
       ANVA_VERSION: ${ANVA_VERSION:-0.1.0}
       ANVA_REVISION: ${ANVA_REVISION:-unknown}
-      ANVA_IMAGE_SHA256: ${ANVA_IMAGE_SHA256:-0000000000000000000000000000000000000000000000000000000000000000}
+      ANVA_BUILD_INPUT_SHA256: ${ANVA_BUILD_INPUT_SHA256:-0000000000000000000000000000000000000000000000000000000000000000}
       ANVA_SOURCE: ${ANVA_SOURCE:-https://github.com/rishavt/anva}
       SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH:-1756684800}
   profiles: ["acceptance"]
@@ -54,7 +54,7 @@ services:
       args:
         ANVA_VERSION: ${ANVA_VERSION:-0.1.0}
         ANVA_REVISION: ${ANVA_REVISION:-unknown}
-        ANVA_IMAGE_SHA256: ${ANVA_IMAGE_SHA256:-0000000000000000000000000000000000000000000000000000000000000000}
+        ANVA_BUILD_INPUT_SHA256: ${ANVA_BUILD_INPUT_SHA256:-0000000000000000000000000000000000000000000000000000000000000000}
         ANVA_SOURCE: ${ANVA_SOURCE:-https://github.com/rishavt/anva}
         SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH:-1756684800}
     profiles: ["acceptance"]
@@ -140,7 +140,7 @@ services:
       args:
         ANVA_VERSION: ${ANVA_VERSION:-0.1.0}
         ANVA_REVISION: ${ANVA_REVISION:-unknown}
-        ANVA_IMAGE_SHA256: ${ANVA_IMAGE_SHA256:-0000000000000000000000000000000000000000000000000000000000000000}
+        ANVA_BUILD_INPUT_SHA256: ${ANVA_BUILD_INPUT_SHA256:-0000000000000000000000000000000000000000000000000000000000000000}
         ANVA_SOURCE: ${ANVA_SOURCE:-https://github.com/rishavt/anva}
         SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH:-1756684800}
     profiles: ["acceptance"]
@@ -201,6 +201,14 @@ services:
       - ${ANVA_REVISION:-unknown}
       - --product-image-sha256
       - ${ANVA_IMAGE_SHA256:-invalid-unpinned-image}
+      - --product-image-reference
+      - ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.0}
+      - --build-input-sha256
+      - ${ANVA_BUILD_INPUT_SHA256:-invalid-unpinned-build-input}
+      - --launch-manifest
+      - /acceptance/launch/manifest.json
+      - --launch-service
+      - acceptance-product-start
     volumes:
       - acceptance-canonical:/app/acceptance/canonical:ro
       - type: bind
@@ -211,6 +219,12 @@ services:
       - type: bind
         source: ${ANVA_ACCEPTANCE_CREDENTIAL_DIR:-/nonexistent-anva-acceptance-credentials}
         target: /acceptance/credentials
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${ANVA_ACCEPTANCE_LAUNCH_MANIFEST:-/nonexistent-anva-launch-manifest}
+        target: /acceptance/launch/manifest.json
+        read_only: true
         bind:
           create_host_path: false
 
@@ -241,6 +255,14 @@ services:
       - ${ANVA_REVISION:-unknown}
       - --product-image-sha256
       - ${ANVA_IMAGE_SHA256:-invalid-unpinned-image}
+      - --product-image-reference
+      - ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.0}
+      - --build-input-sha256
+      - ${ANVA_BUILD_INPUT_SHA256:-invalid-unpinned-build-input}
+      - --launch-manifest
+      - /acceptance/launch/manifest.json
+      - --launch-service
+      - acceptance-review-request
     volumes:
       - acceptance-canonical:/app/acceptance/canonical:ro
       - type: bind
@@ -251,6 +273,12 @@ services:
       - type: bind
         source: ${ANVA_ACCEPTANCE_HANDOFF_DIR:-/nonexistent-anva-acceptance-handoff}
         target: /acceptance/handoff
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${ANVA_ACCEPTANCE_LAUNCH_MANIFEST:-/nonexistent-anva-launch-manifest}
+        target: /acceptance/launch/manifest.json
+        read_only: true
         bind:
           create_host_path: false
 
@@ -283,6 +311,14 @@ services:
       - ${ANVA_REVISION:-unknown}
       - --product-image-sha256
       - ${ANVA_IMAGE_SHA256:-invalid-unpinned-image}
+      - --product-image-reference
+      - ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.0}
+      - --build-input-sha256
+      - ${ANVA_BUILD_INPUT_SHA256:-invalid-unpinned-build-input}
+      - --launch-manifest
+      - /acceptance/launch/manifest.json
+      - --launch-service
+      - acceptance-review-submit
     volumes:
       - acceptance-canonical:/app/acceptance/canonical:ro
       - type: bind
@@ -298,6 +334,12 @@ services:
       - type: bind
         source: ${ANVA_ACCEPTANCE_REVIEW_RESULT_DIR:-/nonexistent-anva-review-result}
         target: /acceptance/reviewer
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${ANVA_ACCEPTANCE_LAUNCH_MANIFEST:-/nonexistent-anva-launch-manifest}
+        target: /acceptance/launch/manifest.json
         read_only: true
         bind:
           create_host_path: false
@@ -327,6 +369,14 @@ services:
       - ${ANVA_REVISION:-unknown}
       - --product-image-sha256
       - ${ANVA_IMAGE_SHA256:-invalid-unpinned-image}
+      - --product-image-reference
+      - ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.0}
+      - --build-input-sha256
+      - ${ANVA_BUILD_INPUT_SHA256:-invalid-unpinned-build-input}
+      - --launch-manifest
+      - /acceptance/launch/manifest.json
+      - --launch-service
+      - acceptance-product-finalize
     volumes:
       - acceptance-canonical:/app/acceptance/canonical:ro
       - type: bind
@@ -337,6 +387,12 @@ services:
       - type: bind
         source: ${ANVA_ACCEPTANCE_RESULTS_DIR:-/nonexistent-anva-acceptance-results}
         target: /acceptance/results
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${ANVA_ACCEPTANCE_LAUNCH_MANIFEST:-/nonexistent-anva-launch-manifest}
+        target: /acceptance/launch/manifest.json
+        read_only: true
         bind:
           create_host_path: false
 

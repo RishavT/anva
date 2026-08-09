@@ -168,7 +168,10 @@ def seal_results(
     product_version: str,
     product_commit: str,
     product_image_sha256: str,
+    product_image_reference: str,
+    build_input_sha256: str,
     product_package_sha256: str,
+    launch_manifest_sha256: str,
     corpus_commit: str,
     canonical_manifest_sha256: str,
     canonical_input_sha256: str,
@@ -190,7 +193,9 @@ def seal_results(
         source_fingerprint,
         product_commit,
         product_image_sha256,
+        build_input_sha256,
         product_package_sha256,
+        launch_manifest_sha256,
         corpus_commit,
         canonical_manifest_sha256,
         canonical_input_sha256,
@@ -201,6 +206,8 @@ def seal_results(
     ):
         if HASH_PATTERN.fullmatch(digest) is None:
             raise AcceptanceExportError("Acceptance provenance hash is invalid")
+    if not product_image_reference or len(product_image_reference) > 255:
+        raise AcceptanceExportError("Acceptance image reference is invalid")
     parent = output_root.parent.resolve()
     if not parent.is_dir() or output_root.parent.is_symlink():
         raise AcceptanceExportError("Acceptance output parent is unsafe")
@@ -274,8 +281,11 @@ def seal_results(
                     "name": "anva",
                     "version": product_version,
                     "commit": product_commit,
-                    "image_sha256": product_image_sha256,
+                    "engine_image_sha256": product_image_sha256,
+                    "image_reference": product_image_reference,
+                    "build_input_sha256": build_input_sha256,
                     "package_sha256": product_package_sha256,
+                    "launch_manifest_sha256": launch_manifest_sha256,
                 },
                 "corpus": {
                     "id": corpus_id,
@@ -391,7 +401,10 @@ def verify_sealed_results(
     product_version: str,
     product_commit: str,
     product_image_sha256: str,
+    product_image_reference: str,
+    build_input_sha256: str,
     product_package_sha256: str,
+    launch_manifest_sha256: str,
     corpus_commit: str,
     canonical_input_sha256: str,
     canonical_manifest_sha256: str,
@@ -465,8 +478,11 @@ def verify_sealed_results(
             "name": "anva",
             "version": product_version,
             "commit": product_commit,
-            "image_sha256": product_image_sha256,
+            "engine_image_sha256": product_image_sha256,
+            "image_reference": product_image_reference,
+            "build_input_sha256": build_input_sha256,
             "package_sha256": product_package_sha256,
+            "launch_manifest_sha256": launch_manifest_sha256,
         },
         "corpus": {
             "id": corpus_id,

@@ -23,7 +23,11 @@ from anva.acceptance.export import (
     sha256_bytes,
     verify_sealed_results,
 )
-from anva.acceptance.provenance import AcceptanceProvenanceError, attest_build_provenance
+from anva.acceptance.provenance import (
+    AcceptanceProvenanceError,
+    attest_build_provenance,
+    attest_launch_manifest,
+)
 from anva.acceptance.state import ResumeState, load_state, save_state
 from anva.contracts.validation import validate_payload
 
@@ -48,7 +52,11 @@ class RunnerConfig:
     canonical_manifest_sha256: str
     product_commit: str
     product_image_sha256: str
+    product_image_reference: str
+    build_input_sha256: str
+    launch_service: str
     build_provenance_path: Path = Path("/app/anva-build-provenance.json")
+    launch_manifest_path: Path = Path("/acceptance/launch/manifest.json")
     credential_output: Path | None = None
     sync_timeout_seconds: int = 300
 
@@ -148,6 +156,10 @@ class AcceptanceRunner:
             character != "0" for character in config.product_image_sha256
         ):
             raise AcceptanceRunnerError("Product image must be pinned by a non-zero SHA-256 digest")
+        if re.fullmatch(r"[a-f0-9]{64}", config.build_input_sha256) is None or not any(
+            character != "0" for character in config.build_input_sha256
+        ):
+            raise AcceptanceRunnerError("Build input must be pinned by a non-zero SHA-256 digest")
         if not 1 <= config.sync_timeout_seconds <= 3_600:
             raise AcceptanceRunnerError("Source sync timeout is outside its bound")
         self.config = config
@@ -155,11 +167,21 @@ class AcceptanceRunner:
             provenance = attest_build_provenance(
                 config.build_provenance_path,
                 expected_commit=config.product_commit,
+                expected_build_input_sha256=config.build_input_sha256,
+            )
+            launch_manifest_sha256 = attest_launch_manifest(
+                config.launch_manifest_path,
+                expected_commit=config.product_commit,
+                expected_build_input_sha256=config.build_input_sha256,
+                expected_package_sha256=provenance["package_sha256"],
                 expected_image_sha256=config.product_image_sha256,
+                expected_image_reference=config.product_image_reference,
+                expected_service=config.launch_service,
             )
         except AcceptanceProvenanceError as error:
             raise AcceptanceRunnerError(str(error)) from error
         self.product_package_sha256 = provenance["package_sha256"]
+        self.launch_manifest_sha256 = launch_manifest_sha256
         self.corpus = verify_canonical_corpus(
             config.canonical_root,
             expected_manifest_sha256=config.manifest_sha256,
@@ -299,7 +321,9 @@ class AcceptanceRunner:
                 "canonical_input_sha256": self.corpus.canonical_manifest_sha256,
                 "product_commit": self.config.product_commit,
                 "product_image_sha256": self.config.product_image_sha256,
+                "build_input_sha256": self.config.build_input_sha256,
                 "product_package_sha256": self.product_package_sha256,
+                "launch_manifest_sha256": self.launch_manifest_sha256,
                 "corpus_commit": self.corpus_commit,
                 "reference_time_sha256": sha256_bytes(committed_reference.encode()),
                 "base_commit": _hash40(f"{self.corpus.source_fingerprint}:base"),
@@ -1090,7 +1114,10 @@ class AcceptanceRunner:
             product_version=state.product_version,
             product_commit=state.hashes["product_commit"],
             product_image_sha256=state.hashes["product_image_sha256"],
+            product_image_reference=self.config.product_image_reference,
+            build_input_sha256=state.hashes["build_input_sha256"],
             product_package_sha256=state.hashes["product_package_sha256"],
+            launch_manifest_sha256=state.hashes["launch_manifest_sha256"],
             corpus_commit=state.hashes["corpus_commit"],
             canonical_manifest_sha256=state.hashes["canonical_manifest_sha256"],
             canonical_input_sha256=state.hashes["canonical_input_sha256"],
@@ -1120,7 +1147,10 @@ class AcceptanceRunner:
             product_version=state.product_version,
             product_commit=state.hashes["product_commit"],
             product_image_sha256=state.hashes["product_image_sha256"],
+            product_image_reference=self.config.product_image_reference,
+            build_input_sha256=state.hashes["build_input_sha256"],
             product_package_sha256=state.hashes["product_package_sha256"],
+            launch_manifest_sha256=state.hashes["launch_manifest_sha256"],
             corpus_commit=state.hashes["corpus_commit"],
             canonical_input_sha256=state.hashes["canonical_input_sha256"],
             canonical_manifest_sha256=state.hashes["canonical_manifest_sha256"],

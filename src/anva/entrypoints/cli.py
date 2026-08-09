@@ -112,10 +112,18 @@ def build_parser() -> argparse.ArgumentParser:
     acceptance_common.add_argument("--canonical-manifest-sha256", required=True)
     acceptance_common.add_argument("--product-commit", required=True)
     acceptance_common.add_argument("--product-image-sha256", required=True)
+    acceptance_common.add_argument("--product-image-reference", required=True)
+    acceptance_common.add_argument("--build-input-sha256", required=True)
+    acceptance_common.add_argument("--launch-service", required=True)
     acceptance_common.add_argument(
         "--build-provenance",
         type=Path,
         default=Path("/app/anva-build-provenance.json"),
+    )
+    acceptance_common.add_argument(
+        "--launch-manifest",
+        type=Path,
+        default=Path("/acceptance/launch/manifest.json"),
     )
     acceptance_start = acceptance_commands.add_parser(
         "start",
@@ -1054,7 +1062,11 @@ def _acceptance_request(arguments: argparse.Namespace) -> int:
                 canonical_manifest_sha256=str(arguments.canonical_manifest_sha256),
                 product_commit=str(arguments.product_commit),
                 product_image_sha256=str(arguments.product_image_sha256),
+                product_image_reference=str(arguments.product_image_reference),
+                build_input_sha256=str(arguments.build_input_sha256),
+                launch_service=str(arguments.launch_service),
                 build_provenance_path=arguments.build_provenance,
+                launch_manifest_path=arguments.launch_manifest,
                 credential_output=getattr(arguments, "credential_output", None),
                 sync_timeout_seconds=int(getattr(arguments, "sync_timeout_seconds", 300)),
             )

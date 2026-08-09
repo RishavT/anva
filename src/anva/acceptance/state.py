@@ -67,7 +67,9 @@ HASH_KEYS = frozenset(
         "review_result_sha256",
         "sealed_manifest_sha256",
         "product_image_sha256",
+        "build_input_sha256",
         "product_package_sha256",
+        "launch_manifest_sha256",
     }
 )
 
