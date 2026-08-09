@@ -22,7 +22,17 @@ from anva.acceptance.runner import AcceptanceRunner, AcceptanceRunnerError, Runn
 from anva.acceptance.state import ResumeState, load_state
 from anva.contracts.catalog import EXAMPLES
 
-SOURCE_SHA256 = "ed7cd26f52a826b25ba96ad8139479025451f6ccf3df668a4a1740b3f2952aca"
+SOURCE_TEXT = "# Checkout ownership\n\nThe Payments Platform team owns checkout.\n"
+SOURCE_NORMALIZED = json.dumps(
+    {
+        "headings": [{"level": 1, "line": 1, "text": "Checkout ownership"}],
+        "links": [],
+        "text": SOURCE_TEXT,
+    },
+    separators=(",", ":"),
+    sort_keys=True,
+)
+SOURCE_NORMALIZED_SHA256 = hashlib.sha256(SOURCE_NORMALIZED.encode()).hexdigest()
 
 
 def _id(number: int) -> str:
@@ -237,9 +247,10 @@ class FakeMCP:
                     "results": [
                         {
                             "chunk_id": _id(42),
-                            "content_hash": SOURCE_SHA256,
+                            "content_hash": SOURCE_NORMALIZED_SHA256,
                             "pointer": "/",
                             "canonical_url": "file:///canonical/organization/decision.md",
+                            "text": SOURCE_NORMALIZED,
                         }
                     ]
                 },
@@ -255,11 +266,13 @@ class FakeMCP:
                     "items": [
                         {
                             "item_id": _id(43),
+                            "payload": {"content_hash": SOURCE_NORMALIZED_SHA256},
+                            "summary": SOURCE_NORMALIZED,
                             "anva_sources": [
                                 {
                                     "canonical_url": ("file:///canonical/organization/decision.md"),
                                     "locator": "/",
-                                    "source_content_hash": SOURCE_SHA256,
+                                    "source_content_hash": SOURCE_NORMALIZED_SHA256,
                                     "source_location_id": _id(44),
                                     "source_observation_id": _id(45),
                                     "access_snapshot_id": _id(46),

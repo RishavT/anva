@@ -109,6 +109,35 @@ def _string(payload: dict[str, object], key: str) -> str:
     return value
 
 
+def _contains_exact_text(value: object, expected: str) -> bool:
+    if isinstance(value, str):
+        return value == expected
+    if isinstance(value, list):
+        return any(_contains_exact_text(item, expected) for item in value)
+    if isinstance(value, dict):
+        return any(_contains_exact_text(item, expected) for item in value.values())
+    return False
+
+
+def _normalized_source_matches(value: object, expected_text: str) -> tuple[bool, str]:
+    if not isinstance(value, dict):
+        return False, ""
+    text = value.get("text")
+    content_hash = value.get("content_hash")
+    if (
+        not isinstance(text, str)
+        or not text
+        or not isinstance(content_hash, str)
+        or sha256_bytes(text.encode()) != content_hash
+    ):
+        return False, ""
+    try:
+        normalized = json.loads(text)
+    except json.JSONDecodeError:
+        normalized = text
+    return _contains_exact_text(normalized, expected_text), content_hash
+
+
 def _write_secret_handoff(path: Path, payload: dict[str, object]) -> None:
     if path.exists() or path.is_symlink():
         raise AcceptanceRunnerError("Secret handoff path must not already exist")
@@ -194,7 +223,7 @@ class AcceptanceRunner:
         files = manifest.get("files")
         if not isinstance(files, list) or not files:
             raise AcceptanceRunnerError("Canonical manifest has no semantic source inventory")
-        expected_sources: list[tuple[str, str]] = []
+        expected_sources: list[tuple[str, str, str]] = []
         for item in files[:10]:
             if not isinstance(item, dict):
                 raise AcceptanceRunnerError("Canonical semantic source inventory is invalid")
@@ -202,18 +231,21 @@ class AcceptanceRunner:
             digest = _string(cast(dict[str, object], item), "sha256")
             if not path.startswith("payload/") or re.fullmatch(r"[a-f0-9]{64}", digest) is None:
                 raise AcceptanceRunnerError("Canonical semantic source inventory is invalid")
-            expected_sources.append((path.removeprefix("payload/"), digest))
+            relative = path.removeprefix("payload/")
+            try:
+                content = (config.canonical_root / "payload" / relative).read_bytes()
+                text = content.decode("utf-8")
+            except (OSError, UnicodeDecodeError) as error:
+                raise AcceptanceRunnerError("Canonical semantic source is unreadable") from error
+            if sha256_bytes(content) != digest:
+                raise AcceptanceRunnerError("Canonical semantic source hash is invalid")
+            expected_sources.append((relative, digest, text))
         self.expected_sources = tuple(expected_sources)
         self.namespace = uuid.uuid5(uuid.NAMESPACE_URL, self.corpus.source_fingerprint)
 
     def _semantic_query(self) -> str:
         fragments = ["organization goals products decisions systems requirements"]
-        for relative, _digest in self.expected_sources:
-            path = self.config.canonical_root / "payload" / relative
-            try:
-                text = path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError) as error:
-                raise AcceptanceRunnerError("Canonical semantic source is unreadable") from error
+        for relative, _digest, text in self.expected_sources:
             fragments.append(relative.replace("/", " "))
             fragments.append(" ".join(text.split())[:240])
         return " ".join(fragments)[:500]
@@ -244,36 +276,52 @@ class AcceptanceRunner:
         items = packet.get("items") if isinstance(packet, dict) else None
         if not isinstance(items, list) or not items:
             raise AcceptanceRunnerError("Canonical source was absent from the context packet")
-        citations = [
-            citation
-            for item in items
-            if isinstance(item, dict)
-            for citation in cast(list[object], item.get("anva_sources", []))
-            if isinstance(citation, dict)
-        ]
-        for relative, digest in self.expected_sources:
-            search_match = any(
-                isinstance(item, dict)
-                and item.get("content_hash") == digest
-                and str(item.get("canonical_url", "")).endswith(relative)
+        for relative, _raw_digest, expected_text in self.expected_sources:
+            search_hashes = {
+                observed_hash
                 for item in results
-            )
-            citation_match = any(
-                item.get("source_content_hash") == digest
-                and str(item.get("canonical_url", "")).endswith(relative)
-                and all(
-                    isinstance(item.get(key), str) and item.get(key)
-                    for key in (
-                        "source_location_id",
-                        "source_observation_id",
-                        "access_snapshot_id",
-                    )
+                if isinstance(item, dict) and str(item.get("canonical_url", "")).endswith(relative)
+                for matched, observed_hash in [_normalized_source_matches(item, expected_text)]
+                if matched
+            }
+            context_match = False
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                summary = item.get("summary")
+                payload = item.get("payload")
+                if not isinstance(summary, str) or not isinstance(payload, dict):
+                    continue
+                summary_match, summary_hash = _normalized_source_matches(
+                    {"text": summary, "content_hash": payload.get("content_hash")},
+                    expected_text,
                 )
-                for item in citations
-            )
-            if not search_match or not citation_match:
+                citations = item.get("anva_sources")
+                if (
+                    not summary_match
+                    or summary_hash not in search_hashes
+                    or not isinstance(citations, list)
+                ):
+                    continue
+                context_match = any(
+                    isinstance(citation, dict)
+                    and citation.get("source_content_hash") == summary_hash
+                    and str(citation.get("canonical_url", "")).endswith(relative)
+                    and all(
+                        isinstance(citation.get(key), str) and citation.get(key)
+                        for key in (
+                            "source_location_id",
+                            "source_observation_id",
+                            "access_snapshot_id",
+                        )
+                    )
+                    for citation in citations
+                )
+                if context_match:
+                    break
+            if not search_hashes or not context_match:
                 raise AcceptanceRunnerError(
-                    "Canonical source path, content hash, or citation was not preserved"
+                    "Canonical source text, normalized hash, path, or citation was not preserved"
                 )
         nodes = canvas.get("nodes")
         edges = canvas.get("edges")
