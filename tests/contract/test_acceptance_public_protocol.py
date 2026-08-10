@@ -17,6 +17,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
 from anva.acceptance.case import acceptance_case
+from anva.contracts import ContractValidationError, validate_payload
 from anva.contracts.acceptance import (
     ACCEPTANCE_HTTP_OPERATION_IDS,
     HTTP_OPERATION_EXAMPLES,
@@ -26,6 +27,8 @@ from anva.contracts.catalog import EXAMPLES, SCHEMAS
 from anva.contracts.generate import openapi_document, rendered_artifacts
 from anva.core.services.evidence_uploads import inspect_evidence_upload
 from anva.mcp.contracts import validate_tool_output
+
+PRIVATE_FIELD_NAMES = ("private_oracle_payload", "private", "oracle")
 
 
 def _operation(document: dict[str, object], operation_id: str) -> dict[str, object]:
@@ -39,32 +42,64 @@ def _operation(document: dict[str, object], operation_id: str) -> dict[str, obje
     raise AssertionError(f"OpenAPI operation not found: {operation_id}")
 
 
-def _open_object_schema_paths(
+def _unsafe_schema_paths(
     value: object,
     path: tuple[str | int, ...] = (),
 ) -> list[tuple[str | int, ...]]:
-    if isinstance(value, list):
-        return [
-            nested
-            for index, item in enumerate(value)
-            for nested in _open_object_schema_paths(item, (*path, index))
-        ]
+    if value is True:
+        return [path]
     if not isinstance(value, dict):
         return []
+    schema_type = value.get("type")
+    allows_object = schema_type == "object" or (
+        isinstance(schema_type, list) and "object" in schema_type
+    )
+    allows_array = schema_type == "array" or (
+        isinstance(schema_type, list) and "array" in schema_type
+    )
     found = (
         [path]
-        if (value.get("type") == "object" or "properties" in value)
-        and value.get("additionalProperties") is not False
+        if not value
+        or (
+            (allows_object or "properties" in value)
+            and value.get("additionalProperties") is not False
+        )
+        or (allows_array and "items" not in value)
         else []
     )
-    return [
-        *found,
-        *(
-            nested
-            for key, item in value.items()
-            for nested in _open_object_schema_paths(item, (*path, key))
-        ),
-    ]
+    nested = list(found)
+    for keyword in (
+        "$defs",
+        "definitions",
+        "properties",
+        "patternProperties",
+        "dependentSchemas",
+    ):
+        children = value.get(keyword)
+        if isinstance(children, dict):
+            for key, child in children.items():
+                nested.extend(_unsafe_schema_paths(child, (*path, keyword, key)))
+    for keyword in (
+        "additionalProperties",
+        "unevaluatedProperties",
+        "items",
+        "contains",
+        "not",
+        "if",
+        "then",
+        "else",
+        "propertyNames",
+        "contentSchema",
+        "unevaluatedItems",
+    ):
+        if keyword in value:
+            nested.extend(_unsafe_schema_paths(value[keyword], (*path, keyword)))
+    for keyword in ("allOf", "anyOf", "oneOf", "prefixItems"):
+        children = value.get(keyword)
+        if isinstance(children, list):
+            for index, child in enumerate(children):
+                nested.extend(_unsafe_schema_paths(child, (*path, keyword, index)))
+    return nested
 
 
 def _payload_object_paths(
@@ -100,6 +135,86 @@ def _payload_at_path(
         else:
             value = cast(list[object], value)[part]
     return cast(dict[str, object], value)
+
+
+def _assert_private_fields_rejected(
+    schema: dict[str, object],
+    example: dict[str, object],
+    identity: tuple[object, ...],
+) -> int:
+    validator = Draft202012Validator(schema)
+    validator.validate(example)
+    checked = 0
+    for path in _payload_object_paths(example):
+        for field_name in PRIVATE_FIELD_NAMES:
+            injected = deepcopy(example)
+            _payload_at_path(injected, path)[field_name] = {"verdict": "must remain private"}
+            assert not validator.is_valid(injected), (*identity, path, field_name)
+            checked += 1
+    return checked
+
+
+def _mcp_input_examples() -> dict[str, dict[str, object]]:
+    repository_id = "00000000-0000-4000-8000-000000000004"
+    scope_id = "00000000-0000-4000-8000-000000000006"
+    entity_id = "00000000-0000-4000-8000-000000000020"
+    work_item_id = "00000000-0000-4000-8000-000000000021"
+    root = {"contract_version": "1", "repository_id": repository_id}
+    proposal = {
+        **root,
+        "access_scope_id": scope_id,
+        "summary": "Public review-only proposal.",
+        "source_references": [{"kind": "ENTITY", "id": entity_id}],
+        "idempotency_key": "public-proposal-example",
+    }
+    return {
+        "anva.resolve_repository": root,
+        "anva.resolve_work_item": {**root, "external_key": "ANVA-35"},
+        "anva.get_context_packet": {
+            **root,
+            "task": "Review the public contract.",
+            "phase": "ASSURANCE",
+        },
+        "anva.search": {**root, "query": "public contract"},
+        "anva.get_entity": {**root, "entity_id": entity_id},
+        "anva.get_relationships": {**root, "entity_id": entity_id},
+        "anva.get_repository_profile": root,
+        "anva.get_policy_bundle": root,
+        "anva.get_requirements": {**root, "work_item_id": work_item_id},
+        "anva.explain_assertion": {**root, "assertion_id": entity_id},
+        "anva.get_source_excerpt": {**root, "chunk_id": entity_id},
+        "anva.propose_correction": {
+            **proposal,
+            "assertion_id": entity_id,
+            "correction": {"value": "Corrected public value."},
+        },
+        "anva.propose_relationship": {
+            **proposal,
+            "source_entity_id": entity_id,
+            "target_entity_id": "00000000-0000-4000-8000-000000000022",
+            "relationship_type": "DEPENDS_ON",
+            "rationale": "Public source-backed relationship.",
+        },
+        "anva.propose_decision": {
+            **proposal,
+            "work_item_id": work_item_id,
+            "title": "Use the closed public contract",
+            "outcome": "Accepted for human review.",
+            "rationale": "Prevents undocumented payload fields.",
+        },
+        "anva.submit_work_summary": {
+            **proposal,
+            "work_item_id": work_item_id,
+            "summary_data": {"status": "complete"},
+        },
+        "anva.submit_preflight_summary": {
+            **proposal,
+            "work_item_id": work_item_id,
+            "commit_sha": "a" * 40,
+            "checks": [{"name": "contract-tests", "passed": True}],
+            "limitations": ["Human review is still required."],
+        },
+    }
 
 
 @pytest.mark.contract
@@ -221,35 +336,101 @@ def test_acceptance_openapi_has_strict_success_schemas_and_canonical_examples() 
 
 
 @pytest.mark.contract
-def test_standalone_success_schemas_are_recursively_closed() -> None:
-    bundle = json.loads(rendered_artifacts()[Path("acceptance/v1/operations.json")])
+def test_standalone_request_and_success_schemas_are_recursively_closed() -> None:
+    artifacts = rendered_artifacts()
+    bundle = json.loads(artifacts[Path("acceptance/v1/operations.json")])
     checked_objects = 0
     for operation in bundle["http_operations"]:
+        request = operation["request"]
+        if request is not None:
+            for media in request["content"].values():
+                schema = media["schema"]
+                assert _unsafe_schema_paths(schema) == [], (
+                    operation["operation_id"],
+                    "request",
+                    _unsafe_schema_paths(schema),
+                )
+                example = media["example"]
+                Draft202012Validator(schema).validate(example)
+                if isinstance(example, dict):
+                    checked_objects += _assert_private_fields_rejected(
+                        schema,
+                        example,
+                        (operation["operation_id"], "request"),
+                    )
         for status, response in operation["responses"].items():
             if not status.startswith("2"):
                 continue
             media = response["content"]["application/json"]
             schema = media["schema"]
-            assert _open_object_schema_paths(schema) == [], (
+            assert _unsafe_schema_paths(schema) == [], (
                 operation["operation_id"],
                 status,
-                _open_object_schema_paths(schema),
+                _unsafe_schema_paths(schema),
             )
             example = media["example"]
-            validator = Draft202012Validator(schema)
-            validator.validate(example)
-            for path in _payload_object_paths(example):
-                injected = deepcopy(example)
-                _payload_at_path(injected, path)["private_oracle_payload"] = {
-                    "verdict": "must remain private"
-                }
-                assert not validator.is_valid(injected), (
+            checked_objects += _assert_private_fields_rejected(
+                schema,
+                example,
+                (
                     operation["operation_id"],
                     status,
-                    path,
-                )
-                checked_objects += 1
+                ),
+            )
+
+    mcp_bundle_operations = cast(list[dict[str, object]], bundle["mcp_operations"])
+    for operation in mcp_bundle_operations:
+        schema = cast(dict[str, object], operation["input_schema"])
+        example = cast(dict[str, object], operation["input_example"])
+        assert _unsafe_schema_paths(schema) == [], (
+            operation["tool"],
+            _unsafe_schema_paths(schema),
+        )
+        checked_objects += _assert_private_fields_rejected(
+            schema,
+            example,
+            (operation["tool"], "acceptance-input"),
+        )
+
+    mcp_document = json.loads(artifacts[Path("mcp/v1/tools.json")])
+    tools = cast(list[dict[str, object]], mcp_document["tools"])
+    input_examples = _mcp_input_examples()
+    assert {cast(str, tool["name"]) for tool in tools} == set(input_examples)
+
+    openapi = json.loads(artifacts[Path("openapi/v1/openapi.json")])
+    mcp_parity_operation = _operation(openapi, "callMcpParityTool")
+    request_body = cast(dict[str, object], mcp_parity_operation["requestBody"])
+    content = cast(dict[str, object], request_body["content"])
+    parity_media = cast(dict[str, object], content["application/json"])
+    parity_schema = cast(dict[str, object], parity_media["schema"])
+    assert _unsafe_schema_paths(parity_schema) == []
+
+    for tool in tools:
+        tool_name = cast(str, tool["name"])
+        schema = cast(dict[str, object], tool["inputSchema"])
+        assert _unsafe_schema_paths(schema) == [], (
+            tool_name,
+            _unsafe_schema_paths(schema),
+        )
+        checked_objects += _assert_private_fields_rejected(
+            schema,
+            input_examples[tool_name],
+            (tool_name, "input"),
+        )
     assert checked_objects >= len(ACCEPTANCE_HTTP_OPERATION_IDS)
+
+
+@pytest.mark.contract
+def test_work_item_import_canonical_summary_is_runtime_valid_and_closed() -> None:
+    payload = deepcopy(HTTP_OPERATION_EXAMPLES["importWorkItemRevision"]["request"])
+    validate_payload("work-item-import", payload)
+
+    summaries = cast(list[dict[str, object]], cast(dict[str, object], payload)["summaries"])
+    structured_data = cast(dict[str, object], summaries[0]["structured_data"])
+    assert structured_data == {"text": "Context only; never evidence."}
+    structured_data["private_oracle_payload"] = {"verdict": "BLOCKED"}
+    with pytest.raises(ContractValidationError, match="structured_data"):
+        validate_payload("work-item-import", payload)
 
 
 @pytest.mark.contract

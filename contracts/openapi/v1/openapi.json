@@ -7032,6 +7032,17 @@
                 "type": "string"
               },
               "structured_data": {
+                "additionalProperties": false,
+                "properties": {
+                  "text": {
+                    "maxLength": 20000,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "text"
+                ],
                 "type": "object"
               },
               "summary_type": {
@@ -10008,39 +10019,6 @@
               "schema": {
                 "oneOf": [
                   {
-                    "$defs": {
-                      "bounded_json_value": {
-                        "oneOf": [
-                          {
-                            "maxLength": 10000,
-                            "type": "string"
-                          },
-                          {
-                            "type": "number"
-                          },
-                          {
-                            "type": "boolean"
-                          },
-                          {
-                            "type": "null"
-                          },
-                          {
-                            "items": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxItems": 200,
-                            "type": "array"
-                          },
-                          {
-                            "additionalProperties": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxProperties": 100,
-                            "type": "object"
-                          }
-                        ]
-                      }
-                    },
                     "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.resolve_repository/input.schema.json",
                     "additionalProperties": false,
                     "properties": {
@@ -10060,39 +10038,6 @@
                     "type": "object"
                   },
                   {
-                    "$defs": {
-                      "bounded_json_value": {
-                        "oneOf": [
-                          {
-                            "maxLength": 10000,
-                            "type": "string"
-                          },
-                          {
-                            "type": "number"
-                          },
-                          {
-                            "type": "boolean"
-                          },
-                          {
-                            "type": "null"
-                          },
-                          {
-                            "items": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxItems": 200,
-                            "type": "array"
-                          },
-                          {
-                            "additionalProperties": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxProperties": 100,
-                            "type": "object"
-                          }
-                        ]
-                      }
-                    },
                     "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.resolve_work_item/input.schema.json",
                     "additionalProperties": false,
                     "oneOf": [
@@ -10143,39 +10088,6 @@
                     "type": "object"
                   },
                   {
-                    "$defs": {
-                      "bounded_json_value": {
-                        "oneOf": [
-                          {
-                            "maxLength": 10000,
-                            "type": "string"
-                          },
-                          {
-                            "type": "number"
-                          },
-                          {
-                            "type": "boolean"
-                          },
-                          {
-                            "type": "null"
-                          },
-                          {
-                            "items": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxItems": 200,
-                            "type": "array"
-                          },
-                          {
-                            "additionalProperties": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxProperties": 100,
-                            "type": "object"
-                          }
-                        ]
-                      }
-                    },
                     "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.get_context_packet/input.schema.json",
                     "additionalProperties": false,
                     "oneOf": [
@@ -10272,39 +10184,6 @@
                     "type": "object"
                   },
                   {
-                    "$defs": {
-                      "bounded_json_value": {
-                        "oneOf": [
-                          {
-                            "maxLength": 10000,
-                            "type": "string"
-                          },
-                          {
-                            "type": "number"
-                          },
-                          {
-                            "type": "boolean"
-                          },
-                          {
-                            "type": "null"
-                          },
-                          {
-                            "items": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxItems": 200,
-                            "type": "array"
-                          },
-                          {
-                            "additionalProperties": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxProperties": 100,
-                            "type": "object"
-                          }
-                        ]
-                      }
-                    },
                     "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.search/input.schema.json",
                     "additionalProperties": false,
                     "properties": {
@@ -10364,39 +10243,6 @@
                     "type": "object"
                   },
                   {
-                    "$defs": {
-                      "bounded_json_value": {
-                        "oneOf": [
-                          {
-                            "maxLength": 10000,
-                            "type": "string"
-                          },
-                          {
-                            "type": "number"
-                          },
-                          {
-                            "type": "boolean"
-                          },
-                          {
-                            "type": "null"
-                          },
-                          {
-                            "items": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxItems": 200,
-                            "type": "array"
-                          },
-                          {
-                            "additionalProperties": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxProperties": 100,
-                            "type": "object"
-                          }
-                        ]
-                      }
-                    },
                     "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.get_entity/input.schema.json",
                     "additionalProperties": false,
                     "properties": {
@@ -10421,39 +10267,6 @@
                     "type": "object"
                   },
                   {
-                    "$defs": {
-                      "bounded_json_value": {
-                        "oneOf": [
-                          {
-                            "maxLength": 10000,
-                            "type": "string"
-                          },
-                          {
-                            "type": "number"
-                          },
-                          {
-                            "type": "boolean"
-                          },
-                          {
-                            "type": "null"
-                          },
-                          {
-                            "items": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxItems": 200,
-                            "type": "array"
-                          },
-                          {
-                            "additionalProperties": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxProperties": 100,
-                            "type": "object"
-                          }
-                        ]
-                      }
-                    },
                     "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.get_relationships/input.schema.json",
                     "additionalProperties": false,
                     "properties": {
@@ -10496,39 +10309,6 @@
                     "type": "object"
                   },
                   {
-                    "$defs": {
-                      "bounded_json_value": {
-                        "oneOf": [
-                          {
-                            "maxLength": 10000,
-                            "type": "string"
-                          },
-                          {
-                            "type": "number"
-                          },
-                          {
-                            "type": "boolean"
-                          },
-                          {
-                            "type": "null"
-                          },
-                          {
-                            "items": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxItems": 200,
-                            "type": "array"
-                          },
-                          {
-                            "additionalProperties": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxProperties": 100,
-                            "type": "object"
-                          }
-                        ]
-                      }
-                    },
                     "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.get_repository_profile/input.schema.json",
                     "additionalProperties": false,
                     "properties": {
@@ -10548,39 +10328,6 @@
                     "type": "object"
                   },
                   {
-                    "$defs": {
-                      "bounded_json_value": {
-                        "oneOf": [
-                          {
-                            "maxLength": 10000,
-                            "type": "string"
-                          },
-                          {
-                            "type": "number"
-                          },
-                          {
-                            "type": "boolean"
-                          },
-                          {
-                            "type": "null"
-                          },
-                          {
-                            "items": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxItems": 200,
-                            "type": "array"
-                          },
-                          {
-                            "additionalProperties": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxProperties": 100,
-                            "type": "object"
-                          }
-                        ]
-                      }
-                    },
                     "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.get_policy_bundle/input.schema.json",
                     "additionalProperties": false,
                     "properties": {
@@ -10618,39 +10365,6 @@
                     "type": "object"
                   },
                   {
-                    "$defs": {
-                      "bounded_json_value": {
-                        "oneOf": [
-                          {
-                            "maxLength": 10000,
-                            "type": "string"
-                          },
-                          {
-                            "type": "number"
-                          },
-                          {
-                            "type": "boolean"
-                          },
-                          {
-                            "type": "null"
-                          },
-                          {
-                            "items": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxItems": 200,
-                            "type": "array"
-                          },
-                          {
-                            "additionalProperties": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxProperties": 100,
-                            "type": "object"
-                          }
-                        ]
-                      }
-                    },
                     "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.get_requirements/input.schema.json",
                     "additionalProperties": false,
                     "properties": {
@@ -10693,39 +10407,6 @@
                     "type": "object"
                   },
                   {
-                    "$defs": {
-                      "bounded_json_value": {
-                        "oneOf": [
-                          {
-                            "maxLength": 10000,
-                            "type": "string"
-                          },
-                          {
-                            "type": "number"
-                          },
-                          {
-                            "type": "boolean"
-                          },
-                          {
-                            "type": "null"
-                          },
-                          {
-                            "items": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxItems": 200,
-                            "type": "array"
-                          },
-                          {
-                            "additionalProperties": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxProperties": 100,
-                            "type": "object"
-                          }
-                        ]
-                      }
-                    },
                     "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.explain_assertion/input.schema.json",
                     "additionalProperties": false,
                     "properties": {
@@ -10750,39 +10431,6 @@
                     "type": "object"
                   },
                   {
-                    "$defs": {
-                      "bounded_json_value": {
-                        "oneOf": [
-                          {
-                            "maxLength": 10000,
-                            "type": "string"
-                          },
-                          {
-                            "type": "number"
-                          },
-                          {
-                            "type": "boolean"
-                          },
-                          {
-                            "type": "null"
-                          },
-                          {
-                            "items": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxItems": 200,
-                            "type": "array"
-                          },
-                          {
-                            "additionalProperties": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxProperties": 100,
-                            "type": "object"
-                          }
-                        ]
-                      }
-                    },
                     "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.get_source_excerpt/input.schema.json",
                     "additionalProperties": false,
                     "properties": {
@@ -10818,39 +10466,6 @@
                     "type": "object"
                   },
                   {
-                    "$defs": {
-                      "bounded_json_value": {
-                        "oneOf": [
-                          {
-                            "maxLength": 10000,
-                            "type": "string"
-                          },
-                          {
-                            "type": "number"
-                          },
-                          {
-                            "type": "boolean"
-                          },
-                          {
-                            "type": "null"
-                          },
-                          {
-                            "items": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxItems": 200,
-                            "type": "array"
-                          },
-                          {
-                            "additionalProperties": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxProperties": 100,
-                            "type": "object"
-                          }
-                        ]
-                      }
-                    },
                     "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.propose_correction/input.schema.json",
                     "additionalProperties": false,
                     "properties": {
@@ -10867,11 +10482,17 @@
                         "type": "string"
                       },
                       "correction": {
-                        "additionalProperties": {
-                          "$ref": "#/$defs/bounded_json_value"
+                        "additionalProperties": false,
+                        "properties": {
+                          "value": {
+                            "maxLength": 10000,
+                            "minLength": 1,
+                            "type": "string"
+                          }
                         },
-                        "maxProperties": 20,
-                        "minProperties": 1,
+                        "required": [
+                          "value"
+                        ],
                         "type": "object"
                       },
                       "idempotency_key": {
@@ -10932,39 +10553,6 @@
                     "type": "object"
                   },
                   {
-                    "$defs": {
-                      "bounded_json_value": {
-                        "oneOf": [
-                          {
-                            "maxLength": 10000,
-                            "type": "string"
-                          },
-                          {
-                            "type": "number"
-                          },
-                          {
-                            "type": "boolean"
-                          },
-                          {
-                            "type": "null"
-                          },
-                          {
-                            "items": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxItems": 200,
-                            "type": "array"
-                          },
-                          {
-                            "additionalProperties": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxProperties": 100,
-                            "type": "object"
-                          }
-                        ]
-                      }
-                    },
                     "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.propose_relationship/input.schema.json",
                     "additionalProperties": false,
                     "properties": {
@@ -11054,39 +10642,6 @@
                     "type": "object"
                   },
                   {
-                    "$defs": {
-                      "bounded_json_value": {
-                        "oneOf": [
-                          {
-                            "maxLength": 10000,
-                            "type": "string"
-                          },
-                          {
-                            "type": "number"
-                          },
-                          {
-                            "type": "boolean"
-                          },
-                          {
-                            "type": "null"
-                          },
-                          {
-                            "items": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxItems": 200,
-                            "type": "array"
-                          },
-                          {
-                            "additionalProperties": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxProperties": 100,
-                            "type": "object"
-                          }
-                        ]
-                      }
-                    },
                     "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.propose_decision/input.schema.json",
                     "additionalProperties": false,
                     "properties": {
@@ -11177,39 +10732,6 @@
                     "type": "object"
                   },
                   {
-                    "$defs": {
-                      "bounded_json_value": {
-                        "oneOf": [
-                          {
-                            "maxLength": 10000,
-                            "type": "string"
-                          },
-                          {
-                            "type": "number"
-                          },
-                          {
-                            "type": "boolean"
-                          },
-                          {
-                            "type": "null"
-                          },
-                          {
-                            "items": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxItems": 200,
-                            "type": "array"
-                          },
-                          {
-                            "additionalProperties": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxProperties": 100,
-                            "type": "object"
-                          }
-                        ]
-                      }
-                    },
                     "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.submit_work_summary/input.schema.json",
                     "additionalProperties": false,
                     "properties": {
@@ -11266,11 +10788,17 @@
                         "type": "string"
                       },
                       "summary_data": {
-                        "additionalProperties": {
-                          "$ref": "#/$defs/bounded_json_value"
+                        "additionalProperties": false,
+                        "properties": {
+                          "status": {
+                            "maxLength": 100,
+                            "minLength": 1,
+                            "type": "string"
+                          }
                         },
-                        "maxProperties": 50,
-                        "minProperties": 1,
+                        "required": [
+                          "status"
+                        ],
                         "type": "object"
                       },
                       "work_item_id": {
@@ -11291,39 +10819,6 @@
                     "type": "object"
                   },
                   {
-                    "$defs": {
-                      "bounded_json_value": {
-                        "oneOf": [
-                          {
-                            "maxLength": 10000,
-                            "type": "string"
-                          },
-                          {
-                            "type": "number"
-                          },
-                          {
-                            "type": "boolean"
-                          },
-                          {
-                            "type": "null"
-                          },
-                          {
-                            "items": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxItems": 200,
-                            "type": "array"
-                          },
-                          {
-                            "additionalProperties": {
-                              "$ref": "#/$defs/bounded_json_value"
-                            },
-                            "maxProperties": 100,
-                            "type": "object"
-                          }
-                        ]
-                      }
-                    },
                     "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.submit_preflight_summary/input.schema.json",
                     "additionalProperties": false,
                     "properties": {
@@ -11333,10 +10828,21 @@
                       },
                       "checks": {
                         "items": {
-                          "additionalProperties": {
-                            "$ref": "#/$defs/bounded_json_value"
+                          "additionalProperties": false,
+                          "properties": {
+                            "name": {
+                              "maxLength": 300,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "passed": {
+                              "type": "boolean"
+                            }
                           },
-                          "maxProperties": 100,
+                          "required": [
+                            "name",
+                            "passed"
+                          ],
                           "type": "object"
                         },
                         "maxItems": 100,

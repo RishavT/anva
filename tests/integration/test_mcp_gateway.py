@@ -328,6 +328,149 @@ def test_proposal_tools_are_idempotent_review_only_scoped_and_audited() -> None:
 
 @pytest.mark.integration
 @pytest.mark.django_db(transaction=True)
+def test_closed_proposal_shapes_dispatch_and_private_fields_fail_before_persistence() -> None:
+    organization, repository, scope, plaintext = _gateway_tenant("mcp-closed-proposals")
+    actor = authenticate_bearer(f"Bearer {plaintext}")
+    assertion = KnowledgeAssertion.objects.create(
+        organization=organization,
+        access_scope=scope,
+        subject_key="service:checkout",
+        predicate="service.owner",
+        value={"team": "platform"},
+        provenance=[{"fixture": "closed-proposal-shapes"}],
+    )
+    work_payload = deepcopy(EXAMPLES["work-item-import"])
+    work_payload.update(
+        {
+            "organization_id": str(organization.id),
+            "repository_id": str(repository.id),
+            "access_scope_id": str(scope.id),
+            "work_item_id": str(uuid.uuid4()),
+            "external_key": "ANVA-CLOSED-35",
+            "title": "Close public proposal inputs",
+            "summary": "Reject undocumented nested proposal content.",
+            "status": "READY",
+        }
+    )
+    work_item = import_work_item(actor=actor, payload=work_payload).work_item
+    common: dict[str, object] = {
+        "contract_version": "1",
+        "repository_id": str(repository.id),
+        "access_scope_id": str(scope.id),
+        "summary": "Public review-only proposal.",
+        "source_references": [{"kind": "ASSERTION", "id": str(assertion.id)}],
+    }
+    valid_cases: tuple[tuple[str, str, dict[str, object], dict[str, object]], ...] = (
+        (
+            "anva.propose_correction",
+            MCPProposalSubmission.Kind.CORRECTION,
+            {
+                **common,
+                "idempotency_key": "closed-correction-proposal",
+                "assertion_id": str(assertion.id),
+                "correction": {"value": "payments-platform"},
+            },
+            {"value": "payments-platform"},
+        ),
+        (
+            "anva.submit_work_summary",
+            MCPProposalSubmission.Kind.WORK_SUMMARY,
+            {
+                **common,
+                "idempotency_key": "closed-work-summary-proposal",
+                "work_item_id": str(work_item.id),
+                "summary_data": {"status": "complete"},
+            },
+            {"status": "complete"},
+        ),
+        (
+            "anva.submit_preflight_summary",
+            MCPProposalSubmission.Kind.PREFLIGHT_SUMMARY,
+            {
+                **common,
+                "idempotency_key": "closed-preflight-proposal",
+                "work_item_id": str(work_item.id),
+                "commit_sha": "a" * 40,
+                "checks": [{"name": "contract-tests", "passed": True}],
+                "limitations": ["Human review is still required."],
+            },
+            {
+                "commit_sha": "a" * 40,
+                "checks": [{"name": "contract-tests", "passed": True}],
+                "limitations": ["Human review is still required."],
+                "advisory": True,
+            },
+        ),
+    )
+    for tool_name, proposal_kind, arguments, expected_value in valid_cases:
+        response = dispatch_tool(
+            actor=replace(actor, request_id=uuid.uuid4()),
+            tool_name=tool_name,
+            arguments=arguments,
+            transport="MCP",
+        )
+        data = response["data"]
+        assert isinstance(data, dict)
+        assert data["proposal_kind"] == proposal_kind
+        proposal = KnowledgeProposal.objects.get(id=data["proposal_id"])
+        assert proposal.proposed_changes[0]["value"] == expected_value
+
+    invalid_cases = (
+        (
+            valid_cases[0][0],
+            {
+                **valid_cases[0][2],
+                "idempotency_key": "invalid-closed-correction",
+                "correction": {
+                    "value": "payments-platform",
+                    "private_oracle_payload": {"verdict": "BLOCKED"},
+                },
+            },
+        ),
+        (
+            valid_cases[1][0],
+            {
+                **valid_cases[1][2],
+                "idempotency_key": "invalid-closed-work-summary",
+                "summary_data": {"status": "complete", "private": {"verdict": "BLOCKED"}},
+            },
+        ),
+        (
+            valid_cases[2][0],
+            {
+                **valid_cases[2][2],
+                "idempotency_key": "invalid-closed-preflight",
+                "checks": [
+                    {
+                        "name": "contract-tests",
+                        "passed": True,
+                        "oracle": {"verdict": "BLOCKED"},
+                    }
+                ],
+            },
+        ),
+    )
+    for tool_name, arguments in invalid_cases:
+        before = {
+            "proposals": KnowledgeProposal.objects.count(),
+            "submissions": MCPProposalSubmission.objects.count(),
+            "outbox": OutboxEvent.objects.count(),
+        }
+        with pytest.raises(MCPGatewayError) as rejected:
+            dispatch_tool(
+                actor=replace(actor, request_id=uuid.uuid4()),
+                tool_name=tool_name,
+                arguments=arguments,
+                transport="MCP",
+            )
+        assert rejected.value.code == "invalid_tool_input"
+        assert KnowledgeProposal.objects.count() == before["proposals"]
+        assert MCPProposalSubmission.objects.count() == before["submissions"]
+        assert OutboxEvent.objects.count() == before["outbox"]
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
 def test_knowledge_proposal_content_and_lifecycle_are_database_governed() -> None:
     organization, _repository, _scope, _plaintext = _gateway_tenant("mcp-immutable")
     proposal = KnowledgeProposal.objects.create(
@@ -382,7 +525,7 @@ def test_secret_bearing_proposal_is_rejected_before_any_persistence() -> None:
                 "source_references": [{"kind": "ASSERTION", "id": str(assertion.id)}],
                 "idempotency_key": "secret-rejection-idempotency",
                 "assertion_id": str(assertion.id),
-                "correction": {"nested": [{"value": secret}]},
+                "correction": {"value": secret},
             },
             transport="MCP",
         )
@@ -414,7 +557,7 @@ def test_secret_bearing_proposal_is_rejected_before_any_persistence() -> None:
         "secret-rejection-idempotency",
         str(assertion.id),
         '"correction"',
-        '"nested"',
+        '"value"',
     ):
         assert prohibited not in rendered_error
         assert prohibited not in persisted_audit

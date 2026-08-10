@@ -93,7 +93,6 @@ def _input(
         ("contract_version", "repository_id", *required),
         one_of=one_of,
     )
-    schema["$defs"] = deepcopy(BOUNDED_JSON_DEFS)
     return schema
 
 
@@ -668,11 +667,16 @@ TOOL_CONTRACTS: Final[tuple[ToolContract, ...]] = (
             {
                 **PROPOSAL_COMMON,
                 "assertion_id": deepcopy(UUID),
-                "correction": {
-                    **deepcopy(BOUNDED_MAP),
-                    "minProperties": 1,
-                    "maxProperties": 20,
-                },
+                "correction": _closed(
+                    {
+                        "value": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 10_000,
+                        }
+                    },
+                    ("value",),
+                ),
             },
             (*PROPOSAL_REQUIRED, "assertion_id", "correction"),
         ),
@@ -739,11 +743,16 @@ TOOL_CONTRACTS: Final[tuple[ToolContract, ...]] = (
             {
                 **PROPOSAL_COMMON,
                 "work_item_id": deepcopy(UUID),
-                "summary_data": {
-                    **deepcopy(BOUNDED_MAP),
-                    "minProperties": 1,
-                    "maxProperties": 50,
-                },
+                "summary_data": _closed(
+                    {
+                        "status": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 100,
+                        }
+                    },
+                    ("status",),
+                ),
             },
             (*PROPOSAL_REQUIRED, "work_item_id", "summary_data"),
         ),
@@ -767,7 +776,17 @@ TOOL_CONTRACTS: Final[tuple[ToolContract, ...]] = (
                     "type": "array",
                     "minItems": 1,
                     "maxItems": 100,
-                    "items": deepcopy(BOUNDED_MAP),
+                    "items": _closed(
+                        {
+                            "name": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 300,
+                            },
+                            "passed": {"type": "boolean"},
+                        },
+                        ("name", "passed"),
+                    ),
                 },
                 "limitations": {
                     "type": "array",

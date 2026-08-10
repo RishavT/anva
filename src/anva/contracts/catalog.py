@@ -433,7 +433,14 @@ WORK_ITEM_IMPORT_SCHEMA = versioned_schema(
             "additionalProperties": False,
             "properties": {
                 "summary_type": {"type": "string", "minLength": 1, "maxLength": 40},
-                "structured_data": {"type": "object"},
+                "structured_data": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "text": {"type": "string", "minLength": 1, "maxLength": 20_000},
+                    },
+                    "required": ["text"],
+                },
                 "producer": {"type": "string", "minLength": 1, "maxLength": 200},
             },
             "required": ["summary_type", "structured_data", "producer"],

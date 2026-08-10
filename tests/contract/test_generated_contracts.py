@@ -101,29 +101,21 @@ def test_openapi_and_mcp_share_the_canonical_schemas() -> None:
 
 
 @pytest.mark.contract
-def test_openapi_mcp_request_schema_resolves_recursive_bounded_payloads() -> None:
+def test_openapi_mcp_request_schema_rejects_undocumented_correction_fields() -> None:
     payload: dict[str, object] = {
         "contract_version": "1",
         "repository_id": "00000000-0000-4000-8000-000000000009",
         "access_scope_id": "00000000-0000-4000-8000-000000000010",
-        "summary": "Correct recursively nested knowledge.",
+        "summary": "Correct normalized knowledge.",
         "source_references": [
             {
                 "kind": "ASSERTION",
                 "id": "00000000-0000-4000-8000-000000000011",
             }
         ],
-        "idempotency_key": "recursive-openapi-proposal",
+        "idempotency_key": "closed-openapi-proposal",
         "assertion_id": "00000000-0000-4000-8000-000000000011",
-        "correction": {
-            "nested": [
-                {
-                    "deeper": {
-                        "value": "bounded",
-                    }
-                }
-            ]
-        },
+        "correction": {"value": "corrected"},
     }
     generated_schema = _mcp_request_schema(openapi_document())
     checked_document = cast(
@@ -138,14 +130,12 @@ def test_openapi_mcp_request_schema_resolves_recursive_bounded_payloads() -> Non
     Draft202012Validator(TOOL_BY_NAME["anva.propose_correction"]["input_schema"]).validate(payload)
     assert checked_schema == generated_schema
 
-    oversized = {
+    undocumented = {
         **payload,
-        "correction": {
-            "nested": {f"key_{index}": index for index in range(101)},
-        },
+        "correction": {"value": "corrected", "private_oracle_payload": "blocked"},
     }
     with pytest.raises(ValidationError):
-        Draft202012Validator(generated_schema).validate(oversized)
+        Draft202012Validator(generated_schema).validate(undocumented)
 
 
 @pytest.mark.contract

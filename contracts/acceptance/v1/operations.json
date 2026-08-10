@@ -2483,6 +2483,17 @@
                       "type": "string"
                     },
                     "structured_data": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "text": {
+                          "maxLength": 20000,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "text"
+                      ],
                       "type": "object"
                     },
                     "summary_type": {
@@ -2814,6 +2825,17 @@
                         "type": "string"
                       },
                       "structured_data": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "text": {
+                            "maxLength": 20000,
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "text"
+                        ],
                         "type": "object"
                       },
                       "summary_type": {
@@ -11082,39 +11104,6 @@
         "repository_id": "00000000-0000-4000-8000-000000000004"
       },
       "input_schema": {
-        "$defs": {
-          "bounded_json_value": {
-            "oneOf": [
-              {
-                "maxLength": 10000,
-                "type": "string"
-              },
-              {
-                "type": "number"
-              },
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              },
-              {
-                "items": {
-                  "$ref": "#/$defs/bounded_json_value"
-                },
-                "maxItems": 200,
-                "type": "array"
-              },
-              {
-                "additionalProperties": {
-                  "$ref": "#/$defs/bounded_json_value"
-                },
-                "maxProperties": 100,
-                "type": "object"
-              }
-            ]
-          }
-        },
         "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.search/input.schema.json",
         "additionalProperties": false,
         "properties": {
@@ -11429,39 +11418,6 @@
         "task": "Review checkout against authorized context."
       },
       "input_schema": {
-        "$defs": {
-          "bounded_json_value": {
-            "oneOf": [
-              {
-                "maxLength": 10000,
-                "type": "string"
-              },
-              {
-                "type": "number"
-              },
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              },
-              {
-                "items": {
-                  "$ref": "#/$defs/bounded_json_value"
-                },
-                "maxItems": 200,
-                "type": "array"
-              },
-              {
-                "additionalProperties": {
-                  "$ref": "#/$defs/bounded_json_value"
-                },
-                "maxProperties": 100,
-                "type": "object"
-              }
-            ]
-          }
-        },
         "$id": "https://schemas.anva.dev/mcp/v1/tools/anva.get_context_packet/input.schema.json",
         "additionalProperties": false,
         "oneOf": [
