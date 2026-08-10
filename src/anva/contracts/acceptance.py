@@ -13,7 +13,9 @@ from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import ValidationError
 
 from anva.contracts.catalog import (
-    EVALUATOR_REQUEST_SCHEMA,
+    ASSURANCE_CITATION,
+    DIFF_CHUNK,
+    EVIDENCE_MANIFEST_SCHEMA,
     EXAMPLES,
     RETRIEVAL_CITATION,
 )
@@ -56,10 +58,149 @@ UUID_LIST: Final[dict[str, object]] = {
     "maxItems": 1_000,
     "uniqueItems": True,
 }
-BOUNDED_MAP: Final[dict[str, object]] = {
-    "type": "object",
-    "maxProperties": 200,
+
+CODE: Final[dict[str, object]] = {
+    "type": "string",
+    "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
 }
+CANVAS_FRESHNESS_VALUES: Final[list[str]] = [
+    "FRESH",
+    "AGING",
+    "STALE",
+    "CONTRADICTED",
+    "SOURCE_UNAVAILABLE",
+    "UNKNOWN",
+]
+
+POLICY_SOURCE: Final[dict[str, object]] = _closed(
+    {
+        "policy_id": UUID,
+        "policy_version_id": UUID,
+        "policy_version": {"type": "integer", "minimum": 1},
+        "binding_id": UUID,
+        "scope_level": {
+            "type": "string",
+            "enum": ["ORGANIZATION", "PRODUCT", "SYSTEM", "REPOSITORY", "PATH"],
+        },
+        "mandatory": {"type": "boolean"},
+        "requirement_id": UUID,
+    },
+    (
+        "policy_id",
+        "policy_version_id",
+        "policy_version",
+        "binding_id",
+        "scope_level",
+        "mandatory",
+        "requirement_id",
+    ),
+)
+POLICY_CONTROL: Final[dict[str, object]] = _closed(
+    {
+        "code": CODE,
+        "description": {"type": "string", "minLength": 1, "maxLength": 10_000},
+        "enforcement": {"type": "string", "enum": ["BLOCKING", "ADVISORY"]},
+        "check_type": {
+            "type": "string",
+            "enum": ["DETERMINISTIC", "EVIDENCE", "MODEL_REVIEW", "MANUAL_APPROVAL"],
+        },
+        "required_evidence": STRING_LIST,
+        "required_reviewers": STRING_LIST,
+        "required_approval": {"type": "boolean"},
+        "report_sections": STRING_LIST,
+        "sources": {"type": "array", "items": POLICY_SOURCE, "maxItems": 100},
+    },
+    (
+        "code",
+        "description",
+        "enforcement",
+        "check_type",
+        "required_evidence",
+        "required_reviewers",
+        "required_approval",
+        "report_sections",
+        "sources",
+    ),
+)
+
+POLICY_BINDING_MATCH: Final[dict[str, object]] = _closed(
+    {
+        "policy_version_id": UUID,
+        "binding_id": UUID,
+        "scope_level": {
+            "type": "string",
+            "enum": ["ORGANIZATION", "PRODUCT", "SYSTEM", "REPOSITORY", "PATH"],
+        },
+        "reasons": STRING_LIST,
+    },
+    ("policy_version_id", "binding_id", "scope_level", "reasons"),
+)
+POLICY_BINDING_CONSIDERATION: Final[dict[str, object]] = _closed(
+    {
+        "policy_version_id": UUID,
+        "binding_id": UUID,
+        "matched": {"type": "boolean"},
+        "reasons": STRING_LIST,
+    },
+    ("policy_version_id", "binding_id", "matched", "reasons"),
+)
+POLICY_APPLIED_OVERRIDE: Final[dict[str, object]] = _closed(
+    {
+        "override_id": UUID,
+        "code": CODE,
+        "source": POLICY_SOURCE,
+        "reason": {"type": "string", "minLength": 1, "maxLength": 2_000},
+    },
+    ("override_id", "code", "source", "reason"),
+)
+POLICY_OUTPUT: Final[dict[str, object]] = _closed(
+    {
+        "engine_version": {"type": "string", "minLength": 1, "maxLength": 100},
+        "outcome": {"type": "string", "const": "CONTROLS_CALCULATED"},
+        "controls": {"type": "array", "items": POLICY_CONTROL, "maxItems": 50_000},
+        "matched_bindings": {
+            "type": "array",
+            "items": POLICY_BINDING_MATCH,
+            "maxItems": 100,
+        },
+        "considered_bindings": {
+            "type": "array",
+            "items": POLICY_BINDING_CONSIDERATION,
+            "maxItems": 100,
+        },
+        "applied_overrides": {
+            "type": "array",
+            "items": POLICY_APPLIED_OVERRIDE,
+            "maxItems": 50_000,
+        },
+        "limitations": STRING_LIST,
+        "reevaluation_conditions": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "enum": [
+                    "commit_changed",
+                    "work_item_revision_changed",
+                    "policy_version_changed",
+                    "approval_or_override_changed",
+                    "evidence_or_retention_changed",
+                ],
+            },
+            "maxItems": 5,
+            "uniqueItems": True,
+        },
+    },
+    (
+        "engine_version",
+        "outcome",
+        "controls",
+        "matched_bindings",
+        "considered_bindings",
+        "applied_overrides",
+        "limitations",
+        "reevaluation_conditions",
+    ),
+)
 
 SOURCE_CONNECTION_REQUEST: Final[dict[str, object]] = _closed(
     {
@@ -188,7 +329,7 @@ CANVAS_NODE: Final[dict[str, object]] = _closed(
         "owner": {"type": "string", "maxLength": 300},
         "status": {"type": "string", "maxLength": 100},
         "risk": {"type": "string", "maxLength": 100},
-        "freshness": {"type": "string", "enum": ["CURRENT", "STALE", "UNKNOWN"]},
+        "freshness": {"type": "string", "enum": CANVAS_FRESHNESS_VALUES},
         "is_inferred": {"type": "boolean"},
         "has_conflict": {"type": "boolean"},
         "provenance": CANVAS_PROVENANCE,
@@ -229,7 +370,7 @@ CANVAS_EDGE: Final[dict[str, object]] = _closed(
         "repository_id": UUID,
         "directed": {"type": "boolean", "const": True},
         "review_state": {"type": "string", "maxLength": 100},
-        "freshness": {"type": "string", "enum": ["CURRENT", "STALE", "UNKNOWN"]},
+        "freshness": {"type": "string", "enum": CANVAS_FRESHNESS_VALUES},
         "basis": {"type": "string", "maxLength": 100},
         "provenance": _closed({"assertion_id": UUID}, ("assertion_id",)),
     },
@@ -248,10 +389,94 @@ CANVAS_EDGE: Final[dict[str, object]] = _closed(
         "provenance",
     ),
 )
+CANVAS_SEMANTIC_QUERY: Final[dict[str, object]] = _closed(
+    {
+        "root_entity_id": UUID,
+        "repository_ids": {
+            "type": "array",
+            "items": UUID,
+            "maxItems": 100,
+            "uniqueItems": True,
+        },
+        "entity_types": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "enum": [
+                    "GOAL",
+                    "METRIC",
+                    "INITIATIVE",
+                    "PRODUCT",
+                    "OWNER",
+                    "ENVIRONMENT",
+                    "CUSTOMER_COMMITMENT",
+                    "ARCHITECTURAL_DECISION",
+                    "ACCEPTANCE_CRITERION",
+                    "RELEASE",
+                    "TEAM",
+                    "REPOSITORY",
+                    "SERVICE",
+                    "COMPONENT",
+                    "API",
+                    "DATA_ASSET",
+                    "WORK_ITEM",
+                    "TASK",
+                    "PULL_REQUEST",
+                    "EVIDENCE",
+                    "RISK",
+                    "INCIDENT",
+                    "CONTROL",
+                    "DECISION",
+                    "POLICY",
+                    "REQUIREMENT",
+                    "UNKNOWN",
+                ],
+            },
+            "maxItems": 27,
+            "uniqueItems": True,
+        },
+        "owner": {"type": "string", "maxLength": 500},
+        "status": {"type": "string", "maxLength": 500},
+        "risk": {"type": "string", "maxLength": 500},
+        "freshness": {
+            "type": "string",
+            "enum": CANVAS_FRESHNESS_VALUES,
+        },
+        "as_of": DATE_TIME,
+        "search": {"type": "string", "maxLength": 500},
+        "layers": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "enum": [
+                    "execution",
+                    "ownership",
+                    "dependencies",
+                    "governance",
+                    "provenance",
+                ],
+            },
+            "maxItems": 5,
+            "uniqueItems": True,
+        },
+        "depth": {"type": "integer", "minimum": 1, "maximum": 4},
+    },
+    (),
+)
+CANVAS_ANNOTATION: Final[dict[str, object]] = _closed(
+    {
+        "id": UUID,
+        "entity_id": _nullable(UUID),
+        "body": {"type": "string", "maxLength": 2_000},
+        "x": {"type": "number", "minimum": -1_000_000, "maximum": 1_000_000},
+        "y": {"type": "number", "minimum": -1_000_000, "maximum": 1_000_000},
+    },
+    ("id", "entity_id", "body", "x", "y"),
+)
 CANVAS_RESPONSE: Final[dict[str, object]] = _closed(
     {
         "schema_version": {"type": "string", "const": "1"},
-        "semantic_query": BOUNDED_MAP,
+        "semantic_query": CANVAS_SEMANTIC_QUERY,
         "view": _closed(
             {
                 "id": _nullable(UUID),
@@ -272,7 +497,7 @@ CANVAS_RESPONSE: Final[dict[str, object]] = _closed(
         },
         "nodes": {"type": "array", "items": CANVAS_NODE, "maxItems": 500},
         "edges": {"type": "array", "items": CANVAS_EDGE, "maxItems": 1_000},
-        "annotations": {"type": "array", "items": BOUNDED_MAP, "maxItems": 100},
+        "annotations": {"type": "array", "items": CANVAS_ANNOTATION, "maxItems": 100},
         "counts": _closed(
             {
                 "nodes": {"type": "integer", "minimum": 0, "maximum": 500},
@@ -346,7 +571,7 @@ POLICY_SIMULATION_RESPONSE: Final[dict[str, object]] = _closed(
         "policy_evaluation_id": UUID,
         "input_hash": SHA256,
         "output_hash": SHA256,
-        "output": BOUNDED_MAP,
+        "output": POLICY_OUTPUT,
         "created": {"type": "boolean"},
     },
     ("policy_evaluation_id", "input_hash", "output_hash", "output", "created"),
@@ -360,6 +585,48 @@ EVIDENCE_MANIFEST_RESPONSE: Final[dict[str, object]] = _closed(
     },
     ("manifest_id", "payload_hash", "evidence_ids", "created"),
 )
+EVIDENCE_ARCHIVE_SUMMARY: Final[dict[str, object]] = _closed(
+    {
+        "format": {"type": "string", "enum": ["JSON", "ZIP", "TAR"]},
+        "member_count": {"type": "integer", "minimum": 1, "maximum": 1_000},
+        "compressed_bytes": {"type": "integer", "minimum": 1, "maximum": 4_096},
+        "expanded_bytes": {"type": "integer", "minimum": 1, "maximum": 64_000_000},
+        "manifest_sha256": SHA256,
+        "results_sha256": SHA256,
+        "check_count": {"type": "integer", "minimum": 1, "maximum": 1_000},
+    },
+    (
+        "format",
+        "member_count",
+        "compressed_bytes",
+        "expanded_bytes",
+        "results_sha256",
+        "check_count",
+    ),
+)
+EVIDENCE_UPLOAD_RESPONSE: Final[dict[str, object]] = _closed(
+    {
+        "evidence_blob_id": UUID,
+        "authorization_id": UUID,
+        "sha256": SHA256,
+        "verified_size": {"type": "integer", "minimum": 1, "maximum": 4_096},
+        "detected_type": {
+            "type": "string",
+            "enum": ["application/json", "application/zip", "application/x-tar"],
+        },
+        "archive_summary": EVIDENCE_ARCHIVE_SUMMARY,
+        "storage_state": {"type": "string", "const": "AVAILABLE"},
+    },
+    (
+        "evidence_blob_id",
+        "authorization_id",
+        "sha256",
+        "verified_size",
+        "detected_type",
+        "archive_summary",
+        "storage_state",
+    ),
+)
 EVIDENCE_MANIFEST_DETAIL_RESPONSE: Final[dict[str, object]] = _closed(
     {
         "id": UUID,
@@ -367,7 +634,7 @@ EVIDENCE_MANIFEST_DETAIL_RESPONSE: Final[dict[str, object]] = _closed(
         "pull_request_number": {"type": "integer", "minimum": 1},
         "commit_sha": COMMIT,
         "payload_hash": SHA256,
-        "manifest": BOUNDED_MAP,
+        "manifest": deepcopy(EVIDENCE_MANIFEST_SCHEMA),
     },
     ("id", "repository_id", "pull_request_number", "commit_sha", "payload_hash", "manifest"),
 )
@@ -385,11 +652,21 @@ MANUAL_DIFF_RESPONSE: Final[dict[str, object]] = _closed(
             "maxItems": 500,
             "uniqueItems": True,
         },
-        "classification_summary": {
-            "type": "object",
-            "additionalProperties": {"type": "integer", "minimum": 0},
-            "maxProperties": 16,
-        },
+        "classification_summary": _closed(
+            {
+                classification: {"type": "integer", "minimum": 0}
+                for classification in (
+                    "SOURCE",
+                    "TEST",
+                    "DOCUMENTATION",
+                    "MIGRATION",
+                    "SECURITY_SENSITIVE",
+                    "DEPENDENCY",
+                    "CI",
+                )
+            },
+            (),
+        ),
         "limitations": STRING_LIST,
         "created": {"type": "boolean"},
     },
@@ -464,7 +741,11 @@ PUBLIC_FINDING: Final[dict[str, object]] = _closed(
         "explanation": {"type": "string", "minLength": 1, "maxLength": 10_000},
         "path": {"type": "string", "maxLength": 1_000},
         "line": _nullable({"type": "integer", "minimum": 1}),
-        "citations": {"type": "array", "items": BOUNDED_MAP, "maxItems": 20},
+        "citations": {
+            "type": "array",
+            "items": deepcopy(ASSURANCE_CITATION),
+            "maxItems": 20,
+        },
         "evidence_ids": UUID_LIST,
         "criterion_codes": {
             "type": "array",
@@ -529,6 +810,221 @@ ASSURANCE_REPORT_RESPONSE: Final[dict[str, object]] = _closed(
     ),
 )
 
+EVALUATOR_ACCEPTANCE_CRITERION: Final[dict[str, object]] = _closed(
+    {
+        "id": UUID,
+        "code": CODE,
+        "text": {"type": "string", "minLength": 1, "maxLength": 10_000},
+        "required_evidence_types": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "maxLength": 100},
+            "maxItems": 20,
+            "uniqueItems": True,
+        },
+        "manual_approval_allowed": {"type": "boolean"},
+    },
+    ("id", "code", "text", "required_evidence_types", "manual_approval_allowed"),
+)
+EVALUATOR_REQUIREMENT: Final[dict[str, object]] = {
+    "oneOf": [
+        _closed(
+            {
+                "kind": {"type": "string", "const": "REQUIREMENT"},
+                "id": UUID,
+                "code": CODE,
+                "text": {"type": "string", "minLength": 1, "maxLength": 10_000},
+                "status": {"type": "string", "minLength": 1, "maxLength": 24},
+                "requires_approval": {"type": "boolean"},
+                "acceptance_criteria": {
+                    "type": "array",
+                    "items": EVALUATOR_ACCEPTANCE_CRITERION,
+                    "maxItems": 500,
+                },
+            },
+            (
+                "kind",
+                "id",
+                "code",
+                "text",
+                "status",
+                "requires_approval",
+                "acceptance_criteria",
+            ),
+        ),
+        _closed(
+            {
+                "kind": {"type": "string", "const": "STANDALONE_ACCEPTANCE_CRITERION"},
+                **cast(dict[str, object], EVALUATOR_ACCEPTANCE_CRITERION["properties"]),
+            },
+            (
+                "kind",
+                "id",
+                "code",
+                "text",
+                "required_evidence_types",
+                "manual_approval_allowed",
+            ),
+        ),
+    ]
+}
+EVALUATOR_DETERMINISTIC_CHECK: Final[dict[str, object]] = _closed(
+    {
+        "code": {"type": "string", "minLength": 1, "maxLength": 100},
+        "status": {"type": "string", "enum": ["PASSED", "FAILED", "NOT_AVAILABLE"]},
+        "blocking": {"type": "boolean"},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 2_000},
+        "evidence_ids": {
+            "type": "array",
+            "items": UUID,
+            "maxItems": 100,
+            "uniqueItems": True,
+        },
+    },
+    ("code", "status", "blocking", "summary", "evidence_ids"),
+)
+EVALUATOR_EVIDENCE_MAPPING: Final[dict[str, object]] = _closed(
+    {
+        "mapping_id": UUID,
+        "criterion_id": UUID,
+        "criterion_code": CODE,
+        "required_evidence_type": {"type": "string", "minLength": 1, "maxLength": 100},
+        "assessment": {"type": "string", "enum": ["SATISFIED", "GAP"]},
+        "classification": {"type": "string", "enum": ["DIRECT", "INDIRECT", "GAP"]},
+        "evidence_id": _nullable(UUID),
+        "gap_code": {"type": "string", "maxLength": 64},
+        "limitations": STRING_LIST,
+        "input_hash": SHA256,
+        "engine_version": {"type": "string", "minLength": 1, "maxLength": 64},
+        "reference_time": DATE_TIME,
+    },
+    (
+        "mapping_id",
+        "criterion_id",
+        "criterion_code",
+        "required_evidence_type",
+        "assessment",
+        "classification",
+        "evidence_id",
+        "gap_code",
+        "limitations",
+        "input_hash",
+        "engine_version",
+        "reference_time",
+    ),
+)
+EVALUATOR_AUTHORIZED_CONTEXT: Final[dict[str, object]] = _closed(
+    {
+        "item_id": UUID,
+        "kind": {
+            "type": "string",
+            "enum": [
+                "POLICY",
+                "RELATIONSHIP",
+                "ASSERTION",
+                "SOURCE_EXCERPT",
+                "DECISION",
+                "INCIDENT",
+                "CONFLICT",
+            ],
+        },
+        "summary": {"type": "string", "minLength": 1, "maxLength": 10_000},
+        "freshness": {"type": "string", "enum": ["CURRENT", "STALE", "UNKNOWN"]},
+        "is_inferred": {"type": "boolean"},
+        "citation_ids": {
+            "type": "array",
+            "items": UUID,
+            "maxItems": 1_000,
+            "uniqueItems": True,
+        },
+    },
+    ("item_id", "kind", "summary", "freshness", "is_inferred", "citation_ids"),
+)
+EVALUATOR_REQUEST: Final[dict[str, object]] = _closed(
+    {
+        "schema_version": {"type": "string", "const": "1.0"},
+        "request_id": UUID,
+        "organization_id": UUID,
+        "repository_id": UUID,
+        "assurance_run_id": UUID,
+        "pull_request_revision_id": UUID,
+        "commit_sha": COMMIT,
+        "versions": _closed(
+            {
+                "diff_parser": {"type": "string", "minLength": 1, "maxLength": 100},
+                "context": {"type": "string", "minLength": 1, "maxLength": 100},
+                "requirements": SHA256,
+                "policy": SHA256,
+                "evidence": SHA256,
+                "evaluator": {"type": "string", "minLength": 1, "maxLength": 100},
+                "prompt": {"type": "string", "minLength": 1, "maxLength": 100},
+            },
+            (
+                "diff_parser",
+                "context",
+                "requirements",
+                "policy",
+                "evidence",
+                "evaluator",
+                "prompt",
+            ),
+        ),
+        "deterministic_checks": {
+            "type": "array",
+            "items": EVALUATOR_DETERMINISTIC_CHECK,
+            "maxItems": 200,
+        },
+        "requirements": {"type": "array", "items": EVALUATOR_REQUIREMENT, "maxItems": 500},
+        "policy_controls": {"type": "array", "items": POLICY_CONTROL, "maxItems": 500},
+        "evidence_mappings": {
+            "type": "array",
+            "items": EVALUATOR_EVIDENCE_MAPPING,
+            "maxItems": 500,
+        },
+        "authorized_context": {
+            "type": "array",
+            "items": EVALUATOR_AUTHORIZED_CONTEXT,
+            "maxItems": 100,
+        },
+        "untrusted_change": _closed(
+            {
+                "title": {"type": "string", "maxLength": 1_000},
+                "description": {"type": "string", "maxLength": 50_000},
+                "chunks": {
+                    "type": "array",
+                    "items": deepcopy(DIFF_CHUNK),
+                    "maxItems": 2_000,
+                },
+            },
+            ("title", "description", "chunks"),
+        ),
+        "instructions": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "maxLength": 1_000},
+            "minItems": 1,
+            "maxItems": 20,
+        },
+        "limitations": STRING_LIST,
+    },
+    (
+        "schema_version",
+        "request_id",
+        "organization_id",
+        "repository_id",
+        "assurance_run_id",
+        "pull_request_revision_id",
+        "commit_sha",
+        "versions",
+        "deterministic_checks",
+        "requirements",
+        "policy_controls",
+        "evidence_mappings",
+        "authorized_context",
+        "untrusted_change",
+        "instructions",
+        "limitations",
+    ),
+)
+
 CLAIMED_BY: Final[dict[str, object]] = _closed(
     {
         "actor_type": {"type": "string", "enum": ["USER", "SERVICE"]},
@@ -554,7 +1050,7 @@ EVALUATOR_CLAIM_RESPONSE: Final[dict[str, object]] = {
                 "lease_expires_at": DATE_TIME,
                 "claim_token": {"type": "string", "minLength": 32, "maxLength": 200},
                 "replayed": {"type": "boolean"},
-                "request": deepcopy(EVALUATOR_REQUEST_SCHEMA),
+                "request": EVALUATOR_REQUEST,
             },
             (
                 "status",
@@ -622,6 +1118,23 @@ EVIDENCE_UPLOAD_EXAMPLE_BYTES: Final[bytes] = (
 EVIDENCE_UPLOAD_EXAMPLE_SHA256: Final[str] = hashlib.sha256(
     EVIDENCE_UPLOAD_EXAMPLE_BYTES
 ).hexdigest()
+
+POLICY_OUTPUT_EXAMPLE: Final[dict[str, object]] = {
+    "engine_version": "deterministic-policy-v1",
+    "outcome": "CONTROLS_CALCULATED",
+    "controls": [],
+    "matched_bindings": [],
+    "considered_bindings": [],
+    "applied_overrides": [],
+    "limitations": [],
+    "reevaluation_conditions": [
+        "commit_changed",
+        "work_item_revision_changed",
+        "policy_version_changed",
+        "approval_or_override_changed",
+        "evidence_or_retention_changed",
+    ],
+}
 
 
 HTTP_OPERATION_EXAMPLES: Final[dict[str, dict[str, object]]] = {
@@ -785,14 +1298,14 @@ HTTP_OPERATION_EXAMPLES: Final[dict[str, dict[str, object]]] = {
             "policy_evaluation_id": _ids(24),
             "input_hash": "5" * 64,
             "output_hash": "6" * 64,
-            "output": {"status": "PASSED"},
+            "output": deepcopy(POLICY_OUTPUT_EXAMPLE),
             "created": True,
         },
         "200": {
             "policy_evaluation_id": _ids(24),
             "input_hash": "5" * 64,
             "output_hash": "6" * 64,
-            "output": {"status": "PASSED"},
+            "output": deepcopy(POLICY_OUTPUT_EXAMPLE),
             "created": False,
         },
     },
@@ -1048,6 +1561,7 @@ HTTP_RESPONSE_OVERRIDES: Final[dict[str, dict[str, object]]] = {
     "importWorkItemRevision": WORK_IMPORT_RESPONSE,
     "importPolicyVersion": POLICY_IMPORT_RESPONSE,
     "simulatePolicy": POLICY_SIMULATION_RESPONSE,
+    "uploadEvidenceContent": EVIDENCE_UPLOAD_RESPONSE,
     "submitEvidenceManifest": EVIDENCE_MANIFEST_RESPONSE,
     "getEvidenceManifest": EVIDENCE_MANIFEST_DETAIL_RESPONSE,
     "ingestManualPullRequestDiff": MANUAL_DIFF_RESPONSE,

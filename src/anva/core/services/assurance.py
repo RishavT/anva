@@ -1179,6 +1179,17 @@ def claim_evaluator_task(
         assert input_hash is not None
         assert head_commit is not None
         exact_selector_values = (task_id, assurance_run_id, input_hash, head_commit)
+    selector_digest = content_hash(
+        {
+            "mode": "EXACT",
+            "task_id": str(task_id),
+            "assurance_run_id": str(assurance_run_id),
+            "input_hash": input_hash,
+            "head_commit": head_commit,
+        }
+        if exact_selector
+        else {"mode": "LEGACY"}
+    )
     actor = _authorize_assurance_review(actor=actor, repository_id=repository_id)
     repository = get_tenant_record(
         queryset=Repository.objects.filter(is_active=True),
@@ -1198,11 +1209,14 @@ def claim_evaluator_task(
             .first()
         )
         if prior is not None:
-            selector_matches = not exact_selector or (
-                prior.id == task_id
-                and prior.assurance_run_id == assurance_run_id
-                and prior.assurance_run.input_hash == input_hash
-                and prior.assurance_run.head_commit == head_commit
+            _authorize_evaluator_source_scope(
+                actor=actor,
+                repository_id=repository.id,
+                evaluator_scope=prior.request_artifact.access_scope,
+            )
+            selector_matches = hmac.compare_digest(
+                prior.claim_selector_sha256,
+                selector_digest,
             )
             same_claim = (
                 selector_matches
@@ -1215,11 +1229,6 @@ def claim_evaluator_task(
             if not same_claim:
                 raise LeaseConflictError("Evaluator claim idempotency key is already bound")
             if prior.lease_expires_at is not None and prior.lease_expires_at > now:
-                _authorize_evaluator_source_scope(
-                    actor=actor,
-                    repository_id=repository.id,
-                    evaluator_scope=prior.request_artifact.access_scope,
-                )
                 token = secrets.token_urlsafe(32)
                 prior.claim_token_hash = hashlib.sha256(token.encode()).hexdigest()
                 prior.lease_expires_at = now + timedelta(seconds=lease_seconds)
@@ -1360,6 +1369,7 @@ def claim_evaluator_task(
     task.claimed_by_actor_id = actor.actor_id
     task.claimed_by_credential_id = actor.credential_id
     task.claim_idempotency_sha256 = claim_idempotency_key or ""
+    task.claim_selector_sha256 = selector_digest if claim_idempotency_key is not None else ""
     task.claim_token_hash = hashlib.sha256(token.encode()).hexdigest()
     task.lease_expires_at = now + timedelta(seconds=lease_seconds)
     task.attempt_count += 1
@@ -1372,6 +1382,7 @@ def claim_evaluator_task(
             "claimed_by_actor_id",
             "claimed_by_credential_id",
             "claim_idempotency_sha256",
+            "claim_selector_sha256",
             "claim_token_hash",
             "lease_expires_at",
             "attempt_count",
@@ -2325,6 +2336,7 @@ def submit_evaluator_result(
         evaluator_scope=task.request_artifact.access_scope,
     )
     result_digest = content_hash(result)
+    expected_token_hash = hashlib.sha256(claim_token.encode()).hexdigest()
     if (
         task.claimed_by_actor_type != actor.actor_type
         or not hmac.compare_digest(task.claimed_by_actor_id, actor.actor_id)
@@ -2332,6 +2344,11 @@ def submit_evaluator_result(
     ):
         raise LeaseConflictError("Evaluator claim is invalid or expired")
     if task.state == EvaluatorTask.State.SUBMITTED and task.result_artifact is not None:
+        if not task.claim_token_hash or not hmac.compare_digest(
+            task.claim_token_hash,
+            expected_token_hash,
+        ):
+            raise LeaseConflictError("Evaluator claim is invalid or expired")
         if task.result_artifact.content_hash != result_digest:
             raise IdempotencyConflictError("Evaluator task was submitted with different content")
         run = task.assurance_run
@@ -2346,7 +2363,6 @@ def submit_evaluator_result(
             ),
             False,
         )
-    expected_token_hash = hashlib.sha256(claim_token.encode()).hexdigest()
     if (
         task.state != EvaluatorTask.State.CLAIMED
         or task.lease_expires_at is None
@@ -2479,7 +2495,6 @@ def submit_evaluator_result(
     task.result_artifact = result_artifact
     task.state = EvaluatorTask.State.SUBMITTED
     task.submitted_at = timezone.now()
-    task.claim_token_hash = ""
     task.lease_expires_at = None
     task.revision += 1
     task.save(
@@ -2487,7 +2502,6 @@ def submit_evaluator_result(
             "result_artifact",
             "state",
             "submitted_at",
-            "claim_token_hash",
             "lease_expires_at",
             "revision",
             "updated_at",

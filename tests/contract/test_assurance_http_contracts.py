@@ -361,7 +361,14 @@ def test_assurance_read_http_adapters_return_exact_run_findings_and_report(
         explanation="Inspect the change.",
         path="src/service.py",
         line=4,
-        citations=[{"type": "DIFF"}],
+        citations=[
+            {
+                "type": "DIFF",
+                "path": "src/service.py",
+                "side": "NEW",
+                "line": 4,
+            }
+        ],
         evidence_ids=[],
         criterion_codes=[],
         uncertainty="Bounded review.",

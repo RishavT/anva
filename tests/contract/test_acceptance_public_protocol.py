@@ -39,6 +39,69 @@ def _operation(document: dict[str, object], operation_id: str) -> dict[str, obje
     raise AssertionError(f"OpenAPI operation not found: {operation_id}")
 
 
+def _open_object_schema_paths(
+    value: object,
+    path: tuple[str | int, ...] = (),
+) -> list[tuple[str | int, ...]]:
+    if isinstance(value, list):
+        return [
+            nested
+            for index, item in enumerate(value)
+            for nested in _open_object_schema_paths(item, (*path, index))
+        ]
+    if not isinstance(value, dict):
+        return []
+    found = (
+        [path]
+        if (value.get("type") == "object" or "properties" in value)
+        and value.get("additionalProperties") is not False
+        else []
+    )
+    return [
+        *found,
+        *(
+            nested
+            for key, item in value.items()
+            for nested in _open_object_schema_paths(item, (*path, key))
+        ),
+    ]
+
+
+def _payload_object_paths(
+    value: object,
+    path: tuple[str | int, ...] = (),
+) -> list[tuple[str | int, ...]]:
+    if isinstance(value, list):
+        return [
+            nested
+            for index, item in enumerate(value)
+            for nested in _payload_object_paths(item, (*path, index))
+        ]
+    if not isinstance(value, dict):
+        return []
+    return [
+        path,
+        *(
+            nested
+            for key, item in value.items()
+            for nested in _payload_object_paths(item, (*path, key))
+        ),
+    ]
+
+
+def _payload_at_path(
+    payload: dict[str, object],
+    path: tuple[str | int, ...],
+) -> dict[str, object]:
+    value: object = payload
+    for part in path:
+        if isinstance(part, str):
+            value = cast(dict[str, object], value)[part]
+        else:
+            value = cast(list[object], value)[part]
+    return cast(dict[str, object], value)
+
+
 @pytest.mark.contract
 def test_acceptance_case_is_closed_public_only_and_has_two_distinct_valid_cases() -> None:
     schema = SCHEMAS["acceptance-case"]
@@ -143,18 +206,50 @@ def test_acceptance_openapi_has_strict_success_schemas_and_canonical_examples() 
             standalone_response = cast(dict[str, object], standalone[operation_id]["responses"])[
                 status
             ]
-            standalone_media = cast(
+            standalone_response_content = cast(
                 dict[str, object],
                 cast(dict[str, object], standalone_response)["content"],
-            )["application/json"]
-            assert media["example"] == cast(dict[str, object], standalone_media)["example"]
-            standalone_schema = cast(
-                dict[str, object], cast(dict[str, object], standalone_media)["schema"]
             )
+            standalone_response_media = cast(
+                dict[str, object],
+                standalone_response_content["application/json"],
+            )
+            assert media["example"] == standalone_response_media["example"]
+            standalone_schema = cast(dict[str, object], standalone_response_media["schema"])
             Draft202012Validator.check_schema(standalone_schema)
-            Draft202012Validator(standalone_schema).validate(
-                cast(dict[str, object], standalone_media)["example"]
+            Draft202012Validator(standalone_schema).validate(standalone_response_media["example"])
+
+
+@pytest.mark.contract
+def test_standalone_success_schemas_are_recursively_closed() -> None:
+    bundle = json.loads(rendered_artifacts()[Path("acceptance/v1/operations.json")])
+    checked_objects = 0
+    for operation in bundle["http_operations"]:
+        for status, response in operation["responses"].items():
+            if not status.startswith("2"):
+                continue
+            media = response["content"]["application/json"]
+            schema = media["schema"]
+            assert _open_object_schema_paths(schema) == [], (
+                operation["operation_id"],
+                status,
+                _open_object_schema_paths(schema),
             )
+            example = media["example"]
+            validator = Draft202012Validator(schema)
+            validator.validate(example)
+            for path in _payload_object_paths(example):
+                injected = deepcopy(example)
+                _payload_at_path(injected, path)["private_oracle_payload"] = {
+                    "verdict": "must remain private"
+                }
+                assert not validator.is_valid(injected), (
+                    operation["operation_id"],
+                    status,
+                    path,
+                )
+                checked_objects += 1
+    assert checked_objects >= len(ACCEPTANCE_HTTP_OPERATION_IDS)
 
 
 @pytest.mark.contract
@@ -205,9 +300,8 @@ def test_exact_claim_selector_is_all_or_nothing_and_response_is_identity_bound()
         Draft202012Validator(schema).validate(incomplete)
 
     response = cast(dict[str, object], standalone["responses"])["200"]
-    response_media = cast(dict[str, object], cast(dict[str, object], response)["content"])[
-        "application/json"
-    ]
+    response_content = cast(dict[str, object], cast(dict[str, object], response)["content"])
+    response_media = cast(dict[str, object], response_content["application/json"])
     response_schema = cast(dict[str, object], response_media["schema"])
     response_example = cast(dict[str, object], response_media["example"])
     Draft202012Validator(response_schema).validate(response_example)

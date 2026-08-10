@@ -592,7 +592,7 @@
           "type": "string"
         },
         "unified_diff": {
-          "maxLength": 1000000,
+          "maxLength": 150000,
           "minLength": 1,
           "type": "string"
         }
@@ -1060,5 +1060,18 @@
     "semantic_assertions"
   ],
   "title": "Anva Public Acceptance Case",
-  "type": "object"
+  "type": "object",
+  "x-anva-input": {
+    "byte_limit": {
+      "applies_to": "entire-encoded-document",
+      "includes": [
+        "insignificant-whitespace",
+        "escape-sequences"
+      ],
+      "maximum": 1000000
+    },
+    "encoding": "utf-8",
+    "media_type": "application/json",
+    "serialization": "json-text"
+  }
 }

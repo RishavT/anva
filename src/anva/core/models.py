@@ -2458,6 +2458,7 @@ class EvaluatorTask(RevisionedTenantModel):
     claimed_by_actor_id = models.CharField(max_length=200, blank=True)
     claimed_by_credential_id = models.UUIDField(null=True, blank=True)
     claim_idempotency_sha256 = models.CharField(max_length=64, blank=True)
+    claim_selector_sha256 = models.CharField(max_length=64, blank=True)
     claim_token_hash = models.CharField(max_length=64, blank=True)
     lease_expires_at = models.DateTimeField(null=True, blank=True)
     attempt_count = models.PositiveIntegerField(default=0)
@@ -2489,6 +2490,16 @@ class EvaluatorTask(RevisionedTenantModel):
                     | Q(claim_idempotency_sha256__regex=r"^[a-f0-9]{64}$")
                 ),
                 name="core_evaluator_claim_idem_sha",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(claim_idempotency_sha256="", claim_selector_sha256="")
+                    | (
+                        ~Q(claim_idempotency_sha256="")
+                        & Q(claim_selector_sha256__regex=r"^[a-f0-9]{64}$")
+                    )
+                ),
+                name="core_evaluator_claim_selector_sha",
             ),
             models.CheckConstraint(
                 condition=Q(attempt_count__lte=F("max_attempts")),

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from copy import deepcopy
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -13,7 +14,8 @@ from django.http import HttpRequest, JsonResponse
 from django.test import Client, RequestFactory
 from starlette.testclient import TestClient
 
-from anva.contracts.acceptance import validate_acceptance_http_response
+from anva.contracts.acceptance import POLICY_OUTPUT_EXAMPLE, validate_acceptance_http_response
+from anva.contracts.catalog import EXAMPLES
 from anva.core import views as core_views
 from anva.core.exceptions import AuthenticationError, IdempotencyConflictError
 from anva.entrypoints.mcp import create_application
@@ -292,7 +294,7 @@ def test_governance_http_creation_simulation_and_submission_contracts(
         id=evaluation_id,
         input_hash="c" * 64,
         output_hash="d" * 64,
-        output_payload={"outcome": "CONTROLS_CALCULATED", "controls": []},
+        output_payload=deepcopy(POLICY_OUTPUT_EXAMPLE),
     )
     manifest_result = SimpleNamespace(
         manifest=SimpleNamespace(id=manifest_id, payload_hash="e" * 64),
@@ -580,7 +582,7 @@ def test_governance_detail_http_responses(client: Client) -> None:
         pull_request_number=17,
         commit_sha="c" * 40,
         payload_hash="d" * 64,
-        artifact=SimpleNamespace(payload={"schema_version": "1.0"}),
+        artifact=SimpleNamespace(payload=deepcopy(EXAMPLES["evidence-manifest"])),
     )
     with (
         patch(

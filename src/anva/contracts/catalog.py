@@ -5,6 +5,15 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Final, cast
 
+from anva.contract_limits import (
+    ACCEPTANCE_CASE_BYTE_LIMIT_SCOPE,
+    ACCEPTANCE_CASE_ENCODING,
+    ACCEPTANCE_CASE_MEDIA_TYPE,
+    ACCEPTANCE_CASE_SERIALIZATION,
+    MAX_ACCEPTANCE_CASE_BYTES,
+    MAX_ACCEPTANCE_UNIFIED_DIFF_CHARACTERS,
+)
+
 SCHEMA_VERSION: Final = "1.0"
 SCHEMA_BASE_URI: Final = "https://schemas.anva.dev/v1"
 SHA256_PATTERN: Final = "^[a-f0-9]{64}$"
@@ -1725,7 +1734,11 @@ ACCEPTANCE_CASE_SCHEMA = versioned_schema(
                 "target_branch": {"type": "string", "minLength": 1, "maxLength": 300},
                 "is_draft": {"type": "boolean"},
                 "state": {"type": "string", "enum": ["OPEN", "MERGED", "CLOSED"]},
-                "unified_diff": {"type": "string", "minLength": 1, "maxLength": 1_000_000},
+                "unified_diff": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": MAX_ACCEPTANCE_UNIFIED_DIFF_CHARACTERS,
+                },
                 "affected_paths": {
                     "type": "array",
                     "items": {"type": "string", "minLength": 1, "maxLength": 500},
@@ -2005,6 +2018,16 @@ ACCEPTANCE_CASE_SCHEMA = versioned_schema(
         },
     },
 )
+ACCEPTANCE_CASE_SCHEMA["x-anva-input"] = {
+    "media_type": ACCEPTANCE_CASE_MEDIA_TYPE,
+    "encoding": ACCEPTANCE_CASE_ENCODING,
+    "serialization": ACCEPTANCE_CASE_SERIALIZATION,
+    "byte_limit": {
+        "maximum": MAX_ACCEPTANCE_CASE_BYTES,
+        "applies_to": ACCEPTANCE_CASE_BYTE_LIMIT_SCOPE,
+        "includes": ["insignificant-whitespace", "escape-sequences"],
+    },
+}
 
 SCHEMAS: Final[dict[str, dict[str, object]]] = {
     "acceptance-case": ACCEPTANCE_CASE_SCHEMA,

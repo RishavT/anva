@@ -12,9 +12,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from anva.contracts.validation import validate_payload
+from anva.contract_limits import ACCEPTANCE_CASE_ENCODING
+from anva.contracts.validation import contract_input_byte_limit, validate_payload
 
-MAX_CASE_BYTES = 1_000_000
+MAX_CASE_BYTES = contract_input_byte_limit("acceptance-case")
 MAX_EVIDENCE_BYTES = 4_096
 FORBIDDEN_PRIVATE_KEYS = frozenset(
     {
@@ -234,7 +235,7 @@ def load_acceptance_case(path: Path) -> AcceptanceCase:
             raw = stream.read(MAX_CASE_BYTES + 1)
         if len(raw) > MAX_CASE_BYTES:
             raise AcceptanceCaseError("Acceptance case exceeds its bound")
-        value = json.loads(raw)
+        value = json.loads(raw.decode(ACCEPTANCE_CASE_ENCODING))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise AcceptanceCaseError("Acceptance case is invalid JSON") from error
     finally:

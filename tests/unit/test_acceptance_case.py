@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from anva.acceptance.case import (
     MAX_CASE_BYTES,
@@ -17,8 +18,15 @@ from anva.acceptance.case import (
     acceptance_case,
     load_acceptance_case,
 )
-from anva.contracts.catalog import EXAMPLES
-from anva.contracts.validation import ContractValidationError
+from anva.contract_limits import (
+    ACCEPTANCE_CASE_BYTE_LIMIT_SCOPE,
+    ACCEPTANCE_CASE_ENCODING,
+    ACCEPTANCE_CASE_MEDIA_TYPE,
+    ACCEPTANCE_CASE_SERIALIZATION,
+    MAX_ACCEPTANCE_UNIFIED_DIFF_CHARACTERS,
+)
+from anva.contracts.catalog import EXAMPLES, SCHEMAS
+from anva.contracts.validation import ContractValidationError, contract_input_byte_limit
 
 
 def _case() -> dict[str, object]:
@@ -123,6 +131,83 @@ def test_case_loader_rejects_links_oversize_and_unsafe_source_paths(tmp_path: Pa
     ]
     with pytest.raises(ContractValidationError):
         acceptance_case(traversal)
+
+
+@pytest.mark.unit
+def test_case_input_metadata_exposes_loader_wire_semantics() -> None:
+    input_metadata = cast(dict[str, object], SCHEMAS["acceptance-case"]["x-anva-input"])
+    byte_limit = cast(dict[str, object], input_metadata["byte_limit"])
+
+    assert input_metadata == {
+        "media_type": ACCEPTANCE_CASE_MEDIA_TYPE,
+        "encoding": ACCEPTANCE_CASE_ENCODING,
+        "serialization": ACCEPTANCE_CASE_SERIALIZATION,
+        "byte_limit": {
+            "maximum": MAX_CASE_BYTES,
+            "applies_to": ACCEPTANCE_CASE_BYTE_LIMIT_SCOPE,
+            "includes": ["insignificant-whitespace", "escape-sequences"],
+        },
+    }
+    assert byte_limit["maximum"] == contract_input_byte_limit("acceptance-case")
+
+
+@pytest.mark.unit
+def test_multibyte_diff_schema_bound_stays_inside_loader_byte_limit(tmp_path: Path) -> None:
+    accepted = _case()
+    cast(dict[str, object], accepted["change"])["unified_diff"] = (
+        "💡" * MAX_ACCEPTANCE_UNIFIED_DIFF_CHARACTERS
+    )
+    path = tmp_path / "multibyte-case.json"
+    path.write_text(json.dumps(accepted, ensure_ascii=False), encoding="utf-8")
+
+    assert path.stat().st_size < MAX_CASE_BYTES
+    assert load_acceptance_case(path).case_id == accepted["case_id"]
+
+    schema = SCHEMAS["acceptance-case"]
+    escaped_path = tmp_path / "escaped-multibyte-case.json"
+    escaped_path.write_text(json.dumps(accepted), encoding="utf-8")
+    Draft202012Validator(schema).validate(accepted)
+    assert escaped_path.stat().st_size > MAX_CASE_BYTES
+    with pytest.raises(AcceptanceCaseError, match="unsafe|bound"):
+        load_acceptance_case(escaped_path)
+
+    cumulative = deepcopy(accepted)
+    cast(dict[str, object], cumulative["change"])["description"] = "💡" * 50_000
+    cast(dict[str, object], cumulative["work_item"])["summary"] = "💡" * 20_000
+    cast(dict[str, object], cumulative["retrieval"])["context_task"] = "💡" * 2_000
+    cast(dict[str, object], cumulative["evidence"])["limitations"] = [
+        "💡" * 2_000 for _index in range(20)
+    ]
+    Draft202012Validator(schema).validate(cumulative)
+    cumulative_path = tmp_path / "cumulative-multibyte-case.json"
+    cumulative_path.write_text(json.dumps(cumulative, ensure_ascii=False), encoding="utf-8")
+    assert cumulative_path.stat().st_size > MAX_CASE_BYTES
+    with pytest.raises(AcceptanceCaseError, match="unsafe|bound"):
+        load_acceptance_case(cumulative_path)
+
+    rejected = _case()
+    cast(dict[str, object], rejected["change"])["unified_diff"] = "é" * 500_000
+    with pytest.raises(ContractValidationError):
+        acceptance_case(rejected)
+
+
+@pytest.mark.unit
+def test_loader_counts_whitespace_and_requires_declared_encoding(tmp_path: Path) -> None:
+    case = _case()
+    schema = SCHEMAS["acceptance-case"]
+    Draft202012Validator(schema).validate(case)
+    encoded = json.dumps(case, ensure_ascii=False).encode(ACCEPTANCE_CASE_ENCODING)
+
+    padded_path = tmp_path / "whitespace-padded-case.json"
+    padded_path.write_bytes(encoded + b" " * (MAX_CASE_BYTES - len(encoded) + 1))
+    assert padded_path.stat().st_size == MAX_CASE_BYTES + 1
+    with pytest.raises(AcceptanceCaseError, match="unsafe|bound"):
+        load_acceptance_case(padded_path)
+
+    wrong_encoding_path = tmp_path / "utf-16-case.json"
+    wrong_encoding_path.write_bytes(json.dumps(case).encode("utf-16"))
+    with pytest.raises(AcceptanceCaseError, match="invalid JSON"):
+        load_acceptance_case(wrong_encoding_path)
 
 
 @pytest.mark.unit

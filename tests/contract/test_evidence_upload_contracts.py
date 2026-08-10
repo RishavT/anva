@@ -201,7 +201,15 @@ def test_content_http_streams_request_and_returns_only_safe_blob_metadata(client
         content_hash="c" * 64,
         verified_size=631,
         detected_media_type="application/zip",
-        archive_summary={"member_count": 2, "expanded_bytes": 512},
+        archive_summary={
+            "format": "ZIP",
+            "member_count": 2,
+            "compressed_bytes": 256,
+            "expanded_bytes": 512,
+            "manifest_sha256": "d" * 64,
+            "results_sha256": "e" * 64,
+            "check_count": 1,
+        },
         storage_state="AVAILABLE",
         object_key="must-not-leak",
     )
@@ -229,7 +237,15 @@ def test_content_http_streams_request_and_returns_only_safe_blob_metadata(client
         "sha256": "c" * 64,
         "verified_size": 631,
         "detected_type": "application/zip",
-        "archive_summary": {"member_count": 2, "expanded_bytes": 512},
+        "archive_summary": {
+            "format": "ZIP",
+            "member_count": 2,
+            "compressed_bytes": 256,
+            "expanded_bytes": 512,
+            "manifest_sha256": "d" * 64,
+            "results_sha256": "e" * 64,
+            "check_count": 1,
+        },
         "storage_state": "AVAILABLE",
     }
     arguments = accept.call_args.kwargs

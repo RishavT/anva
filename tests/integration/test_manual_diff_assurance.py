@@ -366,6 +366,13 @@ def test_exact_replay_manual_queue_report_and_new_revision_staleness() -> None:
             repository_id=repository.id,
             claimant="fresh-review-agent",
             claim_idempotency_key="9" * 64,
+        )
+    with pytest.raises(LeaseConflictError, match="idempotency key"):
+        claim_evaluator_task(
+            actor=reviewer,
+            repository_id=repository.id,
+            claimant="fresh-review-agent",
+            claim_idempotency_key="9" * 64,
             task_id=started.evaluator_task.id,
             assurance_run_id=started.run.id,
             input_hash=started.run.input_hash,
@@ -403,6 +410,14 @@ def test_exact_replay_manual_queue_report_and_new_revision_staleness() -> None:
     assert completed.report.html == replayed.report.html
     assert completed.report.content_hash == replayed.report.content_hash
     assert completed.report.artifact.content_hash == replayed.report.artifact.content_hash
+    with pytest.raises(LeaseConflictError, match="invalid or expired"):
+        submit_evaluator_result(
+            actor=reviewer,
+            task_id=claim.task.id,
+            claimant="fresh-review-agent",
+            claim_token="different-nonempty-claim-token",
+            result=result,
+        )
     assert REQUIREMENT_TRACEABILITY_LIMITATION in completed.report.markdown
     assert REQUIREMENT_TRACEABILITY_LIMITATION in completed.report.html
     assert "REQUIREMENT\\_TRACEABILITY\\_NOT\\_ESTABLISHED" in completed.report.markdown
@@ -521,9 +536,19 @@ def test_exact_selector_disambiguates_two_tasks_and_fails_closed() -> None:
         actor=reviewer,
         repository_id=repository.id,
         claimant="legacy-queue-agent",
+        claim_idempotency_key="a" * 64,
     )
     assert remaining is not None
     assert remaining.task.id == first.evaluator_task.id
+    legacy_replay = claim_evaluator_task(
+        actor=reviewer,
+        repository_id=repository.id,
+        claimant="legacy-queue-agent",
+        claim_idempotency_key="a" * 64,
+    )
+    assert legacy_replay is not None
+    assert legacy_replay.task.id == first.evaluator_task.id
+    assert legacy_replay.replayed is True
 
     with pytest.raises(ValueError, match="supplied together"):
         claim_evaluator_task(

@@ -1412,7 +1412,45 @@
                 "properties": {
                   "annotations": {
                     "items": {
-                      "maxProperties": 200,
+                      "additionalProperties": false,
+                      "properties": {
+                        "body": {
+                          "maxLength": 2000,
+                          "type": "string"
+                        },
+                        "entity_id": {
+                          "oneOf": [
+                            {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "id": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "x": {
+                          "maximum": 1000000,
+                          "minimum": -1000000,
+                          "type": "number"
+                        },
+                        "y": {
+                          "maximum": 1000000,
+                          "minimum": -1000000,
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "entity_id",
+                        "body",
+                        "x",
+                        "y"
+                      ],
                       "type": "object"
                     },
                     "maxItems": 100,
@@ -1468,8 +1506,11 @@
                         },
                         "freshness": {
                           "enum": [
-                            "CURRENT",
+                            "FRESH",
+                            "AGING",
                             "STALE",
+                            "CONTRADICTED",
+                            "SOURCE_UNAVAILABLE",
                             "UNKNOWN"
                           ],
                           "type": "string"
@@ -1622,8 +1663,11 @@
                         },
                         "freshness": {
                           "enum": [
-                            "CURRENT",
+                            "FRESH",
+                            "AGING",
                             "STALE",
+                            "CONTRADICTED",
+                            "SOURCE_UNAVAILABLE",
                             "UNKNOWN"
                           ],
                           "type": "string"
@@ -1785,7 +1829,111 @@
                     "type": "string"
                   },
                   "semantic_query": {
-                    "maxProperties": 200,
+                    "additionalProperties": false,
+                    "properties": {
+                      "as_of": {
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      "depth": {
+                        "maximum": 4,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "entity_types": {
+                        "items": {
+                          "enum": [
+                            "GOAL",
+                            "METRIC",
+                            "INITIATIVE",
+                            "PRODUCT",
+                            "OWNER",
+                            "ENVIRONMENT",
+                            "CUSTOMER_COMMITMENT",
+                            "ARCHITECTURAL_DECISION",
+                            "ACCEPTANCE_CRITERION",
+                            "RELEASE",
+                            "TEAM",
+                            "REPOSITORY",
+                            "SERVICE",
+                            "COMPONENT",
+                            "API",
+                            "DATA_ASSET",
+                            "WORK_ITEM",
+                            "TASK",
+                            "PULL_REQUEST",
+                            "EVIDENCE",
+                            "RISK",
+                            "INCIDENT",
+                            "CONTROL",
+                            "DECISION",
+                            "POLICY",
+                            "REQUIREMENT",
+                            "UNKNOWN"
+                          ],
+                          "type": "string"
+                        },
+                        "maxItems": 27,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "freshness": {
+                        "enum": [
+                          "FRESH",
+                          "AGING",
+                          "STALE",
+                          "CONTRADICTED",
+                          "SOURCE_UNAVAILABLE",
+                          "UNKNOWN"
+                        ],
+                        "type": "string"
+                      },
+                      "layers": {
+                        "items": {
+                          "enum": [
+                            "execution",
+                            "ownership",
+                            "dependencies",
+                            "governance",
+                            "provenance"
+                          ],
+                          "type": "string"
+                        },
+                        "maxItems": 5,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "owner": {
+                        "maxLength": 500,
+                        "type": "string"
+                      },
+                      "repository_ids": {
+                        "items": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "maxItems": 100,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "risk": {
+                        "maxLength": 500,
+                        "type": "string"
+                      },
+                      "root_entity_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "search": {
+                        "maxLength": 500,
+                        "type": "string"
+                      },
+                      "status": {
+                        "maxLength": 500,
+                        "type": "string"
+                      }
+                    },
+                    "required": [],
                     "type": "object"
                   },
                   "truncated": {
@@ -3916,7 +4064,20 @@
                 "created": false,
                 "input_hash": "5555555555555555555555555555555555555555555555555555555555555555",
                 "output": {
-                  "status": "PASSED"
+                  "applied_overrides": [],
+                  "considered_bindings": [],
+                  "controls": [],
+                  "engine_version": "deterministic-policy-v1",
+                  "limitations": [],
+                  "matched_bindings": [],
+                  "outcome": "CONTROLS_CALCULATED",
+                  "reevaluation_conditions": [
+                    "commit_changed",
+                    "work_item_revision_changed",
+                    "policy_version_changed",
+                    "approval_or_override_changed",
+                    "evidence_or_retention_changed"
+                  ]
                 },
                 "output_hash": "6666666666666666666666666666666666666666666666666666666666666666",
                 "policy_evaluation_id": "00000000-0000-4000-8000-000000000024"
@@ -3932,7 +4093,330 @@
                     "type": "string"
                   },
                   "output": {
-                    "maxProperties": 200,
+                    "additionalProperties": false,
+                    "properties": {
+                      "applied_overrides": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "code": {
+                              "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+                              "type": "string"
+                            },
+                            "override_id": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "reason": {
+                              "maxLength": 2000,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "source": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "binding_id": {
+                                  "format": "uuid",
+                                  "type": "string"
+                                },
+                                "mandatory": {
+                                  "type": "boolean"
+                                },
+                                "policy_id": {
+                                  "format": "uuid",
+                                  "type": "string"
+                                },
+                                "policy_version": {
+                                  "minimum": 1,
+                                  "type": "integer"
+                                },
+                                "policy_version_id": {
+                                  "format": "uuid",
+                                  "type": "string"
+                                },
+                                "requirement_id": {
+                                  "format": "uuid",
+                                  "type": "string"
+                                },
+                                "scope_level": {
+                                  "enum": [
+                                    "ORGANIZATION",
+                                    "PRODUCT",
+                                    "SYSTEM",
+                                    "REPOSITORY",
+                                    "PATH"
+                                  ],
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "policy_id",
+                                "policy_version_id",
+                                "policy_version",
+                                "binding_id",
+                                "scope_level",
+                                "mandatory",
+                                "requirement_id"
+                              ],
+                              "type": "object"
+                            }
+                          },
+                          "required": [
+                            "override_id",
+                            "code",
+                            "source",
+                            "reason"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 50000,
+                        "type": "array"
+                      },
+                      "considered_bindings": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "binding_id": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "matched": {
+                              "type": "boolean"
+                            },
+                            "policy_version_id": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "reasons": {
+                              "items": {
+                                "maxLength": 2000,
+                                "type": "string"
+                              },
+                              "maxItems": 1000,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "policy_version_id",
+                            "binding_id",
+                            "matched",
+                            "reasons"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 100,
+                        "type": "array"
+                      },
+                      "controls": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "check_type": {
+                              "enum": [
+                                "DETERMINISTIC",
+                                "EVIDENCE",
+                                "MODEL_REVIEW",
+                                "MANUAL_APPROVAL"
+                              ],
+                              "type": "string"
+                            },
+                            "code": {
+                              "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+                              "type": "string"
+                            },
+                            "description": {
+                              "maxLength": 10000,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "enforcement": {
+                              "enum": [
+                                "BLOCKING",
+                                "ADVISORY"
+                              ],
+                              "type": "string"
+                            },
+                            "report_sections": {
+                              "items": {
+                                "maxLength": 2000,
+                                "type": "string"
+                              },
+                              "maxItems": 1000,
+                              "type": "array"
+                            },
+                            "required_approval": {
+                              "type": "boolean"
+                            },
+                            "required_evidence": {
+                              "items": {
+                                "maxLength": 2000,
+                                "type": "string"
+                              },
+                              "maxItems": 1000,
+                              "type": "array"
+                            },
+                            "required_reviewers": {
+                              "items": {
+                                "maxLength": 2000,
+                                "type": "string"
+                              },
+                              "maxItems": 1000,
+                              "type": "array"
+                            },
+                            "sources": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "binding_id": {
+                                    "format": "uuid",
+                                    "type": "string"
+                                  },
+                                  "mandatory": {
+                                    "type": "boolean"
+                                  },
+                                  "policy_id": {
+                                    "format": "uuid",
+                                    "type": "string"
+                                  },
+                                  "policy_version": {
+                                    "minimum": 1,
+                                    "type": "integer"
+                                  },
+                                  "policy_version_id": {
+                                    "format": "uuid",
+                                    "type": "string"
+                                  },
+                                  "requirement_id": {
+                                    "format": "uuid",
+                                    "type": "string"
+                                  },
+                                  "scope_level": {
+                                    "enum": [
+                                      "ORGANIZATION",
+                                      "PRODUCT",
+                                      "SYSTEM",
+                                      "REPOSITORY",
+                                      "PATH"
+                                    ],
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "policy_id",
+                                  "policy_version_id",
+                                  "policy_version",
+                                  "binding_id",
+                                  "scope_level",
+                                  "mandatory",
+                                  "requirement_id"
+                                ],
+                                "type": "object"
+                              },
+                              "maxItems": 100,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "code",
+                            "description",
+                            "enforcement",
+                            "check_type",
+                            "required_evidence",
+                            "required_reviewers",
+                            "required_approval",
+                            "report_sections",
+                            "sources"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 50000,
+                        "type": "array"
+                      },
+                      "engine_version": {
+                        "maxLength": 100,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "limitations": {
+                        "items": {
+                          "maxLength": 2000,
+                          "type": "string"
+                        },
+                        "maxItems": 1000,
+                        "type": "array"
+                      },
+                      "matched_bindings": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "binding_id": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "policy_version_id": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "reasons": {
+                              "items": {
+                                "maxLength": 2000,
+                                "type": "string"
+                              },
+                              "maxItems": 1000,
+                              "type": "array"
+                            },
+                            "scope_level": {
+                              "enum": [
+                                "ORGANIZATION",
+                                "PRODUCT",
+                                "SYSTEM",
+                                "REPOSITORY",
+                                "PATH"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "policy_version_id",
+                            "binding_id",
+                            "scope_level",
+                            "reasons"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 100,
+                        "type": "array"
+                      },
+                      "outcome": {
+                        "const": "CONTROLS_CALCULATED",
+                        "type": "string"
+                      },
+                      "reevaluation_conditions": {
+                        "items": {
+                          "enum": [
+                            "commit_changed",
+                            "work_item_revision_changed",
+                            "policy_version_changed",
+                            "approval_or_override_changed",
+                            "evidence_or_retention_changed"
+                          ],
+                          "type": "string"
+                        },
+                        "maxItems": 5,
+                        "type": "array",
+                        "uniqueItems": true
+                      }
+                    },
+                    "required": [
+                      "engine_version",
+                      "outcome",
+                      "controls",
+                      "matched_bindings",
+                      "considered_bindings",
+                      "applied_overrides",
+                      "limitations",
+                      "reevaluation_conditions"
+                    ],
                     "type": "object"
                   },
                   "output_hash": {
@@ -3964,7 +4448,20 @@
                 "created": true,
                 "input_hash": "5555555555555555555555555555555555555555555555555555555555555555",
                 "output": {
-                  "status": "PASSED"
+                  "applied_overrides": [],
+                  "considered_bindings": [],
+                  "controls": [],
+                  "engine_version": "deterministic-policy-v1",
+                  "limitations": [],
+                  "matched_bindings": [],
+                  "outcome": "CONTROLS_CALCULATED",
+                  "reevaluation_conditions": [
+                    "commit_changed",
+                    "work_item_revision_changed",
+                    "policy_version_changed",
+                    "approval_or_override_changed",
+                    "evidence_or_retention_changed"
+                  ]
                 },
                 "output_hash": "6666666666666666666666666666666666666666666666666666666666666666",
                 "policy_evaluation_id": "00000000-0000-4000-8000-000000000024"
@@ -3980,7 +4477,330 @@
                     "type": "string"
                   },
                   "output": {
-                    "maxProperties": 200,
+                    "additionalProperties": false,
+                    "properties": {
+                      "applied_overrides": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "code": {
+                              "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+                              "type": "string"
+                            },
+                            "override_id": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "reason": {
+                              "maxLength": 2000,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "source": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "binding_id": {
+                                  "format": "uuid",
+                                  "type": "string"
+                                },
+                                "mandatory": {
+                                  "type": "boolean"
+                                },
+                                "policy_id": {
+                                  "format": "uuid",
+                                  "type": "string"
+                                },
+                                "policy_version": {
+                                  "minimum": 1,
+                                  "type": "integer"
+                                },
+                                "policy_version_id": {
+                                  "format": "uuid",
+                                  "type": "string"
+                                },
+                                "requirement_id": {
+                                  "format": "uuid",
+                                  "type": "string"
+                                },
+                                "scope_level": {
+                                  "enum": [
+                                    "ORGANIZATION",
+                                    "PRODUCT",
+                                    "SYSTEM",
+                                    "REPOSITORY",
+                                    "PATH"
+                                  ],
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "policy_id",
+                                "policy_version_id",
+                                "policy_version",
+                                "binding_id",
+                                "scope_level",
+                                "mandatory",
+                                "requirement_id"
+                              ],
+                              "type": "object"
+                            }
+                          },
+                          "required": [
+                            "override_id",
+                            "code",
+                            "source",
+                            "reason"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 50000,
+                        "type": "array"
+                      },
+                      "considered_bindings": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "binding_id": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "matched": {
+                              "type": "boolean"
+                            },
+                            "policy_version_id": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "reasons": {
+                              "items": {
+                                "maxLength": 2000,
+                                "type": "string"
+                              },
+                              "maxItems": 1000,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "policy_version_id",
+                            "binding_id",
+                            "matched",
+                            "reasons"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 100,
+                        "type": "array"
+                      },
+                      "controls": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "check_type": {
+                              "enum": [
+                                "DETERMINISTIC",
+                                "EVIDENCE",
+                                "MODEL_REVIEW",
+                                "MANUAL_APPROVAL"
+                              ],
+                              "type": "string"
+                            },
+                            "code": {
+                              "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+                              "type": "string"
+                            },
+                            "description": {
+                              "maxLength": 10000,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "enforcement": {
+                              "enum": [
+                                "BLOCKING",
+                                "ADVISORY"
+                              ],
+                              "type": "string"
+                            },
+                            "report_sections": {
+                              "items": {
+                                "maxLength": 2000,
+                                "type": "string"
+                              },
+                              "maxItems": 1000,
+                              "type": "array"
+                            },
+                            "required_approval": {
+                              "type": "boolean"
+                            },
+                            "required_evidence": {
+                              "items": {
+                                "maxLength": 2000,
+                                "type": "string"
+                              },
+                              "maxItems": 1000,
+                              "type": "array"
+                            },
+                            "required_reviewers": {
+                              "items": {
+                                "maxLength": 2000,
+                                "type": "string"
+                              },
+                              "maxItems": 1000,
+                              "type": "array"
+                            },
+                            "sources": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "binding_id": {
+                                    "format": "uuid",
+                                    "type": "string"
+                                  },
+                                  "mandatory": {
+                                    "type": "boolean"
+                                  },
+                                  "policy_id": {
+                                    "format": "uuid",
+                                    "type": "string"
+                                  },
+                                  "policy_version": {
+                                    "minimum": 1,
+                                    "type": "integer"
+                                  },
+                                  "policy_version_id": {
+                                    "format": "uuid",
+                                    "type": "string"
+                                  },
+                                  "requirement_id": {
+                                    "format": "uuid",
+                                    "type": "string"
+                                  },
+                                  "scope_level": {
+                                    "enum": [
+                                      "ORGANIZATION",
+                                      "PRODUCT",
+                                      "SYSTEM",
+                                      "REPOSITORY",
+                                      "PATH"
+                                    ],
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "policy_id",
+                                  "policy_version_id",
+                                  "policy_version",
+                                  "binding_id",
+                                  "scope_level",
+                                  "mandatory",
+                                  "requirement_id"
+                                ],
+                                "type": "object"
+                              },
+                              "maxItems": 100,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "code",
+                            "description",
+                            "enforcement",
+                            "check_type",
+                            "required_evidence",
+                            "required_reviewers",
+                            "required_approval",
+                            "report_sections",
+                            "sources"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 50000,
+                        "type": "array"
+                      },
+                      "engine_version": {
+                        "maxLength": 100,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "limitations": {
+                        "items": {
+                          "maxLength": 2000,
+                          "type": "string"
+                        },
+                        "maxItems": 1000,
+                        "type": "array"
+                      },
+                      "matched_bindings": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "binding_id": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "policy_version_id": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "reasons": {
+                              "items": {
+                                "maxLength": 2000,
+                                "type": "string"
+                              },
+                              "maxItems": 1000,
+                              "type": "array"
+                            },
+                            "scope_level": {
+                              "enum": [
+                                "ORGANIZATION",
+                                "PRODUCT",
+                                "SYSTEM",
+                                "REPOSITORY",
+                                "PATH"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "policy_version_id",
+                            "binding_id",
+                            "scope_level",
+                            "reasons"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 100,
+                        "type": "array"
+                      },
+                      "outcome": {
+                        "const": "CONTROLS_CALCULATED",
+                        "type": "string"
+                      },
+                      "reevaluation_conditions": {
+                        "items": {
+                          "enum": [
+                            "commit_changed",
+                            "work_item_revision_changed",
+                            "policy_version_changed",
+                            "approval_or_override_changed",
+                            "evidence_or_retention_changed"
+                          ],
+                          "type": "string"
+                        },
+                        "maxItems": 5,
+                        "type": "array",
+                        "uniqueItems": true
+                      }
+                    },
+                    "required": [
+                      "engine_version",
+                      "outcome",
+                      "controls",
+                      "matched_bindings",
+                      "considered_bindings",
+                      "applied_overrides",
+                      "limitations",
+                      "reevaluation_conditions"
+                    ],
                     "type": "object"
                   },
                   "output_hash": {
@@ -4651,7 +5471,53 @@
                 "additionalProperties": false,
                 "properties": {
                   "archive_summary": {
-                    "maxProperties": 32,
+                    "additionalProperties": false,
+                    "properties": {
+                      "check_count": {
+                        "maximum": 1000,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "compressed_bytes": {
+                        "maximum": 4096,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "expanded_bytes": {
+                        "maximum": 64000000,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "format": {
+                        "enum": [
+                          "JSON",
+                          "ZIP",
+                          "TAR"
+                        ],
+                        "type": "string"
+                      },
+                      "manifest_sha256": {
+                        "pattern": "^[a-f0-9]{64}$",
+                        "type": "string"
+                      },
+                      "member_count": {
+                        "maximum": 1000,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "results_sha256": {
+                        "pattern": "^[a-f0-9]{64}$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "format",
+                      "member_count",
+                      "compressed_bytes",
+                      "expanded_bytes",
+                      "results_sha256",
+                      "check_count"
+                    ],
                     "type": "object"
                   },
                   "authorization_id": {
@@ -5817,7 +6683,457 @@
                     "type": "string"
                   },
                   "manifest": {
-                    "maxProperties": 200,
+                    "$defs": {
+                      "evidence_entry": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "approval_id": {
+                            "oneOf": [
+                              {
+                                "format": "uuid",
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "artifact_blob_id": {
+                            "oneOf": [
+                              {
+                                "format": "uuid",
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "artifact_reference": {
+                            "maxLength": 2000,
+                            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*\\x00).*$",
+                            "type": "string"
+                          },
+                          "command": {
+                            "maxLength": 2000,
+                            "type": "string"
+                          },
+                          "completed_at": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          "content_hash": {
+                            "pattern": "^[a-f0-9]{64}$",
+                            "type": "string"
+                          },
+                          "criterion_codes": {
+                            "items": {
+                              "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+                              "type": "string"
+                            },
+                            "maxItems": 500,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "environment": {
+                            "maxLength": 200,
+                            "type": "string"
+                          },
+                          "evidence_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "kind": {
+                            "enum": [
+                              "CHECK_STATUS",
+                              "TEST_RESULT",
+                              "BUILD_RESULT",
+                              "TYPECHECK_RESULT",
+                              "LINT_RESULT",
+                              "SCREENSHOT",
+                              "VIDEO",
+                              "CONSOLE_LOG",
+                              "NETWORK_TRACE",
+                              "API_ASSERTION",
+                              "STATIC_ANALYSIS",
+                              "SECURITY_SCAN",
+                              "DEPENDENCY_SCAN",
+                              "MIGRATION_RESULT",
+                              "PERFORMANCE_RESULT",
+                              "ACCESSIBILITY_RESULT",
+                              "MANUAL_APPROVAL",
+                              "SOURCE_REFERENCE",
+                              "DIFF_REFERENCE"
+                            ],
+                            "type": "string"
+                          },
+                          "limitations": {
+                            "items": {
+                              "maxLength": 2000,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "maxItems": 100,
+                            "type": "array"
+                          },
+                          "name": {
+                            "maxLength": 300,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "producer": {
+                            "maxLength": 200,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "producer_version": {
+                            "maxLength": 100,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "retention_class": {
+                            "maxLength": 100,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "retention_expires_at": {
+                            "oneOf": [
+                              {
+                                "format": "date-time",
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "scenario": {
+                            "maxLength": 500,
+                            "type": "string"
+                          },
+                          "source_url": {
+                            "oneOf": [
+                              {
+                                "format": "uri",
+                                "maxLength": 2000,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "started_at": {
+                            "oneOf": [
+                              {
+                                "format": "date-time",
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "status": {
+                            "enum": [
+                              "PASSED",
+                              "FAILED",
+                              "UNKNOWN"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "evidence_id",
+                          "kind",
+                          "name",
+                          "status",
+                          "command",
+                          "artifact_reference",
+                          "source_url",
+                          "content_hash",
+                          "started_at",
+                          "completed_at",
+                          "producer",
+                          "producer_version",
+                          "approval_id",
+                          "retention_class",
+                          "retention_expires_at",
+                          "limitations",
+                          "criterion_codes",
+                          "environment",
+                          "scenario"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "$id": "https://schemas.anva.dev/v1/evidence-manifest.schema.json",
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "additionalProperties": false,
+                    "properties": {
+                      "access_scope_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "commit_sha": {
+                        "pattern": "^[a-f0-9]{40}$",
+                        "type": "string"
+                      },
+                      "created_at": {
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      "entries": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "approval_id": {
+                              "oneOf": [
+                                {
+                                  "format": "uuid",
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "artifact_blob_id": {
+                              "oneOf": [
+                                {
+                                  "format": "uuid",
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "artifact_reference": {
+                              "maxLength": 2000,
+                              "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*\\x00).*$",
+                              "type": "string"
+                            },
+                            "command": {
+                              "maxLength": 2000,
+                              "type": "string"
+                            },
+                            "completed_at": {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            "content_hash": {
+                              "pattern": "^[a-f0-9]{64}$",
+                              "type": "string"
+                            },
+                            "criterion_codes": {
+                              "items": {
+                                "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+                                "type": "string"
+                              },
+                              "maxItems": 500,
+                              "type": "array",
+                              "uniqueItems": true
+                            },
+                            "environment": {
+                              "maxLength": 200,
+                              "type": "string"
+                            },
+                            "evidence_id": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "CHECK_STATUS",
+                                "TEST_RESULT",
+                                "BUILD_RESULT",
+                                "TYPECHECK_RESULT",
+                                "LINT_RESULT",
+                                "SCREENSHOT",
+                                "VIDEO",
+                                "CONSOLE_LOG",
+                                "NETWORK_TRACE",
+                                "API_ASSERTION",
+                                "STATIC_ANALYSIS",
+                                "SECURITY_SCAN",
+                                "DEPENDENCY_SCAN",
+                                "MIGRATION_RESULT",
+                                "PERFORMANCE_RESULT",
+                                "ACCESSIBILITY_RESULT",
+                                "MANUAL_APPROVAL",
+                                "SOURCE_REFERENCE",
+                                "DIFF_REFERENCE"
+                              ],
+                              "type": "string"
+                            },
+                            "limitations": {
+                              "items": {
+                                "maxLength": 2000,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "maxItems": 100,
+                              "type": "array"
+                            },
+                            "name": {
+                              "maxLength": 300,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "producer": {
+                              "maxLength": 200,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "producer_version": {
+                              "maxLength": 100,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "retention_class": {
+                              "maxLength": 100,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "retention_expires_at": {
+                              "oneOf": [
+                                {
+                                  "format": "date-time",
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "scenario": {
+                              "maxLength": 500,
+                              "type": "string"
+                            },
+                            "source_url": {
+                              "oneOf": [
+                                {
+                                  "format": "uri",
+                                  "maxLength": 2000,
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "started_at": {
+                              "oneOf": [
+                                {
+                                  "format": "date-time",
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "status": {
+                              "enum": [
+                                "PASSED",
+                                "FAILED",
+                                "UNKNOWN"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "evidence_id",
+                            "kind",
+                            "name",
+                            "status",
+                            "command",
+                            "artifact_reference",
+                            "source_url",
+                            "content_hash",
+                            "started_at",
+                            "completed_at",
+                            "producer",
+                            "producer_version",
+                            "approval_id",
+                            "retention_class",
+                            "retention_expires_at",
+                            "limitations",
+                            "criterion_codes",
+                            "environment",
+                            "scenario"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 500,
+                        "type": "array"
+                      },
+                      "manifest_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "organization_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "producer": {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "producer_mode": {
+                        "enum": [
+                          "MANUAL",
+                          "CI"
+                        ],
+                        "type": "string"
+                      },
+                      "producer_version": {
+                        "maxLength": 100,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "pull_request_number": {
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "repository_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "schema_version": {
+                        "const": "1.0",
+                        "type": "string"
+                      },
+                      "work_item_revision_id": {
+                        "oneOf": [
+                          {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "schema_version",
+                      "manifest_id",
+                      "organization_id",
+                      "repository_id",
+                      "access_scope_id",
+                      "pull_request_number",
+                      "work_item_revision_id",
+                      "commit_sha",
+                      "created_at",
+                      "producer",
+                      "producer_version",
+                      "producer_mode",
+                      "entries"
+                    ],
+                    "title": "Anva Evidence Manifest",
                     "type": "object"
                   },
                   "payload_hash": {
@@ -6126,11 +7442,38 @@
                     "uniqueItems": true
                   },
                   "classification_summary": {
-                    "additionalProperties": {
-                      "minimum": 0,
-                      "type": "integer"
+                    "additionalProperties": false,
+                    "properties": {
+                      "CI": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "DEPENDENCY": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "DOCUMENTATION": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "MIGRATION": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "SECURITY_SENSITIVE": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "SOURCE": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "TEST": {
+                        "minimum": 0,
+                        "type": "integer"
+                      }
                     },
-                    "maxProperties": 16,
+                    "required": [],
                     "type": "object"
                   },
                   "created": {
@@ -6222,11 +7565,38 @@
                     "uniqueItems": true
                   },
                   "classification_summary": {
-                    "additionalProperties": {
-                      "minimum": 0,
-                      "type": "integer"
+                    "additionalProperties": false,
+                    "properties": {
+                      "CI": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "DEPENDENCY": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "DOCUMENTATION": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "MIGRATION": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "SECURITY_SENSITIVE": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "SOURCE": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "TEST": {
+                        "minimum": 0,
+                        "type": "integer"
+                      }
                     },
-                    "maxProperties": 16,
+                    "required": [],
                     "type": "object"
                   },
                   "created": {
@@ -7138,8 +8508,56 @@
                       "properties": {
                         "citations": {
                           "items": {
-                            "maxProperties": 200,
-                            "type": "object"
+                            "oneOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "line": {
+                                    "minimum": 1,
+                                    "type": "integer"
+                                  },
+                                  "path": {
+                                    "maxLength": 1000,
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "side": {
+                                    "enum": [
+                                      "OLD",
+                                      "NEW"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "type": {
+                                    "const": "DIFF"
+                                  }
+                                },
+                                "required": [
+                                  "type",
+                                  "path",
+                                  "side",
+                                  "line"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "context_citation_id": {
+                                    "format": "uuid",
+                                    "type": "string"
+                                  },
+                                  "type": {
+                                    "const": "ANVA_SOURCE"
+                                  }
+                                },
+                                "required": [
+                                  "type",
+                                  "context_citation_id"
+                                ],
+                                "type": "object"
+                              }
+                            ]
                           },
                           "maxItems": 20,
                           "type": "array"
@@ -7917,73 +9335,6 @@
                         "type": "boolean"
                       },
                       "request": {
-                        "$defs": {
-                          "diff_chunk": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "classification": {
-                                "enum": [
-                                  "SOURCE",
-                                  "TEST",
-                                  "DOCUMENTATION",
-                                  "MIGRATION",
-                                  "SECURITY_SENSITIVE",
-                                  "DEPENDENCY",
-                                  "CI"
-                                ],
-                                "type": "string"
-                              },
-                              "content_hash": {
-                                "pattern": "^[a-f0-9]{64}$",
-                                "type": "string"
-                              },
-                              "new_count": {
-                                "minimum": 0,
-                                "type": "integer"
-                              },
-                              "new_start": {
-                                "minimum": 0,
-                                "type": "integer"
-                              },
-                              "old_count": {
-                                "minimum": 0,
-                                "type": "integer"
-                              },
-                              "old_start": {
-                                "minimum": 0,
-                                "type": "integer"
-                              },
-                              "path": {
-                                "maxLength": 1000,
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              "position": {
-                                "minimum": 1,
-                                "type": "integer"
-                              },
-                              "text": {
-                                "maxLength": 100000,
-                                "minLength": 1,
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "position",
-                              "path",
-                              "classification",
-                              "old_start",
-                              "old_count",
-                              "new_start",
-                              "new_count",
-                              "text",
-                              "content_hash"
-                            ],
-                            "type": "object"
-                          }
-                        },
-                        "$id": "https://schemas.anva.dev/v1/evaluator-request.schema.json",
-                        "$schema": "https://json-schema.org/draft/2020-12/schema",
                         "additionalProperties": false,
                         "properties": {
                           "assurance_run_id": {
@@ -7992,6 +9343,58 @@
                           },
                           "authorized_context": {
                             "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "citation_ids": {
+                                  "items": {
+                                    "format": "uuid",
+                                    "type": "string"
+                                  },
+                                  "maxItems": 1000,
+                                  "type": "array",
+                                  "uniqueItems": true
+                                },
+                                "freshness": {
+                                  "enum": [
+                                    "CURRENT",
+                                    "STALE",
+                                    "UNKNOWN"
+                                  ],
+                                  "type": "string"
+                                },
+                                "is_inferred": {
+                                  "type": "boolean"
+                                },
+                                "item_id": {
+                                  "format": "uuid",
+                                  "type": "string"
+                                },
+                                "kind": {
+                                  "enum": [
+                                    "POLICY",
+                                    "RELATIONSHIP",
+                                    "ASSERTION",
+                                    "SOURCE_EXCERPT",
+                                    "DECISION",
+                                    "INCIDENT",
+                                    "CONFLICT"
+                                  ],
+                                  "type": "string"
+                                },
+                                "summary": {
+                                  "maxLength": 10000,
+                                  "minLength": 1,
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "item_id",
+                                "kind",
+                                "summary",
+                                "freshness",
+                                "is_inferred",
+                                "citation_ids"
+                              ],
                               "type": "object"
                             },
                             "maxItems": 100,
@@ -8018,6 +9421,7 @@
                                     "format": "uuid",
                                     "type": "string"
                                   },
+                                  "maxItems": 100,
                                   "type": "array",
                                   "uniqueItems": true
                                 },
@@ -8049,6 +9453,91 @@
                           },
                           "evidence_mappings": {
                             "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "assessment": {
+                                  "enum": [
+                                    "SATISFIED",
+                                    "GAP"
+                                  ],
+                                  "type": "string"
+                                },
+                                "classification": {
+                                  "enum": [
+                                    "DIRECT",
+                                    "INDIRECT",
+                                    "GAP"
+                                  ],
+                                  "type": "string"
+                                },
+                                "criterion_code": {
+                                  "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+                                  "type": "string"
+                                },
+                                "criterion_id": {
+                                  "format": "uuid",
+                                  "type": "string"
+                                },
+                                "engine_version": {
+                                  "maxLength": 64,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "evidence_id": {
+                                  "oneOf": [
+                                    {
+                                      "format": "uuid",
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "gap_code": {
+                                  "maxLength": 64,
+                                  "type": "string"
+                                },
+                                "input_hash": {
+                                  "pattern": "^[a-f0-9]{64}$",
+                                  "type": "string"
+                                },
+                                "limitations": {
+                                  "items": {
+                                    "maxLength": 2000,
+                                    "type": "string"
+                                  },
+                                  "maxItems": 1000,
+                                  "type": "array"
+                                },
+                                "mapping_id": {
+                                  "format": "uuid",
+                                  "type": "string"
+                                },
+                                "reference_time": {
+                                  "format": "date-time",
+                                  "type": "string"
+                                },
+                                "required_evidence_type": {
+                                  "maxLength": 100,
+                                  "minLength": 1,
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "mapping_id",
+                                "criterion_id",
+                                "criterion_code",
+                                "required_evidence_type",
+                                "assessment",
+                                "classification",
+                                "evidence_id",
+                                "gap_code",
+                                "limitations",
+                                "input_hash",
+                                "engine_version",
+                                "reference_time"
+                              ],
                               "type": "object"
                             },
                             "maxItems": 500,
@@ -8067,9 +9556,9 @@
                           "limitations": {
                             "items": {
                               "maxLength": 2000,
-                              "minLength": 1,
                               "type": "string"
                             },
+                            "maxItems": 1000,
                             "type": "array"
                           },
                           "organization_id": {
@@ -8078,6 +9567,124 @@
                           },
                           "policy_controls": {
                             "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "check_type": {
+                                  "enum": [
+                                    "DETERMINISTIC",
+                                    "EVIDENCE",
+                                    "MODEL_REVIEW",
+                                    "MANUAL_APPROVAL"
+                                  ],
+                                  "type": "string"
+                                },
+                                "code": {
+                                  "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+                                  "type": "string"
+                                },
+                                "description": {
+                                  "maxLength": 10000,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "enforcement": {
+                                  "enum": [
+                                    "BLOCKING",
+                                    "ADVISORY"
+                                  ],
+                                  "type": "string"
+                                },
+                                "report_sections": {
+                                  "items": {
+                                    "maxLength": 2000,
+                                    "type": "string"
+                                  },
+                                  "maxItems": 1000,
+                                  "type": "array"
+                                },
+                                "required_approval": {
+                                  "type": "boolean"
+                                },
+                                "required_evidence": {
+                                  "items": {
+                                    "maxLength": 2000,
+                                    "type": "string"
+                                  },
+                                  "maxItems": 1000,
+                                  "type": "array"
+                                },
+                                "required_reviewers": {
+                                  "items": {
+                                    "maxLength": 2000,
+                                    "type": "string"
+                                  },
+                                  "maxItems": 1000,
+                                  "type": "array"
+                                },
+                                "sources": {
+                                  "items": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "binding_id": {
+                                        "format": "uuid",
+                                        "type": "string"
+                                      },
+                                      "mandatory": {
+                                        "type": "boolean"
+                                      },
+                                      "policy_id": {
+                                        "format": "uuid",
+                                        "type": "string"
+                                      },
+                                      "policy_version": {
+                                        "minimum": 1,
+                                        "type": "integer"
+                                      },
+                                      "policy_version_id": {
+                                        "format": "uuid",
+                                        "type": "string"
+                                      },
+                                      "requirement_id": {
+                                        "format": "uuid",
+                                        "type": "string"
+                                      },
+                                      "scope_level": {
+                                        "enum": [
+                                          "ORGANIZATION",
+                                          "PRODUCT",
+                                          "SYSTEM",
+                                          "REPOSITORY",
+                                          "PATH"
+                                        ],
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "policy_id",
+                                      "policy_version_id",
+                                      "policy_version",
+                                      "binding_id",
+                                      "scope_level",
+                                      "mandatory",
+                                      "requirement_id"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 100,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "code",
+                                "description",
+                                "enforcement",
+                                "check_type",
+                                "required_evidence",
+                                "required_reviewers",
+                                "required_approval",
+                                "report_sections",
+                                "sources"
+                              ],
                               "type": "object"
                             },
                             "maxItems": 500,
@@ -8097,7 +9704,135 @@
                           },
                           "requirements": {
                             "items": {
-                              "type": "object"
+                              "oneOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "acceptance_criteria": {
+                                      "items": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "code": {
+                                            "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+                                            "type": "string"
+                                          },
+                                          "id": {
+                                            "format": "uuid",
+                                            "type": "string"
+                                          },
+                                          "manual_approval_allowed": {
+                                            "type": "boolean"
+                                          },
+                                          "required_evidence_types": {
+                                            "items": {
+                                              "maxLength": 100,
+                                              "minLength": 1,
+                                              "type": "string"
+                                            },
+                                            "maxItems": 20,
+                                            "type": "array",
+                                            "uniqueItems": true
+                                          },
+                                          "text": {
+                                            "maxLength": 10000,
+                                            "minLength": 1,
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "id",
+                                          "code",
+                                          "text",
+                                          "required_evidence_types",
+                                          "manual_approval_allowed"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      "maxItems": 500,
+                                      "type": "array"
+                                    },
+                                    "code": {
+                                      "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+                                      "type": "string"
+                                    },
+                                    "id": {
+                                      "format": "uuid",
+                                      "type": "string"
+                                    },
+                                    "kind": {
+                                      "const": "REQUIREMENT",
+                                      "type": "string"
+                                    },
+                                    "requires_approval": {
+                                      "type": "boolean"
+                                    },
+                                    "status": {
+                                      "maxLength": 24,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "text": {
+                                      "maxLength": 10000,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "id",
+                                    "code",
+                                    "text",
+                                    "status",
+                                    "requires_approval",
+                                    "acceptance_criteria"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "code": {
+                                      "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+                                      "type": "string"
+                                    },
+                                    "id": {
+                                      "format": "uuid",
+                                      "type": "string"
+                                    },
+                                    "kind": {
+                                      "const": "STANDALONE_ACCEPTANCE_CRITERION",
+                                      "type": "string"
+                                    },
+                                    "manual_approval_allowed": {
+                                      "type": "boolean"
+                                    },
+                                    "required_evidence_types": {
+                                      "items": {
+                                        "maxLength": 100,
+                                        "minLength": 1,
+                                        "type": "string"
+                                      },
+                                      "maxItems": 20,
+                                      "type": "array",
+                                      "uniqueItems": true
+                                    },
+                                    "text": {
+                                      "maxLength": 10000,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "id",
+                                    "code",
+                                    "text",
+                                    "required_evidence_types",
+                                    "manual_approval_allowed"
+                                  ],
+                                  "type": "object"
+                                }
+                              ]
                             },
                             "maxItems": 500,
                             "type": "array"
@@ -8258,7 +9993,6 @@
                           "instructions",
                           "limitations"
                         ],
-                        "title": "Anva Evaluator Request",
                         "type": "object"
                       },
                       "request_id": {
