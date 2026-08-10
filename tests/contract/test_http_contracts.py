@@ -13,6 +13,7 @@ from django.http import HttpRequest, JsonResponse
 from django.test import Client, RequestFactory
 from starlette.testclient import TestClient
 
+from anva.contracts.acceptance import validate_acceptance_http_response
 from anva.core import views as core_views
 from anva.core.exceptions import AuthenticationError, IdempotencyConflictError
 from anva.entrypoints.mcp import create_application
@@ -167,7 +168,20 @@ def test_source_lifecycle_http_contracts(client: Client) -> None:
         ),
         patch(
             "anva.core.views.source_sync_runs",
-            return_value=[{"id": str(run_id), "state": "REQUESTED"}],
+            return_value=[
+                {
+                    "id": str(run_id),
+                    "state": "REQUESTED",
+                    "scan_mode": "FULL",
+                    "discovered_count": 0,
+                    "processed_count": 0,
+                    "failed_count": 0,
+                    "tombstoned_count": 0,
+                    "failure_code": "",
+                    "started_at": "2026-08-10T12:00:00Z",
+                    "completed_at": None,
+                }
+            ],
         ),
     ):
         connected = client.post(
@@ -188,17 +202,53 @@ def test_source_lifecycle_http_contracts(client: Client) -> None:
             data=json.dumps({"scan_mode": "FULL"}),
             content_type="application/json",
         )
+        run.state = "PARSING"
+        sync.return_value = (run, False)
+        replayed = client.post(
+            f"/api/v1/source-connections/{source_id}/sync",
+            data=json.dumps({"scan_mode": "FULL"}),
+            content_type="application/json",
+        )
         inspected = client.get(f"/api/v1/source-connections/{source_id}")
         history = client.get(f"/api/v1/source-connections/{source_id}/sync-runs")
+        invalid_connected = client.post(
+            "/api/v1/source-connections/filesystem",
+            data=json.dumps(
+                {
+                    "repository_id": str(repository_id),
+                    "access_scope_id": str(scope_id),
+                    "external_key": "fixture",
+                    "display_name": "Fixture",
+                    "root": "/fixtures/anva-test",
+                    "credential": "must-not-cross-boundary",
+                }
+            ),
+            content_type="application/json",
+        )
+        invalid_sync = client.post(
+            f"/api/v1/source-connections/{source_id}/sync",
+            data=json.dumps({"scan_mode": "FULL", "unexpected": True}),
+            content_type="application/json",
+        )
 
     assert connected.status_code == 201
     assert connected.json()["created"] is True
     assert requested.status_code == 202
     assert requested.json()["access_snapshot_id"] == str(run.access_snapshot_id)
+    assert replayed.status_code == 202
+    assert replayed.json()["state"] == "PARSING"
+    assert replayed.json()["created"] is False
     assert inspected.json() == {"id": str(source_id), "state": "ACTIVE"}
     assert history.json()["sync_runs"][0]["id"] == str(run_id)
+    assert invalid_connected.status_code == invalid_sync.status_code == 400
+    validate_acceptance_http_response("connectFilesystemSource", 201, connected.json())
+    validate_acceptance_http_response("syncSourceConnection", 202, requested.json())
+    validate_acceptance_http_response("syncSourceConnection", 202, replayed.json())
+    validate_acceptance_http_response("listSourceSyncRuns", 200, history.json())
     assert connect.call_args.kwargs["root"] == "/fixtures/anva-test"
+    assert connect.call_count == 1
     assert sync.call_args.kwargs["scan_mode"] == "FULL"
+    assert sync.call_count == 2
 
 
 @pytest.mark.contract
@@ -315,6 +365,10 @@ def test_governance_http_creation_simulation_and_submission_contracts(
     assert policy.json()["policy_version_id"] == str(policy_version_id)
     assert simulation.json()["output"]["outcome"] == "CONTROLS_CALCULATED"
     assert evidence.json()["manifest_id"] == str(manifest_id)
+    validate_acceptance_http_response("importWorkItemRevision", 201, work.json())
+    validate_acceptance_http_response("importPolicyVersion", 201, policy.json())
+    validate_acceptance_http_response("simulatePolicy", 201, simulation.json())
+    validate_acceptance_http_response("submitEvidenceManifest", 201, evidence.json())
 
 
 @pytest.mark.contract
@@ -550,6 +604,7 @@ def test_governance_detail_http_responses(client: Client) -> None:
     assert work_response.json()["intent"]["title"] == "governed"
     assert policy_response.json()["version"] == 3
     assert manifest_response.json()["manifest"]["schema_version"] == "1.0"
+    validate_acceptance_http_response("getEvidenceManifest", 200, manifest_response.json())
 
 
 @pytest.mark.contract

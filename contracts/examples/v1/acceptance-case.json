@@ -1,0 +1,177 @@
+{
+  "assurance": {
+    "deterministic_checks": [
+      {
+        "blocking": true,
+        "code": "TESTS_PASS",
+        "include_evidence": true,
+        "status": "PASSED",
+        "summary": "Exact-head evidence was accepted through public boundaries."
+      }
+    ],
+    "evaluator_version": "external-acceptance-v1",
+    "prompt_version": "acceptance-review-v1",
+    "review_lease_seconds": 3600,
+    "reviewer_claimant": "independent-acceptance-evaluator"
+  },
+  "canvas": {
+    "depth": 4,
+    "edge_limit": 600,
+    "layers": [
+      "execution",
+      "dependencies",
+      "governance",
+      "provenance"
+    ],
+    "node_limit": 300
+  },
+  "case_id": "tst-009.scn-ember",
+  "change": {
+    "affected_entities": [],
+    "affected_paths": [
+      "src/checkout.py"
+    ],
+    "base_commit": "cccccccccccccccccccccccccccccccccccccccc",
+    "description": "A public, bounded manual diff for Ember.",
+    "head_commit": "dddddddddddddddddddddddddddddddddddddddd",
+    "is_draft": false,
+    "pull_request_number": 17,
+    "stale_probe": {
+      "new_head_commit": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "pull_request_number": 18,
+      "title_suffix": "stale probe"
+    },
+    "state": "OPEN",
+    "target_branch": "main",
+    "title": "Bound checkout retry behavior",
+    "unified_diff": "diff --git a/src/checkout.py b/src/checkout.py\n--- a/src/checkout.py\n+++ b/src/checkout.py\n@@ -1 +1 @@\n-retry = 2\n+retry = 3\n"
+  },
+  "evidence": {
+    "artifact_reference": "accepted/exact-head-tests.json",
+    "command": "public acceptance case evidence",
+    "content_base64": "eyJjaGVja3MiOlt7Im5hbWUiOiJURVNUU19QQVNTIiwic3RhdHVzIjoiUEFTU0VEIn1dLCJoZWFkX3NoYSI6ImRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGQiLCJzY2hlbWFfdmVyc2lvbiI6MX0K",
+    "criterion_codes": [
+      "TESTS_PASS"
+    ],
+    "environment": "sealed-acceptance",
+    "filename": "exact-head-tests.json",
+    "kind": "TEST_RESULT",
+    "limitations": [
+      "External provider execution is outside this case."
+    ],
+    "name": "Ember exact-head tests",
+    "producer": "anva-acceptance-runner",
+    "producer_mode": "MANUAL",
+    "producer_version": "1",
+    "retention_class": "ASSURANCE_1Y",
+    "retention_days": 365,
+    "scenario": "tst-009.scn-ember",
+    "source_url": null,
+    "status": "PASSED"
+  },
+  "organization": {
+    "admin_display_name": "TST-009 initiator",
+    "admin_email": "operator@ember.invalid",
+    "independent_reviewer_name": "TST-009 independent reviewer",
+    "name": "TST-009 Ember Organization",
+    "repository_external_id": "github:synthetic/ember",
+    "repository_name": "ember",
+    "slug": "anva-tst-009-ember"
+  },
+  "policy": {
+    "binding": {
+      "entity_ids": [],
+      "entity_types": [],
+      "mandatory": true,
+      "path_patterns": [
+        "src/**"
+      ],
+      "scope_level": "REPOSITORY",
+      "target_branches": [
+        "main"
+      ],
+      "work_item_types": [
+        "FEATURE"
+      ]
+    },
+    "name": "Ember exact-head policy",
+    "owner": "payments-platform",
+    "requirements": [
+      {
+        "check_type": "EVIDENCE",
+        "code": "TESTS_PASS",
+        "description": "Exact-head tests are required.",
+        "enforcement": "BLOCKING",
+        "report_sections": [
+          "tests"
+        ],
+        "required_approval": false,
+        "required_evidence": [
+          "TEST_RESULT"
+        ],
+        "required_reviewers": []
+      }
+    ],
+    "status": "ACTIVE"
+  },
+  "retrieval": {
+    "budget": {
+      "max_bytes": 100000,
+      "max_citations": 100,
+      "max_items": 50,
+      "max_tokens": 8000
+    },
+    "context_phase": "ASSURANCE",
+    "context_task": "Review the Ember change against authorized organization context.",
+    "search_limit": 50,
+    "search_phase": "PREPARE",
+    "search_query": "checkout ownership exact-head evidence policy"
+  },
+  "schema_version": "1.0",
+  "semantic_assertions": {
+    "require_source_backed_canvas": true,
+    "source_paths": [
+      "organization/decision.md"
+    ]
+  },
+  "source": {
+    "display_name": "Ember organizational knowledge",
+    "external_key": "tst-009:ember:knowledge"
+  },
+  "work_item": {
+    "acceptance_criteria": [
+      {
+        "code": "TESTS_PASS",
+        "manual_approval_allowed": false,
+        "normalized_text": "The exact-head tests pass.",
+        "required_evidence_types": [
+          "TEST_RESULT"
+        ],
+        "requirement_code": "REQ_EXACT_HEAD"
+      }
+    ],
+    "external_key": "EMBER-17",
+    "origin": "sealed-acceptance",
+    "requirements": [
+      {
+        "code": "REQ_EXACT_HEAD",
+        "normalized_text": "Readiness uses evidence for the exact Ember head.",
+        "origin": "acceptance-case",
+        "owner": "payments-platform",
+        "related_entity_ids": [],
+        "requires_approval": false,
+        "source_references": [
+          "tst-009:ember:requirements"
+        ],
+        "status": "CONFIRMED"
+      }
+    ],
+    "source_references": [
+      "tst-009:ember:requirements"
+    ],
+    "status": "READY",
+    "summary": "Validate the exact Ember head against connected policy and evidence.",
+    "title": "Bound checkout retry behavior",
+    "work_type": "FEATURE"
+  }
+}

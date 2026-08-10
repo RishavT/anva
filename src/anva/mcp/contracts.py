@@ -5,6 +5,9 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Final, TypedDict
 
+from jsonschema import Draft202012Validator, FormatChecker
+from jsonschema.exceptions import ValidationError
+
 CONTRACT_VERSION: Final = "1"
 MCP_PROTOCOL_VERSIONS: Final[tuple[str, ...]] = (
     "2024-11-05",
@@ -181,6 +184,192 @@ PROPOSAL_DATA: Final[dict[str, object]] = {
     "created": {"type": "boolean"},
 }
 
+RETRIEVAL_CITATION: Final[dict[str, object]] = _closed(
+    {
+        "source_location_id": deepcopy(UUID),
+        "source_observation_id": deepcopy(UUID),
+        "access_snapshot_id": deepcopy(UUID),
+        "canonical_url": {"type": "string", "format": "uri", "maxLength": 2_000},
+        "locator": {"type": "string", "minLength": 1, "maxLength": 1_000},
+        "source_content_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "observed_at": {"type": "string", "format": "date-time"},
+    },
+    (
+        "source_location_id",
+        "source_observation_id",
+        "access_snapshot_id",
+        "canonical_url",
+        "locator",
+        "source_content_hash",
+        "observed_at",
+    ),
+)
+RANKING_EXPLANATION: Final[dict[str, object]] = _closed(
+    {
+        "lexical_rank": {"oneOf": [{"type": "integer", "minimum": 1}, {"type": "null"}]},
+        "semantic_rank": {"oneOf": [{"type": "integer", "minimum": 1}, {"type": "null"}]},
+        "reciprocal_rank_score": {"type": "number", "minimum": 0},
+        "phase": {
+            "oneOf": [
+                {
+                    "type": "string",
+                    "enum": ["PREPARE", "BUILD", "PREFLIGHT", "ASSURANCE"],
+                },
+                {"type": "null"},
+            ]
+        },
+        "phase_terms": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "maxLength": 100},
+            "maxItems": 20,
+            "uniqueItems": True,
+        },
+    },
+    ("lexical_rank", "semantic_rank", "reciprocal_rank_score", "phase", "phase_terms"),
+)
+SEARCH_RESULT: Final[dict[str, object]] = _closed(
+    {
+        "chunk_id": deepcopy(UUID),
+        "text": {"type": "string", "maxLength": 250_000},
+        "content_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "pointer": {"type": "string", "minLength": 1, "maxLength": 1_000},
+        "canonical_url": {"type": "string", "format": "uri", "maxLength": 2_000},
+        "access_scope_id": deepcopy(UUID),
+        "source_location_id": deepcopy(UUID),
+        "source_observation_id": deepcopy(UUID),
+        "access_snapshot_id": deepcopy(UUID),
+        "observed_at": {"type": "string", "format": "date-time"},
+        "explanation": RANKING_EXPLANATION,
+    },
+    (
+        "chunk_id",
+        "text",
+        "content_hash",
+        "pointer",
+        "canonical_url",
+        "access_scope_id",
+        "source_location_id",
+        "source_observation_id",
+        "access_snapshot_id",
+        "observed_at",
+        "explanation",
+    ),
+)
+CONTEXT_ITEM: Final[dict[str, object]] = _closed(
+    {
+        "item_id": deepcopy(UUID),
+        "kind": {
+            "type": "string",
+            "enum": [
+                "POLICY",
+                "RELATIONSHIP",
+                "ASSERTION",
+                "SOURCE_EXCERPT",
+                "DECISION",
+                "INCIDENT",
+                "CONFLICT",
+            ],
+        },
+        "item_key": {"type": "string", "minLength": 1, "maxLength": 500},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 10_000},
+        "freshness": {"type": "string", "enum": ["CURRENT", "STALE", "UNKNOWN"]},
+        "is_inferred": {"type": "boolean"},
+        "selection_reason": {"type": "string", "minLength": 1, "maxLength": 500},
+        "rank_score": {"type": "number", "minimum": 0},
+        "payload": deepcopy(BOUNDED_MAP),
+        "anva_sources": {
+            "type": "array",
+            "items": RETRIEVAL_CITATION,
+            "minItems": 1,
+            "maxItems": 200,
+        },
+    },
+    (
+        "item_id",
+        "kind",
+        "item_key",
+        "summary",
+        "freshness",
+        "is_inferred",
+        "selection_reason",
+        "rank_score",
+        "payload",
+        "anva_sources",
+    ),
+)
+CONTEXT_PACKET: Final[dict[str, object]] = _closed(
+    {
+        "schema_version": {"type": "string", "const": "1.0"},
+        "packet_id": deepcopy(UUID),
+        "organization_id": deepcopy(UUID),
+        "repository_id": deepcopy(UUID),
+        "work_item_id": {"oneOf": [deepcopy(UUID), {"type": "null"}]},
+        "revision": {"type": "integer", "minimum": 1},
+        "generated_at": {"type": "string", "format": "date-time"},
+        "content_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "phase": {
+            "type": "string",
+            "enum": ["PREPARE", "BUILD", "PREFLIGHT", "ASSURANCE"],
+        },
+        "request": deepcopy(BOUNDED_MAP),
+        "authorization_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "selection_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "retrieval_watermark": {"type": "integer", "minimum": 1},
+        "retrieval_algorithm_version": {"type": "string", "minLength": 1, "maxLength": 100},
+        "index_version": {"type": "string", "minLength": 1, "maxLength": 100},
+        "embedding_version": {"type": "string", "minLength": 1, "maxLength": 100},
+        "budget": _closed(
+            {
+                "max_items": {"type": "integer", "minimum": 1, "maximum": 100},
+                "max_tokens": {"type": "integer", "minimum": 1, "maximum": 20_000},
+                "max_bytes": {"type": "integer", "minimum": 1, "maximum": 250_000},
+                "max_citations": {"type": "integer", "minimum": 1, "maximum": 200},
+                "selected_items": {"type": "integer", "minimum": 0, "maximum": 100},
+                "selected_tokens": {"type": "integer", "minimum": 0},
+                "selected_bytes": {"type": "integer", "minimum": 0},
+                "selected_citations": {"type": "integer", "minimum": 0},
+            },
+            (
+                "max_items",
+                "max_tokens",
+                "max_bytes",
+                "max_citations",
+                "selected_items",
+                "selected_tokens",
+                "selected_bytes",
+                "selected_citations",
+            ),
+        ),
+        "items": {"type": "array", "items": CONTEXT_ITEM, "maxItems": 100},
+        "limitations": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "maxLength": 2_000},
+            "maxItems": 100,
+        },
+    },
+    (
+        "schema_version",
+        "packet_id",
+        "organization_id",
+        "repository_id",
+        "work_item_id",
+        "revision",
+        "generated_at",
+        "content_hash",
+        "phase",
+        "request",
+        "authorization_hash",
+        "selection_hash",
+        "retrieval_watermark",
+        "retrieval_algorithm_version",
+        "index_version",
+        "embedding_version",
+        "budget",
+        "items",
+        "limitations",
+    ),
+)
+
 
 def _tool(
     name: str,
@@ -268,7 +457,7 @@ TOOL_CONTRACTS: Final[tuple[ToolContract, ...]] = (
             {
                 "packet_id": deepcopy(UUID),
                 "created": {"type": "boolean"},
-                "packet": deepcopy(BOUNDED_MAP),
+                "packet": CONTEXT_PACKET,
             },
             ("packet_id", "created", "packet"),
         ),
@@ -299,7 +488,7 @@ TOOL_CONTRACTS: Final[tuple[ToolContract, ...]] = (
                 "results": {
                     "type": "array",
                     "maxItems": MAX_PAGE_SIZE,
-                    "items": deepcopy(BOUNDED_MAP),
+                    "items": SEARCH_RESULT,
                 },
             },
             ("results",),
@@ -606,6 +795,22 @@ TOOL_CONTRACTS: Final[tuple[ToolContract, ...]] = (
 TOOL_BY_NAME: Final[dict[str, ToolContract]] = {
     contract["name"]: contract for contract in TOOL_CONTRACTS
 }
+
+
+def validate_tool_output(tool_name: str, payload: dict[str, object]) -> None:
+    """Fail closed when a successful MCP result drifts from its public contract."""
+    contract = TOOL_BY_NAME.get(tool_name)
+    if contract is None:
+        raise ValueError("MCP output contract is unavailable")
+    try:
+        Draft202012Validator(contract["output_schema"], format_checker=FormatChecker()).validate(
+            payload
+        )
+    except ValidationError as error:
+        location = ".".join(str(part) for part in error.absolute_path) or "<root>"
+        raise ValueError(f"MCP output contract failed at {location}: {error.message}") from error
+
+
 READ_TOOL_NAMES: Final[frozenset[str]] = frozenset(
     contract["name"] for contract in TOOL_CONTRACTS if contract["read_only"]
 )

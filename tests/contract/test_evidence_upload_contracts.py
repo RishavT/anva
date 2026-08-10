@@ -16,6 +16,7 @@ from django.test import Client, RequestFactory
 from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import ValidationError
 
+from anva.contracts.acceptance import validate_acceptance_http_response
 from anva.contracts.catalog import EXAMPLES, SCHEMAS
 from anva.contracts.generate import openapi_document
 from anva.core import views as core_views
@@ -102,9 +103,9 @@ def test_upload_openapi_requires_actor_and_separate_upload_secret() -> None:
             "EXPIRED",
             "REVOKED",
         ]
-    assert upload["requestBody"]["content"] == {
-        "application/octet-stream": {"schema": {"type": "string", "format": "binary"}}
-    }
+    upload_media = upload["requestBody"]["content"]["application/octet-stream"]
+    assert upload_media["schema"] == {"type": "string", "format": "binary"}
+    assert isinstance(upload_media["example"], str)
     parameters = cast(list[dict[str, Any]], upload["parameters"])
     digest = next(item for item in parameters if item.get("name") == "X-Anva-Content-SHA256")
     assert digest["required"] is True
@@ -129,7 +130,11 @@ def test_authorization_http_returns_secret_once_and_preserves_binding(client: Cl
         expires_at=expires_at,
     )
     grants = (
-        SimpleNamespace(authorization=authorization, raw_token="opaque-once", replayed=False),
+        SimpleNamespace(
+            authorization=authorization,
+            raw_token="opaque-once-value-0000000000000001",
+            replayed=False,
+        ),
         SimpleNamespace(authorization=authorization, raw_token=None, replayed=True),
     )
     path = f"/api/v1/repositories/{repository_id}/pull-requests/17/evidence-upload-authorizations"
@@ -154,7 +159,7 @@ def test_authorization_http_returns_secret_once_and_preserves_binding(client: Cl
 
     assert first.status_code == 201
     assert replay.status_code == 200
-    assert first.json()["upload_token"] == "opaque-once"  # noqa: S105
+    assert first.json()["upload_token"] == "opaque-once-value-0000000000000001"  # noqa: S105
     assert replay.json()["upload_token"] is None
     assert first.json()["upload_path"] == (
         f"/api/v1/evidence-upload-authorizations/{authorization_id}/content"
@@ -164,6 +169,8 @@ def test_authorization_http_returns_secret_once_and_preserves_binding(client: Cl
     assert issue.call_count == 2
     assert issue.call_args.kwargs["declared_size"] == 631
     assert issue.call_args.kwargs["pull_request_number"] == 17
+    validate_acceptance_http_response("createEvidenceUploadAuthorization", 201, first.json())
+    validate_acceptance_http_response("createEvidenceUploadAuthorization", 200, replay.json())
 
 
 @pytest.mark.contract
@@ -231,6 +238,7 @@ def test_content_http_streams_request_and_returns_only_safe_blob_metadata(client
     assert arguments["expected_sha256"] == "c" * 64
     assert arguments["raw_token"] == "opaque-upload-secret"  # noqa: S105
     assert "object_key" not in response.json()
+    validate_acceptance_http_response("uploadEvidenceContent", 201, response.json())
 
 
 @pytest.mark.contract

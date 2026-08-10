@@ -151,6 +151,7 @@ class EvaluatorClaim:
     task: EvaluatorTask
     claim_token: str
     request: dict[str, object]
+    replayed: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -1147,6 +1148,10 @@ def claim_evaluator_task(
     claimant: str,
     lease_seconds: int = 900,
     claim_idempotency_key: str | None = None,
+    task_id: uuid.UUID | None = None,
+    assurance_run_id: uuid.UUID | None = None,
+    input_hash: str | None = None,
+    head_commit: str | None = None,
 ) -> EvaluatorClaim | None:
     """Claim one pending or expired manual evaluator task with a single-use secret."""
     claimant = _normalized_text(claimant, name="claimant", maximum=200)
@@ -1157,6 +1162,23 @@ def claim_evaluator_task(
         and re.fullmatch(r"[a-f0-9]{64}", claim_idempotency_key) is None
     ):
         raise ValueError("claim_idempotency_key must be a SHA-256 digest")
+    selector = (task_id, assurance_run_id, input_hash, head_commit)
+    if any(value is not None for value in selector) and not all(
+        value is not None for value in selector
+    ):
+        raise ValueError("Evaluator task selector fields must be supplied together")
+    exact_selector = task_id is not None
+    if input_hash is not None and re.fullmatch(r"[a-f0-9]{64}", input_hash) is None:
+        raise ValueError("input_hash must be a SHA-256 digest")
+    if head_commit is not None:
+        validate_full_commit(head_commit)
+    exact_selector_values: tuple[uuid.UUID, uuid.UUID, str, str] | None = None
+    if exact_selector:
+        assert task_id is not None
+        assert assurance_run_id is not None
+        assert input_hash is not None
+        assert head_commit is not None
+        exact_selector_values = (task_id, assurance_run_id, input_hash, head_commit)
     actor = _authorize_assurance_review(actor=actor, repository_id=repository_id)
     repository = get_tenant_record(
         queryset=Repository.objects.filter(is_active=True),
@@ -1167,7 +1189,7 @@ def claim_evaluator_task(
     if claim_idempotency_key is not None:
         prior = (
             EvaluatorTask.objects.select_for_update(of=("self",))
-            .select_related("request_artifact")
+            .select_related("assurance_run", "request_artifact__access_scope")
             .filter(
                 organization_id=actor.organization_id,
                 repository=repository,
@@ -1176,8 +1198,15 @@ def claim_evaluator_task(
             .first()
         )
         if prior is not None:
+            selector_matches = not exact_selector or (
+                prior.id == task_id
+                and prior.assurance_run_id == assurance_run_id
+                and prior.assurance_run.input_hash == input_hash
+                and prior.assurance_run.head_commit == head_commit
+            )
             same_claim = (
-                prior.state == EvaluatorTask.State.CLAIMED
+                selector_matches
+                and prior.state == EvaluatorTask.State.CLAIMED
                 and prior.claimant == claimant
                 and prior.claimed_by_actor_type == actor.actor_type
                 and hmac.compare_digest(prior.claimed_by_actor_id, actor.actor_id)
@@ -1186,6 +1215,11 @@ def claim_evaluator_task(
             if not same_claim:
                 raise LeaseConflictError("Evaluator claim idempotency key is already bound")
             if prior.lease_expires_at is not None and prior.lease_expires_at > now:
+                _authorize_evaluator_source_scope(
+                    actor=actor,
+                    repository_id=repository.id,
+                    evaluator_scope=prior.request_artifact.access_scope,
+                )
                 token = secrets.token_urlsafe(32)
                 prior.claim_token_hash = hashlib.sha256(token.encode()).hexdigest()
                 prior.lease_expires_at = now + timedelta(seconds=lease_seconds)
@@ -1202,8 +1236,9 @@ def claim_evaluator_task(
                     task=prior,
                     claim_token=token,
                     request=cast(dict[str, object], prior.request_artifact.payload),
+                    replayed=True,
                 )
-    exhausted_tasks = list(
+    exhausted_queryset = (
         EvaluatorTask.objects.select_for_update(of=("self",))
         .select_related("organization", "assurance_run", "request_artifact__access_scope")
         .filter(
@@ -1215,6 +1250,15 @@ def claim_evaluator_task(
         )
         .order_by("created_at", "id")
     )
+    if exact_selector_values is not None:
+        exact_task_id, exact_run_id, exact_input_hash, exact_head_commit = exact_selector_values
+        exhausted_queryset = exhausted_queryset.filter(
+            id=exact_task_id,
+            assurance_run_id=exact_run_id,
+            assurance_run__input_hash=exact_input_hash,
+            assurance_run__head_commit=exact_head_commit,
+        )
+    exhausted_tasks = list(exhausted_queryset)
     for exhausted in exhausted_tasks:
         if (
             exhausted.assurance_run.initiated_by_actor_type == actor.actor_type
@@ -1252,6 +1296,14 @@ def claim_evaluator_task(
         )
         .order_by("created_at", "id")
     )
+    if exact_selector_values is not None:
+        exact_task_id, exact_run_id, exact_input_hash, exact_head_commit = exact_selector_values
+        candidates = candidates.filter(
+            id=exact_task_id,
+            assurance_run_id=exact_run_id,
+            assurance_run__input_hash=exact_input_hash,
+            assurance_run__head_commit=exact_head_commit,
+        )
     excluded_task_ids: set[uuid.UUID] = set()
     task = candidates.first()
     while task is not None:
@@ -1292,6 +1344,8 @@ def claim_evaluator_task(
             continue
         break
     if task is None:
+        if exact_selector:
+            raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
         return None
     actor = scoped_actor
     prior_claim_state = (
@@ -1350,6 +1404,7 @@ def claim_evaluator_task(
         task=task,
         claim_token=token,
         request=cast(dict[str, object], task.request_artifact.payload),
+        replayed=False,
     )
 
 

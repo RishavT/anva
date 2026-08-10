@@ -105,6 +105,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--mcp-url", default=os.getenv("ANVA_MCP_URL", "http://mcp:8001/mcp")
     )
     acceptance_common.add_argument("--canonical-root", required=True, type=Path)
+    acceptance_common.add_argument(
+        "--case",
+        type=Path,
+        help="Strict public acceptance case JSON (default: legacy TST-008 journey)",
+    )
     acceptance_common.add_argument("--state", required=True, type=Path)
     acceptance_common.add_argument("--output", required=True, type=Path)
     acceptance_common.add_argument("--manifest-sha256", required=True)
@@ -271,6 +276,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Audit-only evaluator or provider display label",
     )
     evaluator_claim.add_argument("--lease-seconds", type=int, default=900)
+    evaluator_claim.add_argument("--claim-idempotency-key")
+    evaluator_claim.add_argument("--task-id", type=uuid.UUID)
+    evaluator_claim.add_argument("--assurance-run-id", type=uuid.UUID)
+    evaluator_claim.add_argument("--input-hash")
+    evaluator_claim.add_argument("--head-commit")
     evaluator_submit = evaluator_commands.add_parser(
         "submit",
         help="Submit with the exact actor and credential that claimed the task",
@@ -538,6 +548,16 @@ def _evaluator_request(arguments: argparse.Namespace) -> int:
             "claimant": arguments.claimant,
             "lease_seconds": arguments.lease_seconds,
         }
+        optional_fields = {
+            "claim_idempotency_key": arguments.claim_idempotency_key,
+            "task_id": arguments.task_id,
+            "assurance_run_id": arguments.assurance_run_id,
+            "input_hash": arguments.input_hash,
+            "head_commit": arguments.head_commit,
+        }
+        for name, value in optional_fields.items():
+            if value is not None:
+                payload[name] = str(value)
     elif command == "submit":
         claim_token = os.getenv("ANVA_EVALUATOR_CLAIM_TOKEN", "")
         if not claim_token:
@@ -1065,6 +1085,7 @@ def _acceptance_request(arguments: argparse.Namespace) -> int:
                 product_image_reference=str(arguments.product_image_reference),
                 build_input_sha256=str(arguments.build_input_sha256),
                 launch_service=str(arguments.launch_service),
+                case_path=arguments.case,
                 build_provenance_path=arguments.build_provenance,
                 launch_manifest_path=arguments.launch_manifest,
                 credential_output=getattr(arguments, "credential_output", None),

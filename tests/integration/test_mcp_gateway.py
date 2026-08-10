@@ -46,6 +46,7 @@ from anva.core.services.tokens import (
     issue_bootstrap_repository_token,
 )
 from anva.core.services.transitions import transition_knowledge_proposal
+from anva.mcp.contracts import validate_tool_output
 
 
 def _gateway_tenant(label: str) -> tuple[Organization, Repository, AccessScope, str]:
@@ -176,6 +177,20 @@ def test_codex_and_claude_workflow_traces_share_exact_authorized_packet() -> Non
     assert codex_packet["limitations"] == claude_packet["limitations"]
     assert codex_data["created"] is True
     assert claude_data["created"] is False
+    validate_tool_output("anva.get_context_packet", codex_context)
+    validate_tool_output("anva.get_context_packet", claude_context)
+    search_result = dispatch_tool(
+        actor=replace(base_actor, request_id=uuid.uuid4()),
+        tool_name="anva.search",
+        arguments={
+            **repository_arguments,
+            "query": "Host-neutral workflow parity",
+            "phase": "PREPARE",
+            "limit": 20,
+        },
+        transport="MCP",
+    )
+    validate_tool_output("anva.search", search_result)
     for request_ids in (codex_request_ids, claude_request_ids):
         assert [
             MCPToolInvocation.objects.get(request_id=request_id).tool_name

@@ -1,0 +1,153 @@
+x-acceptance-case-path: &acceptance-case-path /acceptance/case/case.json
+x-acceptance-case-volume: &acceptance-case-volume
+  type: bind
+  source: ${ANVA_ACCEPTANCE_CASE_FILE:?ANVA_ACCEPTANCE_CASE_FILE is required}
+  target: *acceptance-case-path
+  read_only: true
+  bind:
+    create_host_path: false
+
+services:
+  acceptance-product-start:
+    command:
+      - anva
+      - acceptance
+      - start
+      - --canonical-root
+      - /app/acceptance/canonical
+      - --case
+      - *acceptance-case-path
+      - --state
+      - /acceptance/state/resume.json
+      - --output
+      - /acceptance/results/sealed
+      - --credential-output
+      - /acceptance/credentials/credentials.json
+      - --manifest-sha256
+      - ${ANVA_ACCEPTANCE_MANIFEST_SHA256:-invalid-unpinned-manifest}
+      - --source-fingerprint
+      - ${ANVA_ACCEPTANCE_SOURCE_FINGERPRINT:-invalid-unpinned-fingerprint}
+      - --canonical-manifest-sha256
+      - ${ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256:-invalid-unpinned-canonical-manifest}
+      - --product-commit
+      - ${ANVA_REVISION:-unknown}
+      - --product-image-sha256
+      - ${ANVA_IMAGE_SHA256:-invalid-unpinned-image}
+      - --product-image-reference
+      - ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.0}
+      - --build-input-sha256
+      - ${ANVA_BUILD_INPUT_SHA256:-invalid-unpinned-build-input}
+      - --launch-manifest
+      - /acceptance/launch/manifest.json
+      - --launch-service
+      - acceptance-product-start
+    volumes:
+      - *acceptance-case-volume
+
+  acceptance-review-request:
+    command:
+      - anva
+      - acceptance
+      - review-request
+      - --canonical-root
+      - /app/acceptance/canonical
+      - --case
+      - *acceptance-case-path
+      - --state
+      - /acceptance/state/resume.json
+      - --output
+      - /acceptance/results/sealed
+      - --handoff
+      - /acceptance/handoff/review.json
+      - --manifest-sha256
+      - ${ANVA_ACCEPTANCE_MANIFEST_SHA256:-invalid-unpinned-manifest}
+      - --source-fingerprint
+      - ${ANVA_ACCEPTANCE_SOURCE_FINGERPRINT:-invalid-unpinned-fingerprint}
+      - --canonical-manifest-sha256
+      - ${ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256:-invalid-unpinned-canonical-manifest}
+      - --product-commit
+      - ${ANVA_REVISION:-unknown}
+      - --product-image-sha256
+      - ${ANVA_IMAGE_SHA256:-invalid-unpinned-image}
+      - --product-image-reference
+      - ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.0}
+      - --build-input-sha256
+      - ${ANVA_BUILD_INPUT_SHA256:-invalid-unpinned-build-input}
+      - --launch-manifest
+      - /acceptance/launch/manifest.json
+      - --launch-service
+      - acceptance-review-request
+    volumes:
+      - *acceptance-case-volume
+
+  acceptance-review-submit:
+    command:
+      - anva
+      - acceptance
+      - review-submit
+      - --canonical-root
+      - /app/acceptance/canonical
+      - --case
+      - *acceptance-case-path
+      - --state
+      - /acceptance/state/resume.json
+      - --output
+      - /acceptance/results/sealed
+      - --handoff
+      - /acceptance/handoff/review.json
+      - --result
+      - /acceptance/reviewer/result.json
+      - --manifest-sha256
+      - ${ANVA_ACCEPTANCE_MANIFEST_SHA256:-invalid-unpinned-manifest}
+      - --source-fingerprint
+      - ${ANVA_ACCEPTANCE_SOURCE_FINGERPRINT:-invalid-unpinned-fingerprint}
+      - --canonical-manifest-sha256
+      - ${ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256:-invalid-unpinned-canonical-manifest}
+      - --product-commit
+      - ${ANVA_REVISION:-unknown}
+      - --product-image-sha256
+      - ${ANVA_IMAGE_SHA256:-invalid-unpinned-image}
+      - --product-image-reference
+      - ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.0}
+      - --build-input-sha256
+      - ${ANVA_BUILD_INPUT_SHA256:-invalid-unpinned-build-input}
+      - --launch-manifest
+      - /acceptance/launch/manifest.json
+      - --launch-service
+      - acceptance-review-submit
+    volumes:
+      - *acceptance-case-volume
+
+  acceptance-product-finalize:
+    command:
+      - anva
+      - acceptance
+      - finalize
+      - --canonical-root
+      - /app/acceptance/canonical
+      - --case
+      - *acceptance-case-path
+      - --state
+      - /acceptance/state/resume.json
+      - --output
+      - /acceptance/results/sealed
+      - --manifest-sha256
+      - ${ANVA_ACCEPTANCE_MANIFEST_SHA256:-invalid-unpinned-manifest}
+      - --source-fingerprint
+      - ${ANVA_ACCEPTANCE_SOURCE_FINGERPRINT:-invalid-unpinned-fingerprint}
+      - --canonical-manifest-sha256
+      - ${ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256:-invalid-unpinned-canonical-manifest}
+      - --product-commit
+      - ${ANVA_REVISION:-unknown}
+      - --product-image-sha256
+      - ${ANVA_IMAGE_SHA256:-invalid-unpinned-image}
+      - --product-image-reference
+      - ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.0}
+      - --build-input-sha256
+      - ${ANVA_BUILD_INPUT_SHA256:-invalid-unpinned-build-input}
+      - --launch-manifest
+      - /acceptance/launch/manifest.json
+      - --launch-service
+      - acceptance-product-finalize
+    volumes:
+      - *acceptance-case-volume

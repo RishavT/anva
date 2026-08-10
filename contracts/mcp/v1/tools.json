@@ -678,10 +678,299 @@
                 "type": "boolean"
               },
               "packet": {
-                "additionalProperties": {
-                  "$ref": "#/$defs/bounded_json_value"
+                "additionalProperties": false,
+                "properties": {
+                  "authorization_hash": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "budget": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "max_bytes": {
+                        "maximum": 250000,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "max_citations": {
+                        "maximum": 200,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "max_items": {
+                        "maximum": 100,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "max_tokens": {
+                        "maximum": 20000,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "selected_bytes": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "selected_citations": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "selected_items": {
+                        "maximum": 100,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "selected_tokens": {
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "max_items",
+                      "max_tokens",
+                      "max_bytes",
+                      "max_citations",
+                      "selected_items",
+                      "selected_tokens",
+                      "selected_bytes",
+                      "selected_citations"
+                    ],
+                    "type": "object"
+                  },
+                  "content_hash": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "embedding_version": {
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "generated_at": {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  "index_version": {
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "items": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "anva_sources": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "access_snapshot_id": {
+                                "format": "uuid",
+                                "type": "string"
+                              },
+                              "canonical_url": {
+                                "format": "uri",
+                                "maxLength": 2000,
+                                "type": "string"
+                              },
+                              "locator": {
+                                "maxLength": 1000,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "observed_at": {
+                                "format": "date-time",
+                                "type": "string"
+                              },
+                              "source_content_hash": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "source_location_id": {
+                                "format": "uuid",
+                                "type": "string"
+                              },
+                              "source_observation_id": {
+                                "format": "uuid",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "source_location_id",
+                              "source_observation_id",
+                              "access_snapshot_id",
+                              "canonical_url",
+                              "locator",
+                              "source_content_hash",
+                              "observed_at"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 200,
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        "freshness": {
+                          "enum": [
+                            "CURRENT",
+                            "STALE",
+                            "UNKNOWN"
+                          ],
+                          "type": "string"
+                        },
+                        "is_inferred": {
+                          "type": "boolean"
+                        },
+                        "item_id": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "item_key": {
+                          "maxLength": 500,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "kind": {
+                          "enum": [
+                            "POLICY",
+                            "RELATIONSHIP",
+                            "ASSERTION",
+                            "SOURCE_EXCERPT",
+                            "DECISION",
+                            "INCIDENT",
+                            "CONFLICT"
+                          ],
+                          "type": "string"
+                        },
+                        "payload": {
+                          "additionalProperties": {
+                            "$ref": "#/$defs/bounded_json_value"
+                          },
+                          "maxProperties": 100,
+                          "type": "object"
+                        },
+                        "rank_score": {
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        "selection_reason": {
+                          "maxLength": 500,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "summary": {
+                          "maxLength": 10000,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "item_id",
+                        "kind",
+                        "item_key",
+                        "summary",
+                        "freshness",
+                        "is_inferred",
+                        "selection_reason",
+                        "rank_score",
+                        "payload",
+                        "anva_sources"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 100,
+                    "type": "array"
+                  },
+                  "limitations": {
+                    "items": {
+                      "maxLength": 2000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 100,
+                    "type": "array"
+                  },
+                  "organization_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "packet_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "phase": {
+                    "enum": [
+                      "PREPARE",
+                      "BUILD",
+                      "PREFLIGHT",
+                      "ASSURANCE"
+                    ],
+                    "type": "string"
+                  },
+                  "repository_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "request": {
+                    "additionalProperties": {
+                      "$ref": "#/$defs/bounded_json_value"
+                    },
+                    "maxProperties": 100,
+                    "type": "object"
+                  },
+                  "retrieval_algorithm_version": {
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "retrieval_watermark": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "revision": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "schema_version": {
+                    "const": "1.0",
+                    "type": "string"
+                  },
+                  "selection_hash": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "work_item_id": {
+                    "oneOf": [
+                      {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
                 },
-                "maxProperties": 100,
+                "required": [
+                  "schema_version",
+                  "packet_id",
+                  "organization_id",
+                  "repository_id",
+                  "work_item_id",
+                  "revision",
+                  "generated_at",
+                  "content_hash",
+                  "phase",
+                  "request",
+                  "authorization_hash",
+                  "selection_hash",
+                  "retrieval_watermark",
+                  "retrieval_algorithm_version",
+                  "index_version",
+                  "embedding_version",
+                  "budget",
+                  "items",
+                  "limitations"
+                ],
                 "type": "object"
               },
               "packet_id": {
@@ -1252,10 +1541,299 @@
                 "type": "boolean"
               },
               "packet": {
-                "additionalProperties": {
-                  "$ref": "#/$defs/bounded_json_value"
+                "additionalProperties": false,
+                "properties": {
+                  "authorization_hash": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "budget": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "max_bytes": {
+                        "maximum": 250000,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "max_citations": {
+                        "maximum": 200,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "max_items": {
+                        "maximum": 100,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "max_tokens": {
+                        "maximum": 20000,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "selected_bytes": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "selected_citations": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "selected_items": {
+                        "maximum": 100,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "selected_tokens": {
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "max_items",
+                      "max_tokens",
+                      "max_bytes",
+                      "max_citations",
+                      "selected_items",
+                      "selected_tokens",
+                      "selected_bytes",
+                      "selected_citations"
+                    ],
+                    "type": "object"
+                  },
+                  "content_hash": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "embedding_version": {
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "generated_at": {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  "index_version": {
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "items": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "anva_sources": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "access_snapshot_id": {
+                                "format": "uuid",
+                                "type": "string"
+                              },
+                              "canonical_url": {
+                                "format": "uri",
+                                "maxLength": 2000,
+                                "type": "string"
+                              },
+                              "locator": {
+                                "maxLength": 1000,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "observed_at": {
+                                "format": "date-time",
+                                "type": "string"
+                              },
+                              "source_content_hash": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "source_location_id": {
+                                "format": "uuid",
+                                "type": "string"
+                              },
+                              "source_observation_id": {
+                                "format": "uuid",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "source_location_id",
+                              "source_observation_id",
+                              "access_snapshot_id",
+                              "canonical_url",
+                              "locator",
+                              "source_content_hash",
+                              "observed_at"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 200,
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        "freshness": {
+                          "enum": [
+                            "CURRENT",
+                            "STALE",
+                            "UNKNOWN"
+                          ],
+                          "type": "string"
+                        },
+                        "is_inferred": {
+                          "type": "boolean"
+                        },
+                        "item_id": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "item_key": {
+                          "maxLength": 500,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "kind": {
+                          "enum": [
+                            "POLICY",
+                            "RELATIONSHIP",
+                            "ASSERTION",
+                            "SOURCE_EXCERPT",
+                            "DECISION",
+                            "INCIDENT",
+                            "CONFLICT"
+                          ],
+                          "type": "string"
+                        },
+                        "payload": {
+                          "additionalProperties": {
+                            "$ref": "#/$defs/bounded_json_value"
+                          },
+                          "maxProperties": 100,
+                          "type": "object"
+                        },
+                        "rank_score": {
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        "selection_reason": {
+                          "maxLength": 500,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "summary": {
+                          "maxLength": 10000,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "item_id",
+                        "kind",
+                        "item_key",
+                        "summary",
+                        "freshness",
+                        "is_inferred",
+                        "selection_reason",
+                        "rank_score",
+                        "payload",
+                        "anva_sources"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 100,
+                    "type": "array"
+                  },
+                  "limitations": {
+                    "items": {
+                      "maxLength": 2000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 100,
+                    "type": "array"
+                  },
+                  "organization_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "packet_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "phase": {
+                    "enum": [
+                      "PREPARE",
+                      "BUILD",
+                      "PREFLIGHT",
+                      "ASSURANCE"
+                    ],
+                    "type": "string"
+                  },
+                  "repository_id": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "request": {
+                    "additionalProperties": {
+                      "$ref": "#/$defs/bounded_json_value"
+                    },
+                    "maxProperties": 100,
+                    "type": "object"
+                  },
+                  "retrieval_algorithm_version": {
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "retrieval_watermark": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "revision": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "schema_version": {
+                    "const": "1.0",
+                    "type": "string"
+                  },
+                  "selection_hash": {
+                    "pattern": "^[a-f0-9]{64}$",
+                    "type": "string"
+                  },
+                  "work_item_id": {
+                    "oneOf": [
+                      {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
                 },
-                "maxProperties": 100,
+                "required": [
+                  "schema_version",
+                  "packet_id",
+                  "organization_id",
+                  "repository_id",
+                  "work_item_id",
+                  "revision",
+                  "generated_at",
+                  "content_hash",
+                  "phase",
+                  "request",
+                  "authorization_hash",
+                  "selection_hash",
+                  "retrieval_watermark",
+                  "retrieval_algorithm_version",
+                  "index_version",
+                  "embedding_version",
+                  "budget",
+                  "items",
+                  "limitations"
+                ],
                 "type": "object"
               },
               "packet_id": {
@@ -1431,10 +2009,129 @@
             "properties": {
               "results": {
                 "items": {
-                  "additionalProperties": {
-                    "$ref": "#/$defs/bounded_json_value"
+                  "additionalProperties": false,
+                  "properties": {
+                    "access_scope_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "access_snapshot_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "canonical_url": {
+                      "format": "uri",
+                      "maxLength": 2000,
+                      "type": "string"
+                    },
+                    "chunk_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "content_hash": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
+                    "explanation": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "lexical_rank": {
+                          "oneOf": [
+                            {
+                              "minimum": 1,
+                              "type": "integer"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "phase": {
+                          "oneOf": [
+                            {
+                              "enum": [
+                                "PREPARE",
+                                "BUILD",
+                                "PREFLIGHT",
+                                "ASSURANCE"
+                              ],
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "phase_terms": {
+                          "items": {
+                            "maxLength": 100,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "maxItems": 20,
+                          "type": "array",
+                          "uniqueItems": true
+                        },
+                        "reciprocal_rank_score": {
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        "semantic_rank": {
+                          "oneOf": [
+                            {
+                              "minimum": 1,
+                              "type": "integer"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "lexical_rank",
+                        "semantic_rank",
+                        "reciprocal_rank_score",
+                        "phase",
+                        "phase_terms"
+                      ],
+                      "type": "object"
+                    },
+                    "observed_at": {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "pointer": {
+                      "maxLength": 1000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "source_location_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "source_observation_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "text": {
+                      "maxLength": 250000,
+                      "type": "string"
+                    }
                   },
-                  "maxProperties": 100,
+                  "required": [
+                    "chunk_id",
+                    "text",
+                    "content_hash",
+                    "pointer",
+                    "canonical_url",
+                    "access_scope_id",
+                    "source_location_id",
+                    "source_observation_id",
+                    "access_snapshot_id",
+                    "observed_at",
+                    "explanation"
+                  ],
                   "type": "object"
                 },
                 "maxItems": 50,

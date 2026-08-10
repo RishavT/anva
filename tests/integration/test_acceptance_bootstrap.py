@@ -7,6 +7,7 @@ import json
 import pytest
 from django.test import Client, override_settings
 
+from anva.contracts.acceptance import validate_acceptance_http_response
 from anva.core.models import (
     AccessGrant,
     AccessScopeServiceIdentity,
@@ -106,6 +107,7 @@ def test_opt_in_reviewer_is_distinct_least_privilege_and_token_is_never_persiste
     ).exists()
     stored = RepositoryAccessToken.objects.get(id=result["reviewer_token_id"])
     assert stored.token_hash != reviewer_token
+    validate_acceptance_http_response("bootstrapOrganization", 201, result)
     persisted = json.dumps(
         list(AuditEvent.objects.values("metadata", "actor_id", "authorization_path")),
         sort_keys=True,

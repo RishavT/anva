@@ -10,6 +10,10 @@ from typing import cast
 
 from jsonschema import Draft202012Validator
 
+from anva.contracts.acceptance import (
+    acceptance_operation_document,
+    apply_acceptance_http_contracts,
+)
 from anva.contracts.catalog import EXAMPLES, KNOWLEDGE_CHANGE, SCHEMAS
 from anva.contracts.validation import validate_payload
 from anva.mcp.contracts import TOOL_CONTRACTS, mcp_contract_document
@@ -421,8 +425,22 @@ def openapi_document() -> dict[str, object]:
                 ),
             },
             "lease_seconds": {"type": "integer", "minimum": 60, "maximum": 3_600},
+            "claim_idempotency_key": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$",
+            },
+            "task_id": {"type": "string", "format": "uuid"},
+            "assurance_run_id": {"type": "string", "format": "uuid"},
+            "input_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+            "head_commit": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
         },
         "required": ["claimant"],
+        "dependentRequired": {
+            "task_id": ["assurance_run_id", "input_hash", "head_commit"],
+            "assurance_run_id": ["task_id", "input_hash", "head_commit"],
+            "input_hash": ["task_id", "assurance_run_id", "head_commit"],
+            "head_commit": ["task_id", "assurance_run_id", "input_hash"],
+        },
     }
     evaluator_submit_request = {
         "type": "object",
@@ -934,7 +952,7 @@ def openapi_document() -> dict[str, object]:
         "200": {"description": "Authenticated MCP compatibility response."},
         **structured_errors,
     }
-    return {
+    document: dict[str, object] = {
         "openapi": "3.1.0",
         "info": {
             "title": "Anva API",
@@ -2181,6 +2199,8 @@ def openapi_document() -> dict[str, object]:
             },
         },
     }
+    apply_acceptance_http_contracts(document)
+    return document
 
 
 def mcp_document() -> dict[str, object]:
@@ -2196,7 +2216,11 @@ def rendered_artifacts() -> dict[Path, bytes]:
     for name, example in sorted(EXAMPLES.items()):
         artifacts[Path("examples/v1") / f"{name}.json"] = canonical_json(example)
     artifacts[Path("openapi/v1/openapi.json")] = canonical_json(openapi_document())
-    artifacts[Path("mcp/v1/tools.json")] = canonical_json(mcp_document())
+    mcp = mcp_document()
+    artifacts[Path("mcp/v1/tools.json")] = canonical_json(mcp)
+    artifacts[Path("acceptance/v1/operations.json")] = canonical_json(
+        acceptance_operation_document(openapi_document(), mcp)
+    )
     return artifacts
 
 

@@ -34,7 +34,8 @@ RELEASE_COMPOSE := $(COMPOSE) -f compose.yaml -f compose.release.yaml
 TEST_COMPOSE := docker compose -p $(TEST_PROJECT)
 TEST_RUN := $(TEST_COMPOSE) --profile test run --rm --build test
 ACCEPTANCE_PROJECT ?= anva-acceptance
-ACCEPTANCE_COMPOSE := docker compose -p $(ACCEPTANCE_PROJECT) -f compose.yaml -f compose.acceptance.yaml
+ACCEPTANCE_CASE_COMPOSE = $(if $(strip $(ANVA_ACCEPTANCE_CASE_FILE)),-f compose.acceptance.case.yaml,)
+ACCEPTANCE_COMPOSE = docker compose -p $(ACCEPTANCE_PROJECT) -f compose.yaml -f compose.acceptance.yaml $(ACCEPTANCE_CASE_COMPOSE)
 
 .PHONY: help install-demo up up-exposed down uninstall uninstall-clean backup backup-verify restore migration-rehearsal rate-limit-cleanup release-build release-scan release-scan-gate release-manifest release-artifacts release-clean reset logs migrate migrations-check shell cli lock contracts contracts-check skills-render skills-package skills-check format format-check lint type unit integration acceptance-canonicalize acceptance-verify acceptance-start acceptance-review-request acceptance-review-submit acceptance-finalize acceptance-down contract smoke browser coverage test test-down check ci
 

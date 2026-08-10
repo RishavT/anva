@@ -52,6 +52,7 @@ HASH_KEYS = frozenset(
         "source_fingerprint",
         "canonical_manifest_sha256",
         "canonical_input_sha256",
+        "case_sha256",
         "product_commit",
         "corpus_commit",
         "base_commit",

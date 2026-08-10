@@ -9,12 +9,18 @@ import re
 import stat
 import time
 import uuid
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
 from anva import __version__
+from anva.acceptance.case import (
+    AcceptanceCaseError,
+    legacy_acceptance_case,
+    load_acceptance_case,
+)
 from anva.acceptance.client import MCPBoundary, PublicAPI, StreamableHTTPMCP
 from anva.acceptance.corpus import CANONICAL_MANIFEST_NAME, verify_canonical_corpus
 from anva.acceptance.export import (
@@ -55,6 +61,7 @@ class RunnerConfig:
     product_image_reference: str
     build_input_sha256: str
     launch_service: str
+    case_path: Path | None = None
     build_provenance_path: Path = Path("/app/anva-build-provenance.json")
     launch_manifest_path: Path = Path("/acceptance/launch/manifest.json")
     credential_output: Path | None = None
@@ -345,8 +352,8 @@ class AcceptanceRunner:
         files = manifest.get("files")
         if not isinstance(files, list) or not files:
             raise AcceptanceRunnerError("Canonical manifest has no semantic source inventory")
-        expected_sources: list[tuple[str, str, str]] = []
-        for item in files[:10]:
+        inventory: dict[str, str] = {}
+        for item in files:
             if not isinstance(item, dict):
                 raise AcceptanceRunnerError("Canonical semantic source inventory is invalid")
             path = _string(cast(dict[str, object], item), "path")
@@ -354,23 +361,68 @@ class AcceptanceRunner:
             if not path.startswith("payload/") or re.fullmatch(r"[a-f0-9]{64}", digest) is None:
                 raise AcceptanceRunnerError("Canonical semantic source inventory is invalid")
             relative = path.removeprefix("payload/")
-            try:
-                content = (config.canonical_root / "payload" / relative).read_bytes()
-                text = content.decode("utf-8")
-            except (OSError, UnicodeDecodeError) as error:
-                raise AcceptanceRunnerError("Canonical semantic source is unreadable") from error
-            if sha256_bytes(content) != digest:
-                raise AcceptanceRunnerError("Canonical semantic source hash is invalid")
-            expected_sources.append((relative, digest, text))
-        self.expected_sources = tuple(expected_sources)
-        self.namespace = uuid.uuid5(uuid.NAMESPACE_URL, self.corpus.source_fingerprint)
+            if relative in inventory:
+                raise AcceptanceRunnerError("Canonical semantic source inventory is invalid")
+            inventory[relative] = digest
+
+        def read_sources(paths: tuple[str, ...]) -> tuple[tuple[str, str, str], ...]:
+            expected_sources: list[tuple[str, str, str]] = []
+            for relative in paths:
+                digest = inventory.get(relative)
+                if digest is None:
+                    raise AcceptanceRunnerError(
+                        "Acceptance case source path is absent from the canonical manifest"
+                    )
+                source_path = config.canonical_root / "payload" / relative
+                if source_path.is_symlink() or not source_path.is_file():
+                    raise AcceptanceRunnerError("Canonical semantic source is unsafe")
+                try:
+                    content = source_path.read_bytes()
+                    text = content.decode("utf-8")
+                except (OSError, UnicodeDecodeError) as error:
+                    raise AcceptanceRunnerError(
+                        "Canonical semantic source is unreadable"
+                    ) from error
+                if sha256_bytes(content) != digest:
+                    raise AcceptanceRunnerError("Canonical semantic source hash is invalid")
+                expected_sources.append((relative, digest, text))
+            return tuple(expected_sources)
+
+        legacy_paths = tuple(inventory)[:10]
+        legacy_sources = read_sources(legacy_paths)
+        base_commit = _hash40(f"{self.corpus.source_fingerprint}:base")
+        head_commit = _hash40(f"{self.corpus.source_fingerprint}:head")
+        new_head_commit = _hash40(f"{self.corpus.source_fingerprint}:new-head")
+        try:
+            if config.case_path is None:
+                self.case = legacy_acceptance_case(
+                    corpus_id=self.corpus.corpus_id,
+                    source_fingerprint=self.corpus.source_fingerprint,
+                    base_commit=base_commit,
+                    head_commit=head_commit,
+                    new_head_commit=new_head_commit,
+                    source_paths_and_text=tuple(
+                        (relative, text) for relative, _digest, text in legacy_sources
+                    ),
+                )
+            else:
+                self.case = load_acceptance_case(config.case_path)
+        except AcceptanceCaseError as error:
+            raise AcceptanceRunnerError(str(error)) from error
+        semantic = self.case.section("semantic_assertions")
+        raw_source_paths = semantic["source_paths"]
+        if not isinstance(raw_source_paths, list) or not all(
+            isinstance(path, str) for path in raw_source_paths
+        ):
+            raise AcceptanceRunnerError("Acceptance case semantic source paths are invalid")
+        self.expected_sources = read_sources(tuple(cast(list[str], raw_source_paths)))
+        namespace_name = self.corpus.source_fingerprint
+        if not self.case.legacy_default:
+            namespace_name = f"{namespace_name}:{self.case.sha256}"
+        self.namespace = uuid.uuid5(uuid.NAMESPACE_URL, namespace_name)
 
     def _semantic_query(self) -> str:
-        fragments = ["organization goals products decisions systems requirements"]
-        for relative, _digest, text in self.expected_sources:
-            fragments.append(relative.replace("/", " "))
-            fragments.append(" ".join(text.split())[:240])
-        return " ".join(fragments)[:500]
+        return _string(self.case.section("retrieval"), "search_query")
 
     def _validate_semantic_journey(
         self,
@@ -478,28 +530,44 @@ class AcceptanceRunner:
             sync_timeout_seconds=self.config.sync_timeout_seconds,
         )
         run_uuid = _uuid(self.namespace, f"acceptance-run:{committed_reference}")
+        change = self.case.section("change")
+        hashes = {
+            "manifest_sha256": self.corpus.manifest_sha256,
+            "source_fingerprint": self.corpus.source_fingerprint,
+            "canonical_manifest_sha256": self.corpus.canonical_manifest_sha256,
+            "canonical_input_sha256": self.corpus.canonical_manifest_sha256,
+            "product_commit": self.config.product_commit,
+            "product_image_sha256": self.config.product_image_sha256,
+            "build_input_sha256": self.config.build_input_sha256,
+            "product_package_sha256": self.product_package_sha256,
+            "launch_manifest_sha256": self.launch_manifest_sha256,
+            "corpus_commit": self.corpus_commit,
+            "reference_time_sha256": sha256_bytes(committed_reference.encode()),
+            "base_commit": _string(change, "base_commit"),
+            "head_commit": _string(change, "head_commit"),
+        }
+        stale_probe = change["stale_probe"]
+        if isinstance(stale_probe, dict):
+            hashes["new_head_commit"] = _string(
+                cast(dict[str, object], stale_probe), "new_head_commit"
+            )
+        if not self.case.legacy_default:
+            hashes["case_sha256"] = self.case.sha256
+            hashes["canonical_input_sha256"] = sha256_bytes(
+                canonical_bytes(
+                    {
+                        "canonical_manifest_sha256": self.corpus.canonical_manifest_sha256,
+                        "case_sha256": self.case.sha256,
+                    }
+                )
+            )
         state = ResumeState(
             corpus_id=self.corpus.corpus_id,
             run_id=f"anva:{run_uuid}",
             reference_time=committed_reference,
             product_version=__version__,
             status="BOOTSTRAP_PREPARED",
-            hashes={
-                "manifest_sha256": self.corpus.manifest_sha256,
-                "source_fingerprint": self.corpus.source_fingerprint,
-                "canonical_manifest_sha256": self.corpus.canonical_manifest_sha256,
-                "canonical_input_sha256": self.corpus.canonical_manifest_sha256,
-                "product_commit": self.config.product_commit,
-                "product_image_sha256": self.config.product_image_sha256,
-                "build_input_sha256": self.config.build_input_sha256,
-                "product_package_sha256": self.product_package_sha256,
-                "launch_manifest_sha256": self.launch_manifest_sha256,
-                "corpus_commit": self.corpus_commit,
-                "reference_time_sha256": sha256_bytes(committed_reference.encode()),
-                "base_commit": _hash40(f"{self.corpus.source_fingerprint}:base"),
-                "head_commit": _hash40(f"{self.corpus.source_fingerprint}:head"),
-                "new_head_commit": _hash40(f"{self.corpus.source_fingerprint}:new-head"),
-            },
+            hashes=hashes,
         )
         state.hashes["bootstrap_idempotency_sha256"] = sha256_bytes(
             f"bootstrap:{state.run_id}".encode()
@@ -512,15 +580,22 @@ class AcceptanceRunner:
     def _bootstrap_payload(
         self, state: ResumeState, *, include_idempotency: bool = True
     ) -> dict[str, object]:
-        slug = f"anva-acceptance-{state.hashes['reference_time_sha256'][:12]}"
+        organization = self.case.section("organization")
+        slug = _string(organization, "slug")
+        if self.case.legacy_default:
+            slug = f"anva-acceptance-{state.hashes['reference_time_sha256'][:12]}"
         payload: dict[str, object] = {
             "organization_slug": slug,
-            "organization_name": f"Anva Acceptance {self.corpus.corpus_id}",
-            "admin_email": f"{slug}@anva.invalid",
-            "admin_display_name": "Anva acceptance operator",
-            "repository_external_id": f"acceptance:{self.corpus.source_fingerprint}",
-            "repository_name": self.corpus.corpus_id,
-            "independent_reviewer_name": "Independent acceptance evaluator",
+            "organization_name": _string(organization, "name"),
+            "admin_email": (
+                f"{slug}@anva.invalid"
+                if self.case.legacy_default
+                else _string(organization, "admin_email")
+            ),
+            "admin_display_name": _string(organization, "admin_display_name"),
+            "repository_external_id": _string(organization, "repository_external_id"),
+            "repository_name": _string(organization, "repository_name"),
+            "independent_reviewer_name": _string(organization, "independent_reviewer_name"),
         }
         if include_idempotency:
             payload["idempotency_key"] = state.hashes["bootstrap_idempotency_sha256"]
@@ -555,6 +630,7 @@ class AcceptanceRunner:
                 payload=self._bootstrap_payload(state),
                 headers={"X-Anva-Bootstrap-Secret": bootstrap_secret},
                 expected=frozenset({201}),
+                operation_id="bootstrapOrganization",
             )
             .payload
         )
@@ -613,7 +689,11 @@ class AcceptanceRunner:
     def _wait_for_sync(self, api: PublicAPI, source_id: str, sync_id: str) -> None:
         deadline = time.monotonic() + self.config.sync_timeout_seconds
         while time.monotonic() < deadline:
-            payload = api.request("GET", f"/source-connections/{source_id}/sync-runs").payload
+            payload = api.request(
+                "GET",
+                f"/source-connections/{source_id}/sync-runs",
+                operation_id="listSourceSyncRuns",
+            ).payload
             runs = payload.get("sync_runs")
             if not isinstance(runs, list):
                 raise AcceptanceRunnerError("Source sync response is invalid")
@@ -634,43 +714,23 @@ class AcceptanceRunner:
         organization_id = state.identities["organization_id"]
         repository_id = state.identities["repository_id"]
         access_scope_id = state.identities["access_scope_id"]
+        work = deepcopy(self.case.section("work_item"))
         return {
             "schema_version": "1.0",
             "organization_id": organization_id,
             "repository_id": repository_id,
             "access_scope_id": access_scope_id,
             "work_item_id": _uuid(_state_namespace(state), "work-item"),
-            "external_key": f"ACCEPTANCE-{self.corpus.source_fingerprint[:16]}",
-            "origin": "sealed-acceptance",
-            "work_type": "FEATURE",
-            "title": "Exercise exact-head production acceptance",
-            "summary": "Validate connected context, governance, evidence, and assurance.",
-            "status": "READY",
+            "external_key": work["external_key"],
+            "origin": work["origin"],
+            "work_type": work["work_type"],
+            "title": work["title"],
+            "summary": work["summary"],
+            "status": work["status"],
             "revision": 1,
-            "source_references": [f"acceptance:{self.corpus.source_fingerprint}"],
-            "requirements": [
-                {
-                    "code": "REQ_EXACT_HEAD",
-                    "normalized_text": (
-                        "Readiness uses only evidence for the exact pull request head."
-                    ),
-                    "origin": "acceptance",
-                    "owner": "platform",
-                    "status": "CONFIRMED",
-                    "source_references": [f"acceptance:{self.corpus.source_fingerprint}"],
-                    "related_entity_ids": [],
-                    "requires_approval": False,
-                }
-            ],
-            "acceptance_criteria": [
-                {
-                    "code": "EXACT_HEAD_PROOF",
-                    "requirement_code": "REQ_EXACT_HEAD",
-                    "normalized_text": "Exact-head acceptance evidence is present.",
-                    "required_evidence_types": ["TEST_RESULT"],
-                    "manual_approval_allowed": False,
-                }
-            ],
+            "source_references": work["source_references"],
+            "requirements": work["requirements"],
+            "acceptance_criteria": work["acceptance_criteria"],
             "non_requirements": [],
             "assumptions": [],
             "decisions": [],
@@ -678,74 +738,66 @@ class AcceptanceRunner:
         }
 
     def _policy_payload(self, state: ResumeState) -> dict[str, object]:
+        policy = deepcopy(self.case.section("policy"))
+        binding = cast(dict[str, object], policy["binding"])
+        binding["repository_ids"] = [state.identities["repository_id"]]
+        requirements = cast(list[dict[str, object]], policy["requirements"])
+        for index, requirement in enumerate(requirements):
+            identity_name = (
+                "policy-requirement"
+                if self.case.legacy_default and index == 0
+                else f"policy-requirement:{index}"
+            )
+            requirement["requirement_id"] = _uuid(_state_namespace(state), identity_name)
         return {
             "schema_version": "1.0",
             "organization_id": state.identities["organization_id"],
             "access_scope_id": state.identities["access_scope_id"],
             "policy_id": _uuid(_state_namespace(state), "policy"),
             "version": 1,
-            "name": "Exact-head acceptance",
-            "owner": "platform",
-            "status": "ACTIVE",
+            "name": policy["name"],
+            "owner": policy["owner"],
+            "status": policy["status"],
             "effective_at": state.reference_time,
             "expires_at": None,
-            "binding": {
-                "scope_level": "REPOSITORY",
-                "repository_ids": [state.identities["repository_id"]],
-                "entity_ids": [],
-                "entity_types": [],
-                "path_patterns": [],
-                "target_branches": ["main"],
-                "work_item_types": [],
-                "mandatory": True,
-            },
-            "requirements": [
-                {
-                    "requirement_id": _uuid(_state_namespace(state), "policy-requirement"),
-                    "code": "EXACT_HEAD_PROOF",
-                    "description": "Exact-head acceptance evidence is required.",
-                    "enforcement": "BLOCKING",
-                    "check_type": "EVIDENCE",
-                    "required_evidence": ["TEST_RESULT"],
-                    "required_approval": False,
-                    "required_reviewers": [],
-                    "report_sections": ["tests"],
-                }
-            ],
+            "binding": binding,
+            "requirements": requirements,
         }
 
     def _diff_payload(
         self, state: ResumeState, head: str, *, suffix: str = ""
     ) -> dict[str, object]:
-        return {
-            "access_scope_id": state.identities["access_scope_id"],
-            "base_commit": state.hashes["base_commit"],
-            "head_commit": head,
-            "title": f"Acceptance exact-head change{suffix}",
-            "description": "Bounded synthetic diff supplied through the public manual-diff API.",
-            "target_branch": "main",
-            "is_draft": False,
-            "state": "OPEN",
-            "unified_diff": (
+        change = self.case.section("change")
+        title = _string(change, "title")
+        unified_diff = change["unified_diff"]
+        if self.case.legacy_default:
+            unified_diff = (
                 "diff --git a/acceptance/candidate.py b/acceptance/candidate.py\n"
                 "--- a/acceptance/candidate.py\n"
                 "+++ b/acceptance/candidate.py\n"
                 "@@ -1,1 +1,2 @@\n"
                 " value = 1\n"
                 f"+head = '{head}'\n"
-            ),
+            )
+        return {
+            "access_scope_id": state.identities["access_scope_id"],
+            "base_commit": state.hashes["base_commit"],
+            "head_commit": head,
+            "title": f"{title}{suffix}",
+            "description": change["description"],
+            "target_branch": change["target_branch"],
+            "is_draft": change["is_draft"],
+            "state": change["state"],
+            "unified_diff": unified_diff,
         }
 
     def _submit_evidence(self, api: PublicAPI, state: ResumeState) -> list[str]:
         repository_id = state.identities["repository_id"]
         head = state.hashes["head_commit"]
-        evidence_bytes = canonical_bytes(
-            {
-                "schema_version": 1,
-                "head_sha": head,
-                "checks": [{"name": "EXACT_HEAD_PROOF", "status": "PASSED"}],
-            }
-        )
+        change = self.case.section("change")
+        pull_request_number = change["pull_request_number"]
+        evidence = self.case.section("evidence")
+        evidence_bytes = self.case.evidence_bytes
         evidence_hash = sha256_bytes(evidence_bytes)
         if "evidence_blob_id" not in state.identities:
             idempotency_key = f"acceptance-upload-{evidence_hash}"
@@ -760,19 +812,20 @@ class AcceptanceRunner:
                 authorization = api.request(
                     "POST",
                     (
-                        f"/repositories/{repository_id}/pull-requests/817/"
+                        f"/repositories/{repository_id}/pull-requests/{pull_request_number}/"
                         "evidence-upload-authorizations"
                     ),
                     payload={
                         "schema_version": "1.0",
                         "access_scope_id": state.identities["access_scope_id"],
                         "commit_sha": head,
-                        "filename": "exact-head-result.json",
+                        "filename": evidence["filename"],
                         "declared_sha256": evidence_hash,
                         "declared_size": len(evidence_bytes),
                         "idempotency_key": idempotency_key,
                     },
                     expected=frozenset({200, 201}),
+                    operation_id="createEvidenceUploadAuthorization",
                 ).payload
                 candidate = authorization.get("upload_token")
                 if isinstance(candidate, str) and candidate:
@@ -796,56 +849,61 @@ class AcceptanceRunner:
                     "X-Anva-Content-SHA256": evidence_hash,
                 },
                 expected=frozenset({201}),
+                operation_id="uploadEvidenceContent",
             ).payload
             state.identities["evidence_blob_id"] = _string(upload, "evidence_blob_id")
             self._save(state)
         instant = datetime.fromisoformat(state.reference_time.replace("Z", "+00:00"))
-        expires = instant + timedelta(days=365)
+        producer_version = __version__ if self.case.legacy_default else evidence["producer_version"]
         manifest = {
             "schema_version": "1.0",
             "manifest_id": _uuid(_state_namespace(state), "evidence-manifest"),
             "organization_id": state.identities["organization_id"],
             "repository_id": repository_id,
             "access_scope_id": state.identities["access_scope_id"],
-            "pull_request_number": 817,
+            "pull_request_number": pull_request_number,
             "work_item_revision_id": state.identities["work_item_revision_id"],
             "commit_sha": head,
             "created_at": state.reference_time,
-            "producer": "anva-acceptance-runner",
-            "producer_version": __version__,
-            "producer_mode": "MANUAL",
+            "producer": evidence["producer"],
+            "producer_version": producer_version,
+            "producer_mode": evidence["producer_mode"],
             "entries": [
                 {
                     "evidence_id": _uuid(_state_namespace(state), "evidence"),
-                    "kind": "TEST_RESULT",
-                    "name": "Exact-head public boundary acceptance",
-                    "status": "PASSED",
-                    "command": "anva acceptance start",
-                    "artifact_reference": "accepted/exact-head-result.json",
+                    "kind": evidence["kind"],
+                    "name": evidence["name"],
+                    "status": evidence["status"],
+                    "command": evidence["command"],
+                    "artifact_reference": evidence["artifact_reference"],
                     "artifact_blob_id": state.identities["evidence_blob_id"],
-                    "source_url": None,
+                    "source_url": evidence["source_url"],
                     "content_hash": evidence_hash,
                     "started_at": state.reference_time,
                     "completed_at": state.reference_time,
-                    "producer": "anva-acceptance-runner",
-                    "producer_version": __version__,
+                    "producer": evidence["producer"],
+                    "producer_version": producer_version,
                     "approval_id": None,
-                    "retention_class": "ASSURANCE_1Y",
-                    "retention_expires_at": expires.astimezone(UTC)
+                    "retention_class": evidence["retention_class"],
+                    "retention_expires_at": (
+                        instant + timedelta(days=cast(int, evidence["retention_days"]))
+                    )
+                    .astimezone(UTC)
                     .isoformat()
                     .replace("+00:00", "Z"),
-                    "limitations": ["External provider execution is outside this runner."],
-                    "criterion_codes": ["EXACT_HEAD_PROOF"],
-                    "environment": "sealed-acceptance",
-                    "scenario": "TST-007",
+                    "limitations": evidence["limitations"],
+                    "criterion_codes": evidence["criterion_codes"],
+                    "environment": evidence["environment"],
+                    "scenario": evidence["scenario"],
                 }
             ],
         }
         response = api.request(
             "POST",
-            f"/repositories/{repository_id}/pull-requests/817/evidence",
+            f"/repositories/{repository_id}/pull-requests/{pull_request_number}/evidence",
             payload=manifest,
             expected=frozenset({200, 201}),
+            operation_id="submitEvidenceManifest",
         ).payload
         state.identities["evidence_manifest_id"] = _string(response, "manifest_id")
         evidence_ids = response.get("evidence_ids")
@@ -853,6 +911,20 @@ class AcceptanceRunner:
             isinstance(item, str) for item in evidence_ids
         ):
             raise AcceptanceRunnerError("Evidence response is invalid")
+        manifest_detail = api.request(
+            "GET",
+            f"/evidence-manifests/{state.identities['evidence_manifest_id']}",
+            operation_id="getEvidenceManifest",
+        ).payload
+        if (
+            _string(manifest_detail, "id") != state.identities["evidence_manifest_id"]
+            or _string(manifest_detail, "repository_id") != repository_id
+            or manifest_detail.get("pull_request_number") != pull_request_number
+            or _string(manifest_detail, "commit_sha") != head
+            or _string(manifest_detail, "payload_hash") != _string(response, "payload_hash")
+            or manifest_detail.get("manifest") != manifest
+        ):
+            raise AcceptanceRunnerError("Persisted evidence manifest does not match submission")
         self._save(state)
         return cast(list[str], evidence_ids)
 
@@ -865,27 +937,26 @@ class AcceptanceRunner:
         *,
         trigger: str,
     ) -> dict[str, object]:
+        assurance = self.case.section("assurance")
+        raw_checks = deepcopy(assurance["deterministic_checks"])
+        checks = cast(list[dict[str, object]], raw_checks)
+        for check in checks:
+            include_evidence = check.pop("include_evidence")
+            check["evidence_ids"] = evidence_ids if include_evidence else []
         return api.request(
             "POST",
             f"/pull-request-revisions/{revision_id}/assurance-runs",
             payload={
                 "policy_version_ids": [state.identities["policy_version_id"]],
                 "reference_time": state.reference_time,
-                "deterministic_checks": [
-                    {
-                        "code": "EXACT_HEAD_PROOF",
-                        "status": "PASSED",
-                        "blocking": True,
-                        "summary": "Exact-head evidence was accepted through public boundaries.",
-                        "evidence_ids": evidence_ids,
-                    }
-                ],
+                "deterministic_checks": checks,
                 "work_item_revision_id": state.identities["work_item_revision_id"],
-                "evaluator_version": "external-acceptance-v1",
-                "prompt_version": "acceptance-review-v1",
+                "evaluator_version": assurance["evaluator_version"],
+                "prompt_version": assurance["prompt_version"],
                 "trigger_key": hashlib.sha256(trigger.encode()).hexdigest(),
             },
             expected=frozenset({200, 201}),
+            operation_id="startManualDiffAssurance",
         ).payload
 
     def start(self, *, bootstrap_secret: str | None, token: str | None) -> ResumeState:
@@ -910,17 +981,19 @@ class AcceptanceRunner:
             api, active_token = self._bootstrap(bootstrap_secret or "", state)
         mcp: MCPBoundary = StreamableHTTPMCP(self.config.mcp_url, active_token)
 
+        source_case = self.case.section("source")
         source = api.request(
             "POST",
             "/source-connections/filesystem",
             payload={
                 "repository_id": state.identities["repository_id"],
                 "access_scope_id": state.identities["access_scope_id"],
-                "external_key": f"acceptance:{self.corpus.source_fingerprint}",
-                "display_name": self.corpus.corpus_id,
+                "external_key": source_case["external_key"],
+                "display_name": source_case["display_name"],
                 "root": f"{self.config.canonical_root.as_posix()}/payload",
             },
             expected=frozenset({200, 201}),
+            operation_id="connectFilesystemSource",
         ).payload
         state.identities["source_connection_id"] = _string(source, "id")
         self._save(state)
@@ -929,6 +1002,7 @@ class AcceptanceRunner:
             f"/source-connections/{state.identities['source_connection_id']}/sync",
             payload={"scan_mode": "FULL"},
             expected=frozenset({202}),
+            operation_id="syncSourceConnection",
         ).payload
         state.identities["sync_run_id"] = _string(sync, "id")
         self._save(state)
@@ -937,14 +1011,15 @@ class AcceptanceRunner:
             state.identities["source_connection_id"],
             state.identities["sync_run_id"],
         )
+        retrieval = self.case.section("retrieval")
         search = mcp.call(
             "anva.search",
             {
                 "contract_version": "1",
                 "repository_id": state.identities["repository_id"],
                 "query": self._semantic_query(),
-                "phase": "PREPARE",
-                "limit": 50,
+                "phase": retrieval["search_phase"],
+                "limit": retrieval["search_limit"],
             },
         )
         context = mcp.call(
@@ -952,28 +1027,23 @@ class AcceptanceRunner:
             {
                 "contract_version": "1",
                 "repository_id": state.identities["repository_id"],
-                "task": (
-                    "Review an exact-head acceptance change against connected organization context"
-                ),
-                "phase": "ASSURANCE",
-                "budget": {
-                    "max_items": 50,
-                    "max_tokens": 8000,
-                    "max_bytes": 100000,
-                    "max_citations": 100,
-                },
+                "task": retrieval["context_task"],
+                "phase": retrieval["context_phase"],
+                "budget": retrieval["budget"],
             },
         )
+        canvas_case = self.case.section("canvas")
         canvas = api.request(
             "POST",
             "/canvas/query",
             payload={
                 "repository_ids": [state.identities["repository_id"]],
-                "layers": ["execution", "dependencies", "governance", "provenance"],
-                "depth": 4,
-                "node_limit": 300,
-                "edge_limit": 600,
+                "layers": canvas_case["layers"],
+                "depth": canvas_case["depth"],
+                "node_limit": canvas_case["node_limit"],
+                "edge_limit": canvas_case["edge_limit"],
             },
+            operation_id="queryOrganizationalCanvas",
         ).payload
         self._validate_semantic_journey(
             state,
@@ -987,6 +1057,7 @@ class AcceptanceRunner:
             "/work-items/import",
             payload=self._work_payload(state),
             expected=frozenset({200, 201}),
+            operation_id="importWorkItemRevision",
         ).payload
         state.identities["work_item_id"] = _string(work, "work_item_id")
         state.identities["work_item_revision_id"] = _string(work, "work_item_revision_id")
@@ -996,31 +1067,37 @@ class AcceptanceRunner:
             "/policies/import",
             payload=self._policy_payload(state),
             expected=frozenset({200, 201}),
+            operation_id="importPolicyVersion",
         ).payload
         state.identities["policy_id"] = _string(policy, "policy_id")
         state.identities["policy_version_id"] = _string(policy, "policy_version_id")
         self._save(state)
+        change = self.case.section("change")
+        pull_request_number = cast(int, change["pull_request_number"])
         api.request(
             "POST",
             "/policies/simulate",
             payload={
                 "repository_id": state.identities["repository_id"],
-                "pull_request_number": 817,
+                "pull_request_number": pull_request_number,
                 "commit_sha": state.hashes["head_commit"],
                 "policy_version_ids": [state.identities["policy_version_id"]],
                 "reference_time": state.reference_time,
-                "affected_paths": ["acceptance/candidate.py"],
-                "affected_entities": [],
-                "target_branch": "main",
+                "affected_paths": change["affected_paths"],
+                "affected_entities": change["affected_entities"],
+                "target_branch": change["target_branch"],
                 "work_item_revision_id": state.identities["work_item_revision_id"],
             },
             expected=frozenset({200, 201}),
+            operation_id="simulatePolicy",
         )
         primary = api.request(
             "POST",
-            f"/repositories/{state.identities['repository_id']}/pull-requests/817/manual-diff",
+            f"/repositories/{state.identities['repository_id']}/pull-requests/"
+            f"{pull_request_number}/manual-diff",
             payload=self._diff_payload(state, state.hashes["head_commit"]),
             expected=frozenset({200, 201}),
+            operation_id="ingestManualPullRequestDiff",
         ).payload
         state.identities["pull_request_revision_id"] = _string(primary, "pull_request_revision_id")
         state.hashes["diff_hash"] = _string(primary, "diff_hash")
@@ -1038,32 +1115,45 @@ class AcceptanceRunner:
         state.hashes["input_hash"] = _string(started, "input_hash")
         self._save(state)
 
-        probe_first = api.request(
-            "POST",
-            f"/repositories/{state.identities['repository_id']}/pull-requests/818/manual-diff",
-            payload=self._diff_payload(state, state.hashes["head_commit"], suffix=" stale probe"),
-            expected=frozenset({200, 201}),
-        ).payload
-        probe_run = self._start_assurance(
-            api,
-            state,
-            _string(probe_first, "pull_request_revision_id"),
-            [],
-            trigger=f"{state.run_id}:stale-probe",
-        )
-        state.identities["stale_probe_run_id"] = _string(probe_run, "assurance_run_id")
-        self._save(state)
-        api.request(
-            "POST",
-            f"/repositories/{state.identities['repository_id']}/pull-requests/818/manual-diff",
-            payload=self._diff_payload(state, state.hashes["new_head_commit"], suffix=" new head"),
-            expected=frozenset({201}),
-        )
-        stale = api.request(
-            "GET", f"/assurance-runs/{state.identities['stale_probe_run_id']}"
-        ).payload
-        if stale.get("state") != "STALE" or stale.get("readiness") != "STALE":
-            raise AcceptanceRunnerError("A newer head did not stale the prior assurance run")
+        stale_probe = change["stale_probe"]
+        if isinstance(stale_probe, dict):
+            probe = cast(dict[str, object], stale_probe)
+            probe_number = cast(int, probe["pull_request_number"])
+            suffix = f" {_string(probe, 'title_suffix')}"
+            probe_first = api.request(
+                "POST",
+                f"/repositories/{state.identities['repository_id']}/pull-requests/"
+                f"{probe_number}/manual-diff",
+                payload=self._diff_payload(state, state.hashes["head_commit"], suffix=suffix),
+                expected=frozenset({200, 201}),
+                operation_id="ingestManualPullRequestDiff",
+            ).payload
+            probe_run = self._start_assurance(
+                api,
+                state,
+                _string(probe_first, "pull_request_revision_id"),
+                [],
+                trigger=f"{state.run_id}:stale-probe",
+            )
+            state.identities["stale_probe_run_id"] = _string(probe_run, "assurance_run_id")
+            self._save(state)
+            api.request(
+                "POST",
+                f"/repositories/{state.identities['repository_id']}/pull-requests/"
+                f"{probe_number}/manual-diff",
+                payload=self._diff_payload(
+                    state, state.hashes["new_head_commit"], suffix=" new head"
+                ),
+                expected=frozenset({201}),
+                operation_id="ingestManualPullRequestDiff",
+            )
+            stale = api.request(
+                "GET",
+                f"/assurance-runs/{state.identities['stale_probe_run_id']}",
+                operation_id="getAssuranceRun",
+            ).payload
+            if stale.get("state") != "STALE" or stale.get("readiness") != "STALE":
+                raise AcceptanceRunnerError("A newer head did not stale the prior assurance run")
         state.status = "AWAITING_EXTERNAL_REVIEW"
         self._save(state)
         return state
@@ -1101,14 +1191,23 @@ class AcceptanceRunner:
             "POST",
             f"/repositories/{state.identities['repository_id']}/evaluator-tasks/claim",
             payload={
-                "claimant": "independent-acceptance-evaluator",
-                "lease_seconds": 3600,
+                "claimant": self.case.section("assurance")["reviewer_claimant"],
+                "lease_seconds": self.case.section("assurance")["review_lease_seconds"],
                 "claim_idempotency_key": state.hashes["review_claim_idempotency_sha256"],
+                "task_id": state.identities["evaluator_task_id"],
+                "assurance_run_id": state.identities["assurance_run_id"],
+                "input_hash": state.hashes["input_hash"],
+                "head_commit": state.hashes["head_commit"],
             },
+            operation_id="claimManualEvaluatorTask",
         ).payload
         if (
             claim.get("status") == "EMPTY"
             or _string(claim, "task_id") != state.identities["evaluator_task_id"]
+            or _string(claim, "assurance_run_id") != state.identities["assurance_run_id"]
+            or _string(claim, "input_hash") != state.hashes["input_hash"]
+            or _string(claim, "head_commit") != state.hashes["head_commit"]
+            or claim.get("status") != "CLAIMED"
         ):
             raise AcceptanceRunnerError("Independent evaluator task was not available")
         request = claim.get("request")
@@ -1190,10 +1289,26 @@ class AcceptanceRunner:
                 f"/evaluator-tasks/{state.identities['evaluator_task_id']}/submit",
                 payload={"claim_token": _string(handoff, "claim_token"), "result": result},
                 expected=frozenset({200, 201}),
+                operation_id="submitManualEvaluatorResult",
             )
             .payload
         )
-        if _string(response, "assurance_run_id") != state.identities["assurance_run_id"]:
+        api_result_digest = hashlib.sha256(
+            json.dumps(
+                result,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
+        if (
+            _string(response, "task_id") != state.identities["evaluator_task_id"]
+            or _string(response, "assurance_run_id") != state.identities["assurance_run_id"]
+            or _string(response, "input_hash") != state.hashes["input_hash"]
+            or _string(response, "head_commit") != state.hashes["head_commit"]
+            or _string(response, "result_hash") != api_result_digest
+        ):
             raise AcceptanceRunnerError("External evaluator submission returned the wrong run")
         state.identities["report_id"] = _string(response, "report_id")
         state.hashes["review_result_sha256"] = result_digest
@@ -1217,7 +1332,11 @@ class AcceptanceRunner:
             self._save(state)
             return state
         api = PublicAPI(self.config.api_url, token)
-        run = api.request("GET", f"/assurance-runs/{state.identities['assurance_run_id']}").payload
+        run = api.request(
+            "GET",
+            f"/assurance-runs/{state.identities['assurance_run_id']}",
+            operation_id="getAssuranceRun",
+        ).payload
         if (
             run.get("state") != "COMPLETED"
             or run.get("head_commit") != state.hashes["head_commit"]
@@ -1225,14 +1344,15 @@ class AcceptanceRunner:
         ):
             raise AcceptanceRunnerError("Assurance completion is not for the exact current head")
         boundary = mcp or StreamableHTTPMCP(self.config.mcp_url, token)
+        retrieval = self.case.section("retrieval")
         search = boundary.call(
             "anva.search",
             {
                 "contract_version": "1",
                 "repository_id": state.identities["repository_id"],
                 "query": self._semantic_query(),
-                "phase": "ASSURANCE",
-                "limit": 50,
+                "phase": retrieval["search_phase"],
+                "limit": retrieval["search_limit"],
             },
         )
         context = boundary.call(
@@ -1240,34 +1360,33 @@ class AcceptanceRunner:
             {
                 "contract_version": "1",
                 "repository_id": state.identities["repository_id"],
-                "task": (
-                    "Review an exact-head acceptance change against connected organization context"
-                ),
-                "phase": "ASSURANCE",
-                "budget": {
-                    "max_items": 50,
-                    "max_tokens": 8000,
-                    "max_bytes": 100000,
-                    "max_citations": 100,
-                },
+                "task": retrieval["context_task"],
+                "phase": retrieval["context_phase"],
+                "budget": retrieval["budget"],
             },
         )
+        canvas_case = self.case.section("canvas")
         canvas = api.request(
             "POST",
             "/canvas/query",
             payload={
                 "repository_ids": [state.identities["repository_id"]],
-                "layers": ["execution", "dependencies", "governance", "provenance"],
-                "depth": 4,
-                "node_limit": 300,
-                "edge_limit": 600,
+                "layers": canvas_case["layers"],
+                "depth": canvas_case["depth"],
+                "node_limit": canvas_case["node_limit"],
+                "edge_limit": canvas_case["edge_limit"],
             },
+            operation_id="queryOrganizationalCanvas",
         ).payload
         report = api.request(
-            "GET", f"/assurance-runs/{state.identities['assurance_run_id']}/report"
+            "GET",
+            f"/assurance-runs/{state.identities['assurance_run_id']}/report",
+            operation_id="getAssuranceReport",
         ).payload
         findings = api.request(
-            "GET", f"/assurance-runs/{state.identities['assurance_run_id']}/findings"
+            "GET",
+            f"/assurance-runs/{state.identities['assurance_run_id']}/findings",
+            operation_id="listAssuranceFindings",
         ).payload
         self._validate_semantic_journey(
             state,

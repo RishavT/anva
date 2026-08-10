@@ -29,6 +29,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 FROM release-builder AS wheel-builder
 COPY src ./src
+COPY contracts ./contracts
 COPY packages/anva-skills ./packages/anva-skills
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv build --python /app/.venv/bin/python --no-build-isolation --offline \
@@ -56,6 +57,7 @@ CMD ["gunicorn", "anva.config.wsgi:application", "--bind=0.0.0.0:8000", "--acces
 
 FROM base AS test
 COPY src ./src
+COPY contracts ./contracts
 COPY packages/anva-skills ./packages/anva-skills
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen
 COPY tests ./tests

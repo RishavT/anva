@@ -312,6 +312,7 @@ src/anva/entrypoints/  API-adjacent CLI, worker, and MCP process boundaries
 src/anva/templates/    Server-rendered semantic HTML
 src/anva/static/       Browser-native CSS and JavaScript
 tests/                 Unit, integration, contract, and smoke suites
+contracts/             Standalone OpenAPI, MCP, JSON Schema, examples, and acceptance protocol
 packages/anva-skills/  Portable workflow source and generated host distributions
 docs/product/          Canonical product requirements
 docs/adr/              Architecture decisions

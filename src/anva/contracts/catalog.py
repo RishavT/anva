@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Final
+from typing import Final, cast
 
 SCHEMA_VERSION: Final = "1.0"
 SCHEMA_BASE_URI: Final = "https://schemas.anva.dev/v1"
@@ -1543,7 +1543,471 @@ ACCEPTANCE_RESULT_SCHEMA["allOf"] = [
     },
 ]
 
+ACCEPTANCE_CASE_SCHEMA = versioned_schema(
+    "acceptance-case",
+    "Anva Public Acceptance Case",
+    {
+        "case_id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$",
+        },
+        "organization": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "slug": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9-]{0,79}$",
+                },
+                "name": {"type": "string", "minLength": 1, "maxLength": 300},
+                "admin_email": {"type": "string", "format": "email", "maxLength": 300},
+                "admin_display_name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                },
+                "repository_external_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                },
+                "repository_name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                },
+                "independent_reviewer_name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                },
+            },
+            "required": [
+                "slug",
+                "name",
+                "admin_email",
+                "admin_display_name",
+                "repository_external_id",
+                "repository_name",
+                "independent_reviewer_name",
+            ],
+        },
+        "source": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "external_key": {"type": "string", "minLength": 1, "maxLength": 300},
+                "display_name": {"type": "string", "minLength": 1, "maxLength": 300},
+            },
+            "required": ["external_key", "display_name"],
+        },
+        "retrieval": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "search_query": {"type": "string", "minLength": 1, "maxLength": 500},
+                "search_phase": {
+                    "type": "string",
+                    "enum": ["PREPARE", "BUILD", "PREFLIGHT", "ASSURANCE"],
+                },
+                "search_limit": {"type": "integer", "minimum": 1, "maximum": 50},
+                "context_task": {"type": "string", "minLength": 1, "maxLength": 2_000},
+                "context_phase": {
+                    "type": "string",
+                    "enum": ["PREPARE", "BUILD", "PREFLIGHT", "ASSURANCE"],
+                },
+                "budget": {"$ref": "#/$defs/context_budget"},
+            },
+            "required": [
+                "search_query",
+                "search_phase",
+                "search_limit",
+                "context_task",
+                "context_phase",
+                "budget",
+            ],
+        },
+        "canvas": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "layers": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["execution", "dependencies", "governance", "provenance"],
+                    },
+                    "minItems": 1,
+                    "maxItems": 4,
+                    "uniqueItems": True,
+                },
+                "depth": {"type": "integer", "minimum": 1, "maximum": 6},
+                "node_limit": {"type": "integer", "minimum": 1, "maximum": 500},
+                "edge_limit": {"type": "integer", "minimum": 1, "maximum": 1_000},
+            },
+            "required": ["layers", "depth", "node_limit", "edge_limit"],
+        },
+        "work_item": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "external_key": {
+                    "oneOf": [
+                        {"type": "string", "minLength": 1, "maxLength": 300},
+                        {"type": "null"},
+                    ]
+                },
+                "origin": {"type": "string", "minLength": 1, "maxLength": 100},
+                "work_type": {
+                    "type": "string",
+                    "enum": ["FEATURE", "BUG", "SECURITY", "MIGRATION", "OPERATIONS", "OTHER"],
+                },
+                "title": {"type": "string", "minLength": 1, "maxLength": 500},
+                "summary": {"type": "string", "maxLength": 20_000},
+                "status": {"type": "string", "enum": ["DRAFT", "READY", "APPROVED", "CLOSED"]},
+                "source_references": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1, "maxLength": 1_000},
+                    "maxItems": 500,
+                    "uniqueItems": True,
+                },
+                "requirements": {
+                    "type": "array",
+                    "items": {"$ref": "#/$defs/work_requirement"},
+                    "minItems": 1,
+                    "maxItems": 500,
+                },
+                "acceptance_criteria": {
+                    "type": "array",
+                    "items": {"$ref": "#/$defs/work_criterion"},
+                    "minItems": 1,
+                    "maxItems": 500,
+                },
+            },
+            "required": [
+                "external_key",
+                "origin",
+                "work_type",
+                "title",
+                "summary",
+                "status",
+                "source_references",
+                "requirements",
+                "acceptance_criteria",
+            ],
+        },
+        "policy": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "name": {"type": "string", "minLength": 1, "maxLength": 300},
+                "owner": {"type": "string", "minLength": 1, "maxLength": 300},
+                "status": {"type": "string", "enum": ["DRAFT", "ACTIVE", "DISABLED"]},
+                "binding": {"$ref": "#/$defs/case_policy_binding"},
+                "requirements": {
+                    "type": "array",
+                    "items": {"$ref": "#/$defs/case_policy_requirement"},
+                    "minItems": 1,
+                    "maxItems": 500,
+                },
+            },
+            "required": ["name", "owner", "status", "binding", "requirements"],
+        },
+        "change": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "pull_request_number": {"type": "integer", "minimum": 1},
+                "base_commit": COMMIT_FIELD,
+                "head_commit": COMMIT_FIELD,
+                "title": {"type": "string", "minLength": 1, "maxLength": 1_000},
+                "description": {"type": "string", "maxLength": 50_000},
+                "target_branch": {"type": "string", "minLength": 1, "maxLength": 300},
+                "is_draft": {"type": "boolean"},
+                "state": {"type": "string", "enum": ["OPEN", "MERGED", "CLOSED"]},
+                "unified_diff": {"type": "string", "minLength": 1, "maxLength": 1_000_000},
+                "affected_paths": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1, "maxLength": 500},
+                    "maxItems": 1_000,
+                    "uniqueItems": True,
+                },
+                "affected_entities": {
+                    "type": "array",
+                    "items": {"$ref": "#/$defs/affected_entity"},
+                    "maxItems": 1_000,
+                },
+                "stale_probe": {
+                    "oneOf": [
+                        {"$ref": "#/$defs/stale_probe"},
+                        {"type": "null"},
+                    ]
+                },
+            },
+            "required": [
+                "pull_request_number",
+                "base_commit",
+                "head_commit",
+                "title",
+                "description",
+                "target_branch",
+                "is_draft",
+                "state",
+                "unified_diff",
+                "affected_paths",
+                "affected_entities",
+                "stale_probe",
+            ],
+        },
+        "evidence": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "filename": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^(?!\\.{1,2}$)(?!.*[ .]$)[^/\\\\:\\x00-\\x1f\\x7f]+$",
+                },
+                "content_base64": {
+                    "type": "string",
+                    "contentEncoding": "base64",
+                    "pattern": "^[A-Za-z0-9+/]*={0,2}$",
+                    "minLength": 4,
+                    "maxLength": 5_464,
+                },
+                "kind": {"type": "string", "enum": EVIDENCE_KINDS},
+                "name": {"type": "string", "minLength": 1, "maxLength": 300},
+                "status": {"type": "string", "enum": ["PASSED", "FAILED", "UNKNOWN"]},
+                "command": {"type": "string", "maxLength": 2_000},
+                "artifact_reference": {
+                    "type": "string",
+                    "maxLength": 2_000,
+                    "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*\\x00).*$",
+                },
+                "source_url": {
+                    "oneOf": [
+                        {"type": "string", "format": "uri", "maxLength": 2_000},
+                        {"type": "null"},
+                    ]
+                },
+                "producer": {"type": "string", "minLength": 1, "maxLength": 200},
+                "producer_version": {"type": "string", "minLength": 1, "maxLength": 100},
+                "producer_mode": {"type": "string", "enum": ["MANUAL", "CI"]},
+                "retention_class": {"type": "string", "minLength": 1, "maxLength": 100},
+                "retention_days": {"type": "integer", "minimum": 1, "maximum": 3_650},
+                "limitations": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1, "maxLength": 2_000},
+                    "maxItems": 100,
+                },
+                "criterion_codes": {
+                    "type": "array",
+                    "items": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,63}$"},
+                    "minItems": 1,
+                    "maxItems": 500,
+                    "uniqueItems": True,
+                },
+                "environment": {"type": "string", "maxLength": 200},
+                "scenario": {"type": "string", "minLength": 1, "maxLength": 500},
+            },
+            "required": [
+                "filename",
+                "content_base64",
+                "kind",
+                "name",
+                "status",
+                "command",
+                "artifact_reference",
+                "source_url",
+                "producer",
+                "producer_version",
+                "producer_mode",
+                "retention_class",
+                "retention_days",
+                "limitations",
+                "criterion_codes",
+                "environment",
+                "scenario",
+            ],
+        },
+        "assurance": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "deterministic_checks": {
+                    "type": "array",
+                    "items": {"$ref": "#/$defs/case_deterministic_check"},
+                    "minItems": 1,
+                    "maxItems": 200,
+                },
+                "evaluator_version": {"type": "string", "minLength": 1, "maxLength": 100},
+                "prompt_version": {"type": "string", "minLength": 1, "maxLength": 100},
+                "reviewer_claimant": {"type": "string", "minLength": 1, "maxLength": 200},
+                "review_lease_seconds": {"type": "integer", "minimum": 60, "maximum": 3_600},
+            },
+            "required": [
+                "deterministic_checks",
+                "evaluator_version",
+                "prompt_version",
+                "reviewer_claimant",
+                "review_lease_seconds",
+            ],
+        },
+        "semantic_assertions": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "source_paths": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1_000,
+                        "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)[^\\x00]+$",
+                    },
+                    "minItems": 1,
+                    "maxItems": 50,
+                    "uniqueItems": True,
+                },
+                "require_source_backed_canvas": {"type": "boolean", "const": True},
+            },
+            "required": ["source_paths", "require_source_backed_canvas"],
+        },
+    },
+    [
+        "case_id",
+        "organization",
+        "source",
+        "retrieval",
+        "canvas",
+        "work_item",
+        "policy",
+        "change",
+        "evidence",
+        "assurance",
+        "semantic_assertions",
+    ],
+    definitions={
+        "context_budget": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "max_items": {"type": "integer", "minimum": 1, "maximum": 100},
+                "max_tokens": {"type": "integer", "minimum": 1, "maximum": 20_000},
+                "max_bytes": {"type": "integer", "minimum": 1, "maximum": 250_000},
+                "max_citations": {"type": "integer", "minimum": 1, "maximum": 200},
+            },
+            "required": ["max_items", "max_tokens", "max_bytes", "max_citations"],
+        },
+        "work_requirement": deepcopy(
+            cast(dict[str, object], WORK_ITEM_IMPORT_SCHEMA["$defs"])["requirement"]
+        ),
+        "work_criterion": deepcopy(
+            cast(dict[str, object], WORK_ITEM_IMPORT_SCHEMA["$defs"])["acceptance_criterion"]
+        ),
+        "case_policy_binding": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                name: deepcopy(cast(dict[str, object], POLICY_BINDING["properties"])[name])
+                for name in (
+                    "scope_level",
+                    "mandatory",
+                    "entity_ids",
+                    "entity_types",
+                    "path_patterns",
+                    "work_item_types",
+                    "target_branches",
+                )
+            },
+            "required": [
+                "scope_level",
+                "mandatory",
+                "entity_ids",
+                "entity_types",
+                "path_patterns",
+                "work_item_types",
+                "target_branches",
+            ],
+        },
+        "case_policy_requirement": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                name: deepcopy(cast(dict[str, object], POLICY_REQUIREMENT["properties"])[name])
+                for name in (
+                    "code",
+                    "description",
+                    "enforcement",
+                    "check_type",
+                    "required_evidence",
+                    "required_reviewers",
+                    "required_approval",
+                    "report_sections",
+                )
+            },
+            "required": [
+                "code",
+                "description",
+                "enforcement",
+                "check_type",
+                "required_evidence",
+                "required_reviewers",
+                "required_approval",
+                "report_sections",
+            ],
+        },
+        "affected_entity": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "id": UUID_FIELD,
+                "type": {
+                    "type": "string",
+                    "enum": [
+                        "TEAM",
+                        "REPOSITORY",
+                        "SERVICE",
+                        "COMPONENT",
+                        "API",
+                        "DATA_ASSET",
+                        "DECISION",
+                        "POLICY",
+                        "REQUIREMENT",
+                        "UNKNOWN",
+                    ],
+                },
+            },
+            "required": ["id", "type"],
+        },
+        "stale_probe": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "pull_request_number": {"type": "integer", "minimum": 1},
+                "new_head_commit": COMMIT_FIELD,
+                "title_suffix": {"type": "string", "minLength": 1, "maxLength": 100},
+            },
+            "required": ["pull_request_number", "new_head_commit", "title_suffix"],
+        },
+        "case_deterministic_check": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "code": {"type": "string", "minLength": 1, "maxLength": 100},
+                "status": {"type": "string", "enum": ["PASSED", "FAILED", "NOT_AVAILABLE"]},
+                "blocking": {"type": "boolean"},
+                "summary": {"type": "string", "minLength": 1, "maxLength": 2_000},
+                "include_evidence": {"type": "boolean"},
+            },
+            "required": ["code", "status", "blocking", "summary", "include_evidence"],
+        },
+    },
+)
+
 SCHEMAS: Final[dict[str, dict[str, object]]] = {
+    "acceptance-case": ACCEPTANCE_CASE_SCHEMA,
     "acceptance-corpus": ACCEPTANCE_CORPUS_SCHEMA,
     "acceptance-result": ACCEPTANCE_RESULT_SCHEMA,
     "context-packet": CONTEXT_PACKET_SCHEMA,
@@ -1630,6 +2094,165 @@ RETRIEVAL_CITATION_EXAMPLE: Final[dict[str, object]] = {
 }
 
 EXAMPLES: Final[dict[str, dict[str, object]]] = {
+    "acceptance-case": {
+        "schema_version": SCHEMA_VERSION,
+        "case_id": "tst-009.scn-ember",
+        "organization": {
+            "slug": "anva-tst-009-ember",
+            "name": "TST-009 Ember Organization",
+            "admin_email": "operator@ember.invalid",
+            "admin_display_name": "TST-009 initiator",
+            "repository_external_id": "github:synthetic/ember",
+            "repository_name": "ember",
+            "independent_reviewer_name": "TST-009 independent reviewer",
+        },
+        "source": {
+            "external_key": "tst-009:ember:knowledge",
+            "display_name": "Ember organizational knowledge",
+        },
+        "retrieval": {
+            "search_query": "checkout ownership exact-head evidence policy",
+            "search_phase": "PREPARE",
+            "search_limit": 50,
+            "context_task": "Review the Ember change against authorized organization context.",
+            "context_phase": "ASSURANCE",
+            "budget": {
+                "max_items": 50,
+                "max_tokens": 8_000,
+                "max_bytes": 100_000,
+                "max_citations": 100,
+            },
+        },
+        "canvas": {
+            "layers": ["execution", "dependencies", "governance", "provenance"],
+            "depth": 4,
+            "node_limit": 300,
+            "edge_limit": 600,
+        },
+        "work_item": {
+            "external_key": "EMBER-17",
+            "origin": "sealed-acceptance",
+            "work_type": "FEATURE",
+            "title": "Bound checkout retry behavior",
+            "summary": "Validate the exact Ember head against connected policy and evidence.",
+            "status": "READY",
+            "source_references": ["tst-009:ember:requirements"],
+            "requirements": [
+                {
+                    "code": "REQ_EXACT_HEAD",
+                    "normalized_text": "Readiness uses evidence for the exact Ember head.",
+                    "origin": "acceptance-case",
+                    "owner": "payments-platform",
+                    "status": "CONFIRMED",
+                    "source_references": ["tst-009:ember:requirements"],
+                    "related_entity_ids": [],
+                    "requires_approval": False,
+                }
+            ],
+            "acceptance_criteria": [
+                {
+                    "code": "TESTS_PASS",
+                    "requirement_code": "REQ_EXACT_HEAD",
+                    "normalized_text": "The exact-head tests pass.",
+                    "required_evidence_types": ["TEST_RESULT"],
+                    "manual_approval_allowed": False,
+                }
+            ],
+        },
+        "policy": {
+            "name": "Ember exact-head policy",
+            "owner": "payments-platform",
+            "status": "ACTIVE",
+            "binding": {
+                "scope_level": "REPOSITORY",
+                "mandatory": True,
+                "entity_ids": [],
+                "entity_types": [],
+                "path_patterns": ["src/**"],
+                "work_item_types": ["FEATURE"],
+                "target_branches": ["main"],
+            },
+            "requirements": [
+                {
+                    "code": "TESTS_PASS",
+                    "description": "Exact-head tests are required.",
+                    "enforcement": "BLOCKING",
+                    "check_type": "EVIDENCE",
+                    "required_evidence": ["TEST_RESULT"],
+                    "required_reviewers": [],
+                    "required_approval": False,
+                    "report_sections": ["tests"],
+                }
+            ],
+        },
+        "change": {
+            "pull_request_number": 17,
+            "base_commit": "c" * 40,
+            "head_commit": "d" * 40,
+            "title": "Bound checkout retry behavior",
+            "description": "A public, bounded manual diff for Ember.",
+            "target_branch": "main",
+            "is_draft": False,
+            "state": "OPEN",
+            "unified_diff": (
+                "diff --git a/src/checkout.py b/src/checkout.py\n"
+                "--- a/src/checkout.py\n"
+                "+++ b/src/checkout.py\n"
+                "@@ -1 +1 @@\n"
+                "-retry = 2\n"
+                "+retry = 3\n"
+            ),
+            "affected_paths": ["src/checkout.py"],
+            "affected_entities": [],
+            "stale_probe": {
+                "pull_request_number": 18,
+                "new_head_commit": "e" * 40,
+                "title_suffix": "stale probe",
+            },
+        },
+        "evidence": {
+            "filename": "exact-head-tests.json",
+            "content_base64": (
+                "eyJjaGVja3MiOlt7Im5hbWUiOiJURVNUU19QQVNTIiwic3RhdHVzIjoiUEFTU0VEIn1d"
+                "LCJoZWFkX3NoYSI6ImRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZG"
+                "RkZGQiLCJzY2hlbWFfdmVyc2lvbiI6MX0K"
+            ),
+            "kind": "TEST_RESULT",
+            "name": "Ember exact-head tests",
+            "status": "PASSED",
+            "command": "public acceptance case evidence",
+            "artifact_reference": "accepted/exact-head-tests.json",
+            "source_url": None,
+            "producer": "anva-acceptance-runner",
+            "producer_version": "1",
+            "producer_mode": "MANUAL",
+            "retention_class": "ASSURANCE_1Y",
+            "retention_days": 365,
+            "limitations": ["External provider execution is outside this case."],
+            "criterion_codes": ["TESTS_PASS"],
+            "environment": "sealed-acceptance",
+            "scenario": "tst-009.scn-ember",
+        },
+        "assurance": {
+            "deterministic_checks": [
+                {
+                    "code": "TESTS_PASS",
+                    "status": "PASSED",
+                    "blocking": True,
+                    "summary": "Exact-head evidence was accepted through public boundaries.",
+                    "include_evidence": True,
+                }
+            ],
+            "evaluator_version": "external-acceptance-v1",
+            "prompt_version": "acceptance-review-v1",
+            "reviewer_claimant": "independent-acceptance-evaluator",
+            "review_lease_seconds": 3_600,
+        },
+        "semantic_assertions": {
+            "source_paths": ["organization/decision.md"],
+            "require_source_backed_canvas": True,
+        },
+    },
     "acceptance-corpus": {
         "schema_version": SCHEMA_VERSION,
         "corpus_id": "halcyon-messy-organization-tst-008",

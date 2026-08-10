@@ -338,18 +338,39 @@ def test_exact_replay_manual_queue_report_and_new_revision_staleness() -> None:
         repository_id=repository.id,
         claimant="fresh-review-agent",
         claim_idempotency_key="9" * 64,
+        task_id=started.evaluator_task.id,
+        assurance_run_id=started.run.id,
+        input_hash=started.run.input_hash,
+        head_commit=started.run.head_commit,
     )
     assert claim is not None
+    assert claim.replayed is False
     recovered_claim = claim_evaluator_task(
         actor=reviewer,
         repository_id=repository.id,
         claimant="fresh-review-agent",
         claim_idempotency_key="9" * 64,
+        task_id=started.evaluator_task.id,
+        assurance_run_id=started.run.id,
+        input_hash=started.run.input_hash,
+        head_commit=started.run.head_commit,
     )
     assert recovered_claim is not None
     assert recovered_claim.task.id == claim.task.id
     assert recovered_claim.task.attempt_count == claim.task.attempt_count
     assert recovered_claim.claim_token != claim.claim_token
+    assert recovered_claim.replayed is True
+    with pytest.raises(LeaseConflictError, match="idempotency key"):
+        claim_evaluator_task(
+            actor=reviewer,
+            repository_id=repository.id,
+            claimant="fresh-review-agent",
+            claim_idempotency_key="9" * 64,
+            task_id=started.evaluator_task.id,
+            assurance_run_id=started.run.id,
+            input_hash=started.run.input_hash,
+            head_commit="f" * 40,
+        )
     claim = recovered_claim
     serialized_request = str(claim.request)
     assert "claim_token" not in serialized_request
@@ -409,6 +430,183 @@ def test_exact_replay_manual_queue_report_and_new_revision_staleness() -> None:
     )
     assert newer_completion.findings[0].id == completed.findings[0].id
     assert newer_completion.findings[0].fingerprint == completed.findings[0].fingerprint
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_exact_selector_disambiguates_two_tasks_and_fails_closed() -> None:
+    organization, repository, scope, actor = _tenant()
+    policy_version_id = _policy(organization, repository, scope, actor)
+    first_revision = _ingest(
+        actor=actor,
+        repository=repository,
+        scope=scope,
+        number=31,
+        head="b" * 40,
+    )
+    second_revision = _ingest(
+        actor=actor,
+        repository=repository,
+        scope=scope,
+        number=32,
+        head="c" * 40,
+    )
+    first = start_assurance(
+        actor=actor,
+        pull_request_revision_id=first_revision.revision.id,
+        policy_version_ids=[policy_version_id],
+        reference_time=REFERENCE_TIME,
+        deterministic_checks=_passing_checks(),
+        evaluator_version="fake-evaluator-v1",
+        trigger_key="4" * 64,
+    )
+    second = start_assurance(
+        actor=actor,
+        pull_request_revision_id=second_revision.revision.id,
+        policy_version_ids=[policy_version_id],
+        reference_time=REFERENCE_TIME,
+        deterministic_checks=_passing_checks(),
+        evaluator_version="fake-evaluator-v1",
+        trigger_key="5" * 64,
+    )
+    stale_revision = _ingest(
+        actor=actor,
+        repository=repository,
+        scope=scope,
+        number=33,
+        head="d" * 40,
+    )
+    stale_started = start_assurance(
+        actor=actor,
+        pull_request_revision_id=stale_revision.revision.id,
+        policy_version_ids=[policy_version_id],
+        reference_time=REFERENCE_TIME,
+        deterministic_checks=_passing_checks(),
+        evaluator_version="fake-evaluator-v1",
+        trigger_key="6" * 64,
+    )
+    _ingest(
+        actor=actor,
+        repository=repository,
+        scope=scope,
+        number=33,
+        head="e" * 40,
+    )
+    reviewer = _reviewer_actor(organization, label="exact-selector")
+
+    selected = claim_evaluator_task(
+        actor=reviewer,
+        repository_id=repository.id,
+        claimant="exact-selector-agent",
+        task_id=second.evaluator_task.id,
+        assurance_run_id=second.run.id,
+        input_hash=second.run.input_hash,
+        head_commit=second.run.head_commit,
+    )
+
+    assert selected is not None
+    assert selected.task.id == second.evaluator_task.id
+    assert selected.replayed is False
+    with pytest.raises(ResourceNotFoundError):
+        claim_evaluator_task(
+            actor=reviewer,
+            repository_id=repository.id,
+            claimant="stale-selector-agent",
+            task_id=stale_started.evaluator_task.id,
+            assurance_run_id=stale_started.run.id,
+            input_hash=stale_started.run.input_hash,
+            head_commit=stale_started.run.head_commit,
+        )
+    remaining = claim_evaluator_task(
+        actor=reviewer,
+        repository_id=repository.id,
+        claimant="legacy-queue-agent",
+    )
+    assert remaining is not None
+    assert remaining.task.id == first.evaluator_task.id
+
+    with pytest.raises(ValueError, match="supplied together"):
+        claim_evaluator_task(
+            actor=reviewer,
+            repository_id=repository.id,
+            claimant="partial-selector",
+            task_id=uuid.uuid4(),
+        )
+    with pytest.raises(ResourceNotFoundError):
+        claim_evaluator_task(
+            actor=reviewer,
+            repository_id=repository.id,
+            claimant="unknown-selector",
+            task_id=uuid.uuid4(),
+            assurance_run_id=uuid.uuid4(),
+            input_hash="d" * 64,
+            head_commit="e" * 40,
+        )
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_exact_claim_replay_reauthorizes_source_scope_before_rotating_token() -> None:
+    organization, repository, scope, initiator = _tenant()
+    policy_version_id = _policy(organization, repository, scope, initiator)
+    ingested = _ingest(
+        actor=initiator,
+        repository=repository,
+        scope=scope,
+        number=34,
+        head="a" * 40,
+    )
+    started = start_assurance(
+        actor=initiator,
+        pull_request_revision_id=ingested.revision.id,
+        policy_version_ids=[policy_version_id],
+        reference_time=REFERENCE_TIME,
+        deterministic_checks=_passing_checks(),
+        evaluator_version="fake-evaluator-v1",
+        trigger_key="7" * 64,
+    )
+    service, credentials = _service_reviewer_credentials(
+        organization,
+        repository,
+        scope,
+        count=1,
+    )
+    _credential, reviewer = credentials[0]
+    claim = claim_evaluator_task(
+        actor=reviewer,
+        repository_id=repository.id,
+        claimant="scope-bound-reviewer",
+        claim_idempotency_key="8" * 64,
+        task_id=started.evaluator_task.id,
+        assurance_run_id=started.run.id,
+        input_hash=started.run.input_hash,
+        head_commit=started.run.head_commit,
+    )
+    assert claim is not None
+    claim.task.refresh_from_db()
+    original_token_hash = claim.task.claim_token_hash
+    original_revision = claim.task.revision
+    AccessScopeServiceIdentity.objects.filter(
+        organization=organization,
+        access_scope=scope,
+        service_identity=service,
+    ).delete()
+
+    with pytest.raises(ResourceNotFoundError):
+        claim_evaluator_task(
+            actor=reviewer,
+            repository_id=repository.id,
+            claimant="scope-bound-reviewer",
+            claim_idempotency_key="8" * 64,
+            task_id=started.evaluator_task.id,
+            assurance_run_id=started.run.id,
+            input_hash=started.run.input_hash,
+            head_commit=started.run.head_commit,
+        )
+
+    claim.task.refresh_from_db()
+    assert claim.task.claim_token_hash == original_token_hash
+    assert claim.task.revision == original_revision
 
 
 @pytest.mark.integration
