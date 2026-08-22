@@ -26,6 +26,29 @@ SHA256: Final[dict[str, str]] = {"type": "string", "pattern": "^[a-f0-9]{64}$"}
 COMMIT: Final[dict[str, str]] = {"type": "string", "pattern": "^[a-f0-9]{40}$"}
 DATE_TIME: Final[dict[str, str]] = {"type": "string", "format": "date-time"}
 
+BOOTSTRAP_COMMON_RESPONSE_PROPERTIES: Final[dict[str, object]] = {
+    "organization_id": UUID,
+    "user_id": UUID,
+    "membership_id": UUID,
+    "repository_id": UUID,
+    "service_identity_id": UUID,
+    "access_scope_id": UUID,
+    "token_id": UUID,
+    "token": {"type": "string", "minLength": 32, "maxLength": 512},
+    "expires_at": DATE_TIME,
+    "bootstrap_request_sha256": SHA256,
+    "recovered": {"type": "boolean"},
+}
+BOOTSTRAP_COMMON_RESPONSE_REQUIRED: Final[tuple[str, ...]] = tuple(
+    BOOTSTRAP_COMMON_RESPONSE_PROPERTIES
+)
+BOOTSTRAP_REVIEWER_RESPONSE_PROPERTIES: Final[dict[str, object]] = {
+    "reviewer_service_identity_id": UUID,
+    "reviewer_token_id": UUID,
+    "reviewer_token": {"type": "string", "minLength": 32, "maxLength": 512},
+    "reviewer_expires_at": DATE_TIME,
+}
+
 
 def _closed(
     properties: dict[str, object],
@@ -42,6 +65,58 @@ def _closed(
     if one_of is not None:
         schema["oneOf"] = one_of
     return schema
+
+
+BOOTSTRAP_SCOPED_RESPONSE: Final[dict[str, object]] = _closed(
+    {
+        **deepcopy(BOOTSTRAP_COMMON_RESPONSE_PROPERTIES),
+        **deepcopy(BOOTSTRAP_REVIEWER_RESPONSE_PROPERTIES),
+        "bootstrap_mode": {
+            "type": "string",
+            "const": "SCOPED",
+            "description": "Server-derived discriminator for the scoped bootstrap request.",
+        },
+    },
+    (
+        *BOOTSTRAP_COMMON_RESPONSE_REQUIRED,
+        *BOOTSTRAP_REVIEWER_RESPONSE_PROPERTIES,
+        "bootstrap_mode",
+    ),
+)
+BOOTSTRAP_LEGACY_RESPONSE_WITH_REVIEWER: Final[dict[str, object]] = _closed(
+    {
+        **deepcopy(BOOTSTRAP_COMMON_RESPONSE_PROPERTIES),
+        **deepcopy(BOOTSTRAP_REVIEWER_RESPONSE_PROPERTIES),
+        "bootstrap_mode": {
+            "type": "string",
+            "const": "LEGACY",
+            "description": "Server-derived discriminator for a legacy bootstrap request.",
+        },
+    },
+    (
+        *BOOTSTRAP_COMMON_RESPONSE_REQUIRED,
+        *BOOTSTRAP_REVIEWER_RESPONSE_PROPERTIES,
+        "bootstrap_mode",
+    ),
+)
+BOOTSTRAP_LEGACY_RESPONSE_WITHOUT_REVIEWER: Final[dict[str, object]] = _closed(
+    {
+        **deepcopy(BOOTSTRAP_COMMON_RESPONSE_PROPERTIES),
+        "bootstrap_mode": {
+            "type": "string",
+            "const": "LEGACY",
+            "description": "Server-derived discriminator for a legacy bootstrap request.",
+        },
+    },
+    (*BOOTSTRAP_COMMON_RESPONSE_REQUIRED, "bootstrap_mode"),
+)
+BOOTSTRAP_RESPONSE: Final[dict[str, object]] = {
+    "oneOf": [
+        deepcopy(BOOTSTRAP_SCOPED_RESPONSE),
+        deepcopy(BOOTSTRAP_LEGACY_RESPONSE_WITH_REVIEWER),
+        deepcopy(BOOTSTRAP_LEGACY_RESPONSE_WITHOUT_REVIEWER),
+    ]
+}
 
 
 def _nullable(schema: Mapping[str, object]) -> dict[str, object]:
@@ -1210,6 +1285,7 @@ HTTP_OPERATION_EXAMPLES: Final[dict[str, dict[str, object]]] = {
             "expires_at": "2026-08-10T12:00:00Z",
             "bootstrap_request_sha256": "1" * 64,
             "recovered": False,
+            "bootstrap_mode": "SCOPED",
             "reviewer_service_identity_id": _ids(8),
             "reviewer_token_id": _ids(9),
             "reviewer_token": "example-only-opaque-value-never-issued-0002",
@@ -1481,6 +1557,8 @@ HTTP_OPERATION_EXAMPLES: Final[dict[str, dict[str, object]]] = {
             "reference_time": "2026-08-10T12:00:00Z",
             "deterministic_checks": [],
             "work_item_revision_id": _ids(21),
+            "reviewer_service_identity_id": _ids(8),
+            "reviewer_token_id": _ids(9),
             "evaluator_version": "external-acceptance-v1",
             "prompt_version": "acceptance-review-v1",
             "trigger_key": "a" * 64,
@@ -1603,6 +1681,7 @@ HTTP_OPERATION_EXAMPLES: Final[dict[str, dict[str, object]]] = {
 }
 
 HTTP_RESPONSE_OVERRIDES: Final[dict[str, dict[str, object]]] = {
+    "bootstrapOrganization": BOOTSTRAP_RESPONSE,
     "connectFilesystemSource": SOURCE_CONNECTION_RESPONSE,
     "syncSourceConnection": SYNC_START_RESPONSE,
     "listSourceSyncRuns": SYNC_RUNS_RESPONSE,
@@ -1816,11 +1895,20 @@ def validate_acceptance_http_response(
     operation_id: str,
     status: int,
     payload: dict[str, object],
+    *,
+    request_payload: Mapping[str, object] | None = None,
 ) -> None:
     """Fail closed when a successful public response drifts from its published contract."""
     schema = _success_response_contracts().get((operation_id, status))
     if schema is None:
         raise ValueError("Acceptance response contract is unavailable")
+    if operation_id == "bootstrapOrganization" and status == 201 and request_payload is not None:
+        if "scope" in request_payload:
+            schema = BOOTSTRAP_SCOPED_RESPONSE
+        elif "independent_reviewer_name" in request_payload:
+            schema = BOOTSTRAP_LEGACY_RESPONSE_WITH_REVIEWER
+        else:
+            schema = BOOTSTRAP_LEGACY_RESPONSE_WITHOUT_REVIEWER
     try:
         Draft202012Validator(schema, format_checker=FormatChecker()).validate(payload)
     except ValidationError as error:

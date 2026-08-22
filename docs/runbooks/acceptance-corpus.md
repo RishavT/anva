@@ -110,7 +110,13 @@ make acceptance-start
 The one-time credential file is mode `0600`; the resume record contains only allowlisted opaque
 UUIDs and hashes. With a supplied case, the bootstrap token belongs to the declared initiator and
 the reviewer token belongs to the declared reviewer; the runner does not synthesize or select any
-other principal. Load each credential into its named environment variable without printing it.
+other principal. The public bootstrap response is explicitly marked `SCOPED` or `LEGACY`; a
+`SCOPED` response is invalid unless it includes the distinct reviewer service-identity ID,
+reviewer token-record ID, one-time reviewer token, and reviewer expiry. The two non-secret IDs are
+bound into scoped assurance start, restart state, review handoff, and sealed provenance so a
+different actor or credential cannot adopt the task. Raw tokens remain only in the private
+one-time credential/handoff flow and never enter resume state or sealed results. Load each
+credential into its named environment variable without printing it.
 Use the reviewer credential only for the two reviewer phases:
 
 ```sh

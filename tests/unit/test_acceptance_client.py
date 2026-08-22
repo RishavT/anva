@@ -101,6 +101,57 @@ def test_public_api_rejects_response_from_the_other_success_status() -> None:
 
 
 @pytest.mark.unit
+def test_public_api_rejects_scoped_bootstrap_response_with_legacy_or_partial_metadata() -> None:
+    request = cast(
+        dict[str, object],
+        deepcopy(HTTP_OPERATION_EXAMPLES["bootstrapOrganization"]["request"]),
+    )
+    valid = cast(
+        dict[str, object],
+        deepcopy(HTTP_OPERATION_EXAMPLES["bootstrapOrganization"]["201"]),
+    )
+    wrong_mode = deepcopy(valid)
+    wrong_mode["bootstrap_mode"] = "LEGACY"
+    partial = deepcopy(valid)
+    partial.pop("reviewer_token_id")
+    api = PublicAPI("https://anva.invalid/api/v1")
+
+    with patch(
+        "anva.acceptance.client.urlopen",
+        side_effect=[_Response(201, valid), _Response(201, wrong_mode), _Response(201, partial)],
+    ):
+        assert (
+            api.request(
+                "POST",
+                "/bootstrap",
+                payload=request,
+                expected=frozenset({201}),
+                operation_id="bootstrapOrganization",
+            ).payload
+            == valid
+        )
+        with pytest.raises(AcceptanceBoundaryError) as wrong_mode_failure:
+            api.request(
+                "POST",
+                "/bootstrap",
+                payload=request,
+                expected=frozenset({201}),
+                operation_id="bootstrapOrganization",
+            )
+        with pytest.raises(AcceptanceBoundaryError) as partial_failure:
+            api.request(
+                "POST",
+                "/bootstrap",
+                payload=request,
+                expected=frozenset({201}),
+                operation_id="bootstrapOrganization",
+            )
+
+    assert wrong_mode_failure.value.code == "invalid_response_contract"
+    assert partial_failure.value.code == "invalid_response_contract"
+
+
+@pytest.mark.unit
 def test_acceptance_mcp_outputs_require_complete_citation_provenance() -> None:
     bundle = json.loads(rendered_artifacts()[Path("acceptance/v1/operations.json")])
     operations = {item["tool"]: item for item in bundle["mcp_operations"]}

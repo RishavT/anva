@@ -210,6 +210,13 @@ def test_bootstrap_exposes_scope_and_opt_in_independent_reviewer_once() -> None:
     created_content = cast(dict[str, object], created["content"])
     created_media = cast(dict[str, object], created_content["application/json"])
     response_schema = cast(dict[str, object], created_media["schema"])
+    if isinstance(response_schema.get("$ref"), str):
+        components = cast(dict[str, object], document["components"])
+        schemas = cast(dict[str, object], components["schemas"])
+        response_schema = cast(
+            dict[str, object],
+            schemas[cast(str, response_schema["$ref"]).rsplit("/", maxsplit=1)[-1]],
+        )
     request_branches = cast(list[dict[str, object]], request_schema["oneOf"])
     assert len(request_branches) == 2
     legacy_request = next(
@@ -224,9 +231,21 @@ def test_bootstrap_exposes_scope_and_opt_in_independent_reviewer_once() -> None:
     )
     legacy_properties = cast(dict[str, object], legacy_request["properties"])
     scoped_properties = cast(dict[str, object], scoped_request["properties"])
-    response_properties = cast(dict[str, object], response_schema["properties"])
+    response_branches = cast(list[dict[str, object]], response_schema["oneOf"])
+    assert len(response_branches) == 3
+    scoped_response = next(
+        branch
+        for branch in response_branches
+        if cast(
+            dict[str, object],
+            cast(dict[str, object], branch["properties"])["bootstrap_mode"],
+        ).get("const")
+        == "SCOPED"
+    )
+    legacy_responses = [branch for branch in response_branches if branch is not scoped_response]
+    scoped_response_properties = cast(dict[str, object], scoped_response["properties"])
 
-    assert "access_scope_id" in cast(list[str], response_schema["required"])
+    assert "access_scope_id" in cast(list[str], scoped_response["required"])
     assert legacy_request["additionalProperties"] is False
     assert "scope" not in legacy_properties
     assert "independent_reviewer_name" in legacy_properties
@@ -239,9 +258,30 @@ def test_bootstrap_exposes_scope_and_opt_in_independent_reviewer_once() -> None:
         assert cast(dict[str, object], properties["idempotency_key"])["pattern"] == (
             "^[a-f0-9]{64}$"
         )
-    assert cast(dict[str, object], response_properties["reviewer_token"])["minLength"] == 32
-    assert "bootstrap_request_sha256" in cast(list[str], response_schema["required"])
-    assert "recovered" in cast(list[str], response_schema["required"])
+    assert cast(dict[str, object], scoped_response_properties["reviewer_token"])["minLength"] == 32
+    for field in (
+        "bootstrap_mode",
+        "bootstrap_request_sha256",
+        "recovered",
+        "reviewer_service_identity_id",
+        "reviewer_token_id",
+        "reviewer_token",
+        "reviewer_expires_at",
+    ):
+        assert field in cast(list[str], scoped_response["required"])
+    assert all(branch["additionalProperties"] is False for branch in response_branches)
+    assert all(
+        cast(
+            dict[str, object],
+            cast(dict[str, object], branch["properties"])["bootstrap_mode"],
+        ).get("const")
+        == "LEGACY"
+        for branch in legacy_responses
+    )
+    assert sorted(
+        "reviewer_token" in cast(dict[str, object], branch["properties"])
+        for branch in legacy_responses
+    ) == [False, True]
     assert operation["security"] == []
     description = cast(str, operation["description"])
     assert "explicitly request closed roles" in description

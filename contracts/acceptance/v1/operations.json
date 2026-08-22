@@ -460,6 +460,7 @@
             "application/json": {
               "example": {
                 "access_scope_id": "00000000-0000-4000-8000-000000000006",
+                "bootstrap_mode": "SCOPED",
                 "bootstrap_request_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
                 "expires_at": "2026-08-10T12:00:00Z",
                 "membership_id": "00000000-0000-4000-8000-000000000003",
@@ -476,82 +477,257 @@
                 "user_id": "00000000-0000-4000-8000-000000000002"
               },
               "schema": {
-                "additionalProperties": false,
-                "properties": {
-                  "access_scope_id": {
-                    "format": "uuid",
-                    "type": "string"
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "access_scope_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "bootstrap_mode": {
+                        "const": "SCOPED",
+                        "description": "Server-derived discriminator for the scoped bootstrap request.",
+                        "type": "string"
+                      },
+                      "bootstrap_request_sha256": {
+                        "pattern": "^[a-f0-9]{64}$",
+                        "type": "string"
+                      },
+                      "expires_at": {
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      "membership_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "organization_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "recovered": {
+                        "type": "boolean"
+                      },
+                      "repository_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "reviewer_expires_at": {
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      "reviewer_service_identity_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "reviewer_token": {
+                        "maxLength": 512,
+                        "minLength": 32,
+                        "type": "string"
+                      },
+                      "reviewer_token_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "service_identity_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "token": {
+                        "maxLength": 512,
+                        "minLength": 32,
+                        "type": "string"
+                      },
+                      "token_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "user_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "organization_id",
+                      "user_id",
+                      "membership_id",
+                      "repository_id",
+                      "service_identity_id",
+                      "access_scope_id",
+                      "token_id",
+                      "token",
+                      "expires_at",
+                      "bootstrap_request_sha256",
+                      "recovered",
+                      "reviewer_service_identity_id",
+                      "reviewer_token_id",
+                      "reviewer_token",
+                      "reviewer_expires_at",
+                      "bootstrap_mode"
+                    ],
+                    "type": "object"
                   },
-                  "bootstrap_request_sha256": {
-                    "pattern": "^[a-f0-9]{64}$",
-                    "type": "string"
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "access_scope_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "bootstrap_mode": {
+                        "const": "LEGACY",
+                        "description": "Server-derived discriminator for a legacy bootstrap request.",
+                        "type": "string"
+                      },
+                      "bootstrap_request_sha256": {
+                        "pattern": "^[a-f0-9]{64}$",
+                        "type": "string"
+                      },
+                      "expires_at": {
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      "membership_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "organization_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "recovered": {
+                        "type": "boolean"
+                      },
+                      "repository_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "reviewer_expires_at": {
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      "reviewer_service_identity_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "reviewer_token": {
+                        "maxLength": 512,
+                        "minLength": 32,
+                        "type": "string"
+                      },
+                      "reviewer_token_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "service_identity_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "token": {
+                        "maxLength": 512,
+                        "minLength": 32,
+                        "type": "string"
+                      },
+                      "token_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "user_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "organization_id",
+                      "user_id",
+                      "membership_id",
+                      "repository_id",
+                      "service_identity_id",
+                      "access_scope_id",
+                      "token_id",
+                      "token",
+                      "expires_at",
+                      "bootstrap_request_sha256",
+                      "recovered",
+                      "reviewer_service_identity_id",
+                      "reviewer_token_id",
+                      "reviewer_token",
+                      "reviewer_expires_at",
+                      "bootstrap_mode"
+                    ],
+                    "type": "object"
                   },
-                  "expires_at": {
-                    "format": "date-time",
-                    "type": "string"
-                  },
-                  "membership_id": {
-                    "format": "uuid",
-                    "type": "string"
-                  },
-                  "organization_id": {
-                    "format": "uuid",
-                    "type": "string"
-                  },
-                  "recovered": {
-                    "type": "boolean"
-                  },
-                  "repository_id": {
-                    "format": "uuid",
-                    "type": "string"
-                  },
-                  "reviewer_expires_at": {
-                    "format": "date-time",
-                    "type": "string"
-                  },
-                  "reviewer_service_identity_id": {
-                    "format": "uuid",
-                    "type": "string"
-                  },
-                  "reviewer_token": {
-                    "minLength": 32,
-                    "type": "string"
-                  },
-                  "reviewer_token_id": {
-                    "format": "uuid",
-                    "type": "string"
-                  },
-                  "service_identity_id": {
-                    "format": "uuid",
-                    "type": "string"
-                  },
-                  "token": {
-                    "minLength": 32,
-                    "type": "string"
-                  },
-                  "token_id": {
-                    "format": "uuid",
-                    "type": "string"
-                  },
-                  "user_id": {
-                    "format": "uuid",
-                    "type": "string"
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "access_scope_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "bootstrap_mode": {
+                        "const": "LEGACY",
+                        "description": "Server-derived discriminator for a legacy bootstrap request.",
+                        "type": "string"
+                      },
+                      "bootstrap_request_sha256": {
+                        "pattern": "^[a-f0-9]{64}$",
+                        "type": "string"
+                      },
+                      "expires_at": {
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      "membership_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "organization_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "recovered": {
+                        "type": "boolean"
+                      },
+                      "repository_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "service_identity_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "token": {
+                        "maxLength": 512,
+                        "minLength": 32,
+                        "type": "string"
+                      },
+                      "token_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "user_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "organization_id",
+                      "user_id",
+                      "membership_id",
+                      "repository_id",
+                      "service_identity_id",
+                      "access_scope_id",
+                      "token_id",
+                      "token",
+                      "expires_at",
+                      "bootstrap_request_sha256",
+                      "recovered",
+                      "bootstrap_mode"
+                    ],
+                    "type": "object"
                   }
-                },
-                "required": [
-                  "organization_id",
-                  "user_id",
-                  "membership_id",
-                  "repository_id",
-                  "service_identity_id",
-                  "access_scope_id",
-                  "token_id",
-                  "token",
-                  "expires_at",
-                  "bootstrap_request_sha256",
-                  "recovered"
-                ],
-                "type": "object"
+                ]
               }
             }
           },
@@ -8228,11 +8404,21 @@
               ],
               "prompt_version": "acceptance-review-v1",
               "reference_time": "2026-08-10T12:00:00Z",
+              "reviewer_service_identity_id": "00000000-0000-4000-8000-000000000008",
+              "reviewer_token_id": "00000000-0000-4000-8000-000000000009",
               "trigger_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
               "work_item_revision_id": "00000000-0000-4000-8000-000000000021"
             },
             "schema": {
               "additionalProperties": false,
+              "dependentRequired": {
+                "reviewer_service_identity_id": [
+                  "reviewer_token_id"
+                ],
+                "reviewer_token_id": [
+                  "reviewer_service_identity_id"
+                ]
+              },
               "properties": {
                 "deterministic_checks": {
                   "items": {
@@ -8303,6 +8489,14 @@
                 },
                 "reference_time": {
                   "format": "date-time",
+                  "type": "string"
+                },
+                "reviewer_service_identity_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "reviewer_token_id": {
+                  "format": "uuid",
                   "type": "string"
                 },
                 "trigger_key": {

@@ -2445,6 +2445,20 @@ class EvaluatorTask(RevisionedTenantModel):
         on_delete=models.PROTECT,
         related_name="evaluator_request_tasks",
     )
+    reviewer_service_identity = models.ForeignKey(
+        "ServiceIdentity",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="bound_evaluator_tasks",
+    )
+    reviewer_token = models.ForeignKey(
+        "RepositoryAccessToken",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="bound_evaluator_tasks",
+    )
     result_artifact = models.ForeignKey(
         ImmutableArtifact,
         on_delete=models.PROTECT,
@@ -2500,6 +2514,19 @@ class EvaluatorTask(RevisionedTenantModel):
                     )
                 ),
                 name="core_evaluator_claim_selector_sha",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        reviewer_service_identity__isnull=True,
+                        reviewer_token__isnull=True,
+                    )
+                    | Q(
+                        reviewer_service_identity__isnull=False,
+                        reviewer_token__isnull=False,
+                    )
+                ),
+                name="core_evaluator_reviewer_binding_pair",
             ),
             models.CheckConstraint(
                 condition=Q(attempt_count__lte=F("max_attempts")),

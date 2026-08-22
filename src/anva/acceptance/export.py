@@ -179,6 +179,8 @@ def seal_results(
     assurance_input_sha256: str,
     reference_time_sha256: str,
     review_result_sha256: str,
+    reviewer_service_identity_id: str,
+    reviewer_token_id: str,
     search_output: Mapping[str, object],
     context_output: Mapping[str, object],
     canvas_output: Mapping[str, object],
@@ -208,6 +210,11 @@ def seal_results(
             raise AcceptanceExportError("Acceptance provenance hash is invalid")
     if not product_image_reference or len(product_image_reference) > 255:
         raise AcceptanceExportError("Acceptance image reference is invalid")
+    try:
+        uuid.UUID(reviewer_service_identity_id)
+        uuid.UUID(reviewer_token_id)
+    except ValueError as error:
+        raise AcceptanceExportError("Acceptance reviewer metadata is invalid") from error
     parent = output_root.parent.resolve()
     if not parent.is_dir() or output_root.parent.is_symlink():
         raise AcceptanceExportError("Acceptance output parent is unsafe")
@@ -302,6 +309,10 @@ def seal_results(
                     "reference_time_sha256": reference_time_sha256,
                     "assurance_input_sha256": assurance_input_sha256,
                     "external_review_result_sha256": review_result_sha256,
+                },
+                "reviewer": {
+                    "service_identity_id": reviewer_service_identity_id,
+                    "credential_id": reviewer_token_id,
                 },
                 "ranking": {
                     "order": "server-returned-rank",
@@ -412,6 +423,8 @@ def verify_sealed_results(
     assurance_input_sha256: str,
     reference_time_sha256: str,
     review_result_sha256: str,
+    reviewer_service_identity_id: str,
+    reviewer_token_id: str,
 ) -> str:
     """Verify and adopt only the exact immutable tree a prior finalize published."""
     if (
@@ -499,6 +512,10 @@ def verify_sealed_results(
             "reference_time_sha256": reference_time_sha256,
             "assurance_input_sha256": assurance_input_sha256,
             "external_review_result_sha256": review_result_sha256,
+        },
+        "reviewer": {
+            "service_identity_id": reviewer_service_identity_id,
+            "credential_id": reviewer_token_id,
         },
     }
     if any(metadata.get(key) != value for key, value in expected_metadata.items()):

@@ -1057,6 +1057,7 @@ def bootstrap(request: HttpRequest) -> JsonResponse:
         "expires_at": result.issued_token.record.expires_at.isoformat(),
         "bootstrap_request_sha256": result.request_sha256,
         "recovered": result.recovered,
+        "bootstrap_mode": "SCOPED" if "scope" in payload else "LEGACY",
     }
     if result.reviewer_service_identity is not None and result.reviewer_issued_token is not None:
         response.update(
@@ -1905,6 +1906,8 @@ def assurance_start(
                 "evaluator_version",
                 "prompt_version",
                 "trigger_key",
+                "reviewer_service_identity_id",
+                "reviewer_token_id",
             }
         ),
         required=frozenset(
@@ -1919,6 +1922,8 @@ def assurance_start(
     if not isinstance(checks, list) or not all(isinstance(item, dict) for item in checks):
         raise ValueError("deterministic_checks must be a list of objects")
     work_revision = _optional_string(payload, "work_item_revision_id")
+    reviewer_service_identity = _optional_string(payload, "reviewer_service_identity_id")
+    reviewer_token = _optional_string(payload, "reviewer_token_id")
     result = start_assurance(
         actor=_actor(request),
         pull_request_revision_id=pull_request_revision_id,
@@ -1932,6 +1937,10 @@ def assurance_start(
         ),
         prompt_version=cast(str, payload.get("prompt_version", "assurance-prompt-v1")),
         trigger_key=cast(str, payload.get("trigger_key", "")),
+        reviewer_service_identity_id=(
+            uuid.UUID(reviewer_service_identity) if reviewer_service_identity else None
+        ),
+        reviewer_token_id=uuid.UUID(reviewer_token) if reviewer_token else None,
     )
     return JsonResponse(
         {

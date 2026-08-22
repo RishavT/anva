@@ -133,7 +133,12 @@ class PublicAPI:
             raise AcceptanceBoundaryError(code, "Anva API rejected the operation", status=status)
         if operation_id is not None:
             try:
-                validate_acceptance_http_response(operation_id, status, response_payload)
+                validate_acceptance_http_response(
+                    operation_id,
+                    status,
+                    response_payload,
+                    request_payload=payload,
+                )
             except ValueError as error:
                 raise AcceptanceBoundaryError(
                     "invalid_response_contract",

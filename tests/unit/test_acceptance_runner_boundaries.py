@@ -8,7 +8,7 @@ import io
 import json
 import os
 import shutil
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
@@ -111,11 +111,16 @@ class FakeProduct:
                     "organization_id": _id(1),
                     "repository_id": _id(2),
                     "access_scope_id": _id(3),
+                    "service_identity_id": _id(6),
+                    "token_id": _id(7),
                     "token": "initiator-token-material",
+                    "reviewer_service_identity_id": _id(8),
+                    "reviewer_token_id": _id(9),
                     "reviewer_token": "reviewer-token-material",
                     "expires_at": "2026-08-04T12:00:00Z",
                     "reviewer_expires_at": "2026-08-04T12:00:00Z",
                     "bootstrap_request_sha256": request_hash,
+                    "bootstrap_mode": "SCOPED" if "scope" in payload else "LEGACY",
                     "recovered": False,
                 },
             )
@@ -243,8 +248,8 @@ class FakeProduct:
                     "claimant": "independent-acceptance-evaluator",
                     "claimed_by": {
                         "actor_type": "SERVICE",
-                        "actor_id": "independent-reviewer",
-                        "credential_id": _id(39),
+                        "actor_id": _id(8),
+                        "credential_id": _id(9),
                     },
                     "attempt": 1,
                     "lease_expires_at": "2026-08-10T13:00:00Z",
@@ -523,6 +528,8 @@ def test_case_drives_query_commits_pr_and_public_payloads(
     assert awaiting.hashes["head_commit"] == head_commit
     assert "new_head_commit" not in awaiting.hashes
     assert awaiting.hashes["case_sha256"] == runner.case.sha256
+    assert awaiting.identities["reviewer_service_identity_id"] == _id(8)
+    assert awaiting.identities["reviewer_token_id"] == _id(9)
     assert any(
         path == f"/repositories/{_id(2)}/pull-requests/{pull_request_number}/manual-diff"
         for _method, path, _token, _payload in product.calls
@@ -545,6 +552,14 @@ def test_case_drives_query_commits_pr_and_public_payloads(
     assert "admin_email" not in bootstrap
     identities = cast(dict[str, object], bootstrap["scope"])["service_identities"]
     assert isinstance(identities, list) and len(identities) == 2
+    assurance_payload = next(
+        payload
+        for method, path, _token, payload in product.calls
+        if method == "POST" and path.endswith("/assurance-runs")
+    )
+    assert assurance_payload is not None
+    assert assurance_payload["reviewer_service_identity_id"] == _id(8)
+    assert assurance_payload["reviewer_token_id"] == _id(9)
     assert product.upload_contents == [runner.case.evidence_bytes]
     inspected = inspect_evidence_upload(
         io.BytesIO(runner.case.evidence_bytes),
@@ -605,6 +620,14 @@ def test_no_case_preserves_legacy_journey_golden(
         "idempotency_key": state.hashes["bootstrap_idempotency_sha256"],
     }
     runner.start(bootstrap_secret="bootstrap-material", token=None)
+    assurance_payload = next(
+        payload
+        for method, path, _token, payload in product.calls
+        if method == "POST" and path.endswith("/assurance-runs")
+    )
+    assert assurance_payload is not None
+    assert "reviewer_service_identity_id" not in assurance_payload
+    assert "reviewer_token_id" not in assurance_payload
     assert any("pull-requests/817/" in path for _method, path, _token, _payload in product.calls)
     assert any("pull-requests/818/" in path for _method, path, _token, _payload in product.calls)
     assert json.loads(product.upload_contents[0]) == {
@@ -935,6 +958,52 @@ def test_bootstrap_crash_after_server_commit_recovers_exact_request(
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda payload: payload.update({"bootstrap_mode": "LEGACY"}),
+        lambda payload: payload.pop("reviewer_service_identity_id"),
+        lambda payload: payload.pop("reviewer_token_id"),
+        lambda payload: payload.pop("reviewer_token"),
+        lambda payload: payload.pop("reviewer_expires_at"),
+    ],
+)
+def test_runner_rejects_wrong_mode_or_incomplete_scoped_bootstrap_before_handoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: Callable[[dict[str, object]], object],
+) -> None:
+    runner, product = _runner(
+        tmp_path,
+        monkeypatch,
+        case_payload=deepcopy(EXAMPLES["acceptance-case"]),
+    )
+    original_request = product.request
+
+    def malformed_bootstrap(
+        token: str | None,
+        method: str,
+        path: str,
+        payload: dict[str, object] | None,
+        content: bytes | None,
+    ) -> APIResponse:
+        response = original_request(token, method, path, payload, content)
+        if path != "/bootstrap":
+            return response
+        malformed = deepcopy(response.payload)
+        mutation(malformed)
+        return APIResponse(response.status, malformed)
+
+    monkeypatch.setattr(product, "request", malformed_bootstrap)
+
+    with pytest.raises(AcceptanceRunnerError, match="mode|required identity"):
+        runner.start(bootstrap_secret="bootstrap-material", token=None)
+    assert load_state(runner.config.state_path).status == "BOOTSTRAP_PREPARED"
+    assert runner.config.credential_output is not None
+    assert not runner.config.credential_output.exists()
+
+
+@pytest.mark.unit
 def test_bootstrap_crash_after_handoff_reconciles_without_second_bootstrap(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -958,6 +1027,8 @@ def test_bootstrap_crash_after_handoff_reconciles_without_second_bootstrap(
 
     resumed = AcceptanceRunner(runner.config).start(bootstrap_secret=None, token=None)
     assert resumed.status == "AWAITING_EXTERNAL_REVIEW"
+    assert resumed.identities["reviewer_service_identity_id"] == _id(8)
+    assert resumed.identities["reviewer_token_id"] == _id(9)
     assert sum(path == "/bootstrap" for _method, path, _token, _body in product.calls) == 1
 
 
@@ -1012,6 +1083,15 @@ def test_review_and_finalize_crash_boundaries_are_restart_safe(
     assert claim_payloads[0] == claim_payloads[1]
 
     handoff = json.loads(handoff_path.read_bytes())
+    assert handoff["reviewer_service_identity_id"] == _id(8)
+    assert handoff["reviewer_token_id"] == _id(9)
+    claimed_state = load_state(runner.config.state_path)
+    assert (
+        claimed_state.hashes["review_claim_idempotency_sha256"]
+        == hashlib.sha256(
+            (f"review-claim:{claimed_state.run_id}:{_id(35)}:{_id(8)}:{_id(9)}").encode()
+        ).hexdigest()
+    )
     result_path = tmp_path / "external-result.json"
     result = deepcopy(EXAMPLES["evaluator-result"])
     result.update(
@@ -1087,3 +1167,44 @@ def test_review_and_finalize_crash_boundaries_are_restart_safe(
     with pytest.raises(AcceptanceExportError, match="checksum"):
         AcceptanceRunner(runner.config).finalize(token="initiator-token-material")
     assert load_state(runner.config.state_path).hashes["sealed_manifest_sha256"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("claimed_by_field", ["actor_id", "credential_id"])
+def test_review_claim_must_match_bootstrap_reviewer_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    claimed_by_field: str,
+) -> None:
+    runner, product = _runner(
+        tmp_path,
+        monkeypatch,
+        case_payload=deepcopy(EXAMPLES["acceptance-case"]),
+    )
+    runner.start(bootstrap_secret="bootstrap-material", token=None)
+    original_request = product.request
+
+    def mismatched_claim(
+        token: str | None,
+        method: str,
+        path: str,
+        payload: dict[str, object] | None,
+        content: bytes | None,
+    ) -> APIResponse:
+        response = original_request(token, method, path, payload, content)
+        if not path.endswith("/evaluator-tasks/claim"):
+            return response
+        malformed = deepcopy(response.payload)
+        claimed_by = cast(dict[str, object], malformed["claimed_by"])
+        claimed_by[claimed_by_field] = _id(99)
+        return APIResponse(response.status, malformed)
+
+    monkeypatch.setattr(product, "request", mismatched_claim)
+    handoff_path = tmp_path / "handoff" / "mismatched.json"
+    with pytest.raises(AcceptanceRunnerError, match="wrong credential"):
+        runner.create_review_handoff(
+            reviewer_token="reviewer-token-material",
+            output=handoff_path,
+        )
+    assert load_state(runner.config.state_path).status == "REVIEW_CLAIMING"
+    assert not handoff_path.exists()

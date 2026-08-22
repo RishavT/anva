@@ -8,10 +8,11 @@ import json
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from django.conf import settings
 from django.db import connection, transaction
+from django.db.models import F
 from django.utils import timezone
 
 from anva.contracts.bootstrap_scope import parse_bootstrap_scope
@@ -23,6 +24,7 @@ from anva.core.models import (
     AccessScopeRepository,
     AccessScopeServiceIdentity,
     BootstrapRecovery,
+    EvaluatorTask,
     Membership,
     Organization,
     Repository,
@@ -60,6 +62,36 @@ SHA256_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 def _bootstrap_request_sha256(payload: dict[str, object]) -> str:
     rendered = (json.dumps(payload, separators=(",", ":"), sort_keys=True) + "\n").encode()
     return hashlib.sha256(rendered).hexdigest()
+
+
+def _rebind_reviewer_tasks_after_recovery(
+    *,
+    recovery: BootstrapRecovery,
+    previous_reviewer_token_id: uuid.UUID | None,
+    now: datetime,
+) -> None:
+    """Move live bound tasks to the replacement token and invalidate old claim material."""
+    replacement = recovery.reviewer_issued_token
+    reviewer = recovery.reviewer_service_identity
+    if previous_reviewer_token_id is None or replacement is None or reviewer is None:
+        return
+    tasks = EvaluatorTask.objects.filter(
+        organization=recovery.organization,
+        repository=recovery.repository,
+        reviewer_service_identity=reviewer,
+        reviewer_token_id=previous_reviewer_token_id,
+    )
+    tasks.filter(state=EvaluatorTask.State.PENDING).update(
+        reviewer_token=replacement,
+        revision=F("revision") + 1,
+    )
+    tasks.filter(state=EvaluatorTask.State.CLAIMED).update(
+        reviewer_token=replacement,
+        claim_idempotency_sha256="",
+        claim_selector_sha256="",
+        lease_expires_at=now,
+        revision=F("revision") + 1,
+    )
 
 
 def bootstrap_local_organization(
@@ -162,6 +194,11 @@ def bootstrap_local_organization(
                 expires_at=now + timedelta(days=7),
             )
             reviewer_issued_token = None
+            previous_reviewer_token_id = (
+                recovery.reviewer_issued_token_id
+                if recovery.reviewer_issued_token is not None
+                else None
+            )
             if recovery.reviewer_service_identity is not None:
                 if (
                     recovery.reviewer_issued_token is not None
@@ -197,6 +234,11 @@ def bootstrap_local_organization(
                     "recovery_count",
                     "updated_at",
                 ]
+            )
+            _rebind_reviewer_tasks_after_recovery(
+                recovery=recovery,
+                previous_reviewer_token_id=previous_reviewer_token_id,
+                now=now,
             )
             return BootstrapResult(
                 organization=recovery.organization,

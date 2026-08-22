@@ -358,11 +358,17 @@ def openapi_document() -> dict[str, object]:
                 "maxItems": 200,
             },
             "work_item_revision_id": {"type": "string", "format": "uuid"},
+            "reviewer_service_identity_id": {"type": "string", "format": "uuid"},
+            "reviewer_token_id": {"type": "string", "format": "uuid"},
             "evaluator_version": {"type": "string", "minLength": 1, "maxLength": 100},
             "prompt_version": {"type": "string", "minLength": 1, "maxLength": 100},
             "trigger_key": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
         },
         "required": ["policy_version_ids", "reference_time", "deterministic_checks"],
+        "dependentRequired": {
+            "reviewer_service_identity_id": ["reviewer_token_id"],
+            "reviewer_token_id": ["reviewer_service_identity_id"],
+        },
     }
     evaluator_claim_request = {
         "type": "object",

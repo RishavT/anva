@@ -30,6 +30,7 @@ from anva.core.models import (
     AssuranceKnowledgeProposal,
     AssuranceReport,
     AssuranceRun,
+    BootstrapRecovery,
     ContextPacketCitation,
     ContextPacketItem,
     CriterionEvidence,
@@ -240,6 +241,82 @@ def _authorize_evaluator_source_scope(
     return authorized_actor
 
 
+def _resolve_bootstrap_reviewer_binding(
+    *,
+    actor: ActorContext,
+    repository_id: uuid.UUID,
+    reviewer_service_identity_id: uuid.UUID | None,
+    reviewer_token_id: uuid.UUID | None,
+) -> tuple[uuid.UUID | None, uuid.UUID | None]:
+    """Resolve non-secret reviewer IDs only through the caller's current bootstrap record."""
+    if (reviewer_service_identity_id is None) != (reviewer_token_id is None):
+        raise ValueError("Reviewer service identity and token IDs must be supplied together")
+    if reviewer_service_identity_id is None or reviewer_token_id is None:
+        return None, None
+    if actor.actor_type != "SERVICE" or actor.credential_id is None:
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    try:
+        initiator_service_identity_id = uuid.UUID(actor.actor_id)
+    except ValueError:
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE) from None
+    recovery = (
+        BootstrapRecovery.objects.select_related(
+            "organization",
+            "repository",
+            "service_identity",
+            "issued_token",
+            "reviewer_service_identity",
+            "reviewer_issued_token",
+        )
+        .filter(
+            organization_id=actor.organization_id,
+            repository_id=repository_id,
+            service_identity_id=initiator_service_identity_id,
+            issued_token_id=actor.credential_id,
+            reviewer_service_identity_id=reviewer_service_identity_id,
+            reviewer_issued_token_id=reviewer_token_id,
+        )
+        .first()
+    )
+    now = timezone.now()
+    reviewer = recovery.reviewer_service_identity if recovery is not None else None
+    reviewer_token = recovery.reviewer_issued_token if recovery is not None else None
+    if (
+        recovery is None
+        or reviewer is None
+        or reviewer_token is None
+        or not reviewer.is_active
+        or reviewer_token.revoked_at is not None
+        or reviewer_token.expires_at <= now
+        or reviewer_token.organization_id != actor.organization_id
+        or reviewer_token.repository_id != repository_id
+        or reviewer_token.service_identity_id != reviewer.id
+        or not isinstance(reviewer_token.allowed_actions, list)
+        or Action.ASSURANCE_REVIEW.value not in reviewer_token.allowed_actions
+    ):
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    return reviewer.id, reviewer_token.id
+
+
+def _task_reviewer_binding_matches(*, actor: ActorContext, task: EvaluatorTask) -> bool:
+    """Require the exact bootstrap reviewer identity and credential for bound tasks."""
+    reviewer_id = task.reviewer_service_identity_id
+    reviewer_token_id = task.reviewer_token_id
+    if reviewer_id is None and reviewer_token_id is None:
+        return True
+    if (
+        reviewer_id is None
+        or reviewer_token_id is None
+        or actor.actor_type != "SERVICE"
+        or actor.credential_id != reviewer_token_id
+    ):
+        return False
+    try:
+        return hmac.compare_digest(actor.actor_id, str(reviewer_id))
+    except TypeError:
+        return False
+
+
 def _create_evaluator_artifact(
     *,
     actor: ActorContext,
@@ -252,6 +329,8 @@ def _create_evaluator_artifact(
     """Persist queue output after source-boundary review authorization succeeded."""
     if task.request_artifact.access_scope_id is None:
         raise ValueError("Evaluator request artifact must have an access scope")
+    if require_claim_identity and not _task_reviewer_binding_matches(actor=actor, task=task):
+        raise LeaseConflictError("Evaluator claim is invalid or expired")
     if require_claim_identity and (
         task.claimed_by_actor_type != actor.actor_type
         or not hmac.compare_digest(task.claimed_by_actor_id, actor.actor_id)
@@ -811,6 +890,8 @@ def start_assurance(
     evaluator_version: str = DEFAULT_EVALUATOR_VERSION,
     prompt_version: str = DEFAULT_PROMPT_VERSION,
     trigger_key: str = "",
+    reviewer_service_identity_id: uuid.UUID | None = None,
+    reviewer_token_id: uuid.UUID | None = None,
 ) -> AssuranceStartResult:
     """Build exact deterministic context and enqueue one independent manual review."""
     if reference_time.tzinfo is None:
@@ -848,6 +929,12 @@ def start_assurance(
         actor=actor,
         repository_id=repository.id,
         access_scope_id=access_scope_id,
+    )
+    bound_reviewer_id, bound_reviewer_token_id = _resolve_bootstrap_reviewer_binding(
+        actor=actor,
+        repository_id=repository.id,
+        reviewer_service_identity_id=reviewer_service_identity_id,
+        reviewer_token_id=reviewer_token_id,
     )
     work_revision: WorkItemRevision | None = None
     if work_item_revision_id is not None:
@@ -940,6 +1027,11 @@ def start_assurance(
         "evaluator_version": evaluator_version,
         "prompt_version": prompt_version,
     }
+    if bound_reviewer_id is not None and bound_reviewer_token_id is not None:
+        canonical_input["reviewer_binding"] = {
+            "service_identity_id": str(bound_reviewer_id),
+            "token_id": str(bound_reviewer_token_id),
+        }
     input_digest = content_hash(canonical_input)
     existing = (
         AssuranceRun.objects.select_for_update()
@@ -957,6 +1049,13 @@ def start_assurance(
             organization_id=actor.organization_id,
             assurance_run=existing,
         )
+        if (
+            task.reviewer_service_identity_id != bound_reviewer_id
+            or task.reviewer_token_id != bound_reviewer_token_id
+        ):
+            raise IdempotencyConflictError(
+                "Assurance run is bound to a different evaluator reviewer"
+            )
         return AssuranceStartResult(existing, task, False)
 
     older_runs = list(
@@ -1126,6 +1225,8 @@ def start_assurance(
         assurance_run=run,
         repository=repository,
         request_artifact=request_artifact,
+        reviewer_service_identity_id=bound_reviewer_id,
+        reviewer_token_id=bound_reviewer_token_id,
     )
     record_transition(
         organization=organization,
@@ -1135,7 +1236,15 @@ def start_assurance(
         from_state="",
         to_state=task.state,
         revision=task.revision,
-        metadata={"content_hash": request_artifact.content_hash},
+        metadata={
+            "content_hash": request_artifact.content_hash,
+            "reviewer_service_identity_id": (
+                str(bound_reviewer_id) if bound_reviewer_id is not None else None
+            ),
+            "reviewer_token_id": (
+                str(bound_reviewer_token_id) if bound_reviewer_token_id is not None else None
+            ),
+        },
     )
     return AssuranceStartResult(run, task, True)
 
@@ -1209,6 +1318,8 @@ def claim_evaluator_task(
             .first()
         )
         if prior is not None:
+            if not _task_reviewer_binding_matches(actor=actor, task=prior):
+                raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
             _authorize_evaluator_source_scope(
                 actor=actor,
                 repository_id=repository.id,
@@ -1269,6 +1380,8 @@ def claim_evaluator_task(
         )
     exhausted_tasks = list(exhausted_queryset)
     for exhausted in exhausted_tasks:
+        if not _task_reviewer_binding_matches(actor=actor, task=exhausted):
+            continue
         if (
             exhausted.assurance_run.initiated_by_actor_type == actor.actor_type
             and hmac.compare_digest(exhausted.assurance_run.initiated_by_actor_id, actor.actor_id)
@@ -1316,6 +1429,10 @@ def claim_evaluator_task(
     excluded_task_ids: set[uuid.UUID] = set()
     task = candidates.first()
     while task is not None:
+        if not _task_reviewer_binding_matches(actor=actor, task=task):
+            excluded_task_ids.add(task.id)
+            task = candidates.exclude(id__in=excluded_task_ids).first()
+            continue
         run = task.assurance_run
         if run.initiated_by_actor_type == actor.actor_type and hmac.compare_digest(
             run.initiated_by_actor_id, actor.actor_id
@@ -2335,6 +2452,8 @@ def submit_evaluator_result(
         repository_id=task.repository_id,
         evaluator_scope=task.request_artifact.access_scope,
     )
+    if not _task_reviewer_binding_matches(actor=actor, task=task):
+        raise LeaseConflictError("Evaluator claim is invalid or expired")
     result_digest = content_hash(result)
     expected_token_hash = hashlib.sha256(claim_token.encode()).hexdigest()
     if (

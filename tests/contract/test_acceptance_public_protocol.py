@@ -567,6 +567,38 @@ def test_exact_claim_selector_is_all_or_nothing_and_response_is_identity_bound()
 
 
 @pytest.mark.contract
+def test_assurance_start_reviewer_binding_is_optional_only_as_an_exact_pair() -> None:
+    operation = _operation(openapi_document(), "startManualDiffAssurance")
+    body = cast(dict[str, object], operation["requestBody"])
+    content = cast(dict[str, object], body["content"])
+    media = cast(dict[str, object], content["application/json"])
+    schema = cast(dict[str, object], media["schema"])
+    scoped = cast(
+        dict[str, object],
+        deepcopy(HTTP_OPERATION_EXAMPLES["startManualDiffAssurance"]["request"]),
+    )
+    validator = Draft202012Validator(schema)
+
+    validator.validate(scoped)
+    for missing_field in ("reviewer_service_identity_id", "reviewer_token_id"):
+        partial = deepcopy(scoped)
+        partial.pop(missing_field)
+        with pytest.raises(ValidationError):
+            validator.validate(partial)
+
+    legacy = deepcopy(scoped)
+    legacy.pop("reviewer_service_identity_id")
+    legacy.pop("reviewer_token_id")
+    validator.validate(legacy)
+
+    unknown = deepcopy(scoped)
+    invalid_value = "must-never-enter-assurance-input"
+    unknown["reviewer_token"] = invalid_value
+    with pytest.raises(ValidationError):
+        validator.validate(unknown)
+
+
+@pytest.mark.contract
 def test_standalone_bundle_validates_without_importing_anva(tmp_path: Path) -> None:
     artifacts = rendered_artifacts()
     bundle_path = tmp_path / "operations.json"

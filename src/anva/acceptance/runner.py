@@ -638,12 +638,13 @@ class AcceptanceRunner:
     def _bootstrap(self, bootstrap_secret: str, state: ResumeState) -> tuple[PublicAPI, str]:
         if not bootstrap_secret:
             raise AcceptanceRunnerError("Bootstrap secret is required for a fresh run")
+        bootstrap_payload = self._bootstrap_payload(state)
         response = (
             PublicAPI(self.config.api_url)
             .request(
                 "POST",
                 "/bootstrap",
-                payload=self._bootstrap_payload(state),
+                payload=bootstrap_payload,
                 headers={"X-Anva-Bootstrap-Secret": bootstrap_secret},
                 expected=frozenset({201}),
                 operation_id="bootstrapOrganization",
@@ -652,11 +653,26 @@ class AcceptanceRunner:
         )
         token = _string(response, "token")
         reviewer_token = _string(response, "reviewer_token")
+        service_identity_id = _string(response, "service_identity_id")
+        token_id = _string(response, "token_id")
+        reviewer_service_identity_id = _string(response, "reviewer_service_identity_id")
+        reviewer_token_id = _string(response, "reviewer_token_id")
+        expected_bootstrap_mode = "LEGACY" if self.case.legacy_default else "SCOPED"
+        if response.get("bootstrap_mode") != expected_bootstrap_mode:
+            raise AcceptanceRunnerError("Bootstrap response mode does not match the request")
+        if reviewer_service_identity_id == service_identity_id or reviewer_token_id == token_id:
+            raise AcceptanceRunnerError("Bootstrap reviewer credential is not independent")
         if response.get("bootstrap_request_sha256") != state.hashes["bootstrap_request_sha256"]:
             raise AcceptanceRunnerError(
                 "Recovered bootstrap does not match the precommitted request"
             )
-        for key in ("organization_id", "repository_id", "access_scope_id"):
+        for key in (
+            "organization_id",
+            "repository_id",
+            "access_scope_id",
+            "reviewer_service_identity_id",
+            "reviewer_token_id",
+        ):
             state.identities[key] = _string(response, key)
         if self.config.credential_output is None:
             raise AcceptanceRunnerError("A fresh run requires a one-time credential output path")
@@ -666,9 +682,12 @@ class AcceptanceRunner:
                 "schema_version": 1,
                 "run_id": state.run_id,
                 "bootstrap_request_sha256": state.hashes["bootstrap_request_sha256"],
+                "bootstrap_mode": expected_bootstrap_mode,
                 "organization_id": state.identities["organization_id"],
                 "repository_id": state.identities["repository_id"],
                 "access_scope_id": state.identities["access_scope_id"],
+                "reviewer_service_identity_id": state.identities["reviewer_service_identity_id"],
+                "reviewer_token_id": state.identities["reviewer_token_id"],
                 "anva_token": token,
                 "reviewer_token": reviewer_token,
                 "expires_at": _string(response, "expires_at"),
@@ -690,9 +709,16 @@ class AcceptanceRunner:
             handoff.get("schema_version") != 1
             or handoff.get("run_id") != state.run_id
             or handoff.get("bootstrap_request_sha256") != state.hashes["bootstrap_request_sha256"]
+            or handoff.get("bootstrap_mode") != ("LEGACY" if self.case.legacy_default else "SCOPED")
         ):
             raise AcceptanceRunnerError("Bootstrap credential handoff does not match this run")
-        for key in ("organization_id", "repository_id", "access_scope_id"):
+        for key in (
+            "organization_id",
+            "repository_id",
+            "access_scope_id",
+            "reviewer_service_identity_id",
+            "reviewer_token_id",
+        ):
             state.identities[key] = _string(handoff, key)
         token = _string(handoff, "anva_token")
         _string(handoff, "reviewer_token")
@@ -959,18 +985,28 @@ class AcceptanceRunner:
         for check in checks:
             include_evidence = check.pop("include_evidence")
             check["evidence_ids"] = evidence_ids if include_evidence else []
+        payload: dict[str, object] = {
+            "policy_version_ids": [state.identities["policy_version_id"]],
+            "reference_time": state.reference_time,
+            "deterministic_checks": checks,
+            "work_item_revision_id": state.identities["work_item_revision_id"],
+            "evaluator_version": assurance["evaluator_version"],
+            "prompt_version": assurance["prompt_version"],
+            "trigger_key": hashlib.sha256(trigger.encode()).hexdigest(),
+        }
+        if not self.case.legacy_default:
+            payload.update(
+                {
+                    "reviewer_service_identity_id": state.identities[
+                        "reviewer_service_identity_id"
+                    ],
+                    "reviewer_token_id": state.identities["reviewer_token_id"],
+                }
+            )
         return api.request(
             "POST",
             f"/pull-request-revisions/{revision_id}/assurance-runs",
-            payload={
-                "policy_version_ids": [state.identities["policy_version_id"]],
-                "reference_time": state.reference_time,
-                "deterministic_checks": checks,
-                "work_item_revision_id": state.identities["work_item_revision_id"],
-                "evaluator_version": assurance["evaluator_version"],
-                "prompt_version": assurance["prompt_version"],
-                "trigger_key": hashlib.sha256(trigger.encode()).hexdigest(),
-            },
+            payload=payload,
             expected=frozenset({200, 201}),
             operation_id="startManualDiffAssurance",
         ).payload
@@ -1178,7 +1214,14 @@ class AcceptanceRunner:
         state = self._load_matching_state()
         if state.status == "REVIEW_CLAIMED":
             handoff = _read_secret_handoff(output)
-            if sha256_bytes(canonical_bytes(handoff)) != state.hashes.get("review_handoff_sha256"):
+            if (
+                sha256_bytes(canonical_bytes(handoff)) != state.hashes.get("review_handoff_sha256")
+                or handoff.get("run_id") != state.run_id
+                or handoff.get("task_id") != state.identities["evaluator_task_id"]
+                or handoff.get("reviewer_service_identity_id")
+                != state.identities["reviewer_service_identity_id"]
+                or handoff.get("reviewer_token_id") != state.identities["reviewer_token_id"]
+            ):
                 raise AcceptanceRunnerError(
                     "External-review handoff does not match the resume record"
                 )
@@ -1190,6 +1233,10 @@ class AcceptanceRunner:
             if (
                 recovered_handoff.get("run_id") != state.run_id
                 or recovered_handoff.get("task_id") != state.identities["evaluator_task_id"]
+                or recovered_handoff.get("reviewer_service_identity_id")
+                != state.identities["reviewer_service_identity_id"]
+                or recovered_handoff.get("reviewer_token_id")
+                != state.identities["reviewer_token_id"]
             ):
                 raise AcceptanceRunnerError("External-review handoff identity is invalid")
             state.hashes["review_handoff_sha256"] = sha256_bytes(canonical_bytes(recovered_handoff))
@@ -1198,7 +1245,11 @@ class AcceptanceRunner:
             return state
         if state.status == "AWAITING_EXTERNAL_REVIEW":
             state.hashes["review_claim_idempotency_sha256"] = sha256_bytes(
-                f"review-claim:{state.run_id}:{state.identities['evaluator_task_id']}".encode()
+                (
+                    f"review-claim:{state.run_id}:{state.identities['evaluator_task_id']}:"
+                    f"{state.identities['reviewer_service_identity_id']}:"
+                    f"{state.identities['reviewer_token_id']}"
+                ).encode()
             )
             state.status = "REVIEW_CLAIMING"
             self._save(state)
@@ -1229,10 +1280,20 @@ class AcceptanceRunner:
         request = claim.get("request")
         if not isinstance(request, dict):
             raise AcceptanceRunnerError("Independent evaluator request is invalid")
+        claimed_by = claim.get("claimed_by")
+        if (
+            not isinstance(claimed_by, dict)
+            or claimed_by.get("actor_type") != "SERVICE"
+            or claimed_by.get("actor_id") != state.identities["reviewer_service_identity_id"]
+            or claimed_by.get("credential_id") != state.identities["reviewer_token_id"]
+        ):
+            raise AcceptanceRunnerError("Independent evaluator claim used the wrong credential")
         handoff = {
             "schema_version": 1,
             "run_id": state.run_id,
             "task_id": state.identities["evaluator_task_id"],
+            "reviewer_service_identity_id": state.identities["reviewer_service_identity_id"],
+            "reviewer_token_id": state.identities["reviewer_token_id"],
             "claim_token": _string(claim, "claim_token"),
             "request": request,
         }
@@ -1251,6 +1312,9 @@ class AcceptanceRunner:
         if (
             handoff.get("run_id") != state.run_id
             or handoff.get("task_id") != state.identities["evaluator_task_id"]
+            or handoff.get("reviewer_service_identity_id")
+            != state.identities["reviewer_service_identity_id"]
+            or handoff.get("reviewer_token_id") != state.identities["reviewer_token_id"]
         ):
             raise AcceptanceRunnerError("External-review handoff identity is invalid")
         if (
@@ -1432,6 +1496,8 @@ class AcceptanceRunner:
             assurance_input_sha256=state.hashes["input_hash"],
             reference_time_sha256=state.hashes["reference_time_sha256"],
             review_result_sha256=state.hashes["review_result_sha256"],
+            reviewer_service_identity_id=state.identities["reviewer_service_identity_id"],
+            reviewer_token_id=state.identities["reviewer_token_id"],
             search_output=search,
             context_output=context,
             canvas_output=canvas,
@@ -1465,4 +1531,6 @@ class AcceptanceRunner:
             assurance_input_sha256=state.hashes["input_hash"],
             reference_time_sha256=state.hashes["reference_time_sha256"],
             review_result_sha256=state.hashes["review_result_sha256"],
+            reviewer_service_identity_id=state.identities["reviewer_service_identity_id"],
+            reviewer_token_id=state.identities["reviewer_token_id"],
         )

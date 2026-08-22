@@ -65,9 +65,10 @@ def _scoped_payload(*, suffix: str = "ember") -> dict[str, object]:
 @pytest.mark.django_db
 @override_settings(BOOTSTRAP_SECRET="acceptance-bootstrap-secret")
 def test_bootstrap_default_returns_scope_without_creating_reviewer() -> None:
+    payload = _payload(reviewer=False)
     response = Client().post(
         "/api/v1/bootstrap",
-        data=json.dumps(_payload(reviewer=False)),
+        data=json.dumps(payload),
         content_type="application/json",
         headers={"X-Anva-Bootstrap-Secret": "acceptance-bootstrap-secret"},
     )
@@ -75,7 +76,9 @@ def test_bootstrap_default_returns_scope_without_creating_reviewer() -> None:
     assert response.status_code == 201
     result = response.json()
     assert result["access_scope_id"]
+    assert result["bootstrap_mode"] == "LEGACY"
     assert "reviewer_token" not in result
+    validate_acceptance_http_response("bootstrapOrganization", 201, result, request_payload=payload)
     assert ServiceIdentity.objects.count() == 1
 
 
@@ -104,15 +107,18 @@ def test_bootstrap_rejects_fields_outside_its_closed_public_contract() -> None:
 def test_scoped_bootstrap_creates_only_explicit_records_bindings_and_action_grants(
     suffix: str,
 ) -> None:
+    payload = _scoped_payload(suffix=suffix)
     response = Client().post(
         "/api/v1/bootstrap",
-        data=json.dumps(_scoped_payload(suffix=suffix)),
+        data=json.dumps(payload),
         content_type="application/json",
         headers={"X-Anva-Bootstrap-Secret": "acceptance-bootstrap-secret"},
     )
 
     assert response.status_code == 201, response.json()
     result = response.json()
+    assert result["bootstrap_mode"] == "SCOPED"
+    validate_acceptance_http_response("bootstrapOrganization", 201, result, request_payload=payload)
     scope = AccessScope.objects.get(id=result["access_scope_id"])
     assert (scope.all_memberships, scope.all_repositories, scope.all_service_identities) == (
         False,
@@ -288,15 +294,17 @@ def test_scoped_bootstrap_recovery_reissues_only_declared_actions() -> None:
 @pytest.mark.django_db
 @override_settings(BOOTSTRAP_SECRET="acceptance-bootstrap-secret")
 def test_opt_in_reviewer_is_distinct_least_privilege_and_token_is_never_persisted() -> None:
+    payload = _payload(reviewer=True)
     response = Client().post(
         "/api/v1/bootstrap",
-        data=json.dumps(_payload(reviewer=True)),
+        data=json.dumps(payload),
         content_type="application/json",
         headers={"X-Anva-Bootstrap-Secret": "acceptance-bootstrap-secret"},
     )
 
     assert response.status_code == 201
     result = response.json()
+    assert result["bootstrap_mode"] == "LEGACY"
     assert result["reviewer_service_identity_id"] != result["service_identity_id"]
     reviewer_token = result["reviewer_token"]
     reviewer = authenticate_bearer(f"Bearer {reviewer_token}")
@@ -321,7 +329,7 @@ def test_opt_in_reviewer_is_distinct_least_privilege_and_token_is_never_persiste
     ).exists()
     stored = RepositoryAccessToken.objects.get(id=result["reviewer_token_id"])
     assert stored.token_hash != reviewer_token
-    validate_acceptance_http_response("bootstrapOrganization", 201, result)
+    validate_acceptance_http_response("bootstrapOrganization", 201, result, request_payload=payload)
     persisted = json.dumps(
         list(AuditEvent.objects.values("metadata", "actor_id", "authorization_path")),
         sort_keys=True,
