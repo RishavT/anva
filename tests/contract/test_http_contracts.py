@@ -199,6 +199,20 @@ def test_source_lifecycle_http_contracts(client: Client) -> None:
             ),
             content_type="application/json",
         )
+        connect.return_value = (source, False)
+        connection_replay = client.post(
+            "/api/v1/source-connections/filesystem",
+            data=json.dumps(
+                {
+                    "repository_id": str(repository_id),
+                    "access_scope_id": str(scope_id),
+                    "external_key": "fixture",
+                    "display_name": "Fixture",
+                    "root": "/fixtures/anva-test",
+                }
+            ),
+            content_type="application/json",
+        )
         requested = client.post(
             f"/api/v1/source-connections/{source_id}/sync",
             data=json.dumps({"scan_mode": "FULL"}),
@@ -235,6 +249,8 @@ def test_source_lifecycle_http_contracts(client: Client) -> None:
 
     assert connected.status_code == 201
     assert connected.json()["created"] is True
+    assert connection_replay.status_code == 200
+    assert connection_replay.json()["created"] is False
     assert requested.status_code == 202
     assert requested.json()["access_snapshot_id"] == str(run.access_snapshot_id)
     assert replayed.status_code == 202
@@ -244,11 +260,12 @@ def test_source_lifecycle_http_contracts(client: Client) -> None:
     assert history.json()["sync_runs"][0]["id"] == str(run_id)
     assert invalid_connected.status_code == invalid_sync.status_code == 400
     validate_acceptance_http_response("connectFilesystemSource", 201, connected.json())
+    validate_acceptance_http_response("connectFilesystemSource", 200, connection_replay.json())
     validate_acceptance_http_response("syncSourceConnection", 202, requested.json())
     validate_acceptance_http_response("syncSourceConnection", 202, replayed.json())
     validate_acceptance_http_response("listSourceSyncRuns", 200, history.json())
     assert connect.call_args.kwargs["root"] == "/fixtures/anva-test"
-    assert connect.call_count == 1
+    assert connect.call_count == 2
     assert sync.call_args.kwargs["scan_mode"] == "FULL"
     assert sync.call_count == 2
 
@@ -305,7 +322,7 @@ def test_governance_http_creation_simulation_and_submission_contracts(
         patch("anva.core.views._actor", return_value=object()),
         patch("anva.core.views.import_work_item", return_value=work_result),
         patch("anva.core.views.import_policy", return_value=policy_result),
-        patch("anva.core.views.evaluate_policy", return_value=(evaluation, True)),
+        patch("anva.core.views.evaluate_policy", return_value=(evaluation, True)) as evaluate,
         patch(
             "anva.core.views.submit_evidence_manifest",
             return_value=manifest_result,
@@ -359,9 +376,55 @@ def test_governance_http_creation_simulation_and_submission_contracts(
             data=json.dumps({"schema_version": "1.0"}),
             content_type="application/json",
         )
+        work_result.created = False
+        policy_result.created = False
+        evaluate.return_value = (evaluation, False)
+        manifest_result.created = False
+        work_replay = client.post(
+            "/api/v1/work-items/import",
+            data=json.dumps({"schema_version": "1.0"}),
+            content_type="application/json",
+        )
+        policy_replay = client.post(
+            "/api/v1/policies/import",
+            data=json.dumps({"schema_version": "1.0"}),
+            content_type="application/json",
+        )
+        simulation_replay = client.post(
+            "/api/v1/policies/simulate",
+            data=json.dumps(
+                {
+                    "repository_id": str(repository_id),
+                    "pull_request_number": 17,
+                    "commit_sha": "a" * 40,
+                    "policy_version_ids": [str(policy_version_id)],
+                    "reference_time": "2026-07-28T00:00:00Z",
+                    "affected_paths": [],
+                    "affected_entities": [],
+                    "target_branch": "main",
+                }
+            ),
+            content_type="application/json",
+        )
+        evidence_replay = client.post(
+            f"/api/v1/repositories/{repository_id}/pull-requests/17/evidence",
+            data=json.dumps({"schema_version": "1.0"}),
+            content_type="application/json",
+        )
 
     assert work.status_code == policy.status_code == simulation.status_code == 201
     assert evidence.status_code == 201
+    assert (
+        work_replay.status_code
+        == policy_replay.status_code
+        == simulation_replay.status_code
+        == evidence_replay.status_code
+        == 200
+    )
+    assert all(
+        response.json()["created"] is False
+        for response in (work_replay, policy_replay, simulation_replay, evidence_replay)
+    )
     assert invalid_simulation.status_code == 400
     assert work.json()["work_item_revision_id"] == str(work_revision_id)
     assert policy.json()["policy_version_id"] == str(policy_version_id)
@@ -371,6 +434,10 @@ def test_governance_http_creation_simulation_and_submission_contracts(
     validate_acceptance_http_response("importPolicyVersion", 201, policy.json())
     validate_acceptance_http_response("simulatePolicy", 201, simulation.json())
     validate_acceptance_http_response("submitEvidenceManifest", 201, evidence.json())
+    validate_acceptance_http_response("importWorkItemRevision", 200, work_replay.json())
+    validate_acceptance_http_response("importPolicyVersion", 200, policy_replay.json())
+    validate_acceptance_http_response("simulatePolicy", 200, simulation_replay.json())
+    validate_acceptance_http_response("submitEvidenceManifest", 200, evidence_replay.json())
 
 
 @pytest.mark.contract

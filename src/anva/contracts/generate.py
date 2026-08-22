@@ -5,15 +5,18 @@ from __future__ import annotations
 import argparse
 import json
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from pathlib import Path
 from typing import cast
 
 from jsonschema import Draft202012Validator
 
 from anva.contracts.acceptance import (
+    EVIDENCE_UPLOAD_AUTHORIZATION_RESPONSE,
     acceptance_operation_document,
     apply_acceptance_http_contracts,
 )
+from anva.contracts.bootstrap_scope import BOOTSTRAP_SCOPE_SCHEMA
 from anva.contracts.catalog import EXAMPLES, KNOWLEDGE_CHANGE, SCHEMAS
 from anva.contracts.validation import validate_payload
 from anva.mcp.contracts import TOOL_CONTRACTS, mcp_contract_document
@@ -32,57 +35,7 @@ def openapi_document() -> dict[str, object]:
     mutation_parameters: list[dict[str, object]] = [
         {"$ref": "#/components/parameters/CorrelationId"},
     ]
-    upload_authorization_response_schema: dict[str, object] = {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "authorization_id": {"type": "string", "format": "uuid"},
-            "repository_id": {"type": "string", "format": "uuid"},
-            "access_scope_id": {"type": "string", "format": "uuid"},
-            "pull_request_number": {"type": "integer", "minimum": 1},
-            "commit_sha": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
-            "declared_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
-            "declared_size": {"type": "integer", "minimum": 1, "maximum": 4_096},
-            "state": {
-                "type": "string",
-                "enum": [
-                    "ISSUED",
-                    "RECEIVING",
-                    "RECOVERING",
-                    "ACCEPTED",
-                    "REJECTED",
-                    "EXPIRED",
-                    "REVOKED",
-                ],
-            },
-            "expires_at": {"type": "string", "format": "date-time"},
-            "upload_path": {
-                "type": "string",
-                "pattern": ("^/api/v1/evidence-upload-authorizations/[a-f0-9-]{36}/content$"),
-            },
-            "upload_token": {
-                "oneOf": [
-                    {"type": "string", "minLength": 32, "maxLength": 512},
-                    {"type": "null"},
-                ]
-            },
-            "replayed": {"type": "boolean"},
-        },
-        "required": [
-            "authorization_id",
-            "repository_id",
-            "access_scope_id",
-            "pull_request_number",
-            "commit_sha",
-            "declared_sha256",
-            "declared_size",
-            "state",
-            "expires_at",
-            "upload_path",
-            "upload_token",
-            "replayed",
-        ],
-    }
+    upload_authorization_response_schema = deepcopy(EVIDENCE_UPLOAD_AUTHORIZATION_RESPONSE)
     evidence_blob_response_schema: dict[str, object] = {
         "type": "object",
         "additionalProperties": False,
@@ -459,6 +412,65 @@ def openapi_document() -> dict[str, object]:
             "result": {"$ref": "#/components/schemas/evaluator-result"},
         },
         "required": ["claim_token", "result"],
+    }
+    bootstrap_common_properties: dict[str, object] = {
+        "organization_slug": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300,
+        },
+        "organization_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300,
+        },
+        "idempotency_key": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+        },
+    }
+    bootstrap_legacy_properties = {
+        **deepcopy(bootstrap_common_properties),
+        **{
+            name: {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300,
+            }
+            for name in (
+                "admin_email",
+                "admin_display_name",
+                "repository_external_id",
+                "repository_name",
+                "independent_reviewer_name",
+            )
+        },
+    }
+    bootstrap_request: dict[str, object] = {
+        "oneOf": [
+            {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": bootstrap_legacy_properties,
+                "required": [
+                    "organization_slug",
+                    "organization_name",
+                    "admin_email",
+                    "admin_display_name",
+                    "repository_external_id",
+                    "repository_name",
+                ],
+            },
+            {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    **deepcopy(bootstrap_common_properties),
+                    "scope": deepcopy(BOOTSTRAP_SCOPE_SCHEMA),
+                },
+                "required": ["organization_slug", "organization_name", "scope"],
+            },
+        ]
     }
     finding_decision_request = {
         "type": "object",
@@ -1326,8 +1338,9 @@ def openapi_document() -> dict[str, object]:
                     "operationId": "bootstrapOrganization",
                     "description": (
                         "Create the one initial tenant and return one-time credentials. "
-                        "When independent_reviewer_name is supplied, a distinct least-privilege "
-                        "assurance reviewer credential is emitted once and stored only as a hash. "
+                        "New callers explicitly request closed roles, memberships, repositories, "
+                        "service identities, access bindings, and per-repository actions in scope. "
+                        "A deprecated flat request remains only for no-case compatibility. "
                         "An exact idempotency retry revokes and reissues only the bound "
                         "credentials."
                     ),
@@ -1343,44 +1356,7 @@ def openapi_document() -> dict[str, object]:
                     ],
                     "requestBody": {
                         "required": True,
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "type": "object",
-                                    "additionalProperties": False,
-                                    "properties": {
-                                        **{
-                                            name: {
-                                                "type": "string",
-                                                "minLength": 1,
-                                                "maxLength": 300,
-                                            }
-                                            for name in (
-                                                "organization_slug",
-                                                "organization_name",
-                                                "admin_email",
-                                                "admin_display_name",
-                                                "repository_external_id",
-                                                "repository_name",
-                                                "independent_reviewer_name",
-                                            )
-                                        },
-                                        "idempotency_key": {
-                                            "type": "string",
-                                            "pattern": "^[a-f0-9]{64}$",
-                                        },
-                                    },
-                                    "required": [
-                                        "organization_slug",
-                                        "organization_name",
-                                        "admin_email",
-                                        "admin_display_name",
-                                        "repository_external_id",
-                                        "repository_name",
-                                    ],
-                                }
-                            }
-                        },
+                        "content": {"application/json": {"schema": bootstrap_request}},
                     },
                     "responses": cast(
                         dict[str, object],

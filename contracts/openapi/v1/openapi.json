@@ -793,32 +793,282 @@
           "organization": {
             "additionalProperties": false,
             "properties": {
-              "admin_display_name": {
-                "maxLength": 300,
-                "minLength": 1,
-                "type": "string"
-              },
-              "admin_email": {
-                "format": "email",
-                "maxLength": 300,
-                "type": "string"
-              },
-              "independent_reviewer_name": {
-                "maxLength": 300,
-                "minLength": 1,
-                "type": "string"
+              "bootstrap_scope": {
+                "additionalProperties": false,
+                "properties": {
+                  "access_scope": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "membership_keys": {
+                        "items": {
+                          "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                          "type": "string"
+                        },
+                        "maxItems": 32,
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "name": {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "repository_keys": {
+                        "items": {
+                          "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                          "type": "string"
+                        },
+                        "maxItems": 100,
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "service_identity_keys": {
+                        "items": {
+                          "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                          "type": "string"
+                        },
+                        "maxItems": 32,
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "membership_keys",
+                      "repository_keys",
+                      "service_identity_keys"
+                    ],
+                    "type": "object"
+                  },
+                  "initiator_service_identity_key": {
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                    "type": "string"
+                  },
+                  "memberships": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "display_name": {
+                          "maxLength": 300,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "email": {
+                          "format": "email",
+                          "maxLength": 300,
+                          "type": "string"
+                        },
+                        "key": {
+                          "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                          "type": "string"
+                        },
+                        "role_key": {
+                          "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "email",
+                        "display_name",
+                        "role_key"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 32,
+                    "minItems": 1,
+                    "type": "array",
+                    "uniqueItems": true
+                  },
+                  "primary_membership_key": {
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                    "type": "string"
+                  },
+                  "primary_repository_key": {
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                    "type": "string"
+                  },
+                  "repositories": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "external_id": {
+                          "maxLength": 300,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "key": {
+                          "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                          "type": "string"
+                        },
+                        "name": {
+                          "maxLength": 300,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "external_id",
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 100,
+                    "minItems": 1,
+                    "type": "array",
+                    "uniqueItems": true
+                  },
+                  "reviewer_service_identity_key": {
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                    "type": "string"
+                  },
+                  "roles": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "ORG_ADMIN",
+                            "KNOWLEDGE_ADMIN",
+                            "TECHNICAL_OWNER",
+                            "PRODUCT_OWNER",
+                            "DEVELOPER",
+                            "REVIEWER",
+                            "SECURITY_REVIEWER",
+                            "VIEWER"
+                          ],
+                          "type": "string"
+                        },
+                        "key": {
+                          "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                          "type": "string"
+                        },
+                        "name": {
+                          "maxLength": 100,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "code",
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 8,
+                    "minItems": 1,
+                    "type": "array",
+                    "uniqueItems": true
+                  },
+                  "service_identities": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "grants": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "actions": {
+                                "items": {
+                                  "enum": [
+                                    "organization.view",
+                                    "membership.manage",
+                                    "repository.view",
+                                    "token.manage",
+                                    "source.view",
+                                    "source.sync",
+                                    "source.revoke",
+                                    "knowledge.view",
+                                    "knowledge.propose",
+                                    "knowledge.review",
+                                    "assurance.view",
+                                    "assurance.execute",
+                                    "assurance.review",
+                                    "audit.view",
+                                    "finding.dismiss",
+                                    "policy.override",
+                                    "work.view",
+                                    "work.manage",
+                                    "work.approve",
+                                    "policy.view",
+                                    "policy.manage",
+                                    "evidence.view",
+                                    "evidence.submit",
+                                    "search.query",
+                                    "canvas.view",
+                                    "canvas.manage",
+                                    "mcp.context",
+                                    "artifact.view",
+                                    "artifact.create",
+                                    "scope.manage",
+                                    "github.manage",
+                                    "retention.manage"
+                                  ],
+                                  "type": "string"
+                                },
+                                "maxItems": 32,
+                                "minItems": 1,
+                                "type": "array",
+                                "uniqueItems": true
+                              },
+                              "repository_key": {
+                                "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "repository_key",
+                              "actions"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 100,
+                          "minItems": 1,
+                          "type": "array",
+                          "uniqueItems": true
+                        },
+                        "key": {
+                          "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                          "type": "string"
+                        },
+                        "name": {
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "name",
+                        "grants"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 32,
+                    "minItems": 1,
+                    "type": "array",
+                    "uniqueItems": true
+                  }
+                },
+                "required": [
+                  "roles",
+                  "memberships",
+                  "repositories",
+                  "service_identities",
+                  "access_scope",
+                  "primary_membership_key",
+                  "primary_repository_key",
+                  "initiator_service_identity_key",
+                  "reviewer_service_identity_key"
+                ],
+                "type": "object"
               },
               "name": {
-                "maxLength": 300,
-                "minLength": 1,
-                "type": "string"
-              },
-              "repository_external_id": {
-                "maxLength": 300,
-                "minLength": 1,
-                "type": "string"
-              },
-              "repository_name": {
                 "maxLength": 300,
                 "minLength": 1,
                 "type": "string"
@@ -831,11 +1081,7 @@
             "required": [
               "slug",
               "name",
-              "admin_email",
-              "admin_display_name",
-              "repository_external_id",
-              "repository_name",
-              "independent_reviewer_name"
+              "bootstrap_scope"
             ],
             "type": "object"
           },
@@ -1101,7 +1347,7 @@
           "serialization": "json-text"
         }
       },
-      "acceptance-claimManualEvaluatorTask-response": {
+      "acceptance-claimManualEvaluatorTask-200-response": {
         "oneOf": [
           {
             "additionalProperties": false,
@@ -1879,6 +2125,78 @@
           }
         ]
       },
+      "acceptance-connectFilesystemSource-200-response": {
+        "additionalProperties": false,
+        "properties": {
+          "created": {
+            "const": false,
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "DRAFT",
+              "AUTHORIZING",
+              "ACTIVE",
+              "DEGRADED",
+              "REVOKED",
+              "DISABLED",
+              "FAILED"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "state",
+          "revision",
+          "created"
+        ],
+        "type": "object"
+      },
+      "acceptance-connectFilesystemSource-201-response": {
+        "additionalProperties": false,
+        "properties": {
+          "created": {
+            "const": true,
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "DRAFT",
+              "AUTHORIZING",
+              "ACTIVE",
+              "DEGRADED",
+              "REVOKED",
+              "DISABLED",
+              "FAILED"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "state",
+          "revision",
+          "created"
+        ],
+        "type": "object"
+      },
       "acceptance-connectFilesystemSource-request": {
         "additionalProperties": false,
         "properties": {
@@ -1912,41 +2230,6 @@
           "external_key",
           "display_name",
           "root"
-        ],
-        "type": "object"
-      },
-      "acceptance-connectFilesystemSource-response": {
-        "additionalProperties": false,
-        "properties": {
-          "created": {
-            "type": "boolean"
-          },
-          "id": {
-            "format": "uuid",
-            "type": "string"
-          },
-          "revision": {
-            "minimum": 1,
-            "type": "integer"
-          },
-          "state": {
-            "enum": [
-              "DRAFT",
-              "AUTHORIZING",
-              "ACTIVE",
-              "DEGRADED",
-              "REVOKED",
-              "DISABLED",
-              "FAILED"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "state",
-          "revision",
-          "created"
         ],
         "type": "object"
       },
@@ -2045,7 +2328,161 @@
         "title": "Anva Public Acceptance Corpus Manifest",
         "type": "object"
       },
-      "acceptance-getAssuranceReport-response": {
+      "acceptance-createEvidenceUploadAuthorization-200-response": {
+        "additionalProperties": false,
+        "properties": {
+          "access_scope_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "authorization_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "commit_sha": {
+            "pattern": "^[a-f0-9]{40}$",
+            "type": "string"
+          },
+          "declared_sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "declared_size": {
+            "maximum": 4096,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "pull_request_number": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "replayed": {
+            "const": true,
+            "type": "boolean"
+          },
+          "repository_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "ISSUED",
+              "RECEIVING",
+              "RECOVERING",
+              "ACCEPTED",
+              "REJECTED",
+              "EXPIRED",
+              "REVOKED"
+            ],
+            "type": "string"
+          },
+          "upload_path": {
+            "pattern": "^/api/v1/evidence-upload-authorizations/[a-f0-9-]{36}/content$",
+            "type": "string"
+          },
+          "upload_token": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "authorization_id",
+          "repository_id",
+          "access_scope_id",
+          "pull_request_number",
+          "commit_sha",
+          "declared_sha256",
+          "declared_size",
+          "state",
+          "expires_at",
+          "upload_path",
+          "upload_token",
+          "replayed"
+        ],
+        "type": "object"
+      },
+      "acceptance-createEvidenceUploadAuthorization-201-response": {
+        "additionalProperties": false,
+        "properties": {
+          "access_scope_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "authorization_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "commit_sha": {
+            "pattern": "^[a-f0-9]{40}$",
+            "type": "string"
+          },
+          "declared_sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "declared_size": {
+            "maximum": 4096,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "pull_request_number": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "replayed": {
+            "const": false,
+            "type": "boolean"
+          },
+          "repository_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "ISSUED",
+              "RECEIVING",
+              "RECOVERING",
+              "ACCEPTED",
+              "REJECTED",
+              "EXPIRED",
+              "REVOKED"
+            ],
+            "type": "string"
+          },
+          "upload_path": {
+            "pattern": "^/api/v1/evidence-upload-authorizations/[a-f0-9-]{36}/content$",
+            "type": "string"
+          },
+          "upload_token": {
+            "maxLength": 512,
+            "minLength": 32,
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorization_id",
+          "repository_id",
+          "access_scope_id",
+          "pull_request_number",
+          "commit_sha",
+          "declared_sha256",
+          "declared_size",
+          "state",
+          "expires_at",
+          "upload_path",
+          "upload_token",
+          "replayed"
+        ],
+        "type": "object"
+      },
+      "acceptance-getAssuranceReport-200-response": {
         "additionalProperties": false,
         "properties": {
           "assurance_run_id": {
@@ -2106,7 +2543,7 @@
         ],
         "type": "object"
       },
-      "acceptance-getAssuranceRun-response": {
+      "acceptance-getAssuranceRun-200-response": {
         "additionalProperties": false,
         "properties": {
           "evaluator_version": {
@@ -2199,7 +2636,7 @@
         ],
         "type": "object"
       },
-      "acceptance-getEvidenceManifest-response": {
+      "acceptance-getEvidenceManifest-200-response": {
         "additionalProperties": false,
         "properties": {
           "commit_sha": {
@@ -2508,7 +2945,7 @@
         ],
         "type": "object"
       },
-      "acceptance-importPolicyVersion-response": {
+      "acceptance-importPolicyVersion-200-response": {
         "additionalProperties": false,
         "properties": {
           "content_hash": {
@@ -2516,6 +2953,7 @@
             "type": "string"
           },
           "created": {
+            "const": false,
             "type": "boolean"
           },
           "policy_id": {
@@ -2540,7 +2978,7 @@
         ],
         "type": "object"
       },
-      "acceptance-importWorkItemRevision-response": {
+      "acceptance-importPolicyVersion-201-response": {
         "additionalProperties": false,
         "properties": {
           "content_hash": {
@@ -2548,6 +2986,40 @@
             "type": "string"
           },
           "created": {
+            "const": true,
+            "type": "boolean"
+          },
+          "policy_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "policy_version_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "version": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "policy_id",
+          "policy_version_id",
+          "version",
+          "content_hash",
+          "created"
+        ],
+        "type": "object"
+      },
+      "acceptance-importWorkItemRevision-200-response": {
+        "additionalProperties": false,
+        "properties": {
+          "content_hash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "created": {
+            "const": false,
             "type": "boolean"
           },
           "revision": {
@@ -2572,7 +3044,40 @@
         ],
         "type": "object"
       },
-      "acceptance-ingestManualPullRequestDiff-response": {
+      "acceptance-importWorkItemRevision-201-response": {
+        "additionalProperties": false,
+        "properties": {
+          "content_hash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "created": {
+            "const": true,
+            "type": "boolean"
+          },
+          "revision": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "work_item_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "work_item_revision_id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "work_item_id",
+          "work_item_revision_id",
+          "revision",
+          "content_hash",
+          "created"
+        ],
+        "type": "object"
+      },
+      "acceptance-ingestManualPullRequestDiff-200-response": {
         "additionalProperties": false,
         "properties": {
           "changed_paths": {
@@ -2621,6 +3126,7 @@
             "type": "object"
           },
           "created": {
+            "const": false,
             "type": "boolean"
           },
           "diff_artifact_id": {
@@ -2670,7 +3176,106 @@
         ],
         "type": "object"
       },
-      "acceptance-listAssuranceFindings-response": {
+      "acceptance-ingestManualPullRequestDiff-201-response": {
+        "additionalProperties": false,
+        "properties": {
+          "changed_paths": {
+            "items": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 500,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "classification_summary": {
+            "additionalProperties": false,
+            "properties": {
+              "CI": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "DEPENDENCY": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "DOCUMENTATION": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "MIGRATION": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "SECURITY_SENSITIVE": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "SOURCE": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "TEST": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "created": {
+            "const": true,
+            "type": "boolean"
+          },
+          "diff_artifact_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "diff_hash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "head_commit": {
+            "pattern": "^[a-f0-9]{40}$",
+            "type": "string"
+          },
+          "limitations": {
+            "items": {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "type": "array"
+          },
+          "pull_request_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "pull_request_revision_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pull_request_id",
+          "pull_request_revision_id",
+          "revision",
+          "head_commit",
+          "diff_artifact_id",
+          "diff_hash",
+          "changed_paths",
+          "classification_summary",
+          "limitations",
+          "created"
+        ],
+        "type": "object"
+      },
+      "acceptance-listAssuranceFindings-200-response": {
         "additionalProperties": false,
         "properties": {
           "assurance_run_id": {
@@ -2858,7 +3463,7 @@
         ],
         "type": "object"
       },
-      "acceptance-listSourceSyncRuns-response": {
+      "acceptance-listSourceSyncRuns-200-response": {
         "additionalProperties": false,
         "properties": {
           "sync_runs": {
@@ -2952,7 +3557,7 @@
         ],
         "type": "object"
       },
-      "acceptance-queryOrganizationalCanvas-response": {
+      "acceptance-queryOrganizationalCanvas-200-response": {
         "additionalProperties": false,
         "properties": {
           "annotations": {
@@ -3749,10 +4354,11 @@
         "title": "Anva Public Acceptance Result",
         "type": "object"
       },
-      "acceptance-simulatePolicy-response": {
+      "acceptance-simulatePolicy-200-response": {
         "additionalProperties": false,
         "properties": {
           "created": {
+            "const": false,
             "type": "boolean"
           },
           "input_hash": {
@@ -4104,7 +4710,363 @@
         ],
         "type": "object"
       },
-      "acceptance-startManualDiffAssurance-response": {
+      "acceptance-simulatePolicy-201-response": {
+        "additionalProperties": false,
+        "properties": {
+          "created": {
+            "const": true,
+            "type": "boolean"
+          },
+          "input_hash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "output": {
+            "additionalProperties": false,
+            "properties": {
+              "applied_overrides": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+                      "type": "string"
+                    },
+                    "override_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "reason": {
+                      "maxLength": 2000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "source": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "binding_id": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "mandatory": {
+                          "type": "boolean"
+                        },
+                        "policy_id": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "policy_version": {
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "policy_version_id": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "requirement_id": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "scope_level": {
+                          "enum": [
+                            "ORGANIZATION",
+                            "PRODUCT",
+                            "SYSTEM",
+                            "REPOSITORY",
+                            "PATH"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "policy_id",
+                        "policy_version_id",
+                        "policy_version",
+                        "binding_id",
+                        "scope_level",
+                        "mandatory",
+                        "requirement_id"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "override_id",
+                    "code",
+                    "source",
+                    "reason"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 50000,
+                "type": "array"
+              },
+              "considered_bindings": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "binding_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "matched": {
+                      "type": "boolean"
+                    },
+                    "policy_version_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "reasons": {
+                      "items": {
+                        "maxLength": 2000,
+                        "type": "string"
+                      },
+                      "maxItems": 1000,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "policy_version_id",
+                    "binding_id",
+                    "matched",
+                    "reasons"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "controls": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "check_type": {
+                      "enum": [
+                        "DETERMINISTIC",
+                        "EVIDENCE",
+                        "MODEL_REVIEW",
+                        "MANUAL_APPROVAL"
+                      ],
+                      "type": "string"
+                    },
+                    "code": {
+                      "pattern": "^[A-Z][A-Z0-9_]{2,63}$",
+                      "type": "string"
+                    },
+                    "description": {
+                      "maxLength": 10000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "enforcement": {
+                      "enum": [
+                        "BLOCKING",
+                        "ADVISORY"
+                      ],
+                      "type": "string"
+                    },
+                    "report_sections": {
+                      "items": {
+                        "maxLength": 2000,
+                        "type": "string"
+                      },
+                      "maxItems": 1000,
+                      "type": "array"
+                    },
+                    "required_approval": {
+                      "type": "boolean"
+                    },
+                    "required_evidence": {
+                      "items": {
+                        "maxLength": 2000,
+                        "type": "string"
+                      },
+                      "maxItems": 1000,
+                      "type": "array"
+                    },
+                    "required_reviewers": {
+                      "items": {
+                        "maxLength": 2000,
+                        "type": "string"
+                      },
+                      "maxItems": 1000,
+                      "type": "array"
+                    },
+                    "sources": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "binding_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "mandatory": {
+                            "type": "boolean"
+                          },
+                          "policy_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "policy_version": {
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "policy_version_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "requirement_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "scope_level": {
+                            "enum": [
+                              "ORGANIZATION",
+                              "PRODUCT",
+                              "SYSTEM",
+                              "REPOSITORY",
+                              "PATH"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "policy_id",
+                          "policy_version_id",
+                          "policy_version",
+                          "binding_id",
+                          "scope_level",
+                          "mandatory",
+                          "requirement_id"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 100,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "description",
+                    "enforcement",
+                    "check_type",
+                    "required_evidence",
+                    "required_reviewers",
+                    "required_approval",
+                    "report_sections",
+                    "sources"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 50000,
+                "type": "array"
+              },
+              "engine_version": {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              "limitations": {
+                "items": {
+                  "maxLength": 2000,
+                  "type": "string"
+                },
+                "maxItems": 1000,
+                "type": "array"
+              },
+              "matched_bindings": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "binding_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "policy_version_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "reasons": {
+                      "items": {
+                        "maxLength": 2000,
+                        "type": "string"
+                      },
+                      "maxItems": 1000,
+                      "type": "array"
+                    },
+                    "scope_level": {
+                      "enum": [
+                        "ORGANIZATION",
+                        "PRODUCT",
+                        "SYSTEM",
+                        "REPOSITORY",
+                        "PATH"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "policy_version_id",
+                    "binding_id",
+                    "scope_level",
+                    "reasons"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "outcome": {
+                "const": "CONTROLS_CALCULATED",
+                "type": "string"
+              },
+              "reevaluation_conditions": {
+                "items": {
+                  "enum": [
+                    "commit_changed",
+                    "work_item_revision_changed",
+                    "policy_version_changed",
+                    "approval_or_override_changed",
+                    "evidence_or_retention_changed"
+                  ],
+                  "type": "string"
+                },
+                "maxItems": 5,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "engine_version",
+              "outcome",
+              "controls",
+              "matched_bindings",
+              "considered_bindings",
+              "applied_overrides",
+              "limitations",
+              "reevaluation_conditions"
+            ],
+            "type": "object"
+          },
+          "output_hash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "policy_evaluation_id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "policy_evaluation_id",
+          "input_hash",
+          "output_hash",
+          "output",
+          "created"
+        ],
+        "type": "object"
+      },
+      "acceptance-startManualDiffAssurance-200-response": {
         "additionalProperties": false,
         "properties": {
           "assurance_run_id": {
@@ -4112,6 +5074,7 @@
             "type": "string"
           },
           "created": {
+            "const": false,
             "type": "boolean"
           },
           "evaluator_task_id": {
@@ -4142,10 +5105,50 @@
         ],
         "type": "object"
       },
-      "acceptance-submitEvidenceManifest-response": {
+      "acceptance-startManualDiffAssurance-201-response": {
+        "additionalProperties": false,
+        "properties": {
+          "assurance_run_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "created": {
+            "const": true,
+            "type": "boolean"
+          },
+          "evaluator_task_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "head_commit": {
+            "pattern": "^[a-f0-9]{40}$",
+            "type": "string"
+          },
+          "input_hash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "state": {
+            "maxLength": 32,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "assurance_run_id",
+          "evaluator_task_id",
+          "state",
+          "head_commit",
+          "input_hash",
+          "created"
+        ],
+        "type": "object"
+      },
+      "acceptance-submitEvidenceManifest-200-response": {
         "additionalProperties": false,
         "properties": {
           "created": {
+            "const": false,
             "type": "boolean"
           },
           "evidence_ids": {
@@ -4174,7 +5177,40 @@
         ],
         "type": "object"
       },
-      "acceptance-submitManualEvaluatorResult-response": {
+      "acceptance-submitEvidenceManifest-201-response": {
+        "additionalProperties": false,
+        "properties": {
+          "created": {
+            "const": true,
+            "type": "boolean"
+          },
+          "evidence_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "manifest_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "payload_hash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "manifest_id",
+          "payload_hash",
+          "evidence_ids",
+          "created"
+        ],
+        "type": "object"
+      },
+      "acceptance-submitManualEvaluatorResult-200-response": {
         "additionalProperties": false,
         "properties": {
           "assurance_run_id": {
@@ -4182,6 +5218,7 @@
             "type": "string"
           },
           "created": {
+            "const": false,
             "type": "boolean"
           },
           "finding_ids": {
@@ -4217,6 +5254,7 @@
             "uniqueItems": true
           },
           "replayed": {
+            "const": true,
             "type": "boolean"
           },
           "report_id": {
@@ -4252,21 +5290,87 @@
         ],
         "type": "object"
       },
-      "acceptance-syncSourceConnection-request": {
+      "acceptance-submitManualEvaluatorResult-201-response": {
         "additionalProperties": false,
         "properties": {
-          "scan_mode": {
-            "enum": [
-              "FULL",
-              "INCREMENTAL"
-            ],
+          "assurance_run_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "created": {
+            "const": true,
+            "type": "boolean"
+          },
+          "finding_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "head_commit": {
+            "pattern": "^[a-f0-9]{40}$",
+            "type": "string"
+          },
+          "input_hash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "readiness": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "reason_codes": {
+            "items": {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 100,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "replayed": {
+            "const": false,
+            "type": "boolean"
+          },
+          "report_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "result_hash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "state": {
+            "const": "COMPLETED",
+            "type": "string"
+          },
+          "task_id": {
+            "format": "uuid",
             "type": "string"
           }
         },
-        "required": [],
+        "required": [
+          "task_id",
+          "assurance_run_id",
+          "input_hash",
+          "head_commit",
+          "result_hash",
+          "state",
+          "readiness",
+          "reason_codes",
+          "report_id",
+          "finding_ids",
+          "created",
+          "replayed"
+        ],
         "type": "object"
       },
-      "acceptance-syncSourceConnection-response": {
+      "acceptance-syncSourceConnection-202-response": {
         "additionalProperties": false,
         "properties": {
           "access_snapshot_id": {
@@ -4315,7 +5419,21 @@
         ],
         "type": "object"
       },
-      "acceptance-uploadEvidenceContent-response": {
+      "acceptance-syncSourceConnection-request": {
+        "additionalProperties": false,
+        "properties": {
+          "scan_mode": {
+            "enum": [
+              "FULL",
+              "INCREMENTAL"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "acceptance-uploadEvidenceContent-201-response": {
         "additionalProperties": false,
         "properties": {
           "archive_summary": {
@@ -7357,7 +8475,7 @@
                   "state": "MODEL_REVIEW"
                 },
                 "schema": {
-                  "$ref": "#/components/schemas/acceptance-getAssuranceRun-response"
+                  "$ref": "#/components/schemas/acceptance-getAssuranceRun-200-response"
                 }
               }
             },
@@ -7407,7 +8525,7 @@
                   "findings": []
                 },
                 "schema": {
-                  "$ref": "#/components/schemas/acceptance-listAssuranceFindings-response"
+                  "$ref": "#/components/schemas/acceptance-listAssuranceFindings-200-response"
                 }
               }
             },
@@ -7614,7 +8732,7 @@
                   "renderer_version": "assurance-report-v1"
                 },
                 "schema": {
-                  "$ref": "#/components/schemas/acceptance-getAssuranceReport-response"
+                  "$ref": "#/components/schemas/acceptance-getAssuranceReport-200-response"
                 }
               }
             },
@@ -7679,7 +8797,7 @@
     },
     "/bootstrap": {
       "post": {
-        "description": "Create the one initial tenant and return one-time credentials. When independent_reviewer_name is supplied, a distinct least-privilege assurance reviewer credential is emitted once and stored only as a hash. An exact idempotency retry revokes and reissues only the bound credentials.",
+        "description": "Create the one initial tenant and return one-time credentials. New callers explicitly request closed roles, memberships, repositories, service identities, access bindings, and per-repository actions in scope. A deprecated flat request remains only for no-case compatibility. An exact idempotency retry revokes and reissues only the bound credentials.",
         "operationId": "bootstrapOrganization",
         "parameters": [
           {
@@ -7699,67 +8817,445 @@
           "content": {
             "application/json": {
               "example": {
-                "admin_display_name": "Acceptance initiator",
-                "admin_email": "operator@ember.invalid",
                 "idempotency_key": "1111111111111111111111111111111111111111111111111111111111111111",
-                "independent_reviewer_name": "Independent reviewer",
                 "organization_name": "Ember Organization",
                 "organization_slug": "anva-acceptance-ember",
-                "repository_external_id": "github:synthetic/ember",
-                "repository_name": "ember"
+                "scope": {
+                  "access_scope": {
+                    "membership_keys": [
+                      "operator"
+                    ],
+                    "name": "Ember acceptance scope",
+                    "repository_keys": [
+                      "repository"
+                    ],
+                    "service_identity_keys": [
+                      "initiator",
+                      "reviewer"
+                    ]
+                  },
+                  "initiator_service_identity_key": "initiator",
+                  "memberships": [
+                    {
+                      "display_name": "Acceptance initiator",
+                      "email": "operator@ember.invalid",
+                      "key": "operator",
+                      "role_key": "viewer"
+                    }
+                  ],
+                  "primary_membership_key": "operator",
+                  "primary_repository_key": "repository",
+                  "repositories": [
+                    {
+                      "external_id": "github:synthetic/ember",
+                      "key": "repository",
+                      "name": "ember"
+                    }
+                  ],
+                  "reviewer_service_identity_key": "reviewer",
+                  "roles": [
+                    {
+                      "code": "VIEWER",
+                      "key": "viewer",
+                      "name": "Viewer"
+                    }
+                  ],
+                  "service_identities": [
+                    {
+                      "grants": [
+                        {
+                          "actions": [
+                            "artifact.create",
+                            "assurance.execute",
+                            "canvas.view",
+                            "evidence.submit",
+                            "evidence.view",
+                            "knowledge.view",
+                            "mcp.context",
+                            "policy.manage",
+                            "policy.view",
+                            "search.query",
+                            "source.sync",
+                            "source.view",
+                            "work.manage"
+                          ],
+                          "repository_key": "repository"
+                        }
+                      ],
+                      "key": "initiator",
+                      "name": "Acceptance runner"
+                    },
+                    {
+                      "grants": [
+                        {
+                          "actions": [
+                            "assurance.review"
+                          ],
+                          "repository_key": "repository"
+                        }
+                      ],
+                      "key": "reviewer",
+                      "name": "Independent reviewer"
+                    }
+                  ]
+                }
               },
               "schema": {
-                "additionalProperties": false,
-                "properties": {
-                  "admin_display_name": {
-                    "maxLength": 300,
-                    "minLength": 1,
-                    "type": "string"
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "admin_display_name": {
+                        "maxLength": 300,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "admin_email": {
+                        "maxLength": 300,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "idempotency_key": {
+                        "pattern": "^[a-f0-9]{64}$",
+                        "type": "string"
+                      },
+                      "independent_reviewer_name": {
+                        "maxLength": 300,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "organization_name": {
+                        "maxLength": 300,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "organization_slug": {
+                        "maxLength": 300,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "repository_external_id": {
+                        "maxLength": 300,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "repository_name": {
+                        "maxLength": 300,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "organization_slug",
+                      "organization_name",
+                      "admin_email",
+                      "admin_display_name",
+                      "repository_external_id",
+                      "repository_name"
+                    ],
+                    "type": "object"
                   },
-                  "admin_email": {
-                    "maxLength": 300,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "idempotency_key": {
-                    "pattern": "^[a-f0-9]{64}$",
-                    "type": "string"
-                  },
-                  "independent_reviewer_name": {
-                    "maxLength": 300,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "organization_name": {
-                    "maxLength": 300,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "organization_slug": {
-                    "maxLength": 300,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "repository_external_id": {
-                    "maxLength": 300,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "repository_name": {
-                    "maxLength": 300,
-                    "minLength": 1,
-                    "type": "string"
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "idempotency_key": {
+                        "pattern": "^[a-f0-9]{64}$",
+                        "type": "string"
+                      },
+                      "organization_name": {
+                        "maxLength": 300,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "organization_slug": {
+                        "maxLength": 300,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "scope": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "access_scope": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "membership_keys": {
+                                "items": {
+                                  "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 32,
+                                "minItems": 1,
+                                "type": "array",
+                                "uniqueItems": true
+                              },
+                              "name": {
+                                "maxLength": 200,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "repository_keys": {
+                                "items": {
+                                  "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 100,
+                                "minItems": 1,
+                                "type": "array",
+                                "uniqueItems": true
+                              },
+                              "service_identity_keys": {
+                                "items": {
+                                  "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 32,
+                                "minItems": 1,
+                                "type": "array",
+                                "uniqueItems": true
+                              }
+                            },
+                            "required": [
+                              "name",
+                              "membership_keys",
+                              "repository_keys",
+                              "service_identity_keys"
+                            ],
+                            "type": "object"
+                          },
+                          "initiator_service_identity_key": {
+                            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                            "type": "string"
+                          },
+                          "memberships": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "display_name": {
+                                  "maxLength": 300,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "email": {
+                                  "format": "email",
+                                  "maxLength": 300,
+                                  "type": "string"
+                                },
+                                "key": {
+                                  "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                                  "type": "string"
+                                },
+                                "role_key": {
+                                  "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "key",
+                                "email",
+                                "display_name",
+                                "role_key"
+                              ],
+                              "type": "object"
+                            },
+                            "maxItems": 32,
+                            "minItems": 1,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "primary_membership_key": {
+                            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                            "type": "string"
+                          },
+                          "primary_repository_key": {
+                            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                            "type": "string"
+                          },
+                          "repositories": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "external_id": {
+                                  "maxLength": 300,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "key": {
+                                  "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "maxLength": 300,
+                                  "minLength": 1,
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "key",
+                                "external_id",
+                                "name"
+                              ],
+                              "type": "object"
+                            },
+                            "maxItems": 100,
+                            "minItems": 1,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "reviewer_service_identity_key": {
+                            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                            "type": "string"
+                          },
+                          "roles": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "code": {
+                                  "enum": [
+                                    "ORG_ADMIN",
+                                    "KNOWLEDGE_ADMIN",
+                                    "TECHNICAL_OWNER",
+                                    "PRODUCT_OWNER",
+                                    "DEVELOPER",
+                                    "REVIEWER",
+                                    "SECURITY_REVIEWER",
+                                    "VIEWER"
+                                  ],
+                                  "type": "string"
+                                },
+                                "key": {
+                                  "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "maxLength": 100,
+                                  "minLength": 1,
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "key",
+                                "code",
+                                "name"
+                              ],
+                              "type": "object"
+                            },
+                            "maxItems": 8,
+                            "minItems": 1,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "service_identities": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "grants": {
+                                  "items": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "actions": {
+                                        "items": {
+                                          "enum": [
+                                            "organization.view",
+                                            "membership.manage",
+                                            "repository.view",
+                                            "token.manage",
+                                            "source.view",
+                                            "source.sync",
+                                            "source.revoke",
+                                            "knowledge.view",
+                                            "knowledge.propose",
+                                            "knowledge.review",
+                                            "assurance.view",
+                                            "assurance.execute",
+                                            "assurance.review",
+                                            "audit.view",
+                                            "finding.dismiss",
+                                            "policy.override",
+                                            "work.view",
+                                            "work.manage",
+                                            "work.approve",
+                                            "policy.view",
+                                            "policy.manage",
+                                            "evidence.view",
+                                            "evidence.submit",
+                                            "search.query",
+                                            "canvas.view",
+                                            "canvas.manage",
+                                            "mcp.context",
+                                            "artifact.view",
+                                            "artifact.create",
+                                            "scope.manage",
+                                            "github.manage",
+                                            "retention.manage"
+                                          ],
+                                          "type": "string"
+                                        },
+                                        "maxItems": 32,
+                                        "minItems": 1,
+                                        "type": "array",
+                                        "uniqueItems": true
+                                      },
+                                      "repository_key": {
+                                        "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "repository_key",
+                                      "actions"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 100,
+                                  "minItems": 1,
+                                  "type": "array",
+                                  "uniqueItems": true
+                                },
+                                "key": {
+                                  "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "maxLength": 200,
+                                  "minLength": 1,
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "key",
+                                "name",
+                                "grants"
+                              ],
+                              "type": "object"
+                            },
+                            "maxItems": 32,
+                            "minItems": 1,
+                            "type": "array",
+                            "uniqueItems": true
+                          }
+                        },
+                        "required": [
+                          "roles",
+                          "memberships",
+                          "repositories",
+                          "service_identities",
+                          "access_scope",
+                          "primary_membership_key",
+                          "primary_repository_key",
+                          "initiator_service_identity_key",
+                          "reviewer_service_identity_key"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "organization_slug",
+                      "organization_name",
+                      "scope"
+                    ],
+                    "type": "object"
                   }
-                },
-                "required": [
-                  "organization_slug",
-                  "organization_name",
-                  "admin_email",
-                  "admin_display_name",
-                  "repository_external_id",
-                  "repository_name"
-                ],
-                "type": "object"
+                ]
               }
             }
           },
@@ -8266,7 +9762,7 @@
                   }
                 },
                 "schema": {
-                  "$ref": "#/components/schemas/acceptance-queryOrganizationalCanvas-response"
+                  "$ref": "#/components/schemas/acceptance-queryOrganizationalCanvas-200-response"
                 }
               }
             },
@@ -9487,7 +10983,7 @@
                   "task_id": "00000000-0000-4000-8000-000000000031"
                 },
                 "schema": {
-                  "$ref": "#/components/schemas/acceptance-submitManualEvaluatorResult-response"
+                  "$ref": "#/components/schemas/acceptance-submitManualEvaluatorResult-200-response"
                 }
               }
             },
@@ -9513,7 +11009,7 @@
                   "task_id": "00000000-0000-4000-8000-000000000031"
                 },
                 "schema": {
-                  "$ref": "#/components/schemas/acceptance-submitManualEvaluatorResult-response"
+                  "$ref": "#/components/schemas/acceptance-submitManualEvaluatorResult-201-response"
                 }
               }
             },
@@ -9652,7 +11148,7 @@
                   "repository_id": "00000000-0000-4000-8000-000000000004"
                 },
                 "schema": {
-                  "$ref": "#/components/schemas/acceptance-getEvidenceManifest-response"
+                  "$ref": "#/components/schemas/acceptance-getEvidenceManifest-200-response"
                 }
               }
             },
@@ -9737,7 +11233,7 @@
                   "verified_size": 132
                 },
                 "schema": {
-                  "$ref": "#/components/schemas/acceptance-uploadEvidenceContent-response"
+                  "$ref": "#/components/schemas/acceptance-uploadEvidenceContent-201-response"
                 }
               }
             },
@@ -10575,8 +12071,44 @@
                         "type": "string"
                       },
                       "relationship_type": {
-                        "maxLength": 64,
-                        "minLength": 1,
+                        "enum": [
+                          "GOAL_MEASURED_BY_METRIC",
+                          "INITIATIVE_SUPPORTS_GOAL",
+                          "INITIATIVE_OWNED_BY_TEAM",
+                          "INITIATIVE_AFFECTS_PRODUCT",
+                          "PRODUCT_IMPLEMENTED_BY_REPOSITORY",
+                          "COMPONENT_BELONGS_TO_PRODUCT",
+                          "REPOSITORY_OWNED_BY_TEAM",
+                          "REPOSITORY_CONTAINS_COMPONENT",
+                          "SERVICE_IMPLEMENTED_BY_REPOSITORY",
+                          "SERVICE_DEPENDS_ON_SERVICE",
+                          "API_PROVIDED_BY_SERVICE",
+                          "API_CONSUMED_BY_COMPONENT",
+                          "DATA_ASSET_USED_BY_SERVICE",
+                          "DECISION_APPLIES_TO_ENTITY",
+                          "POLICY_APPLIES_TO_ENTITY",
+                          "RISK_AFFECTS_ENTITY",
+                          "INCIDENT_AFFECTED_ENTITY",
+                          "REQUIREMENT_SUPPORTS_INITIATIVE",
+                          "REQUIREMENT_IMPLEMENTED_BY_PULL_REQUEST",
+                          "ACCEPTANCE_CRITERION_VERIFIED_BY_EVIDENCE",
+                          "TASK_CHANGES_ENTITY",
+                          "PULL_REQUEST_CHANGES_ENTITY",
+                          "ENTITY_OWNED_BY_OWNER",
+                          "ENTITY_REVIEWED_BY_TEAM",
+                          "OWNED_BY",
+                          "MAINTAINED_BY",
+                          "DEPENDS_ON",
+                          "MEASURED_BY",
+                          "ADVANCES",
+                          "IMPLEMENTS",
+                          "PART_OF",
+                          "AFFECTS",
+                          "GOVERNED_BY",
+                          "EVIDENCED_BY",
+                          "BLOCKED_BY",
+                          "CHANGES"
+                        ],
                         "type": "string"
                       },
                       "repository_id": {
@@ -11423,7 +12955,7 @@
                   "version": 1
                 },
                 "schema": {
-                  "$ref": "#/components/schemas/acceptance-importPolicyVersion-response"
+                  "$ref": "#/components/schemas/acceptance-importPolicyVersion-200-response"
                 }
               }
             },
@@ -11440,7 +12972,7 @@
                   "version": 1
                 },
                 "schema": {
-                  "$ref": "#/components/schemas/acceptance-importPolicyVersion-response"
+                  "$ref": "#/components/schemas/acceptance-importPolicyVersion-201-response"
                 }
               }
             },
@@ -11623,7 +13155,7 @@
                   "policy_evaluation_id": "00000000-0000-4000-8000-000000000024"
                 },
                 "schema": {
-                  "$ref": "#/components/schemas/acceptance-simulatePolicy-response"
+                  "$ref": "#/components/schemas/acceptance-simulatePolicy-200-response"
                 }
               }
             },
@@ -11655,7 +13187,7 @@
                   "policy_evaluation_id": "00000000-0000-4000-8000-000000000024"
                 },
                 "schema": {
-                  "$ref": "#/components/schemas/acceptance-simulatePolicy-response"
+                  "$ref": "#/components/schemas/acceptance-simulatePolicy-201-response"
                 }
               }
             },
@@ -12038,7 +13570,7 @@
                   "state": "MODEL_REVIEW"
                 },
                 "schema": {
-                  "$ref": "#/components/schemas/acceptance-startManualDiffAssurance-response"
+                  "$ref": "#/components/schemas/acceptance-startManualDiffAssurance-200-response"
                 }
               }
             },
@@ -12056,7 +13588,7 @@
                   "state": "MODEL_REVIEW"
                 },
                 "schema": {
-                  "$ref": "#/components/schemas/acceptance-startManualDiffAssurance-response"
+                  "$ref": "#/components/schemas/acceptance-startManualDiffAssurance-201-response"
                 }
               }
             },
@@ -12276,7 +13808,7 @@
                   "task_id": "00000000-0000-4000-8000-000000000031"
                 },
                 "schema": {
-                  "$ref": "#/components/schemas/acceptance-claimManualEvaluatorTask-response"
+                  "$ref": "#/components/schemas/acceptance-claimManualEvaluatorTask-200-response"
                 }
               }
             },
@@ -12659,7 +14191,7 @@
                   "payload_hash": "8888888888888888888888888888888888888888888888888888888888888888"
                 },
                 "schema": {
-                  "$ref": "#/components/schemas/acceptance-submitEvidenceManifest-response"
+                  "$ref": "#/components/schemas/acceptance-submitEvidenceManifest-200-response"
                 }
               }
             },
@@ -12677,7 +14209,7 @@
                   "payload_hash": "8888888888888888888888888888888888888888888888888888888888888888"
                 },
                 "schema": {
-                  "$ref": "#/components/schemas/acceptance-submitEvidenceManifest-response"
+                  "$ref": "#/components/schemas/acceptance-submitEvidenceManifest-201-response"
                 }
               }
             },
@@ -12766,88 +14298,7 @@
                   "upload_token": null
                 },
                 "schema": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "access_scope_id": {
-                      "format": "uuid",
-                      "type": "string"
-                    },
-                    "authorization_id": {
-                      "format": "uuid",
-                      "type": "string"
-                    },
-                    "commit_sha": {
-                      "pattern": "^[a-f0-9]{40}$",
-                      "type": "string"
-                    },
-                    "declared_sha256": {
-                      "pattern": "^[a-f0-9]{64}$",
-                      "type": "string"
-                    },
-                    "declared_size": {
-                      "maximum": 4096,
-                      "minimum": 1,
-                      "type": "integer"
-                    },
-                    "expires_at": {
-                      "format": "date-time",
-                      "type": "string"
-                    },
-                    "pull_request_number": {
-                      "minimum": 1,
-                      "type": "integer"
-                    },
-                    "replayed": {
-                      "type": "boolean"
-                    },
-                    "repository_id": {
-                      "format": "uuid",
-                      "type": "string"
-                    },
-                    "state": {
-                      "enum": [
-                        "ISSUED",
-                        "RECEIVING",
-                        "RECOVERING",
-                        "ACCEPTED",
-                        "REJECTED",
-                        "EXPIRED",
-                        "REVOKED"
-                      ],
-                      "type": "string"
-                    },
-                    "upload_path": {
-                      "pattern": "^/api/v1/evidence-upload-authorizations/[a-f0-9-]{36}/content$",
-                      "type": "string"
-                    },
-                    "upload_token": {
-                      "oneOf": [
-                        {
-                          "maxLength": 512,
-                          "minLength": 32,
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    }
-                  },
-                  "required": [
-                    "authorization_id",
-                    "repository_id",
-                    "access_scope_id",
-                    "pull_request_number",
-                    "commit_sha",
-                    "declared_sha256",
-                    "declared_size",
-                    "state",
-                    "expires_at",
-                    "upload_path",
-                    "upload_token",
-                    "replayed"
-                  ],
-                  "type": "object"
+                  "$ref": "#/components/schemas/acceptance-createEvidenceUploadAuthorization-200-response"
                 }
               }
             },
@@ -12871,88 +14322,7 @@
                   "upload_token": "example-only-opaque-value-never-issued-0004"
                 },
                 "schema": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "access_scope_id": {
-                      "format": "uuid",
-                      "type": "string"
-                    },
-                    "authorization_id": {
-                      "format": "uuid",
-                      "type": "string"
-                    },
-                    "commit_sha": {
-                      "pattern": "^[a-f0-9]{40}$",
-                      "type": "string"
-                    },
-                    "declared_sha256": {
-                      "pattern": "^[a-f0-9]{64}$",
-                      "type": "string"
-                    },
-                    "declared_size": {
-                      "maximum": 4096,
-                      "minimum": 1,
-                      "type": "integer"
-                    },
-                    "expires_at": {
-                      "format": "date-time",
-                      "type": "string"
-                    },
-                    "pull_request_number": {
-                      "minimum": 1,
-                      "type": "integer"
-                    },
-                    "replayed": {
-                      "type": "boolean"
-                    },
-                    "repository_id": {
-                      "format": "uuid",
-                      "type": "string"
-                    },
-                    "state": {
-                      "enum": [
-                        "ISSUED",
-                        "RECEIVING",
-                        "RECOVERING",
-                        "ACCEPTED",
-                        "REJECTED",
-                        "EXPIRED",
-                        "REVOKED"
-                      ],
-                      "type": "string"
-                    },
-                    "upload_path": {
-                      "pattern": "^/api/v1/evidence-upload-authorizations/[a-f0-9-]{36}/content$",
-                      "type": "string"
-                    },
-                    "upload_token": {
-                      "oneOf": [
-                        {
-                          "maxLength": 512,
-                          "minLength": 32,
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    }
-                  },
-                  "required": [
-                    "authorization_id",
-                    "repository_id",
-                    "access_scope_id",
-                    "pull_request_number",
-                    "commit_sha",
-                    "declared_sha256",
-                    "declared_size",
-                    "state",
-                    "expires_at",
-                    "upload_path",
-                    "upload_token",
-                    "replayed"
-                  ],
-                  "type": "object"
+                  "$ref": "#/components/schemas/acceptance-createEvidenceUploadAuthorization-201-response"
                 }
               }
             },
@@ -13102,7 +14472,7 @@
                   "revision": 1
                 },
                 "schema": {
-                  "$ref": "#/components/schemas/acceptance-ingestManualPullRequestDiff-response"
+                  "$ref": "#/components/schemas/acceptance-ingestManualPullRequestDiff-200-response"
                 }
               }
             },
@@ -13130,7 +14500,7 @@
                   "revision": 1
                 },
                 "schema": {
-                  "$ref": "#/components/schemas/acceptance-ingestManualPullRequestDiff-response"
+                  "$ref": "#/components/schemas/acceptance-ingestManualPullRequestDiff-201-response"
                 }
               }
             },
@@ -13261,7 +14631,7 @@
                   "state": "ACTIVE"
                 },
                 "schema": {
-                  "$ref": "#/components/schemas/acceptance-connectFilesystemSource-response"
+                  "$ref": "#/components/schemas/acceptance-connectFilesystemSource-200-response"
                 }
               }
             },
@@ -13277,7 +14647,7 @@
                   "state": "ACTIVE"
                 },
                 "schema": {
-                  "$ref": "#/components/schemas/acceptance-connectFilesystemSource-response"
+                  "$ref": "#/components/schemas/acceptance-connectFilesystemSource-201-response"
                 }
               }
             },
@@ -13461,7 +14831,7 @@
                   "state": "REQUESTED"
                 },
                 "schema": {
-                  "$ref": "#/components/schemas/acceptance-syncSourceConnection-response"
+                  "$ref": "#/components/schemas/acceptance-syncSourceConnection-202-response"
                 }
               }
             },
@@ -13523,7 +14893,7 @@
                   ]
                 },
                 "schema": {
-                  "$ref": "#/components/schemas/acceptance-listSourceSyncRuns-response"
+                  "$ref": "#/components/schemas/acceptance-listSourceSyncRuns-200-response"
                 }
               }
             },
@@ -14101,7 +15471,7 @@
                   "work_item_revision_id": "00000000-0000-4000-8000-000000000021"
                 },
                 "schema": {
-                  "$ref": "#/components/schemas/acceptance-importWorkItemRevision-response"
+                  "$ref": "#/components/schemas/acceptance-importWorkItemRevision-200-response"
                 }
               }
             },
@@ -14118,7 +15488,7 @@
                   "work_item_revision_id": "00000000-0000-4000-8000-000000000021"
                 },
                 "schema": {
-                  "$ref": "#/components/schemas/acceptance-importWorkItemRevision-response"
+                  "$ref": "#/components/schemas/acceptance-importWorkItemRevision-201-response"
                 }
               }
             },

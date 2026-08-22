@@ -13,6 +13,12 @@ from pathlib import Path
 from typing import cast
 
 from anva.contract_limits import ACCEPTANCE_CASE_ENCODING
+from anva.contracts.bootstrap_scope import (
+    BootstrapScopeError,
+    acceptance_bootstrap_scope_payload,
+    parse_bootstrap_scope,
+    validate_acceptance_bootstrap_scope,
+)
 from anva.contracts.validation import contract_input_byte_limit, validate_payload
 
 MAX_CASE_BYTES = contract_input_byte_limit("acceptance-case")
@@ -99,6 +105,12 @@ class AcceptanceCase:
 def _validate_cross_section(payload: dict[str, object]) -> bytes:
     if _private_material(payload):
         raise AcceptanceCaseError("Acceptance case contains private evaluation material")
+    organization = _object(payload, "organization")
+    try:
+        scope = parse_bootstrap_scope(organization["bootstrap_scope"])
+        validate_acceptance_bootstrap_scope(scope)
+    except BootstrapScopeError as error:
+        raise AcceptanceCaseError(str(error)) from error
     change = _object(payload, "change")
     base_commit = _string(change, "base_commit")
     head_commit = _string(change, "head_commit")
@@ -280,11 +292,15 @@ def legacy_acceptance_case(
         "organization": {
             "slug": slug,
             "name": f"Anva Acceptance {corpus_id}",
-            "admin_email": f"{slug}@anva.invalid",
-            "admin_display_name": "Anva acceptance operator",
-            "repository_external_id": f"acceptance:{source_fingerprint}",
-            "repository_name": corpus_id,
-            "independent_reviewer_name": "Independent acceptance evaluator",
+            "bootstrap_scope": acceptance_bootstrap_scope_payload(
+                admin_email=f"{slug}@anva.invalid",
+                admin_display_name="Anva acceptance operator",
+                repository_external_id=f"acceptance:{source_fingerprint}",
+                repository_name=corpus_id,
+                initiator_name="Anva acceptance runner",
+                reviewer_name="Independent acceptance evaluator",
+                access_scope_name="Legacy acceptance compatibility scope",
+            ),
         },
         "source": {
             "external_key": f"acceptance:{source_fingerprint}",

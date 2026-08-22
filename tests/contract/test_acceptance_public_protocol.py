@@ -20,9 +20,11 @@ from anva.acceptance.case import acceptance_case
 from anva.contracts import ContractValidationError, validate_payload
 from anva.contracts.acceptance import (
     ACCEPTANCE_HTTP_OPERATION_IDS,
+    CREATED_OR_REPLAYED_OPERATION_IDS,
     HTTP_OPERATION_EXAMPLES,
     validate_acceptance_http_response,
 )
+from anva.contracts.bootstrap_scope import acceptance_bootstrap_scope_payload
 from anva.contracts.catalog import EXAMPLES, SCHEMAS
 from anva.contracts.generate import openapi_document, rendered_artifacts
 from anva.core.services.evidence_uploads import inspect_evidence_upload
@@ -159,8 +161,11 @@ def _mcp_input_examples() -> dict[str, dict[str, object]]:
     scope_id = "00000000-0000-4000-8000-000000000006"
     entity_id = "00000000-0000-4000-8000-000000000020"
     work_item_id = "00000000-0000-4000-8000-000000000021"
-    root = {"contract_version": "1", "repository_id": repository_id}
-    proposal = {
+    root: dict[str, object] = {
+        "contract_version": "1",
+        "repository_id": repository_id,
+    }
+    proposal: dict[str, object] = {
         **root,
         "access_scope_id": scope_id,
         "summary": "Public review-only proposal.",
@@ -228,9 +233,15 @@ def test_acceptance_case_is_closed_public_only_and_has_two_distinct_valid_cases(
         {
             "slug": "anva-tst-009-lantern",
             "name": "TST-009 Lantern Organization",
-            "admin_email": "operator@lantern.invalid",
-            "repository_external_id": "github:synthetic/lantern",
-            "repository_name": "lantern",
+            "bootstrap_scope": acceptance_bootstrap_scope_payload(
+                admin_email="operator@lantern.invalid",
+                admin_display_name="TST-009 Lantern initiator",
+                repository_external_id="github:synthetic/lantern",
+                repository_name="lantern",
+                initiator_name="TST-009 Lantern acceptance runner",
+                reviewer_name="TST-009 Lantern independent reviewer",
+                access_scope_name="TST-009 Lantern acceptance scope",
+            ),
         }
     )
     change = cast(dict[str, object], second["change"])
@@ -457,6 +468,61 @@ def test_runtime_validators_bind_every_acceptance_http_and_mcp_operation() -> No
             cast(str, operation["tool"]),
             cast(dict[str, object], operation["output_example"]),
         )
+
+
+@pytest.mark.contract
+def test_all_create_or_replay_status_contracts_are_mutually_exclusive() -> None:
+    dual_status_operations = {
+        operation_id
+        for operation_id, examples in HTTP_OPERATION_EXAMPLES.items()
+        if {"200", "201"}.issubset(examples)
+    }
+    assert dual_status_operations == {
+        *CREATED_OR_REPLAYED_OPERATION_IDS,
+        "createEvidenceUploadAuthorization",
+    }
+    assert len(dual_status_operations) == 9
+
+    for operation_id in sorted(dual_status_operations):
+        examples = HTTP_OPERATION_EXAMPLES[operation_id]
+        fresh = cast(dict[str, object], examples["201"])
+        replay = cast(dict[str, object], examples["200"])
+        validate_acceptance_http_response(operation_id, 201, fresh)
+        validate_acceptance_http_response(operation_id, 200, replay)
+        with pytest.raises(ValueError, match="Acceptance response contract failed"):
+            validate_acceptance_http_response(operation_id, 200, fresh)
+        with pytest.raises(ValueError, match="Acceptance response contract failed"):
+            validate_acceptance_http_response(operation_id, 201, replay)
+
+    upload_examples = HTTP_OPERATION_EXAMPLES["createEvidenceUploadAuthorization"]
+    fresh_upload = cast(dict[str, object], deepcopy(upload_examples["201"]))
+    replay_upload = cast(dict[str, object], deepcopy(upload_examples["200"]))
+    assert isinstance(fresh_upload["upload_token"], str)
+    assert replay_upload["upload_token"] is None
+    replay_upload["upload_token"] = fresh_upload["upload_token"]
+    with pytest.raises(ValueError, match="Acceptance response contract failed"):
+        validate_acceptance_http_response("createEvidenceUploadAuthorization", 200, replay_upload)
+
+
+@pytest.mark.contract
+def test_published_create_or_replay_status_schemas_differ() -> None:
+    bundle = json.loads(rendered_artifacts()[Path("acceptance/v1/operations.json")])
+    operations = {operation["operation_id"]: operation for operation in bundle["http_operations"]}
+    for operation_id, operation in operations.items():
+        responses = cast(dict[str, object], operation["responses"])
+        if not {"200", "201"}.issubset(responses):
+            continue
+        response_200 = cast(dict[str, object], responses["200"])
+        response_201 = cast(dict[str, object], responses["201"])
+        schema_200 = cast(
+            dict[str, object],
+            cast(dict[str, object], response_200["content"])["application/json"],
+        )["schema"]
+        schema_201 = cast(
+            dict[str, object],
+            cast(dict[str, object], response_201["content"])["application/json"],
+        )["schema"]
+        assert schema_200 != schema_201, operation_id
 
 
 @pytest.mark.contract

@@ -272,6 +272,17 @@ def test_manual_evaluator_claim_and_submit_http_adapters(client: Client) -> None
             ),
             content_type="application/json",
         )
+        completion.created = False
+        submission_replay = client.post(
+            submit_url,
+            data=json.dumps(
+                {
+                    "claim_token": "opaque-claim-token",
+                    "result": {"schema_version": "1.0"},
+                }
+            ),
+            content_type="application/json",
+        )
         invalid = client.post(
             submit_url,
             data=json.dumps(
@@ -306,9 +317,13 @@ def test_manual_evaluator_claim_and_submit_http_adapters(client: Client) -> None
     assert submitted.json()["result_hash"] == content_hash({"schema_version": "1.0"})
     assert submitted.json()["created"] is True
     assert submitted.json()["replayed"] is False
+    assert submission_replay.status_code == 200
+    assert submission_replay.json()["created"] is False
+    assert submission_replay.json()["replayed"] is True
     validate_acceptance_http_response("claimManualEvaluatorTask", 200, claimed.json())
     validate_acceptance_http_response("claimManualEvaluatorTask", 200, human_claimed.json())
     validate_acceptance_http_response("submitManualEvaluatorResult", 201, submitted.json())
+    validate_acceptance_http_response("submitManualEvaluatorResult", 200, submission_replay.json())
     assert invalid.status_code == 400
     exact_claim_kwargs = claim_task.call_args_list[1].kwargs
     assert exact_claim_kwargs["lease_seconds"] == 30

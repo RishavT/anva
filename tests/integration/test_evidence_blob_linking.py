@@ -35,7 +35,7 @@ def test_upload_authorization_cannot_be_inserted_as_accepted() -> None:
     now = timezone.now()
     marker = uuid.uuid4().hex
     with pytest.raises(IntegrityError), transaction.atomic():
-        EvidenceUploadAuthorization.objects.create(  # type: ignore[misc]
+        EvidenceUploadAuthorization.objects.create(
             organization=organization,
             repository=repository,
             access_scope=scope,

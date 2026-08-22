@@ -14,10 +14,13 @@ from django.conf import settings
 from django.db import connection, transaction
 from django.utils import timezone
 
+from anva.contracts.bootstrap_scope import parse_bootstrap_scope
 from anva.core.exceptions import AuthenticationError, ResourceNotFoundError
 from anva.core.models import (
     AccessGrant,
     AccessScope,
+    AccessScopeMembership,
+    AccessScopeRepository,
     AccessScopeServiceIdentity,
     BootstrapRecovery,
     Membership,
@@ -54,7 +57,7 @@ class BootstrapResult:
 SHA256_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 
 
-def _bootstrap_request_sha256(payload: dict[str, str | None]) -> str:
+def _bootstrap_request_sha256(payload: dict[str, object]) -> str:
     rendered = (json.dumps(payload, separators=(",", ":"), sort_keys=True) + "\n").encode()
     return hashlib.sha256(rendered).hexdigest()
 
@@ -64,39 +67,55 @@ def bootstrap_local_organization(
     supplied_secret: str,
     organization_slug: str,
     organization_name: str,
-    admin_email: str,
-    admin_display_name: str,
-    repository_external_id: str,
-    repository_name: str,
+    admin_email: str | None = None,
+    admin_display_name: str | None = None,
+    repository_external_id: str | None = None,
+    repository_name: str | None = None,
     independent_reviewer_name: str | None = None,
     idempotency_key: str | None = None,
+    scope_payload: object | None = None,
 ) -> BootstrapResult:
     """Create the only initial organization and emit a one-time repository token."""
     if not hmac.compare_digest(supplied_secret, str(settings.BOOTSTRAP_SECRET)):
         raise AuthenticationError(INVALID_CREDENTIAL_MESSAGE)
-    required = {
-        organization_slug,
-        organization_name,
+    if not organization_slug.strip() or not organization_name.strip():
+        raise ValueError("Every bootstrap field is required")
+    legacy_values = (
         admin_email,
         admin_display_name,
         repository_external_id,
         repository_name,
-    }
-    if any(not value.strip() for value in required):
-        raise ValueError("Every bootstrap field is required")
+    )
+    if scope_payload is None:
+        if any(value is None or not value.strip() for value in legacy_values):
+            raise ValueError("Every bootstrap field is required")
+        scoped = None
+    else:
+        if (
+            any(value is not None for value in legacy_values)
+            or independent_reviewer_name is not None
+        ):
+            raise ValueError("Scoped and legacy bootstrap fields cannot be combined")
+        scoped = parse_bootstrap_scope(scope_payload)
     if idempotency_key is not None and SHA256_PATTERN.fullmatch(idempotency_key) is None:
         raise ValueError("Bootstrap idempotency key must be a SHA-256 digest")
-    request_sha256 = _bootstrap_request_sha256(
-        {
-            "organization_slug": organization_slug,
-            "organization_name": organization_name,
-            "admin_email": admin_email,
-            "admin_display_name": admin_display_name,
-            "repository_external_id": repository_external_id,
-            "repository_name": repository_name,
-            "independent_reviewer_name": independent_reviewer_name,
-        }
-    )
+    request_payload: dict[str, object] = {
+        "organization_slug": organization_slug,
+        "organization_name": organization_name,
+    }
+    if scoped is None:
+        request_payload.update(
+            {
+                "admin_email": admin_email,
+                "admin_display_name": admin_display_name,
+                "repository_external_id": repository_external_id,
+                "repository_name": repository_name,
+                "independent_reviewer_name": independent_reviewer_name,
+            }
+        )
+    else:
+        request_payload["scope"] = scope_payload
+    request_sha256 = _bootstrap_request_sha256(request_payload)
 
     with transaction.atomic():
         with connection.cursor() as cursor:
@@ -126,11 +145,20 @@ def bootstrap_local_organization(
             if recovery.issued_token.revoked_at is None:
                 recovery.issued_token.revoked_at = now
                 recovery.issued_token.save(update_fields=["revoked_at"])
+            initiator_actions = frozenset(
+                Action(value)
+                for value in AccessGrant.objects.filter(
+                    organization=recovery.organization,
+                    service_identity=recovery.service_identity,
+                    repository=recovery.repository,
+                    revoked_at__isnull=True,
+                ).values_list("action", flat=True)
+            )
             issued = issue_bootstrap_repository_token(
                 organization=recovery.organization,
                 repository=recovery.repository,
                 service_identity=recovery.service_identity,
-                actions=frozenset(Action),
+                actions=initiator_actions,
                 expires_at=now + timedelta(days=7),
             )
             reviewer_issued_token = None
@@ -141,11 +169,20 @@ def bootstrap_local_organization(
                 ):
                     recovery.reviewer_issued_token.revoked_at = now
                     recovery.reviewer_issued_token.save(update_fields=["revoked_at"])
+                reviewer_actions = frozenset(
+                    Action(value)
+                    for value in AccessGrant.objects.filter(
+                        organization=recovery.organization,
+                        service_identity=recovery.reviewer_service_identity,
+                        repository=recovery.repository,
+                        revoked_at__isnull=True,
+                    ).values_list("action", flat=True)
+                )
                 reviewer_issued_token = issue_bootstrap_repository_token(
                     organization=recovery.organization,
                     repository=recovery.repository,
                     service_identity=recovery.reviewer_service_identity,
-                    actions=frozenset({Action.ASSURANCE_REVIEW}),
+                    actions=reviewer_actions,
                     expires_at=now + timedelta(days=7),
                 )
             recovery.issued_token = issued.record
@@ -179,90 +216,212 @@ def bootstrap_local_organization(
             slug=organization_slug,
             name=organization_name,
         )
-        roles = {
-            code: Role.objects.create(
-                organization=organization,
-                code=code,
-                name=code.replace("_", " ").title(),
-            )
-            for code in Role.Code.values
-        }
-        user = User.objects.create(
-            email=admin_email.strip().lower(),
-            display_name=admin_display_name,
-        )
-        membership = Membership.objects.create(
-            organization=organization,
-            user=user,
-            role=roles[Role.Code.ORG_ADMIN],
-        )
-        repository = Repository.objects.create(
-            organization=organization,
-            external_id=repository_external_id,
-            name=repository_name,
-        )
-        service_identity = ServiceIdentity.objects.create(
-            organization=organization,
-            name="local-admin",
-            issuer=settings.TOKEN_ISSUER,
-            audience=settings.TOKEN_AUDIENCE,
-        )
-        scope = AccessScope.objects.create(
-            organization=organization,
-            name="Local organization bootstrap",
-            all_memberships=True,
-            all_service_identities=True,
-            all_repositories=True,
-        )
-        actions = frozenset(Action)
-        AccessGrant.objects.bulk_create(
-            [
-                AccessGrant(
+        if scoped is None:
+            assert admin_email is not None
+            assert admin_display_name is not None
+            assert repository_external_id is not None
+            assert repository_name is not None
+            roles = {
+                code: Role.objects.create(
                     organization=organization,
-                    service_identity=service_identity,
-                    repository=repository,
-                    action=action.value,
+                    code=code,
+                    name=code.replace("_", " ").title(),
                 )
-                for action in actions
-            ]
-        )
-        issued = issue_bootstrap_repository_token(
-            organization=organization,
-            repository=repository,
-            service_identity=service_identity,
-            actions=actions,
-            expires_at=timezone.now() + timedelta(days=7),
-        )
-        reviewer_service_identity = None
-        reviewer_issued_token = None
-        if independent_reviewer_name is not None:
-            normalized_reviewer_name = independent_reviewer_name.strip()
-            if not normalized_reviewer_name:
-                raise ValueError("Independent reviewer name cannot be blank")
-            reviewer_service_identity = ServiceIdentity.objects.create(
+                for code in Role.Code.values
+            }
+            user = User.objects.create(
+                email=admin_email.strip().lower(),
+                display_name=admin_display_name,
+            )
+            membership = Membership.objects.create(
                 organization=organization,
-                name=normalized_reviewer_name,
+                user=user,
+                role=roles[Role.Code.ORG_ADMIN],
+            )
+            repository = Repository.objects.create(
+                organization=organization,
+                external_id=repository_external_id,
+                name=repository_name,
+            )
+            service_identity = ServiceIdentity.objects.create(
+                organization=organization,
+                name="local-admin",
                 issuer=settings.TOKEN_ISSUER,
                 audience=settings.TOKEN_AUDIENCE,
             )
-            AccessScopeServiceIdentity.objects.create(
+            scope = AccessScope.objects.create(
                 organization=organization,
-                access_scope=scope,
-                service_identity=reviewer_service_identity,
+                name="Local organization bootstrap",
+                all_memberships=True,
+                all_service_identities=True,
+                all_repositories=True,
             )
-            AccessGrant.objects.create(
+            actions = frozenset(Action)
+            token_actions = actions
+            AccessGrant.objects.bulk_create(
+                [
+                    AccessGrant(
+                        organization=organization,
+                        service_identity=service_identity,
+                        repository=repository,
+                        action=action.value,
+                    )
+                    for action in actions
+                ]
+            )
+            reviewer_service_identity = None
+            reviewer_issued_token = None
+            if independent_reviewer_name is not None:
+                normalized_reviewer_name = independent_reviewer_name.strip()
+                if not normalized_reviewer_name:
+                    raise ValueError("Independent reviewer name cannot be blank")
+                reviewer_service_identity = ServiceIdentity.objects.create(
+                    organization=organization,
+                    name=normalized_reviewer_name,
+                    issuer=settings.TOKEN_ISSUER,
+                    audience=settings.TOKEN_AUDIENCE,
+                )
+                AccessScopeServiceIdentity.objects.create(
+                    organization=organization,
+                    access_scope=scope,
+                    service_identity=reviewer_service_identity,
+                )
+                AccessGrant.objects.create(
+                    organization=organization,
+                    service_identity=reviewer_service_identity,
+                    repository=repository,
+                    action=Action.ASSURANCE_REVIEW.value,
+                )
+                reviewer_issued_token = issue_bootstrap_repository_token(
+                    organization=organization,
+                    repository=repository,
+                    service_identity=reviewer_service_identity,
+                    actions=frozenset({Action.ASSURANCE_REVIEW}),
+                    expires_at=timezone.now() + timedelta(days=7),
+                )
+        else:
+            role_by_key = {
+                item.key: Role.objects.create(
+                    organization=organization,
+                    code=item.code,
+                    name=item.name,
+                )
+                for item in scoped.roles
+            }
+            membership_by_key: dict[str, Membership] = {}
+            user_by_key: dict[str, User] = {}
+            for item in scoped.memberships:
+                scoped_user = User.objects.create(
+                    email=item.email,
+                    display_name=item.display_name,
+                )
+                user_by_key[item.key] = scoped_user
+                membership_by_key[item.key] = Membership.objects.create(
+                    organization=organization,
+                    user=scoped_user,
+                    role=role_by_key[item.role_key],
+                )
+            repository_by_key = {
+                item.key: Repository.objects.create(
+                    organization=organization,
+                    external_id=item.external_id,
+                    name=item.name,
+                )
+                for item in scoped.repositories
+            }
+            identity_by_key = {
+                item.key: ServiceIdentity.objects.create(
+                    organization=organization,
+                    name=item.name,
+                    issuer=settings.TOKEN_ISSUER,
+                    audience=settings.TOKEN_AUDIENCE,
+                )
+                for item in scoped.service_identities
+            }
+            scope = AccessScope.objects.create(
                 organization=organization,
-                service_identity=reviewer_service_identity,
-                repository=repository,
-                action=Action.ASSURANCE_REVIEW.value,
+                name=scoped.access_scope.name,
+                all_memberships=False,
+                all_service_identities=False,
+                all_repositories=False,
+            )
+            AccessScopeMembership.objects.bulk_create(
+                [
+                    AccessScopeMembership(
+                        organization=organization,
+                        access_scope=scope,
+                        membership=membership_by_key[key],
+                    )
+                    for key in sorted(scoped.access_scope.membership_keys)
+                ]
+            )
+            AccessScopeRepository.objects.bulk_create(
+                [
+                    AccessScopeRepository(
+                        organization=organization,
+                        access_scope=scope,
+                        repository=repository_by_key[key],
+                    )
+                    for key in sorted(scoped.access_scope.repository_keys)
+                ]
+            )
+            AccessScopeServiceIdentity.objects.bulk_create(
+                [
+                    AccessScopeServiceIdentity(
+                        organization=organization,
+                        access_scope=scope,
+                        service_identity=identity_by_key[key],
+                    )
+                    for key in sorted(scoped.access_scope.service_identity_keys)
+                ]
+            )
+            AccessGrant.objects.bulk_create(
+                [
+                    AccessGrant(
+                        organization=organization,
+                        service_identity=identity_by_key[identity.key],
+                        repository=repository_by_key[grant.repository_key],
+                        action=action,
+                    )
+                    for identity in scoped.service_identities
+                    for grant in identity.grants
+                    for action in sorted(grant.actions)
+                ]
+            )
+            membership = membership_by_key[scoped.primary_membership_key]
+            user = user_by_key[scoped.primary_membership_key]
+            repository = repository_by_key[scoped.primary_repository_key]
+            service_identity = identity_by_key[scoped.initiator_service_identity_key]
+            reviewer_service_identity = identity_by_key[scoped.reviewer_service_identity_key]
+            scoped_initiator_action_values = next(
+                grant.actions
+                for identity in scoped.service_identities
+                if identity.key == scoped.initiator_service_identity_key
+                for grant in identity.grants
+                if grant.repository_key == scoped.primary_repository_key
+            )
+            scoped_reviewer_action_values = next(
+                grant.actions
+                for identity in scoped.service_identities
+                if identity.key == scoped.reviewer_service_identity_key
+                for grant in identity.grants
+                if grant.repository_key == scoped.primary_repository_key
             )
             reviewer_issued_token = issue_bootstrap_repository_token(
                 organization=organization,
                 repository=repository,
                 service_identity=reviewer_service_identity,
-                actions=frozenset({Action.ASSURANCE_REVIEW}),
+                actions=frozenset(Action(value) for value in scoped_reviewer_action_values),
                 expires_at=timezone.now() + timedelta(days=7),
             )
+            token_actions = frozenset(Action(value) for value in scoped_initiator_action_values)
+        issued = issue_bootstrap_repository_token(
+            organization=organization,
+            repository=repository,
+            service_identity=service_identity,
+            actions=token_actions,
+            expires_at=timezone.now() + timedelta(days=7),
+        )
         actor = ActorContext(
             organization_id=organization.id,
             actor_type="USER",

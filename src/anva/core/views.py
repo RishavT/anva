@@ -1014,29 +1014,36 @@ def bootstrap(request: HttpRequest) -> JsonResponse:
                 "repository_name",
                 "independent_reviewer_name",
                 "idempotency_key",
+                "scope",
             }
         ),
-        required=frozenset(
-            {
-                "organization_slug",
-                "organization_name",
-                "admin_email",
-                "admin_display_name",
-                "repository_external_id",
-                "repository_name",
-            }
-        ),
+        required=frozenset({"organization_slug", "organization_name"}),
     )
+    legacy_required = frozenset(
+        {
+            "admin_email",
+            "admin_display_name",
+            "repository_external_id",
+            "repository_name",
+        }
+    )
+    supplied_legacy = legacy_required & payload.keys()
+    if "scope" in payload:
+        if supplied_legacy or "independent_reviewer_name" in payload:
+            raise ValueError("Scoped and legacy bootstrap fields cannot be combined")
+    elif supplied_legacy != legacy_required:
+        raise ValueError("Legacy bootstrap fields must be supplied together")
     result = bootstrap_local_organization(
         supplied_secret=request.headers.get("X-Anva-Bootstrap-Secret", ""),
         organization_slug=_string(payload, "organization_slug"),
         organization_name=_string(payload, "organization_name"),
-        admin_email=_string(payload, "admin_email"),
-        admin_display_name=_string(payload, "admin_display_name"),
-        repository_external_id=_string(payload, "repository_external_id"),
-        repository_name=_string(payload, "repository_name"),
+        admin_email=_optional_string(payload, "admin_email"),
+        admin_display_name=_optional_string(payload, "admin_display_name"),
+        repository_external_id=_optional_string(payload, "repository_external_id"),
+        repository_name=_optional_string(payload, "repository_name"),
         independent_reviewer_name=_optional_string(payload, "independent_reviewer_name"),
         idempotency_key=_optional_string(payload, "idempotency_key"),
+        scope_payload=payload.get("scope"),
     )
     response: dict[str, object] = {
         "organization_id": str(result.organization.id),

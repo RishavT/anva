@@ -51,33 +51,6 @@ def _closed(
     return schema
 
 
-BOUNDED_JSON_DEFS: Final[dict[str, object]] = {
-    "bounded_json_value": {
-        "oneOf": [
-            {"type": "string", "maxLength": 10_000},
-            {"type": "number"},
-            {"type": "boolean"},
-            {"type": "null"},
-            {
-                "type": "array",
-                "maxItems": 200,
-                "items": {"$ref": "#/$defs/bounded_json_value"},
-            },
-            {
-                "type": "object",
-                "maxProperties": 100,
-                "additionalProperties": {"$ref": "#/$defs/bounded_json_value"},
-            },
-        ]
-    }
-}
-BOUNDED_MAP: Final[dict[str, object]] = {
-    "type": "object",
-    "maxProperties": 100,
-    "additionalProperties": {"$ref": "#/$defs/bounded_json_value"},
-}
-
-
 def _input(
     properties: dict[str, object],
     required: tuple[str, ...],
@@ -112,9 +85,7 @@ def _output(
     if paginated:
         properties["next_cursor"] = deepcopy(NULLABLE_CURSOR)
         required.append("next_cursor")
-    schema = _closed(properties, tuple(required))
-    schema["$defs"] = deepcopy(BOUNDED_JSON_DEFS)
-    return schema
+    return _closed(properties, tuple(required))
 
 
 PAGE_INPUT: Final[dict[str, object]] = {
@@ -156,27 +127,127 @@ PROPOSAL_REQUIRED: Final[tuple[str, ...]] = (
     "idempotency_key",
 )
 
+ENTITY_TYPES: Final[tuple[str, ...]] = (
+    "GOAL",
+    "METRIC",
+    "INITIATIVE",
+    "PRODUCT",
+    "OWNER",
+    "ENVIRONMENT",
+    "CUSTOMER_COMMITMENT",
+    "ARCHITECTURAL_DECISION",
+    "ACCEPTANCE_CRITERION",
+    "RELEASE",
+    "TEAM",
+    "REPOSITORY",
+    "SERVICE",
+    "COMPONENT",
+    "API",
+    "DATA_ASSET",
+    "WORK_ITEM",
+    "TASK",
+    "PULL_REQUEST",
+    "EVIDENCE",
+    "RISK",
+    "INCIDENT",
+    "CONTROL",
+    "DECISION",
+    "POLICY",
+    "REQUIREMENT",
+    "UNKNOWN",
+)
+RELATIONSHIP_TYPES: Final[tuple[str, ...]] = (
+    "GOAL_MEASURED_BY_METRIC",
+    "INITIATIVE_SUPPORTS_GOAL",
+    "INITIATIVE_OWNED_BY_TEAM",
+    "INITIATIVE_AFFECTS_PRODUCT",
+    "PRODUCT_IMPLEMENTED_BY_REPOSITORY",
+    "COMPONENT_BELONGS_TO_PRODUCT",
+    "REPOSITORY_OWNED_BY_TEAM",
+    "REPOSITORY_CONTAINS_COMPONENT",
+    "SERVICE_IMPLEMENTED_BY_REPOSITORY",
+    "SERVICE_DEPENDS_ON_SERVICE",
+    "API_PROVIDED_BY_SERVICE",
+    "API_CONSUMED_BY_COMPONENT",
+    "DATA_ASSET_USED_BY_SERVICE",
+    "DECISION_APPLIES_TO_ENTITY",
+    "POLICY_APPLIES_TO_ENTITY",
+    "RISK_AFFECTS_ENTITY",
+    "INCIDENT_AFFECTED_ENTITY",
+    "REQUIREMENT_SUPPORTS_INITIATIVE",
+    "REQUIREMENT_IMPLEMENTED_BY_PULL_REQUEST",
+    "ACCEPTANCE_CRITERION_VERIFIED_BY_EVIDENCE",
+    "TASK_CHANGES_ENTITY",
+    "PULL_REQUEST_CHANGES_ENTITY",
+    "ENTITY_OWNED_BY_OWNER",
+    "ENTITY_REVIEWED_BY_TEAM",
+    "OWNED_BY",
+    "MAINTAINED_BY",
+    "DEPENDS_ON",
+    "MEASURED_BY",
+    "ADVANCES",
+    "IMPLEMENTS",
+    "PART_OF",
+    "AFFECTS",
+    "GOVERNED_BY",
+    "EVIDENCED_BY",
+    "BLOCKED_BY",
+    "CHANGES",
+)
+EVIDENCE_KINDS: Final[tuple[str, ...]] = (
+    "CHECK_STATUS",
+    "TEST_RESULT",
+    "BUILD_RESULT",
+    "TYPECHECK_RESULT",
+    "LINT_RESULT",
+    "SCREENSHOT",
+    "VIDEO",
+    "CONSOLE_LOG",
+    "NETWORK_TRACE",
+    "API_ASSERTION",
+    "STATIC_ANALYSIS",
+    "SECURITY_SCAN",
+    "DEPENDENCY_SCAN",
+    "MIGRATION_RESULT",
+    "PERFORMANCE_RESULT",
+    "ACCESSIBILITY_RESULT",
+    "MANUAL_APPROVAL",
+    "SOURCE_REFERENCE",
+    "DIFF_REFERENCE",
+)
+
 REPOSITORY_DATA: Final[dict[str, object]] = {
     "repository_id": deepcopy(UUID),
     "organization_id": deepcopy(UUID),
-    "external_id": {"type": "string"},
-    "name": {"type": "string"},
+    "external_id": {"type": "string", "minLength": 1, "maxLength": 300},
+    "name": {"type": "string", "minLength": 1, "maxLength": 300},
     "active": {"type": "boolean"},
 }
 WORK_ITEM_DATA: Final[dict[str, object]] = {
     "work_item_id": deepcopy(UUID),
     "repository_id": deepcopy(UUID),
-    "external_key": {"oneOf": [{"type": "string"}, {"type": "null"}]},
-    "title": {"type": "string"},
-    "work_type": {"type": "string"},
-    "status": {"type": "string"},
+    "external_key": {
+        "oneOf": [
+            {"type": "string", "minLength": 1, "maxLength": 300},
+            {"type": "null"},
+        ]
+    },
+    "title": {"type": "string", "minLength": 1, "maxLength": 500},
+    "work_type": {
+        "type": "string",
+        "enum": ["FEATURE", "BUG", "SECURITY", "MIGRATION", "OPERATIONS", "OTHER"],
+    },
+    "status": {"type": "string", "enum": ["DRAFT", "READY", "APPROVED", "CLOSED"]},
     "revision": {"type": "integer", "minimum": 1},
     "content_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
 }
 PROPOSAL_DATA: Final[dict[str, object]] = {
     "proposal_id": deepcopy(UUID),
     "submission_id": deepcopy(UUID),
-    "proposal_kind": {"type": "string"},
+    "proposal_kind": {
+        "type": "string",
+        "enum": ["CORRECTION", "RELATIONSHIP", "DECISION", "WORK_SUMMARY", "PREFLIGHT_SUMMARY"],
+    },
     "review_state": {"type": "string", "const": "PROPOSED"},
     "approved": {"type": "boolean", "const": False},
     "review_required": {"type": "boolean", "const": True},
@@ -254,47 +325,425 @@ SEARCH_RESULT: Final[dict[str, object]] = _closed(
         "explanation",
     ),
 )
-CONTEXT_ITEM: Final[dict[str, object]] = _closed(
+PUBLIC_SCALAR_VARIANTS: Final[list[dict[str, object]]] = [
+    {"type": "string", "maxLength": 10_000},
+    {"type": "number"},
+    {"type": "boolean"},
+    {"type": "null"},
+]
+PUBLIC_ASSERTION_VALUE_VARIANTS: Final[list[dict[str, object]]] = [
+    *deepcopy(PUBLIC_SCALAR_VARIANTS),
     {
-        "item_id": deepcopy(UUID),
-        "kind": {
-            "type": "string",
-            "enum": [
-                "POLICY",
-                "RELATIONSHIP",
-                "ASSERTION",
-                "SOURCE_EXCERPT",
-                "DECISION",
-                "INCIDENT",
-                "CONFLICT",
-            ],
+        "type": "array",
+        "maxItems": 200,
+        "items": {"oneOf": deepcopy(PUBLIC_SCALAR_VARIANTS)},
+    },
+    _closed(
+        {
+            "team": {"type": "string", "minLength": 1, "maxLength": 500},
+            "owner": {"type": "string", "minLength": 1, "maxLength": 500},
+            "rule": {"type": "string", "minLength": 1, "maxLength": 10_000},
+            "service": {"type": "string", "minLength": 1, "maxLength": 500},
+            "component": {"type": "string", "minLength": 1, "maxLength": 500},
+            "name": {"type": "string", "minLength": 1, "maxLength": 500},
+            "id": {"type": "string", "minLength": 1, "maxLength": 500},
+            "status": {"type": "string", "minLength": 1, "maxLength": 100},
+            "risk": {"type": "string", "minLength": 1, "maxLength": 100},
+            "text": {"type": "string", "minLength": 1, "maxLength": 10_000},
+            "authentication": {"type": "boolean"},
+            "enabled": {"type": "boolean"},
+            "required": {"type": "boolean"},
         },
-        "item_key": {"type": "string", "minLength": 1, "maxLength": 500},
-        "summary": {"type": "string", "minLength": 1, "maxLength": 10_000},
-        "freshness": {"type": "string", "enum": ["CURRENT", "STALE", "UNKNOWN"]},
-        "is_inferred": {"type": "boolean"},
-        "selection_reason": {"type": "string", "minLength": 1, "maxLength": 500},
-        "rank_score": {"type": "number", "minimum": 0},
-        "payload": deepcopy(BOUNDED_MAP),
-        "anva_sources": {
+        (),
+    ),
+]
+PUBLIC_NATIVE_ASSERTION_VALUE: Final[dict[str, object]] = {
+    "oneOf": deepcopy(PUBLIC_ASSERTION_VALUE_VARIANTS)
+}
+PUBLIC_CANONICAL_ASSERTION_VALUE: Final[dict[str, object]] = _closed(
+    {
+        "format": {"type": "string", "const": "CANONICAL_JSON"},
+        "json": {"type": "string", "minLength": 2, "maxLength": 250_000},
+    },
+    ("format", "json"),
+)
+PUBLIC_ASSERTION_VALUE: Final[dict[str, object]] = {
+    "oneOf": [
+        *deepcopy(PUBLIC_ASSERTION_VALUE_VARIANTS),
+        PUBLIC_CANONICAL_ASSERTION_VALUE,
+    ]
+}
+ENTITY_ATTRIBUTES: Final[dict[str, object]] = _closed(
+    {
+        "owner": {"type": "string", "minLength": 1, "maxLength": 500},
+        "status": {"type": "string", "minLength": 1, "maxLength": 100},
+        "risk": {"type": "string", "minLength": 1, "maxLength": 100},
+        "freshness": {"type": "string", "minLength": 1, "maxLength": 100},
+        "tier": {
+            "oneOf": [
+                {"type": "integer", "minimum": 0},
+                {"type": "string", "minLength": 1, "maxLength": 100},
+            ]
+        },
+    },
+    (),
+)
+GRAPH_ENDPOINT: Final[dict[str, object]] = _closed(
+    {
+        "id": deepcopy(UUID),
+        "type": {"type": "string", "enum": list(ENTITY_TYPES)},
+        "key": {"type": "string", "minLength": 1, "maxLength": 500},
+        "name": {"type": "string", "minLength": 1, "maxLength": 500},
+    },
+    ("id", "type", "key", "name"),
+)
+GRAPH_RELATIONSHIP: Final[dict[str, object]] = _closed(
+    {
+        "relationship_id": deepcopy(UUID),
+        "relationship_type": {"type": "string", "enum": list(RELATIONSHIP_TYPES)},
+        "source": GRAPH_ENDPOINT,
+        "target": GRAPH_ENDPOINT,
+        "assertion_id": deepcopy(UUID),
+        "source_location_id": deepcopy(UUID),
+        "source_observation_id": deepcopy(UUID),
+        "access_snapshot_id": deepcopy(UUID),
+        "observed_at": {"type": "string", "format": "date-time"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "depth": {"type": "integer", "const": 1},
+    },
+    (
+        "relationship_id",
+        "relationship_type",
+        "source",
+        "target",
+        "assertion_id",
+        "source_location_id",
+        "source_observation_id",
+        "access_snapshot_id",
+        "observed_at",
+        "confidence",
+        "depth",
+    ),
+)
+POLICY_BINDING: Final[dict[str, object]] = _closed(
+    {
+        "scope_level": {
+            "type": "string",
+            "enum": ["ORGANIZATION", "PRODUCT", "SYSTEM", "REPOSITORY", "PATH"],
+        },
+        "mandatory": {"type": "boolean"},
+        "repository_ids": {
             "type": "array",
-            "items": RETRIEVAL_CITATION,
-            "minItems": 1,
-            "maxItems": 200,
+            "items": deepcopy(UUID),
+            "uniqueItems": True,
+            "maxItems": 100,
+        },
+        "path_patterns": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "maxLength": 500},
+            "uniqueItems": True,
+            "maxItems": 100,
+        },
+        "target_branches": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "maxLength": 200},
+            "uniqueItems": True,
+            "maxItems": 100,
+        },
+    },
+    ("scope_level", "mandatory", "repository_ids", "path_patterns", "target_branches"),
+)
+POLICY_REQUIREMENT: Final[dict[str, object]] = _closed(
+    {
+        "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,63}$"},
+        "description": {"type": "string", "minLength": 1, "maxLength": 5_000},
+        "enforcement": {"type": "string", "enum": ["BLOCKING", "ADVISORY"]},
+        "check_type": {
+            "type": "string",
+            "enum": ["DETERMINISTIC", "EVIDENCE", "MODEL_REVIEW", "MANUAL_APPROVAL"],
+        },
+        "required_evidence": {
+            "type": "array",
+            "items": {"type": "string", "enum": list(EVIDENCE_KINDS)},
+            "uniqueItems": True,
+            "maxItems": 20,
+        },
+        "required_approval": {"type": "boolean"},
+    },
+    (
+        "code",
+        "description",
+        "enforcement",
+        "check_type",
+        "required_evidence",
+        "required_approval",
+    ),
+)
+POLICY_RESULT: Final[dict[str, object]] = _closed(
+    {
+        "policy_id": deepcopy(UUID),
+        "policy_version_id": deepcopy(UUID),
+        "name": {"type": "string", "minLength": 1, "maxLength": 300},
+        "owner": {"type": "string", "minLength": 1, "maxLength": 300},
+        "version": {"type": "integer", "minimum": 1},
+        "schema_version": {"type": "string", "minLength": 1, "maxLength": 20},
+        "content_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "effective_at": {"type": "string", "format": "date-time"},
+        "expires_at": {
+            "oneOf": [
+                {"type": "string", "format": "date-time"},
+                {"type": "null"},
+            ]
+        },
+        "binding": {"oneOf": [POLICY_BINDING, {"type": "null"}]},
+        "requirements": {
+            "type": "array",
+            "items": POLICY_REQUIREMENT,
+            "maxItems": 100,
         },
     },
     (
-        "item_id",
-        "kind",
-        "item_key",
-        "summary",
-        "freshness",
-        "is_inferred",
-        "selection_reason",
-        "rank_score",
-        "payload",
-        "anva_sources",
+        "policy_id",
+        "policy_version_id",
+        "name",
+        "owner",
+        "version",
+        "schema_version",
+        "content_hash",
+        "effective_at",
+        "expires_at",
+        "binding",
+        "requirements",
     ),
+)
+WORK_ACCEPTANCE_CRITERION: Final[dict[str, object]] = _closed(
+    {
+        "id": deepcopy(UUID),
+        "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,63}$"},
+        "normalized_text": {"type": "string", "minLength": 1, "maxLength": 10_000},
+        "required_evidence_types": {
+            "type": "array",
+            "items": {"type": "string", "enum": list(EVIDENCE_KINDS)},
+            "uniqueItems": True,
+            "maxItems": 20,
+        },
+        "manual_approval_allowed": {"type": "boolean"},
+    },
+    (
+        "id",
+        "code",
+        "normalized_text",
+        "required_evidence_types",
+        "manual_approval_allowed",
+    ),
+)
+WORK_REQUIREMENT: Final[dict[str, object]] = _closed(
+    {
+        "requirement_id": deepcopy(UUID),
+        "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,63}$"},
+        "text": {"type": "string", "minLength": 1, "maxLength": 10_000},
+        "origin": {"type": "string", "minLength": 1, "maxLength": 100},
+        "owner": {"type": "string", "maxLength": 300},
+        "status": {"type": "string", "minLength": 1, "maxLength": 24},
+        "requires_approval": {"type": "boolean"},
+        "source_references": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "maxLength": 1_000},
+            "uniqueItems": True,
+            "maxItems": 50,
+        },
+        "related_entity_ids": {
+            "type": "array",
+            "items": deepcopy(UUID),
+            "uniqueItems": True,
+            "maxItems": 100,
+        },
+        "acceptance_criteria": {
+            "type": "array",
+            "items": WORK_ACCEPTANCE_CRITERION,
+            "maxItems": 50,
+        },
+    },
+    (
+        "requirement_id",
+        "code",
+        "text",
+        "origin",
+        "owner",
+        "status",
+        "requires_approval",
+        "source_references",
+        "related_entity_ids",
+        "acceptance_criteria",
+    ),
+)
+SOURCE_EXCERPT_PROVENANCE: Final[dict[str, object]] = _closed(
+    {
+        "pointer": {"type": "string", "minLength": 1, "maxLength": 1_000},
+        "canonical_url": {"type": "string", "format": "uri", "maxLength": 2_000},
+        "source_location_id": deepcopy(UUID),
+        "source_observation_id": deepcopy(UUID),
+        "access_snapshot_id": deepcopy(UUID),
+        "observed_at": {"type": "string", "format": "date-time"},
+    },
+    (
+        "pointer",
+        "canonical_url",
+        "source_location_id",
+        "source_observation_id",
+        "access_snapshot_id",
+        "observed_at",
+    ),
+)
+
+
+def _context_item(
+    kind: dict[str, object],
+    payload: dict[str, object],
+) -> dict[str, object]:
+    return _closed(
+        {
+            "item_id": deepcopy(UUID),
+            "kind": kind,
+            "item_key": {"type": "string", "minLength": 1, "maxLength": 500},
+            "summary": {"type": "string", "minLength": 1, "maxLength": 10_000},
+            "freshness": {"type": "string", "enum": ["CURRENT", "STALE", "UNKNOWN"]},
+            "is_inferred": {"type": "boolean"},
+            "selection_reason": {"type": "string", "minLength": 1, "maxLength": 500},
+            "rank_score": {"type": "number", "minimum": 0},
+            "payload": payload,
+            "anva_sources": {
+                "type": "array",
+                "items": RETRIEVAL_CITATION,
+                "minItems": 1,
+                "maxItems": 200,
+            },
+        },
+        (
+            "item_id",
+            "kind",
+            "item_key",
+            "summary",
+            "freshness",
+            "is_inferred",
+            "selection_reason",
+            "rank_score",
+            "payload",
+            "anva_sources",
+        ),
+    )
+
+
+ASSERTION_PACKET_PAYLOAD: Final[dict[str, object]] = _closed(
+    {
+        "assertion_id": deepcopy(UUID),
+        "subject_key": {"type": "string", "minLength": 1, "maxLength": 500},
+        "predicate": {"type": "string", "minLength": 1, "maxLength": 200},
+        "value": PUBLIC_ASSERTION_VALUE,
+        "review_state": {
+            "type": "string",
+            "enum": [
+                "UNREVIEWED",
+                "AUTO_ACCEPTED",
+                "HUMAN_CONFIRMED",
+                "DISPUTED",
+                "REJECTED",
+                "SUPERSEDED",
+                "STALE",
+            ],
+        },
+        "staleness_state": {
+            "type": "string",
+            "enum": ["FRESH", "AGING", "STALE", "CONTRADICTED", "SOURCE_UNAVAILABLE"],
+        },
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    },
+    (
+        "assertion_id",
+        "subject_key",
+        "predicate",
+        "value",
+        "review_state",
+        "staleness_state",
+        "confidence",
+    ),
+)
+DECISION_REFERENCE_PACKET_PAYLOAD: Final[dict[str, object]] = _closed(
+    {"assertion_id": deepcopy(UUID)},
+    ("assertion_id",),
+)
+RELATIONSHIP_PACKET_PAYLOAD: Final[dict[str, object]] = _closed(
+    {
+        "relationship_id": deepcopy(UUID),
+        "relationship_type": {"type": "string", "enum": list(RELATIONSHIP_TYPES)},
+        "source_entity_id": deepcopy(UUID),
+        "target_entity_id": deepcopy(UUID),
+        "review_state": {
+            "type": "string",
+            "enum": ["UNREVIEWED", "AMBIGUOUS", "CONFIRMED", "REJECTED"],
+        },
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    },
+    (
+        "relationship_id",
+        "relationship_type",
+        "source_entity_id",
+        "target_entity_id",
+        "review_state",
+        "confidence",
+    ),
+)
+SOURCE_PACKET_PAYLOAD: Final[dict[str, object]] = _closed(
+    {
+        "chunk_id": deepcopy(UUID),
+        "content_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "ranking": RANKING_EXPLANATION,
+        "search_position": {"type": "integer", "minimum": 1, "maximum": 100},
+    },
+    ("chunk_id", "content_hash", "ranking", "search_position"),
+)
+CONFLICT_PACKET_PAYLOAD: Final[dict[str, object]] = _closed(
+    {
+        "conflict_id": deepcopy(UUID),
+        "left_assertion_id": deepcopy(UUID),
+        "right_assertion_id": deepcopy(UUID),
+        "predicate": {"type": "string", "minLength": 1, "maxLength": 200},
+    },
+    ("conflict_id", "left_assertion_id", "right_assertion_id", "predicate"),
+)
+CONTEXT_ITEM: Final[dict[str, object]] = {
+    "oneOf": [
+        _context_item(
+            {"type": "string", "enum": ["POLICY", "ASSERTION", "DECISION", "INCIDENT"]},
+            ASSERTION_PACKET_PAYLOAD,
+        ),
+        _context_item(
+            {"type": "string", "const": "DECISION"},
+            DECISION_REFERENCE_PACKET_PAYLOAD,
+        ),
+        _context_item({"type": "string", "const": "RELATIONSHIP"}, RELATIONSHIP_PACKET_PAYLOAD),
+        _context_item({"type": "string", "const": "SOURCE_EXCERPT"}, SOURCE_PACKET_PAYLOAD),
+        _context_item({"type": "string", "const": "CONFLICT"}, CONFLICT_PACKET_PAYLOAD),
+    ]
+}
+CONTEXT_REQUEST: Final[dict[str, object]] = _closed(
+    {
+        "task": {"type": "string", "minLength": 1, "maxLength": 2_000},
+        "phase": {
+            "type": "string",
+            "enum": ["PREPARE", "BUILD", "PREFLIGHT", "ASSURANCE"],
+        },
+        "budget": _closed(
+            {
+                "max_items": {"type": "integer", "minimum": 1, "maximum": 100},
+                "max_tokens": {"type": "integer", "minimum": 1, "maximum": 20_000},
+                "max_bytes": {"type": "integer", "minimum": 1, "maximum": 250_000},
+                "max_citations": {"type": "integer", "minimum": 1, "maximum": 200},
+            },
+            ("max_items", "max_tokens", "max_bytes", "max_citations"),
+        ),
+    },
+    ("task", "phase", "budget"),
 )
 CONTEXT_PACKET: Final[dict[str, object]] = _closed(
     {
@@ -310,7 +759,7 @@ CONTEXT_PACKET: Final[dict[str, object]] = _closed(
             "type": "string",
             "enum": ["PREPARE", "BUILD", "PREFLIGHT", "ASSURANCE"],
         },
-        "request": deepcopy(BOUNDED_MAP),
+        "request": CONTEXT_REQUEST,
         "authorization_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
         "selection_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
         "retrieval_watermark": {"type": "integer", "minimum": 1},
@@ -503,10 +952,10 @@ TOOL_CONTRACTS: Final[tuple[ToolContract, ...]] = (
             "anva.get_entity",
             {
                 "entity_id": deepcopy(UUID),
-                "entity_type": {"type": "string"},
-                "canonical_key": {"type": "string"},
-                "display_name": {"type": "string"},
-                "attributes": deepcopy(BOUNDED_MAP),
+                "entity_type": {"type": "string", "enum": list(ENTITY_TYPES)},
+                "canonical_key": {"type": "string", "minLength": 1, "maxLength": 500},
+                "display_name": {"type": "string", "minLength": 1, "maxLength": 500},
+                "attributes": ENTITY_ATTRIBUTES,
                 "revision": {"type": "integer", "minimum": 1},
             },
             (
@@ -531,7 +980,7 @@ TOOL_CONTRACTS: Final[tuple[ToolContract, ...]] = (
                 "relationships": {
                     "type": "array",
                     "maxItems": MAX_PAGE_SIZE,
-                    "items": deepcopy(BOUNDED_MAP),
+                    "items": GRAPH_RELATIONSHIP,
                 },
             },
             ("entity_id", "relationships"),
@@ -548,7 +997,11 @@ TOOL_CONTRACTS: Final[tuple[ToolContract, ...]] = (
             {
                 **REPOSITORY_DATA,
                 "profile_version": {"type": "integer", "const": 1},
-                "limitations": {"type": "array", "items": {"type": "string"}},
+                "limitations": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1, "maxLength": 2_000},
+                    "maxItems": 20,
+                },
             },
             (*tuple(REPOSITORY_DATA), "profile_version", "limitations"),
         ),
@@ -564,7 +1017,7 @@ TOOL_CONTRACTS: Final[tuple[ToolContract, ...]] = (
                 "policies": {
                     "type": "array",
                     "maxItems": MAX_PAGE_SIZE,
-                    "items": deepcopy(BOUNDED_MAP),
+                    "items": POLICY_RESULT,
                 }
             },
             ("policies",),
@@ -584,7 +1037,7 @@ TOOL_CONTRACTS: Final[tuple[ToolContract, ...]] = (
                 "requirements": {
                     "type": "array",
                     "maxItems": MAX_PAGE_SIZE,
-                    "items": deepcopy(BOUNDED_MAP),
+                    "items": WORK_REQUIREMENT,
                 },
             },
             ("work_item_id", "revision", "requirements"),
@@ -600,14 +1053,28 @@ TOOL_CONTRACTS: Final[tuple[ToolContract, ...]] = (
             "anva.explain_assertion",
             {
                 "assertion_id": deepcopy(UUID),
-                "summary": {"type": "string"},
-                "freshness": {"type": "string"},
+                "summary": {"type": "string", "minLength": 1, "maxLength": 20_000},
+                "freshness": {
+                    "type": "string",
+                    "enum": ["FRESH", "AGING", "STALE", "CONTRADICTED", "SOURCE_UNAVAILABLE"],
+                },
                 "is_inferred": {"type": "boolean"},
-                "review_state": {"type": "string"},
+                "review_state": {
+                    "type": "string",
+                    "enum": [
+                        "UNREVIEWED",
+                        "AUTO_ACCEPTED",
+                        "HUMAN_CONFIRMED",
+                        "DISPUTED",
+                        "REJECTED",
+                        "SUPERSEDED",
+                        "STALE",
+                    ],
+                },
                 "sources": {
                     "type": "array",
                     "maxItems": 200,
-                    "items": deepcopy(BOUNDED_MAP),
+                    "items": RETRIEVAL_CITATION,
                 },
             },
             (
@@ -645,7 +1112,7 @@ TOOL_CONTRACTS: Final[tuple[ToolContract, ...]] = (
                 "content_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
                 "offset": {"type": "integer", "minimum": 0},
                 "truncated": {"type": "boolean"},
-                "provenance": deepcopy(BOUNDED_MAP),
+                "provenance": SOURCE_EXCERPT_PROVENANCE,
                 "trust": {"type": "string", "const": "UNTRUSTED_INERT_SOURCE_TEXT"},
             },
             (
@@ -696,7 +1163,10 @@ TOOL_CONTRACTS: Final[tuple[ToolContract, ...]] = (
                 **PROPOSAL_COMMON,
                 "source_entity_id": deepcopy(UUID),
                 "target_entity_id": deepcopy(UUID),
-                "relationship_type": {"type": "string", "minLength": 1, "maxLength": 64},
+                "relationship_type": {
+                    "type": "string",
+                    "enum": list(RELATIONSHIP_TYPES),
+                },
                 "rationale": {"type": "string", "minLength": 1, "maxLength": 2_000},
             },
             (

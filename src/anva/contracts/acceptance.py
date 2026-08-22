@@ -12,6 +12,7 @@ from typing import Final, cast
 from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import ValidationError
 
+from anva.contracts.bootstrap_scope import acceptance_bootstrap_scope_payload
 from anva.contracts.catalog import (
     ASSURANCE_CITATION,
     DIFF_CHUNK,
@@ -585,6 +586,50 @@ EVIDENCE_MANIFEST_RESPONSE: Final[dict[str, object]] = _closed(
     },
     ("manifest_id", "payload_hash", "evidence_ids", "created"),
 )
+EVIDENCE_UPLOAD_AUTHORIZATION_RESPONSE: Final[dict[str, object]] = _closed(
+    {
+        "authorization_id": UUID,
+        "repository_id": UUID,
+        "access_scope_id": UUID,
+        "pull_request_number": {"type": "integer", "minimum": 1},
+        "commit_sha": COMMIT,
+        "declared_sha256": SHA256,
+        "declared_size": {"type": "integer", "minimum": 1, "maximum": 4_096},
+        "state": {
+            "type": "string",
+            "enum": [
+                "ISSUED",
+                "RECEIVING",
+                "RECOVERING",
+                "ACCEPTED",
+                "REJECTED",
+                "EXPIRED",
+                "REVOKED",
+            ],
+        },
+        "expires_at": DATE_TIME,
+        "upload_path": {
+            "type": "string",
+            "pattern": "^/api/v1/evidence-upload-authorizations/[a-f0-9-]{36}/content$",
+        },
+        "upload_token": _nullable({"type": "string", "minLength": 32, "maxLength": 512}),
+        "replayed": {"type": "boolean"},
+    },
+    (
+        "authorization_id",
+        "repository_id",
+        "access_scope_id",
+        "pull_request_number",
+        "commit_sha",
+        "declared_sha256",
+        "declared_size",
+        "state",
+        "expires_at",
+        "upload_path",
+        "upload_token",
+        "replayed",
+    ),
+)
 EVIDENCE_ARCHIVE_SUMMARY: Final[dict[str, object]] = _closed(
     {
         "format": {"type": "string", "enum": ["JSON", "ZIP", "TAR"]},
@@ -1142,11 +1187,15 @@ HTTP_OPERATION_EXAMPLES: Final[dict[str, dict[str, object]]] = {
         "request": {
             "organization_slug": "anva-acceptance-ember",
             "organization_name": "Ember Organization",
-            "admin_email": "operator@ember.invalid",
-            "admin_display_name": "Acceptance initiator",
-            "repository_external_id": "github:synthetic/ember",
-            "repository_name": "ember",
-            "independent_reviewer_name": "Independent reviewer",
+            "scope": acceptance_bootstrap_scope_payload(
+                admin_email="operator@ember.invalid",
+                admin_display_name="Acceptance initiator",
+                repository_external_id="github:synthetic/ember",
+                repository_name="ember",
+                initiator_name="Acceptance runner",
+                reviewer_name="Independent reviewer",
+                access_scope_name="Ember acceptance scope",
+            ),
             "idempotency_key": "1" * 64,
         },
         "201": {
@@ -1561,6 +1610,7 @@ HTTP_RESPONSE_OVERRIDES: Final[dict[str, dict[str, object]]] = {
     "importWorkItemRevision": WORK_IMPORT_RESPONSE,
     "importPolicyVersion": POLICY_IMPORT_RESPONSE,
     "simulatePolicy": POLICY_SIMULATION_RESPONSE,
+    "createEvidenceUploadAuthorization": EVIDENCE_UPLOAD_AUTHORIZATION_RESPONSE,
     "uploadEvidenceContent": EVIDENCE_UPLOAD_RESPONSE,
     "submitEvidenceManifest": EVIDENCE_MANIFEST_RESPONSE,
     "getEvidenceManifest": EVIDENCE_MANIFEST_DETAIL_RESPONSE,
@@ -1572,6 +1622,53 @@ HTTP_RESPONSE_OVERRIDES: Final[dict[str, dict[str, object]]] = {
     "claimManualEvaluatorTask": EVALUATOR_CLAIM_RESPONSE,
     "submitManualEvaluatorResult": EVALUATOR_SUBMIT_RESPONSE,
 }
+
+CREATED_OR_REPLAYED_OPERATION_IDS: Final[frozenset[str]] = frozenset(
+    {
+        "connectFilesystemSource",
+        "importWorkItemRevision",
+        "importPolicyVersion",
+        "simulatePolicy",
+        "submitEvidenceManifest",
+        "ingestManualPullRequestDiff",
+        "startManualDiffAssurance",
+        "submitManualEvaluatorResult",
+    }
+)
+
+
+def _status_response_schema(
+    operation_id: str,
+    status: int,
+) -> dict[str, object] | None:
+    """Return the exact success shape for one operation/status pair."""
+    base = HTTP_RESPONSE_OVERRIDES.get(operation_id)
+    if base is None:
+        return None
+    schema = deepcopy(base)
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        if operation_id in CREATED_OR_REPLAYED_OPERATION_IDS:
+            raise ValueError(f"Replayable response is not a closed object: {operation_id}")
+        return schema
+    if operation_id in CREATED_OR_REPLAYED_OPERATION_IDS:
+        if status not in {200, 201} or "created" not in properties:
+            raise ValueError(f"Replayable response status is not modeled: {operation_id} {status}")
+        properties["created"] = {"type": "boolean", "const": status == 201}
+    if operation_id == "submitManualEvaluatorResult":
+        properties["replayed"] = {"type": "boolean", "const": status == 200}
+    if operation_id == "createEvidenceUploadAuthorization":
+        if status not in {200, 201}:
+            raise ValueError(f"Upload authorization status is not modeled: {status}")
+        properties["replayed"] = {"type": "boolean", "const": status == 200}
+        properties["upload_token"] = (
+            {"type": "null"}
+            if status == 200
+            else {"type": "string", "minLength": 32, "maxLength": 512}
+        )
+    return schema
+
+
 HTTP_REQUEST_OVERRIDES: Final[dict[str, dict[str, object]]] = {
     "connectFilesystemSource": SOURCE_CONNECTION_REQUEST,
     "syncSourceConnection": SYNC_START_REQUEST,
@@ -1632,12 +1729,6 @@ def apply_acceptance_http_contracts(document: dict[str, object]) -> None:
                     media["schema"] = request_schema_ref
                 media["example"] = deepcopy(examples["request"])
         responses = cast(dict[str, object], operation["responses"])
-        response_schema = HTTP_RESPONSE_OVERRIDES.get(operation_id)
-        response_schema_ref: dict[str, str] | None = None
-        if response_schema is not None:
-            response_component = f"acceptance-{operation_id}-response"
-            schemas[response_component] = deepcopy(response_schema)
-            response_schema_ref = {"$ref": f"#/components/schemas/{response_component}"}
         for status, example in examples.items():
             if status == "request":
                 continue
@@ -1651,19 +1742,12 @@ def apply_acceptance_http_contracts(document: dict[str, object]) -> None:
                 continue
             content = response.setdefault("content", {"application/json": {}})
             media = cast(dict[str, object], cast(dict[str, object], content)["application/json"])
-            if response_schema_ref is not None:
-                media["schema"] = response_schema_ref
+            response_schema = _status_response_schema(operation_id, int(status))
+            if response_schema is not None:
+                response_component = f"acceptance-{operation_id}-{status}-response"
+                schemas[response_component] = response_schema
+                media["schema"] = {"$ref": f"#/components/schemas/{response_component}"}
             media["example"] = deepcopy(example)
-        if response_schema_ref is not None:
-            for status in ("200", "201", "202"):
-                response = responses.get(status)
-                if not isinstance(response, dict):
-                    continue
-                content = response.setdefault("content", {"application/json": {}})
-                media = cast(
-                    dict[str, object], cast(dict[str, object], content)["application/json"]
-                )
-                media["schema"] = response_schema_ref
 
 
 def _resolve_pointer(document: dict[str, object], pointer: str) -> object:

@@ -33,6 +33,7 @@ from anva.acceptance.runner import (
 )
 from anva.acceptance.state import ResumeState, load_state
 from anva.contracts.acceptance import ACCEPTANCE_HTTP_OPERATION_IDS
+from anva.contracts.bootstrap_scope import acceptance_bootstrap_scope_payload
 from anva.contracts.catalog import EXAMPLES
 from anva.core.services.evidence_uploads import inspect_evidence_upload
 
@@ -489,7 +490,17 @@ def test_case_drives_query_commits_pr_and_public_payloads(
     case = deepcopy(EXAMPLES["acceptance-case"])
     case["case_id"] = case_id
     cast(dict[str, object], case["organization"])["slug"] = slug
-    cast(dict[str, object], case["organization"])["name"] = "Synthetic Org"
+    organization = cast(dict[str, object], case["organization"])
+    organization["name"] = "Synthetic Org"
+    organization["bootstrap_scope"] = acceptance_bootstrap_scope_payload(
+        admin_email=f"operator@{slug}.invalid",
+        admin_display_name=f"{slug} operator",
+        repository_external_id=f"github:synthetic/{slug}",
+        repository_name=f"{slug}-repository",
+        initiator_name=f"{slug} acceptance runner",
+        reviewer_name=f"{slug} independent reviewer",
+        access_scope_name=f"{slug} exact scope",
+    )
     cast(dict[str, object], case["retrieval"])["search_query"] = (
         "synthetic ownership and release policy"
     )
@@ -530,6 +541,10 @@ def test_case_drives_query_commits_pr_and_public_payloads(
     )
     assert bootstrap is not None
     assert bootstrap["organization_slug"] == slug
+    assert bootstrap["scope"] == organization["bootstrap_scope"]
+    assert "admin_email" not in bootstrap
+    identities = cast(dict[str, object], bootstrap["scope"])["service_identities"]
+    assert isinstance(identities, list) and len(identities) == 2
     assert product.upload_contents == [runner.case.evidence_bytes]
     inspected = inspect_evidence_upload(
         io.BytesIO(runner.case.evidence_bytes),

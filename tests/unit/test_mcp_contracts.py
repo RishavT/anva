@@ -25,6 +25,7 @@ from anva.mcp.contracts import (
     READ_TOOL_NAMES,
     RESOURCE_CONTRACTS,
     TOOL_CONTRACTS,
+    validate_tool_output,
 )
 
 
@@ -213,3 +214,11 @@ def test_untrusted_source_text_is_returned_as_inert_bounded_data(
     assert result["text"] == malicious[:40]
     assert result["trust"] == "UNTRUSTED_INERT_SOURCE_TEXT"
     assert result["truncated"] is True
+    validate_tool_output(
+        "anva.get_source_excerpt",
+        {
+            "contract_version": "1",
+            "tool": "anva.get_source_excerpt",
+            "data": result,
+        },
+    )

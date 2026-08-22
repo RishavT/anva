@@ -210,20 +210,43 @@ def test_bootstrap_exposes_scope_and_opt_in_independent_reviewer_once() -> None:
     created_content = cast(dict[str, object], created["content"])
     created_media = cast(dict[str, object], created_content["application/json"])
     response_schema = cast(dict[str, object], created_media["schema"])
-    request_properties = cast(dict[str, object], request_schema["properties"])
+    request_branches = cast(list[dict[str, object]], request_schema["oneOf"])
+    assert len(request_branches) == 2
+    legacy_request = next(
+        branch
+        for branch in request_branches
+        if "independent_reviewer_name" in cast(dict[str, object], branch["properties"])
+    )
+    scoped_request = next(
+        branch
+        for branch in request_branches
+        if "scope" in cast(dict[str, object], branch["properties"])
+    )
+    legacy_properties = cast(dict[str, object], legacy_request["properties"])
+    scoped_properties = cast(dict[str, object], scoped_request["properties"])
     response_properties = cast(dict[str, object], response_schema["properties"])
 
     assert "access_scope_id" in cast(list[str], response_schema["required"])
-    assert "independent_reviewer_name" in request_properties
-    assert cast(dict[str, object], request_properties["idempotency_key"])["pattern"] == (
-        "^[a-f0-9]{64}$"
-    )
-    assert "independent_reviewer_name" not in cast(list[str], request_schema["required"])
+    assert legacy_request["additionalProperties"] is False
+    assert "scope" not in legacy_properties
+    assert "independent_reviewer_name" in legacy_properties
+    assert "independent_reviewer_name" not in cast(list[str], legacy_request["required"])
+    assert scoped_request["additionalProperties"] is False
+    assert "scope" in scoped_properties
+    assert "scope" in cast(list[str], scoped_request["required"])
+    assert "independent_reviewer_name" not in scoped_properties
+    for properties in (legacy_properties, scoped_properties):
+        assert cast(dict[str, object], properties["idempotency_key"])["pattern"] == (
+            "^[a-f0-9]{64}$"
+        )
     assert cast(dict[str, object], response_properties["reviewer_token"])["minLength"] == 32
     assert "bootstrap_request_sha256" in cast(list[str], response_schema["required"])
     assert "recovered" in cast(list[str], response_schema["required"])
     assert operation["security"] == []
-    assert "least-privilege" in cast(str, operation["description"])
+    description = cast(str, operation["description"])
+    assert "explicitly request closed roles" in description
+    assert "per-repository actions in scope" in description
+    assert "deprecated flat request" in description
 
 
 @pytest.mark.contract

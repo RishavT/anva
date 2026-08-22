@@ -35,6 +35,7 @@ from anva.acceptance.provenance import (
     attest_launch_manifest,
 )
 from anva.acceptance.state import ResumeState, load_state, save_state
+from anva.contracts.bootstrap_scope import parse_bootstrap_scope
 from anva.contracts.validation import validate_payload
 
 TERMINAL_SYNC_STATES = frozenset({"COMPLETED", "PARTIALLY_COMPLETED", "FAILED", "CANCELLED"})
@@ -582,21 +583,36 @@ class AcceptanceRunner:
     ) -> dict[str, object]:
         organization = self.case.section("organization")
         slug = _string(organization, "slug")
+        raw_scope = organization.get("bootstrap_scope")
+        scope = parse_bootstrap_scope(raw_scope)
         if self.case.legacy_default:
             slug = f"anva-acceptance-{state.hashes['reference_time_sha256'][:12]}"
-        payload: dict[str, object] = {
-            "organization_slug": slug,
-            "organization_name": _string(organization, "name"),
-            "admin_email": (
-                f"{slug}@anva.invalid"
-                if self.case.legacy_default
-                else _string(organization, "admin_email")
-            ),
-            "admin_display_name": _string(organization, "admin_display_name"),
-            "repository_external_id": _string(organization, "repository_external_id"),
-            "repository_name": _string(organization, "repository_name"),
-            "independent_reviewer_name": _string(organization, "independent_reviewer_name"),
-        }
+            membership = next(
+                item for item in scope.memberships if item.key == scope.primary_membership_key
+            )
+            repository = next(
+                item for item in scope.repositories if item.key == scope.primary_repository_key
+            )
+            reviewer = next(
+                item
+                for item in scope.service_identities
+                if item.key == scope.reviewer_service_identity_key
+            )
+            payload: dict[str, object] = {
+                "organization_slug": slug,
+                "organization_name": _string(organization, "name"),
+                "admin_email": f"{slug}@anva.invalid",
+                "admin_display_name": membership.display_name,
+                "repository_external_id": repository.external_id,
+                "repository_name": repository.name,
+                "independent_reviewer_name": reviewer.name,
+            }
+        else:
+            payload = {
+                "organization_slug": slug,
+                "organization_name": _string(organization, "name"),
+                "scope": deepcopy(raw_scope),
+            }
         if include_idempotency:
             payload["idempotency_key"] = state.hashes["bootstrap_idempotency_sha256"]
         return payload

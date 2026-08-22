@@ -32,6 +32,7 @@ from anva.core.models import (
     ServiceIdentity,
     SourceConnection,
 )
+from anva.core.services import mcp_gateway
 from anva.core.services.authorization import NOT_FOUND_MESSAGE, Action
 from anva.core.services.context import ActorContext
 from anva.core.services.intent import import_work_item
@@ -100,6 +101,77 @@ def _gateway_tenant(label: str) -> tuple[Organization, Repository, AccessScope, 
         expires_at=timezone.now() + timedelta(hours=1),
     )
     return organization, repository, scope, issued.plaintext
+
+
+def _assertion_packet(
+    *,
+    organization: Organization,
+    repository: Repository,
+    assertion: KnowledgeAssertion,
+) -> dict[str, object]:
+    packet = deepcopy(EXAMPLES["context-packet"])
+    packet.update(
+        {
+            "packet_id": str(uuid.uuid4()),
+            "organization_id": str(organization.id),
+            "repository_id": str(repository.id),
+            "work_item_id": None,
+            "phase": "PREPARE",
+            "request": {
+                "task": "Read persisted structured assertion context",
+                "phase": "PREPARE",
+                "budget": {
+                    "max_items": 50,
+                    "max_tokens": 8_000,
+                    "max_bytes": 100_000,
+                    "max_citations": 100,
+                },
+            },
+            "items": [
+                {
+                    "item_id": str(uuid.uuid4()),
+                    "kind": "ASSERTION",
+                    "item_key": f"assertion:{assertion.id}",
+                    "summary": "The checkout service depends on payments.",
+                    "freshness": "CURRENT",
+                    "is_inferred": False,
+                    "selection_reason": "Authorized governed assertion",
+                    "rank_score": 1.0,
+                    "payload": {
+                        "assertion_id": str(assertion.id),
+                        "subject_key": assertion.subject_key,
+                        "predicate": assertion.predicate,
+                        "value": assertion.value,
+                        "review_state": assertion.review_state,
+                        "staleness_state": assertion.staleness_state,
+                        "confidence": assertion.confidence,
+                    },
+                    "anva_sources": [
+                        {
+                            "source_location_id": str(uuid.uuid4()),
+                            "source_observation_id": str(uuid.uuid4()),
+                            "access_snapshot_id": str(uuid.uuid4()),
+                            "canonical_url": "https://example.test/services/checkout.json",
+                            "locator": "/dependencies",
+                            "source_content_hash": "a" * 64,
+                            "observed_at": "2026-08-22T00:00:00Z",
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+    packet_budget = packet["budget"]
+    assert isinstance(packet_budget, dict)
+    packet_budget.update(
+        {
+            "selected_items": 1,
+            "selected_tokens": 10,
+            "selected_bytes": 100,
+            "selected_citations": 1,
+        }
+    )
+    return packet
 
 
 @pytest.mark.integration
@@ -196,6 +268,205 @@ def test_codex_and_claude_workflow_traces_share_exact_authorized_packet() -> Non
             MCPToolInvocation.objects.get(request_id=request_id).tool_name
             for request_id in request_ids
         ] == ["anva.resolve_repository", "anva.resolve_work_item", "anva.get_context_packet"]
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_persisted_nested_assertion_value_returns_schema_valid_public_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    organization, repository, scope, plaintext = _gateway_tenant("mcp-structured-value")
+    actor = authenticate_bearer(f"Bearer {plaintext}")
+    structured_value = {
+        "dependencies": [
+            {"tier": 1, "name": "payments"},
+            {"name": "ledger", "tier": 2},
+        ]
+    }
+    assertion = KnowledgeAssertion.objects.create(
+        organization=organization,
+        access_scope=scope,
+        subject_key="service:checkout",
+        predicate="service.dependencies",
+        value=structured_value,
+        provenance=[{"extractor": "structured-json"}],
+    )
+    packet = _assertion_packet(
+        organization=organization,
+        repository=repository,
+        assertion=assertion,
+    )
+    monkeypatch.setattr(
+        mcp_gateway,
+        "get_context_packet",
+        lambda **_kwargs: deepcopy(packet),
+    )
+
+    response = dispatch_tool(
+        actor=actor,
+        tool_name="anva.get_context_packet",
+        arguments={
+            "contract_version": "1",
+            "repository_id": str(repository.id),
+            "packet_id": packet["packet_id"],
+        },
+        transport="MCP",
+    )
+
+    validate_tool_output("anva.get_context_packet", response)
+    data = response["data"]
+    assert isinstance(data, dict)
+    public_packet = data["packet"]
+    assert isinstance(public_packet, dict)
+    items = public_packet["items"]
+    assert isinstance(items, list)
+    payload = items[0]["payload"]
+    assert isinstance(payload, dict)
+    assert payload["value"] == {
+        "format": "CANONICAL_JSON",
+        "json": ('{"dependencies":[{"name":"payments","tier":1},{"name":"ledger","tier":2}]}'),
+    }
+    assertion.refresh_from_db()
+    assert assertion.value == structured_value
+    invocation = MCPToolInvocation.objects.get(request_id=actor.request_id)
+    assert invocation.outcome == MCPToolInvocation.Outcome.SUCCEEDED
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_nested_assertion_control_and_credentials_fail_before_success_audit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    organization, repository, scope, plaintext = _gateway_tenant("mcp-nested-rejection")
+    actor = authenticate_bearer(f"Bearer {plaintext}")
+    base_value: dict[str, object] = {
+        "dependencies": [
+            {
+                "name": "payments",
+                "metadata": {"tier": 1},
+            }
+        ],
+        "owners": [{"name": "platform"}],
+    }
+
+    def object_paths(value: object, path: tuple[object, ...] = ()) -> list[tuple[object, ...]]:
+        paths: list[tuple[object, ...]] = []
+        if isinstance(value, dict):
+            paths.append(path)
+            for key, child in value.items():
+                paths.extend(object_paths(child, (*path, key)))
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                paths.extend(object_paths(child, (*path, index)))
+        return paths
+
+    def scalar_paths(value: object, path: tuple[object, ...] = ()) -> list[tuple[object, ...]]:
+        if isinstance(value, dict):
+            return [
+                child_path
+                for key, child in value.items()
+                for child_path in scalar_paths(child, (*path, key))
+            ]
+        if isinstance(value, list):
+            return [
+                child_path
+                for index, child in enumerate(value)
+                for child_path in scalar_paths(child, (*path, index))
+            ]
+        return [path]
+
+    def target_at(value: object, path: tuple[object, ...]) -> object:
+        target = value
+        for part in path:
+            if isinstance(part, str):
+                assert isinstance(target, dict)
+                target = target[part]
+            else:
+                assert isinstance(part, int)
+                assert isinstance(target, list)
+                target = target[part]
+        return target
+
+    private_canary = "PRIVATE_NESTED_ASSERTION_MUST_NOT_ESCAPE"
+    rejected_values: list[tuple[dict[str, object], str, str]] = []
+    for path in object_paths(base_value):
+        injected = deepcopy(base_value)
+        target = target_at(injected, path)
+        assert isinstance(target, dict)
+        target["privateOracle"] = {"verdict": private_canary}
+        rejected_values.append((injected, "private_control_material", private_canary))
+    secret = f"ghp_{'A' * 36}"
+    for path in scalar_paths(base_value):
+        injected = deepcopy(base_value)
+        if len(path) == 1:
+            injected[str(path[0])] = secret
+        else:
+            parent = target_at(injected, path[:-1])
+            leaf = path[-1]
+            if isinstance(leaf, str):
+                assert isinstance(parent, dict)
+                parent[leaf] = secret
+            else:
+                assert isinstance(leaf, int)
+                assert isinstance(parent, list)
+                parent[leaf] = secret
+        rejected_values.append((injected, "secret_material", secret))
+    secret_key = f"ghp_{'B' * 36}"
+    for path in object_paths(base_value):
+        injected = deepcopy(base_value)
+        target = target_at(injected, path)
+        assert isinstance(target, dict)
+        target[secret_key] = "must-not-cross-public-boundary"
+        rejected_values.append((injected, "secret_material", secret_key))
+
+    for index, (value, reason, canary) in enumerate(rejected_values):
+        assertion = KnowledgeAssertion.objects.create(
+            organization=organization,
+            access_scope=scope,
+            subject_key=f"service:checkout:{index}",
+            predicate="service.dependencies",
+            value=value,
+            provenance=[{"extractor": "structured-json"}],
+        )
+        packet = _assertion_packet(
+            organization=organization,
+            repository=repository,
+            assertion=assertion,
+        )
+        monkeypatch.setattr(
+            mcp_gateway,
+            "get_context_packet",
+            lambda packet=packet, **_kwargs: deepcopy(packet),
+        )
+        request_actor = replace(actor, request_id=uuid.uuid4())
+
+        with pytest.raises(MCPGatewayError) as rejected:
+            dispatch_tool(
+                actor=request_actor,
+                tool_name="anva.get_context_packet",
+                arguments={
+                    "contract_version": "1",
+                    "repository_id": str(repository.id),
+                    "packet_id": packet["packet_id"],
+                },
+                transport="MCP",
+            )
+
+        assert rejected.value.code == "invalid_tool_output"
+        assert rejected.value.reason == reason
+        assert canary not in str(rejected.value)
+        invocations = MCPToolInvocation.objects.filter(request_id=request_actor.request_id)
+        assert invocations.count() == 1
+        invocation = invocations.get()
+        assert invocation.outcome == MCPToolInvocation.Outcome.FAILED
+        assert invocation.error_code == "invalid_tool_output"
+        assert not invocations.filter(outcome=MCPToolInvocation.Outcome.SUCCEEDED).exists()
+        persisted_audit = json.dumps(
+            MCPToolInvocation.objects.values().get(id=invocation.id),
+            default=str,
+            sort_keys=True,
+        )
+        assert canary not in persisted_audit
 
 
 @pytest.mark.integration
@@ -561,6 +832,50 @@ def test_secret_bearing_proposal_is_rejected_before_any_persistence() -> None:
     ):
         assert prohibited not in rendered_error
         assert prohibited not in persisted_audit
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_persisted_private_entity_output_fails_closed_before_success_audit() -> None:
+    organization, repository, scope, plaintext = _gateway_tenant("mcp-private-output")
+    actor = authenticate_bearer(f"Bearer {plaintext}")
+    canary = "PRIVATE_ORACLE_OUTPUT_MUST_NOT_ESCAPE"
+    entity = KnowledgeEntity.objects.create(
+        organization=organization,
+        access_scope=scope,
+        entity_type=KnowledgeEntity.EntityType.SERVICE,
+        canonical_key="service:private-output",
+        display_name="Private output canary",
+        attributes={
+            "owner": "platform",
+            "privateOracle": {"verdict": canary},
+        },
+    )
+
+    with pytest.raises(MCPGatewayError) as rejected:
+        dispatch_tool(
+            actor=actor,
+            tool_name="anva.get_entity",
+            arguments={
+                "contract_version": "1",
+                "repository_id": str(repository.id),
+                "entity_id": str(entity.id),
+            },
+            transport="MCP",
+        )
+
+    assert rejected.value.code == "invalid_tool_output"
+    assert rejected.value.reason == "private_control_material"
+    assert canary not in str(rejected.value)
+    invocation = MCPToolInvocation.objects.get(request_id=actor.request_id)
+    assert invocation.outcome == MCPToolInvocation.Outcome.FAILED
+    assert invocation.error_code == "invalid_tool_output"
+    persisted_audit = json.dumps(
+        MCPToolInvocation.objects.values().get(id=invocation.id),
+        default=str,
+        sort_keys=True,
+    )
+    assert canary not in persisted_audit
 
 
 @pytest.mark.integration

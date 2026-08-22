@@ -70,12 +70,86 @@
     "status": "PASSED"
   },
   "organization": {
-    "admin_display_name": "TST-009 initiator",
-    "admin_email": "operator@ember.invalid",
-    "independent_reviewer_name": "TST-009 independent reviewer",
+    "bootstrap_scope": {
+      "access_scope": {
+        "membership_keys": [
+          "operator"
+        ],
+        "name": "TST-009 Ember acceptance scope",
+        "repository_keys": [
+          "repository"
+        ],
+        "service_identity_keys": [
+          "initiator",
+          "reviewer"
+        ]
+      },
+      "initiator_service_identity_key": "initiator",
+      "memberships": [
+        {
+          "display_name": "TST-009 initiator",
+          "email": "operator@ember.invalid",
+          "key": "operator",
+          "role_key": "viewer"
+        }
+      ],
+      "primary_membership_key": "operator",
+      "primary_repository_key": "repository",
+      "repositories": [
+        {
+          "external_id": "github:synthetic/ember",
+          "key": "repository",
+          "name": "ember"
+        }
+      ],
+      "reviewer_service_identity_key": "reviewer",
+      "roles": [
+        {
+          "code": "VIEWER",
+          "key": "viewer",
+          "name": "Viewer"
+        }
+      ],
+      "service_identities": [
+        {
+          "grants": [
+            {
+              "actions": [
+                "artifact.create",
+                "assurance.execute",
+                "canvas.view",
+                "evidence.submit",
+                "evidence.view",
+                "knowledge.view",
+                "mcp.context",
+                "policy.manage",
+                "policy.view",
+                "search.query",
+                "source.sync",
+                "source.view",
+                "work.manage"
+              ],
+              "repository_key": "repository"
+            }
+          ],
+          "key": "initiator",
+          "name": "TST-009 acceptance runner"
+        },
+        {
+          "grants": [
+            {
+              "actions": [
+                "assurance.review"
+              ],
+              "repository_key": "repository"
+            }
+          ],
+          "key": "reviewer",
+          "name": "TST-009 independent reviewer"
+        }
+      ]
+    },
     "name": "TST-009 Ember Organization",
-    "repository_external_id": "github:synthetic/ember",
-    "repository_name": "ember",
     "slug": "anva-tst-009-ember"
   },
   "policy": {

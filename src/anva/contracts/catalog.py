@@ -13,6 +13,10 @@ from anva.contract_limits import (
     MAX_ACCEPTANCE_CASE_BYTES,
     MAX_ACCEPTANCE_UNIFIED_DIFF_CHARACTERS,
 )
+from anva.contracts.bootstrap_scope import (
+    BOOTSTRAP_SCOPE_SCHEMA,
+    acceptance_bootstrap_scope_payload,
+)
 
 SCHEMA_VERSION: Final = "1.0"
 SCHEMA_BASE_URI: Final = "https://schemas.anva.dev/v1"
@@ -1576,37 +1580,9 @@ ACCEPTANCE_CASE_SCHEMA = versioned_schema(
                     "pattern": "^[a-z0-9][a-z0-9-]{0,79}$",
                 },
                 "name": {"type": "string", "minLength": 1, "maxLength": 300},
-                "admin_email": {"type": "string", "format": "email", "maxLength": 300},
-                "admin_display_name": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 300,
-                },
-                "repository_external_id": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 300,
-                },
-                "repository_name": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 300,
-                },
-                "independent_reviewer_name": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 300,
-                },
+                "bootstrap_scope": deepcopy(BOOTSTRAP_SCOPE_SCHEMA),
             },
-            "required": [
-                "slug",
-                "name",
-                "admin_email",
-                "admin_display_name",
-                "repository_external_id",
-                "repository_name",
-                "independent_reviewer_name",
-            ],
+            "required": ["slug", "name", "bootstrap_scope"],
         },
         "source": {
             "type": "object",
@@ -2130,11 +2106,15 @@ EXAMPLES: Final[dict[str, dict[str, object]]] = {
         "organization": {
             "slug": "anva-tst-009-ember",
             "name": "TST-009 Ember Organization",
-            "admin_email": "operator@ember.invalid",
-            "admin_display_name": "TST-009 initiator",
-            "repository_external_id": "github:synthetic/ember",
-            "repository_name": "ember",
-            "independent_reviewer_name": "TST-009 independent reviewer",
+            "bootstrap_scope": acceptance_bootstrap_scope_payload(
+                admin_email="operator@ember.invalid",
+                admin_display_name="TST-009 initiator",
+                repository_external_id="github:synthetic/ember",
+                repository_name="ember",
+                initiator_name="TST-009 acceptance runner",
+                reviewer_name="TST-009 independent reviewer",
+                access_scope_name="TST-009 Ember acceptance scope",
+            ),
         },
         "source": {
             "external_key": "tst-009:ember:knowledge",

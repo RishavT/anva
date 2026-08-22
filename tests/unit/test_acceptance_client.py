@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 from pathlib import Path
-from typing import Self
+from typing import Self, cast
 from unittest.mock import patch
 
 import pytest
@@ -33,7 +33,10 @@ class _Response:
 
 @pytest.mark.unit
 def test_public_api_validates_declared_success_response_shape() -> None:
-    valid = deepcopy(HTTP_OPERATION_EXAMPLES["connectFilesystemSource"]["201"])
+    valid = cast(
+        dict[str, object],
+        deepcopy(HTTP_OPERATION_EXAMPLES["connectFilesystemSource"]["201"]),
+    )
     invalid = deepcopy(valid)
     invalid.pop("revision")
     api = PublicAPI("https://anva.invalid/api/v1")
@@ -58,6 +61,43 @@ def test_public_api_validates_declared_success_response_shape() -> None:
 
     assert response.payload == valid
     assert failure.value.code == "invalid_response_contract"
+
+
+@pytest.mark.unit
+def test_public_api_rejects_response_from_the_other_success_status() -> None:
+    fresh = cast(
+        dict[str, object],
+        deepcopy(HTTP_OPERATION_EXAMPLES["createEvidenceUploadAuthorization"]["201"]),
+    )
+    replay = cast(
+        dict[str, object],
+        deepcopy(HTTP_OPERATION_EXAMPLES["createEvidenceUploadAuthorization"]["200"]),
+    )
+    api = PublicAPI("https://anva.invalid/api/v1")
+
+    with patch(
+        "anva.acceptance.client.urlopen",
+        side_effect=[_Response(201, replay), _Response(200, fresh)],
+    ):
+        with pytest.raises(AcceptanceBoundaryError) as replay_as_fresh:
+            api.request(
+                "POST",
+                "/repositories/00000000-0000-4000-8000-000000000004/"
+                "pull-requests/17/evidence-upload-authorizations",
+                expected=frozenset({200, 201}),
+                operation_id="createEvidenceUploadAuthorization",
+            )
+        with pytest.raises(AcceptanceBoundaryError) as fresh_as_replay:
+            api.request(
+                "POST",
+                "/repositories/00000000-0000-4000-8000-000000000004/"
+                "pull-requests/17/evidence-upload-authorizations",
+                expected=frozenset({200, 201}),
+                operation_id="createEvidenceUploadAuthorization",
+            )
+
+    assert replay_as_fresh.value.code == "invalid_response_contract"
+    assert fresh_as_replay.value.code == "invalid_response_contract"
 
 
 @pytest.mark.unit

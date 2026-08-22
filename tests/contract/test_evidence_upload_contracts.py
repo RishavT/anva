@@ -92,8 +92,12 @@ def test_upload_openapi_requires_actor_and_separate_upload_secret() -> None:
             "addition to the normal actor bearer credential."
         ),
     }
+    status_schemas: dict[str, dict[str, Any]] = {}
     for status in ("200", "201"):
-        response_schema = create["responses"][status]["content"]["application/json"]["schema"]
+        response_ref = create["responses"][status]["content"]["application/json"]["schema"]
+        component_name = response_ref["$ref"].rsplit("/", 1)[-1]
+        response_schema = components["schemas"][component_name]
+        status_schemas[status] = response_schema
         assert response_schema["properties"]["state"]["enum"] == [
             "ISSUED",
             "RECEIVING",
@@ -103,6 +107,20 @@ def test_upload_openapi_requires_actor_and_separate_upload_secret() -> None:
             "EXPIRED",
             "REVOKED",
         ]
+    assert status_schemas["200"]["properties"]["replayed"] == {
+        "type": "boolean",
+        "const": True,
+    }
+    assert status_schemas["200"]["properties"]["upload_token"] == {"type": "null"}
+    assert status_schemas["201"]["properties"]["replayed"] == {
+        "type": "boolean",
+        "const": False,
+    }
+    assert status_schemas["201"]["properties"]["upload_token"] == {
+        "type": "string",
+        "minLength": 32,
+        "maxLength": 512,
+    }
     upload_media = upload["requestBody"]["content"]["application/octet-stream"]
     assert upload_media["schema"] == {"type": "string", "format": "binary"}
     assert isinstance(upload_media["example"], str)

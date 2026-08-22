@@ -34,6 +34,36 @@ def _case() -> dict[str, object]:
 
 
 @pytest.mark.unit
+def test_case_declares_exact_acceptance_principal_actions() -> None:
+    case = _case()
+    organization = cast(dict[str, object], case["organization"])
+    scope = cast(dict[str, object], organization["bootstrap_scope"])
+    identities = {
+        cast(str, identity["key"]): identity
+        for identity in cast(list[dict[str, object]], scope["service_identities"])
+    }
+    initiator_grants = cast(list[dict[str, object]], identities["initiator"]["grants"])
+    reviewer_grants = cast(list[dict[str, object]], identities["reviewer"]["grants"])
+
+    assert cast(list[str], initiator_grants[0]["actions"]) == [
+        "artifact.create",
+        "assurance.execute",
+        "canvas.view",
+        "evidence.submit",
+        "evidence.view",
+        "knowledge.view",
+        "mcp.context",
+        "policy.manage",
+        "policy.view",
+        "search.query",
+        "source.sync",
+        "source.view",
+        "work.manage",
+    ]
+    assert cast(list[str], reviewer_grants[0]["actions"]) == ["assurance.review"]
+
+
+@pytest.mark.unit
 def test_case_hash_is_canonical_and_distinguishes_material_inputs() -> None:
     first = _case()
     reordered = dict(reversed(list(first.items())))
@@ -64,6 +94,35 @@ def test_case_rejects_unknown_or_cross_pinned_material(
 ) -> None:
     case = _case()
     mutation(case)
+
+    with pytest.raises((AcceptanceCaseError, ContractValidationError)):
+        acceptance_case(case)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda scope: scope.pop("service_identities"),
+        lambda scope: scope.update({"unexpected": []}),
+        lambda scope: scope["roles"].append(dict(scope["roles"][0])),
+        lambda scope: scope["memberships"][0].update({"role_key": "missing"}),
+        lambda scope: scope["service_identities"][0]["grants"][0]["actions"].append(
+            "github.manage"
+        ),
+        lambda scope: scope["service_identities"][1]["grants"][0]["actions"].append(
+            "assurance.view"
+        ),
+        lambda scope: scope["access_scope"].update({"service_identity_keys": ["initiator"]}),
+    ],
+)
+def test_case_rejects_omitted_extra_duplicate_or_overprivileged_scope(
+    mutation: Callable[[dict[str, object]], object],
+) -> None:
+    case = _case()
+    organization = cast(dict[str, object], case["organization"])
+    scope = cast(dict[str, object], organization["bootstrap_scope"])
+    mutation(scope)
 
     with pytest.raises((AcceptanceCaseError, ContractValidationError)):
         acceptance_case(case)
