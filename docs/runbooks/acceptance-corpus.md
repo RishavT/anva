@@ -58,14 +58,43 @@ reports that file's SHA-256. Preserve those identities with the later public `ac
 document. That result must include a checksummed `knowledge_retrieval_results` artifact; its
 contents remain public run output, not grading truth.
 
+## Declare a least-privilege case scope
+
+Every scenario supplied with `--case` (including the case mounted by the acceptance Compose
+profile) must validate against
+[`contracts/json-schema/v1/acceptance-case.schema.json`](../../contracts/json-schema/v1/acceptance-case.schema.json).
+Start from the public shape in
+[`contracts/examples/v1/acceptance-case.json`](../../contracts/examples/v1/acceptance-case.json),
+then replace every scenario-specific value rather than deleting scope fields.
+
+The closed `organization.bootstrap_scope` object explicitly requests one repository, one human
+membership with the least-privilege `VIEWER` role, and exactly two named service identities. The
+initiator has only the actions needed by the acceptance journey (`artifact.create`,
+`assurance.execute`, `canvas.view`, `evidence.submit`, `evidence.view`, `knowledge.view`,
+`mcp.context`, `policy.manage`, `policy.view`, `search.query`, `source.sync`, `source.view`, and
+`work.manage`) on that repository. The independent reviewer has only `assurance.review` on the
+same repository. The access scope names every requested membership, repository, and service
+identity; it never uses an `all_*` binding.
+
+Keys, role codes, action values, repository grants, and access-scope references are closed and
+cross-validated. Omitted fields, unknown or extra actions, duplicate keys/actions, dangling
+references, unbound requested records, an over-privileged reviewer, or an undeclared principal
+fail before bootstrap. Changing a role, grant, repository, or principal changes the canonical case
+hash and therefore cannot adopt an earlier run's state or handoff.
+
+Only invocation without `--case` uses the original flat, broad local-bootstrap fixture for corpus
+v1 compatibility. That legacy shape is constructed internally; it is not accepted as a new public
+case and must not be copied into a scenario bundle.
+
 ## Run the product acceptance phases
 
 Pre-create private host directories with mode `0700`, and preserve the exact product commit plus
 all three corpus pins outside the runner. `acceptance-start` bootstraps a distinct initiator and
 least-privilege reviewer, syncs the canonical source, exercises search/context through real MCP,
 queries Canvas through HTTP, imports work and policy, uploads verified evidence bytes, evaluates
-PR 817, and proves that a newer PR 818 head makes its earlier run stale. It then stops at
-`AWAITING_EXTERNAL_REVIEW`.
+the case's exact pull request, and, when declared, proves that its independently numbered newer
+head makes the earlier run stale. The no-case compatibility fixture retains its original PR 817/818
+journey. The runner then stops at `AWAITING_EXTERNAL_REVIEW`.
 
 ```sh
 export ANVA_REVISION=<exact-40-character-product-commit>
@@ -79,7 +108,15 @@ make acceptance-start
 ```
 
 The one-time credential file is mode `0600`; the resume record contains only allowlisted opaque
-UUIDs and hashes. Load each credential into its named environment variable without printing it.
+UUIDs and hashes. With a supplied case, the bootstrap token belongs to the declared initiator and
+the reviewer token belongs to the declared reviewer; the runner does not synthesize or select any
+other principal. The public bootstrap response is explicitly marked `SCOPED` or `LEGACY`; a
+`SCOPED` response is invalid unless it includes the distinct reviewer service-identity ID,
+reviewer token-record ID, one-time reviewer token, and reviewer expiry. The two non-secret IDs are
+bound into scoped assurance start, restart state, review handoff, and sealed provenance so a
+different actor or credential cannot adopt the task. Raw tokens remain only in the private
+one-time credential/handoff flow and never enter resume state or sealed results. Load each
+credential into its named environment variable without printing it.
 Use the reviewer credential only for the two reviewer phases:
 
 ```sh

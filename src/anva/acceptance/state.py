@@ -44,14 +44,18 @@ ID_KEYS = frozenset(
         "report_id",
         "stale_probe_run_id",
         "canvas_view_id",
+        "reviewer_service_identity_id",
+        "reviewer_token_id",
     }
 )
+REVIEWER_ID_KEYS = frozenset({"reviewer_service_identity_id", "reviewer_token_id"})
 HASH_KEYS = frozenset(
     {
         "manifest_sha256",
         "source_fingerprint",
         "canonical_manifest_sha256",
         "canonical_input_sha256",
+        "case_sha256",
         "product_commit",
         "corpus_commit",
         "base_commit",
@@ -129,6 +133,11 @@ def _validate_state(payload: dict[str, object]) -> ResumeState:
         raise AcceptanceStateError("Acceptance resume record is invalid")
     if set(identities) - ID_KEYS or set(hashes) - HASH_KEYS:
         raise AcceptanceStateError("Acceptance resume record contains an unsupported field")
+    present_reviewer_ids = set(identities) & REVIEWER_ID_KEYS
+    if present_reviewer_ids and present_reviewer_ids != REVIEWER_ID_KEYS:
+        raise AcceptanceStateError("Acceptance resume reviewer identity is incomplete")
+    if status != "BOOTSTRAP_PREPARED" and present_reviewer_ids != REVIEWER_ID_KEYS:
+        raise AcceptanceStateError("Acceptance resume reviewer identity is unavailable")
     if not all(isinstance(value, str) for value in identities.values()):
         raise AcceptanceStateError("Acceptance resume identity is invalid")
     if not all(isinstance(value, str) for value in hashes.values()):
@@ -141,7 +150,7 @@ def _validate_state(payload: dict[str, object]) -> ResumeState:
     if any(HASH_PATTERN.fullmatch(cast(str, value)) is None for value in hashes.values()):
         raise AcceptanceStateError("Acceptance resume hash is invalid")
     rendered = json.dumps(payload, sort_keys=True).casefold()
-    if any(marker in rendered for marker in ("token", "secret", "password", "authorization")):
+    if any(marker in rendered for marker in ("secret", "password", "authorization", "bearer")):
         raise AcceptanceStateError("Acceptance resume record contains credential material")
     return ResumeState(
         corpus_id=cast(str, payload["corpus_id"]),

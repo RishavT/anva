@@ -809,6 +809,50 @@ def test_evaluator_cli_claim_posts_lease_and_claimant(
 
 
 @pytest.mark.unit
+def test_evaluator_cli_claim_posts_exact_selector_and_idempotency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository_id = uuid.uuid4()
+    task_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    monkeypatch.setenv("ANVA_TOKEN", "CANARY-EVALUATOR-TOKEN")
+    with patch("anva.entrypoints.cli.urlopen") as open_url:
+        open_url.return_value.__enter__.return_value.read.return_value = b'{"status":"EMPTY"}'
+        result = main(
+            [
+                "evaluator",
+                "claim",
+                "--repository-id",
+                str(repository_id),
+                "--claimant",
+                "exact-review-agent",
+                "--claim-idempotency-key",
+                "1" * 64,
+                "--task-id",
+                str(task_id),
+                "--assurance-run-id",
+                str(run_id),
+                "--input-hash",
+                "2" * 64,
+                "--head-commit",
+                "3" * 40,
+            ]
+        )
+
+    assert result == 0
+    request = open_url.call_args.args[0]
+    assert json.loads(request.data) == {
+        "claimant": "exact-review-agent",
+        "lease_seconds": 900,
+        "claim_idempotency_key": "1" * 64,
+        "task_id": str(task_id),
+        "assurance_run_id": str(run_id),
+        "input_hash": "2" * 64,
+        "head_commit": "3" * 40,
+    }
+
+
+@pytest.mark.unit
 def test_evaluator_cli_submit_fails_closed_without_claim_token(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

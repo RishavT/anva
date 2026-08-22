@@ -5,11 +5,18 @@ from __future__ import annotations
 import argparse
 import json
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from pathlib import Path
 from typing import cast
 
 from jsonschema import Draft202012Validator
 
+from anva.contracts.acceptance import (
+    BOOTSTRAP_REQUEST,
+    EVIDENCE_UPLOAD_AUTHORIZATION_RESPONSE,
+    acceptance_operation_document,
+    apply_acceptance_http_contracts,
+)
 from anva.contracts.catalog import EXAMPLES, KNOWLEDGE_CHANGE, SCHEMAS
 from anva.contracts.validation import validate_payload
 from anva.mcp.contracts import TOOL_CONTRACTS, mcp_contract_document
@@ -28,57 +35,7 @@ def openapi_document() -> dict[str, object]:
     mutation_parameters: list[dict[str, object]] = [
         {"$ref": "#/components/parameters/CorrelationId"},
     ]
-    upload_authorization_response_schema: dict[str, object] = {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "authorization_id": {"type": "string", "format": "uuid"},
-            "repository_id": {"type": "string", "format": "uuid"},
-            "access_scope_id": {"type": "string", "format": "uuid"},
-            "pull_request_number": {"type": "integer", "minimum": 1},
-            "commit_sha": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
-            "declared_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
-            "declared_size": {"type": "integer", "minimum": 1, "maximum": 4_096},
-            "state": {
-                "type": "string",
-                "enum": [
-                    "ISSUED",
-                    "RECEIVING",
-                    "RECOVERING",
-                    "ACCEPTED",
-                    "REJECTED",
-                    "EXPIRED",
-                    "REVOKED",
-                ],
-            },
-            "expires_at": {"type": "string", "format": "date-time"},
-            "upload_path": {
-                "type": "string",
-                "pattern": ("^/api/v1/evidence-upload-authorizations/[a-f0-9-]{36}/content$"),
-            },
-            "upload_token": {
-                "oneOf": [
-                    {"type": "string", "minLength": 32, "maxLength": 512},
-                    {"type": "null"},
-                ]
-            },
-            "replayed": {"type": "boolean"},
-        },
-        "required": [
-            "authorization_id",
-            "repository_id",
-            "access_scope_id",
-            "pull_request_number",
-            "commit_sha",
-            "declared_sha256",
-            "declared_size",
-            "state",
-            "expires_at",
-            "upload_path",
-            "upload_token",
-            "replayed",
-        ],
-    }
+    upload_authorization_response_schema = deepcopy(EVIDENCE_UPLOAD_AUTHORIZATION_RESPONSE)
     evidence_blob_response_schema: dict[str, object] = {
         "type": "object",
         "additionalProperties": False,
@@ -401,11 +358,17 @@ def openapi_document() -> dict[str, object]:
                 "maxItems": 200,
             },
             "work_item_revision_id": {"type": "string", "format": "uuid"},
+            "reviewer_service_identity_id": {"type": "string", "format": "uuid"},
+            "reviewer_token_id": {"type": "string", "format": "uuid"},
             "evaluator_version": {"type": "string", "minLength": 1, "maxLength": 100},
             "prompt_version": {"type": "string", "minLength": 1, "maxLength": 100},
             "trigger_key": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
         },
         "required": ["policy_version_ids", "reference_time", "deterministic_checks"],
+        "dependentRequired": {
+            "reviewer_service_identity_id": ["reviewer_token_id"],
+            "reviewer_token_id": ["reviewer_service_identity_id"],
+        },
     }
     evaluator_claim_request = {
         "type": "object",
@@ -421,8 +384,22 @@ def openapi_document() -> dict[str, object]:
                 ),
             },
             "lease_seconds": {"type": "integer", "minimum": 60, "maximum": 3_600},
+            "claim_idempotency_key": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$",
+            },
+            "task_id": {"type": "string", "format": "uuid"},
+            "assurance_run_id": {"type": "string", "format": "uuid"},
+            "input_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+            "head_commit": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
         },
         "required": ["claimant"],
+        "dependentRequired": {
+            "task_id": ["assurance_run_id", "input_hash", "head_commit"],
+            "assurance_run_id": ["task_id", "input_hash", "head_commit"],
+            "input_hash": ["task_id", "assurance_run_id", "head_commit"],
+            "head_commit": ["task_id", "assurance_run_id", "input_hash"],
+        },
     }
     evaluator_submit_request = {
         "type": "object",
@@ -442,6 +419,7 @@ def openapi_document() -> dict[str, object]:
         },
         "required": ["claim_token", "result"],
     }
+    bootstrap_request = deepcopy(BOOTSTRAP_REQUEST)
     finding_decision_request = {
         "type": "object",
         "additionalProperties": False,
@@ -934,7 +912,7 @@ def openapi_document() -> dict[str, object]:
         "200": {"description": "Authenticated MCP compatibility response."},
         **structured_errors,
     }
-    return {
+    document: dict[str, object] = {
         "openapi": "3.1.0",
         "info": {
             "title": "Anva API",
@@ -1308,8 +1286,9 @@ def openapi_document() -> dict[str, object]:
                     "operationId": "bootstrapOrganization",
                     "description": (
                         "Create the one initial tenant and return one-time credentials. "
-                        "When independent_reviewer_name is supplied, a distinct least-privilege "
-                        "assurance reviewer credential is emitted once and stored only as a hash. "
+                        "New callers explicitly request closed roles, memberships, repositories, "
+                        "service identities, access bindings, and per-repository actions in scope. "
+                        "A deprecated flat request remains only for no-case compatibility. "
                         "An exact idempotency retry revokes and reissues only the bound "
                         "credentials."
                     ),
@@ -1325,44 +1304,7 @@ def openapi_document() -> dict[str, object]:
                     ],
                     "requestBody": {
                         "required": True,
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "type": "object",
-                                    "additionalProperties": False,
-                                    "properties": {
-                                        **{
-                                            name: {
-                                                "type": "string",
-                                                "minLength": 1,
-                                                "maxLength": 300,
-                                            }
-                                            for name in (
-                                                "organization_slug",
-                                                "organization_name",
-                                                "admin_email",
-                                                "admin_display_name",
-                                                "repository_external_id",
-                                                "repository_name",
-                                                "independent_reviewer_name",
-                                            )
-                                        },
-                                        "idempotency_key": {
-                                            "type": "string",
-                                            "pattern": "^[a-f0-9]{64}$",
-                                        },
-                                    },
-                                    "required": [
-                                        "organization_slug",
-                                        "organization_name",
-                                        "admin_email",
-                                        "admin_display_name",
-                                        "repository_external_id",
-                                        "repository_name",
-                                    ],
-                                }
-                            }
-                        },
+                        "content": {"application/json": {"schema": bootstrap_request}},
                     },
                     "responses": cast(
                         dict[str, object],
@@ -2181,6 +2123,8 @@ def openapi_document() -> dict[str, object]:
             },
         },
     }
+    apply_acceptance_http_contracts(document)
+    return document
 
 
 def mcp_document() -> dict[str, object]:
@@ -2196,7 +2140,11 @@ def rendered_artifacts() -> dict[Path, bytes]:
     for name, example in sorted(EXAMPLES.items()):
         artifacts[Path("examples/v1") / f"{name}.json"] = canonical_json(example)
     artifacts[Path("openapi/v1/openapi.json")] = canonical_json(openapi_document())
-    artifacts[Path("mcp/v1/tools.json")] = canonical_json(mcp_document())
+    mcp = mcp_document()
+    artifacts[Path("mcp/v1/tools.json")] = canonical_json(mcp)
+    artifacts[Path("acceptance/v1/operations.json")] = canonical_json(
+        acceptance_operation_document(openapi_document(), mcp)
+    )
     return artifacts
 
 

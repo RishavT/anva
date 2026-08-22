@@ -37,6 +37,7 @@ from anva.core.models import (
     Policy,
     WorkItem,
     WorkItemRevision,
+    content_hash,
 )
 from anva.core.services.assurance import (
     claim_evaluator_task,
@@ -1013,29 +1014,36 @@ def bootstrap(request: HttpRequest) -> JsonResponse:
                 "repository_name",
                 "independent_reviewer_name",
                 "idempotency_key",
+                "scope",
             }
         ),
-        required=frozenset(
-            {
-                "organization_slug",
-                "organization_name",
-                "admin_email",
-                "admin_display_name",
-                "repository_external_id",
-                "repository_name",
-            }
-        ),
+        required=frozenset({"organization_slug", "organization_name"}),
     )
+    legacy_required = frozenset(
+        {
+            "admin_email",
+            "admin_display_name",
+            "repository_external_id",
+            "repository_name",
+        }
+    )
+    supplied_legacy = legacy_required & payload.keys()
+    if "scope" in payload:
+        if supplied_legacy or "independent_reviewer_name" in payload:
+            raise ValueError("Scoped and legacy bootstrap fields cannot be combined")
+    elif supplied_legacy != legacy_required:
+        raise ValueError("Legacy bootstrap fields must be supplied together")
     result = bootstrap_local_organization(
         supplied_secret=request.headers.get("X-Anva-Bootstrap-Secret", ""),
         organization_slug=_string(payload, "organization_slug"),
         organization_name=_string(payload, "organization_name"),
-        admin_email=_string(payload, "admin_email"),
-        admin_display_name=_string(payload, "admin_display_name"),
-        repository_external_id=_string(payload, "repository_external_id"),
-        repository_name=_string(payload, "repository_name"),
+        admin_email=_optional_string(payload, "admin_email"),
+        admin_display_name=_optional_string(payload, "admin_display_name"),
+        repository_external_id=_optional_string(payload, "repository_external_id"),
+        repository_name=_optional_string(payload, "repository_name"),
         independent_reviewer_name=_optional_string(payload, "independent_reviewer_name"),
         idempotency_key=_optional_string(payload, "idempotency_key"),
+        scope_payload=payload.get("scope"),
     )
     response: dict[str, object] = {
         "organization_id": str(result.organization.id),
@@ -1049,6 +1057,7 @@ def bootstrap(request: HttpRequest) -> JsonResponse:
         "expires_at": result.issued_token.record.expires_at.isoformat(),
         "bootstrap_request_sha256": result.request_sha256,
         "recovered": result.recovered,
+        "bootstrap_mode": "SCOPED" if "scope" in payload else "LEGACY",
     }
     if result.reviewer_service_identity is not None and result.reviewer_issued_token is not None:
         response.update(
@@ -1897,6 +1906,8 @@ def assurance_start(
                 "evaluator_version",
                 "prompt_version",
                 "trigger_key",
+                "reviewer_service_identity_id",
+                "reviewer_token_id",
             }
         ),
         required=frozenset(
@@ -1911,6 +1922,8 @@ def assurance_start(
     if not isinstance(checks, list) or not all(isinstance(item, dict) for item in checks):
         raise ValueError("deterministic_checks must be a list of objects")
     work_revision = _optional_string(payload, "work_item_revision_id")
+    reviewer_service_identity = _optional_string(payload, "reviewer_service_identity_id")
+    reviewer_token = _optional_string(payload, "reviewer_token_id")
     result = start_assurance(
         actor=_actor(request),
         pull_request_revision_id=pull_request_revision_id,
@@ -1924,6 +1937,10 @@ def assurance_start(
         ),
         prompt_version=cast(str, payload.get("prompt_version", "assurance-prompt-v1")),
         trigger_key=cast(str, payload.get("trigger_key", "")),
+        reviewer_service_identity_id=(
+            uuid.UUID(reviewer_service_identity) if reviewer_service_identity else None
+        ),
+        reviewer_token_id=uuid.UUID(reviewer_token) if reviewer_token else None,
     )
     return JsonResponse(
         {
@@ -1941,29 +1958,54 @@ def assurance_start(
 @api_errors
 @require_http_methods(["POST"])
 def evaluator_task_claim(request: HttpRequest, repository_id: uuid.UUID) -> JsonResponse:
+    selector_fields = frozenset({"task_id", "assurance_run_id", "input_hash", "head_commit"})
     payload = _closed_payload(
         _json_body(request),
-        allowed=frozenset({"claimant", "lease_seconds", "claim_idempotency_key"}),
+        allowed=frozenset({"claimant", "lease_seconds", "claim_idempotency_key", *selector_fields}),
         required=frozenset({"claimant"}),
     )
+    supplied_selector = selector_fields & payload.keys()
+    if supplied_selector and supplied_selector != selector_fields:
+        raise ValueError("Evaluator task selector fields must be supplied together")
     claim = claim_evaluator_task(
         actor=_actor(request),
         repository_id=repository_id,
         claimant=_string(payload, "claimant"),
         lease_seconds=_optional_integer(payload, "lease_seconds", 900),
         claim_idempotency_key=_optional_string(payload, "claim_idempotency_key"),
+        task_id=uuid.UUID(_string(payload, "task_id")) if supplied_selector else None,
+        assurance_run_id=(
+            uuid.UUID(_string(payload, "assurance_run_id")) if supplied_selector else None
+        ),
+        input_hash=_string(payload, "input_hash") if supplied_selector else None,
+        head_commit=_string(payload, "head_commit") if supplied_selector else None,
     )
     if claim is None:
         return JsonResponse({"status": "EMPTY"}, status=200)
     return JsonResponse(
         {
+            "status": "CLAIMED",
             "task_id": str(claim.task.id),
+            "assurance_run_id": str(claim.task.assurance_run_id),
+            "request_id": _string(claim.request, "request_id"),
+            "input_hash": claim.task.assurance_run.input_hash,
+            "head_commit": claim.task.assurance_run.head_commit,
             "claimant": claim.task.claimant,
+            "claimed_by": {
+                "actor_type": claim.task.claimed_by_actor_type,
+                "actor_id": claim.task.claimed_by_actor_id,
+                "credential_id": (
+                    str(claim.task.claimed_by_credential_id)
+                    if claim.task.claimed_by_credential_id is not None
+                    else None
+                ),
+            },
             "attempt": claim.task.attempt_count,
             "lease_expires_at": claim.task.lease_expires_at.isoformat()
             if claim.task.lease_expires_at
             else None,
             "claim_token": claim.claim_token,
+            "replayed": claim.replayed,
             "request": claim.request,
         }
     )
@@ -1989,13 +2031,18 @@ def evaluator_task_submit(request: HttpRequest, task_id: uuid.UUID) -> JsonRespo
     )
     return JsonResponse(
         {
+            "task_id": str(task_id),
             "assurance_run_id": str(completion.run.id),
+            "input_hash": completion.run.input_hash,
+            "head_commit": completion.run.head_commit,
+            "result_hash": content_hash(cast(dict[str, object], result_payload)),
             "state": completion.run.state,
             "readiness": completion.readiness.status,
             "reason_codes": completion.readiness.reason_codes,
             "report_id": str(completion.report.id),
             "finding_ids": [str(finding.id) for finding in completion.findings],
             "created": completion.created,
+            "replayed": not completion.created,
         },
         status=201 if completion.created else 200,
     )
@@ -2541,7 +2588,15 @@ def revoke_source(request: HttpRequest, source_connection_id: uuid.UUID) -> Json
 @require_http_methods(["POST"])
 def connect_filesystem(request: HttpRequest) -> JsonResponse:
     actor = _actor(request)
-    payload = _json_body(request)
+    payload = _closed_payload(
+        _json_body(request),
+        allowed=frozenset(
+            {"repository_id", "access_scope_id", "external_key", "display_name", "root"}
+        ),
+        required=frozenset(
+            {"repository_id", "access_scope_id", "external_key", "display_name", "root"}
+        ),
+    )
     source, created = connect_filesystem_source(
         actor=actor,
         repository_id=uuid.UUID(_string(payload, "repository_id")),
@@ -2579,7 +2634,11 @@ def _request_source_sync(
     force_full: bool,
 ) -> JsonResponse:
     actor = _actor(request)
-    payload = _json_body(request)
+    payload = _closed_payload(
+        _json_body(request),
+        allowed=frozenset({"scan_mode"}),
+        required=frozenset(),
+    )
     requested_mode = _optional_string(payload, "scan_mode")
     scan_mode = "FULL" if force_full else requested_mode or "FULL"
     run, created = request_ingestion_sync(

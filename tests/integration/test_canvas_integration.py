@@ -21,6 +21,7 @@ from django.test import Client
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
+from anva.contracts.acceptance import validate_acceptance_http_response
 from anva.core.exceptions import (
     IdempotencyConflictError,
     OptimisticConcurrencyError,
@@ -347,6 +348,15 @@ def test_canvas_unions_only_strict_per_repository_authorized_graphs(
     }
     assert before["nodes"]
     assert before["edges"]
+    nodes = cast(list[dict[str, object]], before["nodes"])
+    edges = cast(list[dict[str, object]], before["edges"])
+    runtime_freshness = {*KnowledgeAssertion.StalenessState.values, "UNKNOWN"}
+    assert {cast(str, node["freshness"]) for node in nodes} <= runtime_freshness
+    assert {cast(str, edge["freshness"]) for edge in edges} <= runtime_freshness
+    assert KnowledgeAssertion.StalenessState.FRESH in {
+        cast(str, edge["freshness"]) for edge in edges
+    }
+    validate_acceptance_http_response("queryOrganizationalCanvas", 200, before)
 
     hidden_scope = AccessScope.objects.create(
         organization=organization,
@@ -369,7 +379,6 @@ def test_canvas_unions_only_strict_per_repository_authorized_graphs(
         organization=organization,
         canonical_key__contains="CANARY-HIDDEN-ACQUISITION",
     ).id
-    nodes = cast(list[dict[str, object]], before["nodes"])
     public_id = uuid.UUID(str(nodes[0]["id"]))
     with pytest.raises(ResourceNotFoundError):
         canvas_path(actor=viewer, source_id=public_id, target_id=hidden_id)
@@ -3162,6 +3171,7 @@ def test_canvas_api_is_bearer_authenticated_and_closed() -> None:
         str(entity.id),
         str(target.id),
     }
+    validate_acceptance_http_response("queryOrganizationalCanvas", 200, allowed.json())
 
     authorization = f"Bearer {issued.plaintext}"
     cleared_api = client.post(

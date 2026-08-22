@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -197,6 +198,98 @@ def test_product_acceptance_phases_have_disjoint_hardened_mounts() -> None:
     assert text.count("target: /acceptance/credentials") == 1
     assert text.count("target: /acceptance/results") == 1
     assert "grader" not in " ".join(phase_names)
+
+
+@pytest.mark.unit
+def test_optional_acceptance_case_overlay_is_read_only_and_consistent() -> None:
+    base = cast(
+        dict[str, object],
+        yaml.safe_load(Path("compose.acceptance.yaml").read_text(encoding="utf-8")),
+    )
+    base_services = cast(dict[str, dict[str, object]], base["services"])
+    overlay = cast(
+        dict[str, object],
+        yaml.safe_load(Path("compose.acceptance.case.yaml").read_text(encoding="utf-8")),
+    )
+    services = cast(dict[str, dict[str, object]], overlay["services"])
+    phase_names = (
+        "acceptance-product-start",
+        "acceptance-review-request",
+        "acceptance-review-submit",
+        "acceptance-product-finalize",
+    )
+    expected_mount = {
+        "type": "bind",
+        "source": "${ANVA_ACCEPTANCE_CASE_FILE:?ANVA_ACCEPTANCE_CASE_FILE is required}",
+        "target": "/acceptance/case/case.json",
+        "read_only": True,
+        "bind": {"create_host_path": False},
+    }
+
+    for name in phase_names:
+        service = services[name]
+        command = cast(list[str], service["command"])
+        assert command.count("--case") == 1
+        case_index = command.index("--case")
+        assert command[case_index + 1] == "/acceptance/case/case.json"
+        assert command[:case_index] + command[case_index + 2 :] == base_services[name]["command"]
+        assert "--case" not in cast(list[str], base_services[name]["command"])
+        assert service["volumes"] == [expected_mount]
+
+
+@pytest.mark.unit
+def test_acceptance_case_overlay_is_conditional_and_resolves_for_all_phases() -> None:
+    makefile = Path("Makefile").read_text(encoding="utf-8")
+    assert (
+        "ACCEPTANCE_CASE_COMPOSE = $(if $(strip $(ANVA_ACCEPTANCE_CASE_FILE)),"
+        "-f compose.acceptance.case.yaml,)" in makefile
+    )
+    assert "$(ACCEPTANCE_CASE_COMPOSE)" in makefile
+
+    docker = shutil.which("docker")
+    if docker is None:
+        pytest.skip("Docker CLI is unavailable for resolved Compose validation")
+    environment = os.environ.copy()
+    environment["ANVA_ACCEPTANCE_CASE_FILE"] = str(Path("pyproject.toml").resolve())
+    completed = subprocess.run(  # noqa: S603 - executable resolved by shutil.which
+        [
+            docker,
+            "compose",
+            "-f",
+            "compose.yaml",
+            "-f",
+            "compose.acceptance.yaml",
+            "-f",
+            "compose.acceptance.case.yaml",
+            "--profile",
+            "acceptance",
+            "config",
+            "--format",
+            "json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    services = cast(dict[str, dict[str, object]], json.loads(completed.stdout)["services"])
+    for name in (
+        "acceptance-product-start",
+        "acceptance-review-request",
+        "acceptance-review-submit",
+        "acceptance-product-finalize",
+    ):
+        service = services[name]
+        command = cast(list[str], service["command"])
+        assert command[command.index("--case") + 1] == "/acceptance/case/case.json"
+        case_mount = next(
+            mount
+            for mount in cast(list[dict[str, object]], service["volumes"])
+            if mount["target"] == "/acceptance/case/case.json"
+        )
+        assert case_mount["source"] == str(Path("pyproject.toml").resolve())
+        assert case_mount["read_only"] is True
+        assert cast(dict[str, object], case_mount["bind"])["create_host_path"] is False
 
 
 @pytest.mark.unit

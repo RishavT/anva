@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import io
 import json
 import os
 import shutil
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
@@ -15,6 +17,7 @@ from unittest.mock import patch
 
 import pytest
 
+from anva import __version__
 from anva.acceptance.client import APIResponse
 from anva.acceptance.corpus import canonicalize_corpus
 from anva.acceptance.export import AcceptanceExportError
@@ -29,7 +32,10 @@ from anva.acceptance.runner import (
     _write_secret_handoff,
 )
 from anva.acceptance.state import ResumeState, load_state
+from anva.contracts.acceptance import ACCEPTANCE_HTTP_OPERATION_IDS
+from anva.contracts.bootstrap_scope import acceptance_bootstrap_scope_payload
 from anva.contracts.catalog import EXAMPLES
+from anva.core.services.evidence_uploads import inspect_evidence_upload
 
 SOURCE_TEXT = "# Checkout ownership\n\nThe Payments Platform team owns checkout.\n"
 SOURCE_NORMALIZED = json.dumps(
@@ -48,13 +54,38 @@ def _id(number: int) -> str:
     return f"00000000-0000-4000-8000-{number:012d}"
 
 
+def _evidence_bytes(head_commit: str, *, check_name: str = "TESTS_PASS") -> bytes:
+    return (
+        json.dumps(
+            {
+                "checks": [{"name": check_name, "status": "PASSED"}],
+                "head_sha": head_commit,
+                "schema_version": 1,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode()
+
+
+def _bind_case_evidence(case: dict[str, object], head_commit: str) -> None:
+    evidence = cast(dict[str, object], case["evidence"])
+    evidence["content_base64"] = base64.b64encode(_evidence_bytes(head_commit)).decode()
+
+
 class FakeProduct:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, str | None, dict[str, object] | None]] = []
         self.assurance_starts = 0
         self.upload_authorization_calls = 0
         self.manual_heads: list[str] = []
+        self.upload_contents: list[bytes] = []
+        self.mcp_calls: list[tuple[str, dict[str, object]]] = []
+        self.operation_ids: list[str] = []
         self.request_id = _id(901)
+        self.evidence_manifest: dict[str, object] | None = None
+        self.evidence_payload_hash = "6" * 64
 
     def request(
         self,
@@ -80,11 +111,16 @@ class FakeProduct:
                     "organization_id": _id(1),
                     "repository_id": _id(2),
                     "access_scope_id": _id(3),
+                    "service_identity_id": _id(6),
+                    "token_id": _id(7),
                     "token": "initiator-token-material",
+                    "reviewer_service_identity_id": _id(8),
+                    "reviewer_token_id": _id(9),
                     "reviewer_token": "reviewer-token-material",
                     "expires_at": "2026-08-04T12:00:00Z",
                     "reviewer_expires_at": "2026-08-04T12:00:00Z",
                     "bootstrap_request_sha256": request_hash,
+                    "bootstrap_mode": "SCOPED" if "scope" in payload else "LEGACY",
                     "recovered": False,
                 },
             )
@@ -158,17 +194,32 @@ class FakeProduct:
             )
         if path.endswith(f"/{_id(30)}/content"):
             assert method == "PUT" and content is not None
-            decoded = json.loads(content)
-            assert decoded == {
-                "checks": [{"name": "EXACT_HEAD_PROOF", "status": "PASSED"}],
-                "head_sha": self.manual_heads[0],
-                "schema_version": 1,
-            }
+            self.upload_contents.append(content)
             return APIResponse(201, {"evidence_blob_id": _id(31)})
         if path.endswith("/evidence"):
+            assert payload is not None
+            self.evidence_manifest = deepcopy(payload)
             return APIResponse(
                 201,
-                {"manifest_id": _id(32), "evidence_ids": [_id(33)]},
+                {
+                    "manifest_id": _id(32),
+                    "payload_hash": self.evidence_payload_hash,
+                    "evidence_ids": [_id(33)],
+                    "created": True,
+                },
+            )
+        if path == f"/evidence-manifests/{_id(32)}":
+            assert self.evidence_manifest is not None
+            return APIResponse(
+                200,
+                {
+                    "id": _id(32),
+                    "repository_id": _id(2),
+                    "pull_request_number": self.evidence_manifest["pull_request_number"],
+                    "commit_sha": self.evidence_manifest["commit_sha"],
+                    "payload_hash": self.evidence_payload_hash,
+                    "manifest": deepcopy(self.evidence_manifest),
+                },
             )
         if path.endswith("/assurance-runs"):
             self.assurance_starts += 1
@@ -188,8 +239,22 @@ class FakeProduct:
             return APIResponse(
                 200,
                 {
+                    "status": "CLAIMED",
                     "task_id": _id(35),
+                    "assurance_run_id": _id(34),
+                    "request_id": self.request_id,
+                    "input_hash": "7" * 64,
+                    "head_commit": self.manual_heads[0],
+                    "claimant": "independent-acceptance-evaluator",
+                    "claimed_by": {
+                        "actor_type": "SERVICE",
+                        "actor_id": _id(8),
+                        "credential_id": _id(9),
+                    },
+                    "attempt": 1,
+                    "lease_expires_at": "2026-08-10T13:00:00Z",
                     "claim_token": "lease-bound-claim-material",
+                    "replayed": False,
                     "request": {
                         "request_id": self.request_id,
                         "assurance_run_id": _id(34),
@@ -200,7 +265,27 @@ class FakeProduct:
             )
         if path == f"/evaluator-tasks/{_id(35)}/submit":
             assert token == "reviewer-token-material"  # noqa: S105 - synthetic fixture
-            return APIResponse(201, {"assurance_run_id": _id(34), "report_id": _id(38)})
+            assert payload is not None and isinstance(payload.get("result"), dict)
+            result_hash = hashlib.sha256(
+                json.dumps(payload["result"], separators=(",", ":"), sort_keys=True).encode()
+            ).hexdigest()
+            return APIResponse(
+                201,
+                {
+                    "task_id": _id(35),
+                    "assurance_run_id": _id(34),
+                    "input_hash": "7" * 64,
+                    "head_commit": self.manual_heads[0],
+                    "result_hash": result_hash,
+                    "state": "COMPLETED",
+                    "readiness": "READY",
+                    "reason_codes": [],
+                    "report_id": _id(38),
+                    "finding_ids": [],
+                    "created": True,
+                    "replayed": False,
+                },
+            )
         if path == f"/assurance-runs/{_id(34)}":
             return APIResponse(
                 200,
@@ -237,17 +322,21 @@ class FakeAPI:
         content: bytes | None = None,
         headers: dict[str, str] | None = None,
         expected: frozenset[int] = frozenset({200}),
+        operation_id: str | None = None,
     ) -> APIResponse:
         del headers, expected
+        if operation_id is not None:
+            self.product.operation_ids.append(operation_id)
         return self.product.request(self.token, method, path, payload, content)
 
 
 class FakeMCP:
-    def __init__(self) -> None:
-        self.calls: list[str] = []
+    def __init__(self, product: FakeProduct | None = None) -> None:
+        self.product = product
 
     def call(self, tool_name: str, arguments: Mapping[str, object]) -> dict[str, object]:
-        self.calls.append(tool_name)
+        if self.product is not None:
+            self.product.mcp_calls.append((tool_name, dict(arguments)))
         if tool_name == "anva.search":
             return {
                 "contract_version": "1",
@@ -295,7 +384,10 @@ class FakeMCP:
 
 
 def _runner(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    case_payload: dict[str, object] | None = None,
 ) -> tuple[AcceptanceRunner, FakeProduct]:
     fixture = Path("tests/fixtures/acceptance-public")
     raw = tmp_path / "raw"
@@ -306,7 +398,7 @@ def _runner(
     pin = hashlib.sha256((raw / "acceptance-corpus.json").read_bytes()).hexdigest()
     corpus = canonicalize_corpus(raw_root=raw, canonical_root=canonical, manifest_sha256=pin)
     product = FakeProduct()
-    fake_mcp = FakeMCP()
+    fake_mcp = FakeMCP(product)
     monkeypatch.setattr(
         "anva.acceptance.runner.PublicAPI",
         lambda _url, token=None: FakeAPI(product, token),
@@ -354,6 +446,10 @@ def _runner(
         encoding="utf-8",
     )
     launch_manifest.chmod(0o444)
+    case_path: Path | None = None
+    if case_payload is not None:
+        case_path = tmp_path / "acceptance-case.json"
+        case_path.write_text(json.dumps(case_payload), encoding="utf-8")
     runner = AcceptanceRunner(
         RunnerConfig(
             api_url="http://api:8000/api/v1",
@@ -369,6 +465,7 @@ def _runner(
             product_image_reference="anva:test",
             build_input_sha256="b" * 64,
             launch_service="acceptance-product-start",
+            case_path=case_path,
             build_provenance_path=provenance,
             launch_manifest_path=launch_manifest,
             credential_output=tmp_path / "credentials" / "credentials.json",
@@ -376,6 +473,285 @@ def _runner(
         )
     )
     return runner, product
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("case_id", "slug", "pull_request_number", "base_commit", "head_commit"),
+    [
+        ("tst-009.scn-synthetic", "synthetic-org", 29, "4" * 40, "5" * 40),
+        ("tst-009.scn-lantern", "lantern-org", 41, "6" * 40, "7" * 40),
+    ],
+)
+def test_case_drives_query_commits_pr_and_public_payloads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    case_id: str,
+    slug: str,
+    pull_request_number: int,
+    base_commit: str,
+    head_commit: str,
+) -> None:
+    case = deepcopy(EXAMPLES["acceptance-case"])
+    case["case_id"] = case_id
+    cast(dict[str, object], case["organization"])["slug"] = slug
+    organization = cast(dict[str, object], case["organization"])
+    organization["name"] = "Synthetic Org"
+    organization["bootstrap_scope"] = acceptance_bootstrap_scope_payload(
+        admin_email=f"operator@{slug}.invalid",
+        admin_display_name=f"{slug} operator",
+        repository_external_id=f"github:synthetic/{slug}",
+        repository_name=f"{slug}-repository",
+        initiator_name=f"{slug} acceptance runner",
+        reviewer_name=f"{slug} independent reviewer",
+        access_scope_name=f"{slug} exact scope",
+    )
+    cast(dict[str, object], case["retrieval"])["search_query"] = (
+        "synthetic ownership and release policy"
+    )
+    change = cast(dict[str, object], case["change"])
+    change.update(
+        {
+            "pull_request_number": pull_request_number,
+            "base_commit": base_commit,
+            "head_commit": head_commit,
+            "stale_probe": None,
+        }
+    )
+    _bind_case_evidence(case, head_commit)
+    runner, product = _runner(tmp_path, monkeypatch, case_payload=case)
+
+    awaiting = runner.start(bootstrap_secret="bootstrap-material", token=None)
+
+    assert awaiting.status == "AWAITING_EXTERNAL_REVIEW"
+    assert awaiting.hashes["base_commit"] == base_commit
+    assert awaiting.hashes["head_commit"] == head_commit
+    assert "new_head_commit" not in awaiting.hashes
+    assert awaiting.hashes["case_sha256"] == runner.case.sha256
+    assert awaiting.identities["reviewer_service_identity_id"] == _id(8)
+    assert awaiting.identities["reviewer_token_id"] == _id(9)
+    assert any(
+        path == f"/repositories/{_id(2)}/pull-requests/{pull_request_number}/manual-diff"
+        for _method, path, _token, _payload in product.calls
+    )
+    assert not any(
+        "pull-requests/817/" in path for _method, path, _token, _payload in product.calls
+    )
+    search_arguments = next(
+        arguments for tool, arguments in product.mcp_calls if tool == "anva.search"
+    )
+    assert search_arguments["query"] == "synthetic ownership and release policy"
+    bootstrap = next(
+        payload
+        for method, path, _token, payload in product.calls
+        if method == "POST" and path == "/bootstrap"
+    )
+    assert bootstrap is not None
+    assert bootstrap["organization_slug"] == slug
+    assert bootstrap["scope"] == organization["bootstrap_scope"]
+    assert "admin_email" not in bootstrap
+    identities = cast(dict[str, object], bootstrap["scope"])["service_identities"]
+    assert isinstance(identities, list) and len(identities) == 2
+    assurance_payload = next(
+        payload
+        for method, path, _token, payload in product.calls
+        if method == "POST" and path.endswith("/assurance-runs")
+    )
+    assert assurance_payload is not None
+    assert assurance_payload["reviewer_service_identity_id"] == _id(8)
+    assert assurance_payload["reviewer_token_id"] == _id(9)
+    assert product.upload_contents == [runner.case.evidence_bytes]
+    inspected = inspect_evidence_upload(
+        io.BytesIO(runner.case.evidence_bytes),
+        content_length=len(runner.case.evidence_bytes),
+        expected_size=len(runner.case.evidence_bytes),
+        expected_sha256=hashlib.sha256(runner.case.evidence_bytes).hexdigest(),
+        commit_sha=head_commit,
+    )
+    assert inspected.archive_summary["check_count"] == 1
+    assert len(product.operation_ids) == len(product.calls)
+    assert {
+        "bootstrapOrganization",
+        "connectFilesystemSource",
+        "syncSourceConnection",
+        "listSourceSyncRuns",
+        "queryOrganizationalCanvas",
+        "importWorkItemRevision",
+        "importPolicyVersion",
+        "simulatePolicy",
+        "createEvidenceUploadAuthorization",
+        "uploadEvidenceContent",
+        "submitEvidenceManifest",
+        "ingestManualPullRequestDiff",
+        "startManualDiffAssurance",
+    } <= set(product.operation_ids)
+
+
+@pytest.mark.unit
+def test_no_case_preserves_legacy_journey_golden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner, product = _runner(tmp_path, monkeypatch)
+    reference = "2026-08-07T00:10:00Z"
+    state = runner._new_state(reference_time=reference)
+
+    assert runner.case.legacy_default is True
+    assert state.hashes["canonical_input_sha256"] == state.hashes["canonical_manifest_sha256"]
+    assert "case_sha256" not in state.hashes
+    assert (
+        state.hashes["base_commit"]
+        == hashlib.sha256(f"{runner.corpus.source_fingerprint}:base".encode()).hexdigest()[:40]
+    )
+    assert (
+        state.hashes["head_commit"]
+        == hashlib.sha256(f"{runner.corpus.source_fingerprint}:head".encode()).hexdigest()[:40]
+    )
+    bootstrap = runner._bootstrap_payload(state)
+    assert bootstrap == {
+        "organization_slug": f"anva-acceptance-{state.hashes['reference_time_sha256'][:12]}",
+        "organization_name": f"Anva Acceptance {runner.corpus.corpus_id}",
+        "admin_email": (
+            f"anva-acceptance-{state.hashes['reference_time_sha256'][:12]}@anva.invalid"
+        ),
+        "admin_display_name": "Anva acceptance operator",
+        "repository_external_id": f"acceptance:{runner.corpus.source_fingerprint}",
+        "repository_name": runner.corpus.corpus_id,
+        "independent_reviewer_name": "Independent acceptance evaluator",
+        "idempotency_key": state.hashes["bootstrap_idempotency_sha256"],
+    }
+    runner.start(bootstrap_secret="bootstrap-material", token=None)
+    assurance_payload = next(
+        payload
+        for method, path, _token, payload in product.calls
+        if method == "POST" and path.endswith("/assurance-runs")
+    )
+    assert assurance_payload is not None
+    assert "reviewer_service_identity_id" not in assurance_payload
+    assert "reviewer_token_id" not in assurance_payload
+    assert any("pull-requests/817/" in path for _method, path, _token, _payload in product.calls)
+    assert any("pull-requests/818/" in path for _method, path, _token, _payload in product.calls)
+    assert json.loads(product.upload_contents[0]) == {
+        "checks": [{"name": "EXACT_HEAD_PROOF", "status": "PASSED"}],
+        "head_sha": product.manual_heads[0],
+        "schema_version": 1,
+    }
+    evidence_manifests = [
+        payload
+        for method, path, _token, payload in product.calls
+        if method == "POST" and path.endswith("/evidence")
+    ]
+    assert evidence_manifests
+    assert evidence_manifests[0] is not None
+    assert evidence_manifests[0]["producer_version"] == __version__
+    entries = cast(list[dict[str, object]], evidence_manifests[0]["entries"])
+    assert entries[0]["producer_version"] == __version__
+
+
+@pytest.mark.unit
+def test_finalize_reuses_case_retrieval_canvas_and_all_public_operations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    case = deepcopy(EXAMPLES["acceptance-case"])
+    change = cast(dict[str, object], case["change"])
+    change["stale_probe"] = None
+    head_commit = cast(str, change["head_commit"])
+    _bind_case_evidence(case, head_commit)
+    retrieval = cast(dict[str, object], case["retrieval"])
+    retrieval.update(
+        {
+            "search_query": "distinct finalize retrieval",
+            "search_phase": "BUILD",
+            "search_limit": 7,
+            "context_task": "Distinct finalize context task",
+            "context_phase": "PREFLIGHT",
+            "budget": {
+                "max_items": 6,
+                "max_tokens": 700,
+                "max_bytes": 8_000,
+                "max_citations": 9,
+            },
+        }
+    )
+    canvas_case = cast(dict[str, object], case["canvas"])
+    canvas_case.update(
+        {
+            "layers": ["governance", "provenance"],
+            "depth": 2,
+            "node_limit": 71,
+            "edge_limit": 83,
+        }
+    )
+    runner, product = _runner(tmp_path, monkeypatch, case_payload=case)
+    runner.start(bootstrap_secret="bootstrap-material", token=None)
+    handoff_path = tmp_path / "handoff" / "review.json"
+    runner.create_review_handoff(
+        reviewer_token="reviewer-token-material",
+        output=handoff_path,
+    )
+    result = deepcopy(EXAMPLES["evaluator-result"])
+    result.update(
+        {
+            "request_id": product.request_id,
+            "organization_id": _id(1),
+            "commit_sha": head_commit,
+            "completion": "COMPLETE",
+            "evaluator_version": "external-acceptance-v1",
+            "prompt_version": "acceptance-review-v1",
+            "findings": [],
+            "limitations": ["External provider launch is intentionally out of process."],
+            "evaluated_at": "2026-08-07T00:00:00Z",
+        }
+    )
+    result_path = tmp_path / "external-result.json"
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+    runner.submit_review(
+        reviewer_token="reviewer-token-material",
+        handoff_path=handoff_path,
+        result_path=result_path,
+    )
+
+    complete = runner.finalize(
+        token="initiator-token-material",
+        mcp=FakeMCP(product),
+    )
+
+    assert complete.status == "COMPLETE"
+    search_calls = [arguments for tool, arguments in product.mcp_calls if tool == "anva.search"]
+    context_calls = [
+        arguments for tool, arguments in product.mcp_calls if tool == "anva.get_context_packet"
+    ]
+    assert search_calls[-1]["query"] == retrieval["search_query"]
+    assert search_calls[-1]["phase"] == retrieval["search_phase"]
+    assert search_calls[-1]["limit"] == retrieval["search_limit"]
+    assert context_calls[-1]["task"] == retrieval["context_task"]
+    assert context_calls[-1]["phase"] == retrieval["context_phase"]
+    assert context_calls[-1]["budget"] == retrieval["budget"]
+    canvas_payloads = [
+        payload
+        for method, path, _token, payload in product.calls
+        if method == "POST" and path == "/canvas/query"
+    ]
+    assert canvas_payloads[-1] == {
+        "repository_ids": [_id(2)],
+        "layers": canvas_case["layers"],
+        "depth": canvas_case["depth"],
+        "node_limit": canvas_case["node_limit"],
+        "edge_limit": canvas_case["edge_limit"],
+    }
+    assert set(product.operation_ids) == set(ACCEPTANCE_HTTP_OPERATION_IDS)
+
+
+@pytest.mark.unit
+def test_case_source_path_must_exist_in_pinned_canonical_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    case = deepcopy(EXAMPLES["acceptance-case"])
+    cast(dict[str, object], case["semantic_assertions"])["source_paths"] = [
+        "organization/not-in-manifest.md"
+    ]
+
+    with pytest.raises(AcceptanceRunnerError, match="absent from the canonical manifest"):
+        _runner(tmp_path, monkeypatch, case_payload=case)
 
 
 @pytest.mark.unit
@@ -582,6 +958,52 @@ def test_bootstrap_crash_after_server_commit_recovers_exact_request(
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda payload: payload.update({"bootstrap_mode": "LEGACY"}),
+        lambda payload: payload.pop("reviewer_service_identity_id"),
+        lambda payload: payload.pop("reviewer_token_id"),
+        lambda payload: payload.pop("reviewer_token"),
+        lambda payload: payload.pop("reviewer_expires_at"),
+    ],
+)
+def test_runner_rejects_wrong_mode_or_incomplete_scoped_bootstrap_before_handoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: Callable[[dict[str, object]], object],
+) -> None:
+    runner, product = _runner(
+        tmp_path,
+        monkeypatch,
+        case_payload=deepcopy(EXAMPLES["acceptance-case"]),
+    )
+    original_request = product.request
+
+    def malformed_bootstrap(
+        token: str | None,
+        method: str,
+        path: str,
+        payload: dict[str, object] | None,
+        content: bytes | None,
+    ) -> APIResponse:
+        response = original_request(token, method, path, payload, content)
+        if path != "/bootstrap":
+            return response
+        malformed = deepcopy(response.payload)
+        mutation(malformed)
+        return APIResponse(response.status, malformed)
+
+    monkeypatch.setattr(product, "request", malformed_bootstrap)
+
+    with pytest.raises(AcceptanceRunnerError, match="mode|required identity"):
+        runner.start(bootstrap_secret="bootstrap-material", token=None)
+    assert load_state(runner.config.state_path).status == "BOOTSTRAP_PREPARED"
+    assert runner.config.credential_output is not None
+    assert not runner.config.credential_output.exists()
+
+
+@pytest.mark.unit
 def test_bootstrap_crash_after_handoff_reconciles_without_second_bootstrap(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -605,6 +1027,8 @@ def test_bootstrap_crash_after_handoff_reconciles_without_second_bootstrap(
 
     resumed = AcceptanceRunner(runner.config).start(bootstrap_secret=None, token=None)
     assert resumed.status == "AWAITING_EXTERNAL_REVIEW"
+    assert resumed.identities["reviewer_service_identity_id"] == _id(8)
+    assert resumed.identities["reviewer_token_id"] == _id(9)
     assert sum(path == "/bootstrap" for _method, path, _token, _body in product.calls) == 1
 
 
@@ -659,6 +1083,15 @@ def test_review_and_finalize_crash_boundaries_are_restart_safe(
     assert claim_payloads[0] == claim_payloads[1]
 
     handoff = json.loads(handoff_path.read_bytes())
+    assert handoff["reviewer_service_identity_id"] == _id(8)
+    assert handoff["reviewer_token_id"] == _id(9)
+    claimed_state = load_state(runner.config.state_path)
+    assert (
+        claimed_state.hashes["review_claim_idempotency_sha256"]
+        == hashlib.sha256(
+            (f"review-claim:{claimed_state.run_id}:{_id(35)}:{_id(8)}:{_id(9)}").encode()
+        ).hexdigest()
+    )
     result_path = tmp_path / "external-result.json"
     result = deepcopy(EXAMPLES["evaluator-result"])
     result.update(
@@ -717,6 +1150,15 @@ def test_review_and_finalize_crash_boundaries_are_restart_safe(
     complete = AcceptanceRunner(runner.config).finalize(token="initiator-token-material")
     assert complete.status == "COMPLETE"
     assert len(product.calls) == calls_before_adoption
+    assert len(product.operation_ids) == len(product.calls)
+    assert {
+        "getAssuranceRun",
+        "queryOrganizationalCanvas",
+        "listAssuranceFindings",
+        "getAssuranceReport",
+        "claimManualEvaluatorTask",
+        "submitManualEvaluatorResult",
+    } <= set(product.operation_ids)
 
     metadata = runner.config.output_root / "results" / "run-metadata.json"
     metadata.chmod(0o600)
@@ -725,3 +1167,44 @@ def test_review_and_finalize_crash_boundaries_are_restart_safe(
     with pytest.raises(AcceptanceExportError, match="checksum"):
         AcceptanceRunner(runner.config).finalize(token="initiator-token-material")
     assert load_state(runner.config.state_path).hashes["sealed_manifest_sha256"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("claimed_by_field", ["actor_id", "credential_id"])
+def test_review_claim_must_match_bootstrap_reviewer_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    claimed_by_field: str,
+) -> None:
+    runner, product = _runner(
+        tmp_path,
+        monkeypatch,
+        case_payload=deepcopy(EXAMPLES["acceptance-case"]),
+    )
+    runner.start(bootstrap_secret="bootstrap-material", token=None)
+    original_request = product.request
+
+    def mismatched_claim(
+        token: str | None,
+        method: str,
+        path: str,
+        payload: dict[str, object] | None,
+        content: bytes | None,
+    ) -> APIResponse:
+        response = original_request(token, method, path, payload, content)
+        if not path.endswith("/evaluator-tasks/claim"):
+            return response
+        malformed = deepcopy(response.payload)
+        claimed_by = cast(dict[str, object], malformed["claimed_by"])
+        claimed_by[claimed_by_field] = _id(99)
+        return APIResponse(response.status, malformed)
+
+    monkeypatch.setattr(product, "request", mismatched_claim)
+    handoff_path = tmp_path / "handoff" / "mismatched.json"
+    with pytest.raises(AcceptanceRunnerError, match="wrong credential"):
+        runner.create_review_handoff(
+            reviewer_token="reviewer-token-material",
+            output=handoff_path,
+        )
+    assert load_state(runner.config.state_path).status == "REVIEW_CLAIMING"
+    assert not handoff_path.exists()

@@ -233,6 +233,17 @@
           "type": "string"
         },
         "structured_data": {
+          "additionalProperties": false,
+          "properties": {
+            "text": {
+              "maxLength": 20000,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "text"
+          ],
           "type": "object"
         },
         "summary_type": {

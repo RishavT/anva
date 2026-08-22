@@ -43,6 +43,23 @@ def validate_payload(schema_name: str, payload: object) -> None:
         ) from error
 
 
+def contract_input_byte_limit(schema_name: str) -> int:
+    """Return an explicit public raw-input bound declared by a contract schema."""
+    schema = SCHEMAS.get(schema_name)
+    if schema is None:
+        raise ContractValidationError(f"Unknown contract '{schema_name}'")
+    input_metadata = schema.get("x-anva-input")
+    if not isinstance(input_metadata, dict):
+        raise ContractValidationError(f"Contract '{schema_name}' has no input metadata")
+    byte_limit = input_metadata.get("byte_limit")
+    if not isinstance(byte_limit, dict):
+        raise ContractValidationError(f"Contract '{schema_name}' has no byte-limit metadata")
+    value = byte_limit.get("maximum")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ContractValidationError(f"Contract '{schema_name}' has no raw-input byte bound")
+    return value
+
+
 def validate_knowledge_changes(payload: object) -> None:
     """Validate proposed changes against the canonical KnowledgeProposal item contract."""
     schema: dict[str, object] = {

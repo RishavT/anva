@@ -29,7 +29,9 @@ from anva.core.models import (
 from anva.core.services import mcp_gateway
 from anva.core.services.context import ActorContext
 from anva.entrypoints import mcp as mcp_entrypoint
-from anva.mcp.contracts import TOOL_CONTRACTS
+from anva.mcp.contracts import TOOL_CONTRACTS, validate_tool_output
+
+_NO_CURSOR = object()
 
 
 def _actor() -> ActorContext:
@@ -70,6 +72,22 @@ class _Query:
         return self.records[key]
 
 
+def _validate_handler_output(
+    tool_name: str,
+    data: dict[str, object],
+    *,
+    next_cursor: str | None | object = _NO_CURSOR,
+) -> None:
+    payload: dict[str, object] = {
+        "contract_version": "1",
+        "tool": tool_name,
+        "data": data,
+    }
+    if next_cursor is not _NO_CURSOR:
+        payload["next_cursor"] = next_cursor
+    validate_tool_output(tool_name, payload)
+
+
 @pytest.mark.unit
 def test_read_handlers_share_bounded_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
     actor = _actor()
@@ -93,13 +111,12 @@ def test_read_handlers_share_bounded_helpers(monkeypatch: pytest.MonkeyPatch) ->
     )
     monkeypatch.setattr(mcp_gateway, "_repository", lambda **_kwargs: repository)
     monkeypatch.setattr(mcp_gateway, "visible_scope_ids", lambda **_kwargs: (uuid.uuid4(),))
-    assert (
-        mcp_gateway._resolve_repository(
-            actor,
-            {"repository_id": str(repository_id)},
-        )["active"]
-        is True
+    resolved_repository = mcp_gateway._resolve_repository(
+        actor,
+        {"repository_id": str(repository_id)},
     )
+    assert resolved_repository["active"] is True
+    _validate_handler_output("anva.resolve_repository", resolved_repository)
 
     work_item = SimpleNamespace(
         id=uuid.uuid4(),
@@ -130,6 +147,7 @@ def test_read_handlers_share_bounded_helpers(monkeypatch: pytest.MonkeyPatch) ->
         },
     )
     assert resolved["external_key"] == "ANVA-9"
+    _validate_handler_output("anva.resolve_work_item", resolved)
 
     packet_id = uuid.uuid4()
     monkeypatch.setattr(
@@ -164,7 +182,27 @@ def test_read_handlers_share_bounded_helpers(monkeypatch: pytest.MonkeyPatch) ->
     assert built["created"] is True
 
     results = [
-        SimpleNamespace(as_dict=lambda position=position: {"position": position})
+        SimpleNamespace(
+            as_dict=lambda position=position: {
+                "chunk_id": str(uuid.uuid4()),
+                "text": f"Result {position}",
+                "content_hash": "a" * 64,
+                "pointer": f"/result-{position}.md",
+                "canonical_url": f"https://example.test/result-{position}.md",
+                "access_scope_id": str(uuid.uuid4()),
+                "source_location_id": str(uuid.uuid4()),
+                "source_observation_id": str(uuid.uuid4()),
+                "access_snapshot_id": str(uuid.uuid4()),
+                "observed_at": datetime.now(UTC).isoformat(),
+                "explanation": {
+                    "lexical_rank": position,
+                    "semantic_rank": None,
+                    "reciprocal_rank_score": 0.5,
+                    "phase": None,
+                    "phase_terms": [],
+                },
+            }
+        )
         for position in (1, 2)
     ]
     monkeypatch.setattr(
@@ -181,8 +219,9 @@ def test_read_handlers_share_bounded_helpers(monkeypatch: pytest.MonkeyPatch) ->
             "limit": 1,
         },
     )
-    assert searched["results"] == [{"position": 1}]
+    assert cast(list[dict[str, object]], searched["results"])[0]["text"] == "Result 1"
     assert cursor is not None
+    _validate_handler_output("anva.search", searched, next_cursor=cursor)
 
     entity = SimpleNamespace(
         id=uuid.uuid4(),
@@ -193,14 +232,38 @@ def test_read_handlers_share_bounded_helpers(monkeypatch: pytest.MonkeyPatch) ->
         revision=3,
     )
     monkeypatch.setattr(mcp_gateway, "get_authorized_entity", lambda **_kwargs: entity)
-    assert (
-        mcp_gateway._entity(
-            actor,
-            {"repository_id": str(repository_id), "entity_id": str(entity.id)},
-        )["revision"]
-        == 3
+    entity_data = mcp_gateway._entity(
+        actor,
+        {"repository_id": str(repository_id), "entity_id": str(entity.id)},
     )
-    edge = SimpleNamespace(as_dict=lambda: {"relationship": "DEPENDS_ON"})
+    assert entity_data["revision"] == 3
+    _validate_handler_output("anva.get_entity", entity_data)
+    relationship_id = uuid.uuid4()
+    edge = SimpleNamespace(
+        as_dict=lambda: {
+            "relationship_id": str(relationship_id),
+            "relationship_type": "DEPENDS_ON",
+            "source": {
+                "id": str(entity.id),
+                "type": "SERVICE",
+                "key": "service:anva",
+                "name": "Anva",
+            },
+            "target": {
+                "id": str(uuid.uuid4()),
+                "type": "SERVICE",
+                "key": "service:database",
+                "name": "Database",
+            },
+            "assertion_id": str(uuid.uuid4()),
+            "source_location_id": str(uuid.uuid4()),
+            "source_observation_id": str(uuid.uuid4()),
+            "access_snapshot_id": str(uuid.uuid4()),
+            "observed_at": datetime.now(UTC).isoformat(),
+            "confidence": 0.9,
+            "depth": 1,
+        }
+    )
     monkeypatch.setattr(
         mcp_gateway,
         "traverse_graph",
@@ -215,15 +278,17 @@ def test_read_handlers_share_bounded_helpers(monkeypatch: pytest.MonkeyPatch) ->
             "limit": 20,
         },
     )
-    assert relationships["relationships"] == [{"relationship": "DEPENDS_ON"}]
+    assert cast(list[dict[str, object]], relationships["relationships"])[0][
+        "relationship_id"
+    ] == str(relationship_id)
     assert next_cursor is None
-    assert (
-        mcp_gateway._repository_profile(
-            actor,
-            {"repository_id": str(repository_id)},
-        )["profile_version"]
-        == 1
+    _validate_handler_output("anva.get_relationships", relationships, next_cursor=next_cursor)
+    profile = mcp_gateway._repository_profile(
+        actor,
+        {"repository_id": str(repository_id)},
     )
+    assert profile["profile_version"] == 1
+    _validate_handler_output("anva.get_repository_profile", profile)
 
 
 @pytest.mark.unit
@@ -240,8 +305,8 @@ def test_policy_requirements_and_explanation_handlers(
         {
             "code": "SEC_1",
             "description": "Review",
-            "enforcement": "REQUIRED",
-            "check_type": "MANUAL",
+            "enforcement": "BLOCKING",
+            "check_type": "MANUAL_APPROVAL",
             "required_evidence": [],
             "required_approval": True,
         }
@@ -279,6 +344,7 @@ def test_policy_requirements_and_explanation_handlers(
     )
     assert cast(list[dict[str, object]], bundle["policies"])[0]["name"] == "Security"
     assert bundle_cursor is None
+    _validate_handler_output("anva.get_policy_bundle", bundle, next_cursor=bundle_cursor)
 
     work_item = SimpleNamespace(id=uuid.uuid4())
     work_revision = SimpleNamespace(id=uuid.uuid4(), revision=4)
@@ -326,21 +392,32 @@ def test_policy_requirements_and_explanation_handlers(
     )
     assert cast(list[dict[str, object]], requirements["requirements"])[0]["code"] == "REQ_1"
     assert requirements_cursor is None
+    _validate_handler_output("anva.get_requirements", requirements, next_cursor=requirements_cursor)
 
     assertion = SimpleNamespace(
         id=uuid.uuid4(),
         subject_key="gateway",
         predicate="requires",
         value={"authentication": True},
-        staleness_state="CURRENT",
+        staleness_state="FRESH",
         is_inferred=False,
-        review_state="CONFIRMED",
+        review_state="HUMAN_CONFIRMED",
     )
     monkeypatch.setattr(mcp_gateway, "get_authorized_assertion", lambda **_kwargs: assertion)
     monkeypatch.setattr(
         mcp_gateway,
         "authorized_assertion_citations",
-        lambda **_kwargs: ({"source": "normalized"},),
+        lambda **_kwargs: (
+            {
+                "source_location_id": str(uuid.uuid4()),
+                "source_observation_id": str(uuid.uuid4()),
+                "access_snapshot_id": str(uuid.uuid4()),
+                "canonical_url": "https://example.test/assertion.md",
+                "locator": "/assertion.md#L1-L2",
+                "source_content_hash": "a" * 64,
+                "observed_at": datetime.now(UTC).isoformat(),
+            },
+        ),
     )
     explanation = mcp_gateway._assertion_explanation(
         actor,
@@ -349,7 +426,8 @@ def test_policy_requirements_and_explanation_handlers(
             "assertion_id": str(assertion.id),
         },
     )
-    assert explanation["sources"] == [{"source": "normalized"}]
+    assert len(cast(list[dict[str, object]], explanation["sources"])) == 1
+    _validate_handler_output("anva.explain_assertion", explanation)
 
 
 @pytest.mark.unit

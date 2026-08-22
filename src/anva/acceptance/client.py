@@ -16,6 +16,9 @@ import httpx
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
+from anva.contracts.acceptance import validate_acceptance_http_response
+from anva.mcp.contracts import validate_tool_output
+
 MAX_RESPONSE_BYTES = 2_000_000
 
 
@@ -87,6 +90,7 @@ class PublicAPI:
         content: bytes | None = None,
         headers: Mapping[str, str] | None = None,
         expected: frozenset[int] = frozenset({200}),
+        operation_id: str | None = None,
     ) -> APIResponse:
         if not path.startswith("/") or ".." in path.split("/"):
             raise ValueError("Acceptance API path is invalid")
@@ -127,6 +131,20 @@ class PublicAPI:
             raw_code = response_payload.get("code")
             code = raw_code if isinstance(raw_code, str) else "api_rejected"
             raise AcceptanceBoundaryError(code, "Anva API rejected the operation", status=status)
+        if operation_id is not None:
+            try:
+                validate_acceptance_http_response(
+                    operation_id,
+                    status,
+                    response_payload,
+                    request_payload=payload,
+                )
+            except ValueError as error:
+                raise AcceptanceBoundaryError(
+                    "invalid_response_contract",
+                    "Anva returned a response outside its public contract",
+                    status=status,
+                ) from error
         return APIResponse(status=status, payload=response_payload)
 
 
@@ -160,7 +178,15 @@ class StreamableHTTPMCP:
             raise AcceptanceBoundaryError("mcp_unavailable", "Anva MCP operation failed") from error
         if result.isError or not isinstance(result.structuredContent, dict):
             raise AcceptanceBoundaryError("mcp_rejected", "Anva MCP rejected the operation")
-        return cast(dict[str, object], result.structuredContent)
+        payload = cast(dict[str, object], result.structuredContent)
+        try:
+            validate_tool_output(tool_name, payload)
+        except ValueError as error:
+            raise AcceptanceBoundaryError(
+                "invalid_response_contract",
+                "Anva returned an MCP response outside its public contract",
+            ) from error
+        return payload
 
     def call(self, tool_name: str, arguments: Mapping[str, object]) -> dict[str, object]:
         return asyncio.run(self._call(tool_name, arguments))

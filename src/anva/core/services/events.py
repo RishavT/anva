@@ -31,6 +31,8 @@ ALLOWED_AUDIT_METADATA_KEYS = frozenset(
         "membership_id",
         "replacement_token_id",
         "repository_id",
+        "reviewer_service_identity_id",
+        "reviewer_token_id",
         "publication_id",
         "presentation_only",
         "role_code",

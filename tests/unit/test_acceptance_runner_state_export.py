@@ -41,7 +41,11 @@ def _state() -> ResumeState:
         run_id="anva:acceptance-run",
         reference_time="2026-07-28T12:00:00Z",
         product_version="0.1.0",
-        identities={"organization_id": "00000000-0000-4000-8000-000000000001"},
+        identities={
+            "organization_id": "00000000-0000-4000-8000-000000000001",
+            "reviewer_service_identity_id": "00000000-0000-4000-8000-000000000008",
+            "reviewer_token_id": "00000000-0000-4000-8000-000000000009",
+        },
         hashes={
             "manifest_sha256": "a" * 64,
             "source_fingerprint": "b" * 64,
@@ -67,6 +71,21 @@ def test_resume_state_is_private_atomic_and_rejects_tamper_or_credentials(tmp_pa
     assert not list(path.parent.glob("*.tmp"))
 
     payload = json.loads(path.read_bytes())
+    payload["identities"].pop("reviewer_token_id")
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    path.chmod(0o600)
+    with pytest.raises(AcceptanceStateError, match="reviewer identity"):
+        load_state(path)
+
+    payload = json.loads(json.dumps(state.as_dict()))
+    invalid_value = "raw-reviewer-token-material"
+    payload["identities"]["reviewer_token_id"] = invalid_value
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    path.chmod(0o600)
+    with pytest.raises(AcceptanceStateError, match="identity"):
+        load_state(path)
+
+    payload = json.loads(json.dumps(state.as_dict()))
     payload["token"] = "must-never-persist"  # noqa: S105 - rejection canary
     path.write_text(json.dumps(payload), encoding="utf-8")
     path.chmod(0o600)
@@ -110,6 +129,8 @@ def _seal(root: Path, *, corpus_id: str = "halcyon-messy-organization-tst-008") 
         assurance_input_sha256="7" * 64,
         reference_time_sha256="8" * 64,
         review_result_sha256="4" * 64,
+        reviewer_service_identity_id="00000000-0000-4000-8000-000000000008",
+        reviewer_token_id="00000000-0000-4000-8000-000000000009",
         search_output={
             "contract_version": "1",
             "tool": "anva.search",
@@ -195,6 +216,12 @@ def test_public_export_is_deterministic_content_minimized_and_checksum_complete(
     rendered = b"\n".join(first_files.values())
     assert b"sensitive source body" not in rendered
     assert b"full report body" not in rendered
+    metadata = json.loads(first_files["results/run-metadata.json"])
+    assert metadata["reviewer"] == {
+        "service_identity_id": "00000000-0000-4000-8000-000000000008",
+        "credential_id": "00000000-0000-4000-8000-000000000009",
+    }
+    assert b"reviewer_token" not in rendered
     sums = first_files["SHA256SUMS"].decode().splitlines()
     assert len(sums) == len(first_files) - 1
     assert not list(tmp_path.glob(".*.sealing"))

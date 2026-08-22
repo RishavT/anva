@@ -9,6 +9,7 @@ import sys
 import pytest
 
 from anva.core.logging import SecretRedactionFilter, StructuredJsonFormatter, redact_text
+from anva.core.services.events import _validate_audit_value
 
 
 @pytest.mark.unit
@@ -75,6 +76,20 @@ def test_credential_id_in_authorization_path_is_not_secret_material() -> None:
         ">role:ORG_ADMIN>repository:00000000-0000-4000-8000-000000000002"
     )
     assert redact_text(authorization_path) == authorization_path
+
+
+@pytest.mark.unit
+def test_reviewer_identity_and_token_ids_are_safe_audit_metadata_but_secrets_are_not() -> None:
+    _validate_audit_value(
+        {
+            "reviewer_service_identity_id": "00000000-0000-4000-8000-000000000008",
+            "reviewer_token_id": "00000000-0000-4000-8000-000000000009",
+        }
+    )
+    with pytest.raises(ValueError, match="credential material"):
+        _validate_audit_value(
+            {"reviewer_token_id": ("anva_v1.00000000-0000-4000-8000-000000000009.raw-secret")}
+        )
 
 
 @pytest.mark.unit

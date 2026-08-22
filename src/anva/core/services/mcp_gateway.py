@@ -7,8 +7,10 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import uuid
 from collections.abc import Callable, Iterable
+from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime
 from typing import cast
@@ -83,6 +85,7 @@ from anva.mcp.contracts import (
     MAX_PAGE_SIZE,
     MCP_PROTOCOL_VERSIONS,
     PROPOSAL_TOOL_NAMES,
+    PUBLIC_NATIVE_ASSERTION_VALUE,
     TOOL_BY_NAME,
 )
 
@@ -99,6 +102,10 @@ _SOURCE_TYPE = {
     "CONTEXT_PACKET": "EVIDENCE",
 }
 logger = logging.getLogger(__name__)
+_PRIVATE_CONTROL_FIELD = re.compile(
+    r"(?i)(?:^|[_-])(?:private|oracle|grader|ground[_-]?truth|answer[_-]?key)(?:$|[_-])"
+)
+_PUBLIC_NATIVE_ASSERTION_VALUE_VALIDATOR = Draft202012Validator(PUBLIC_NATIVE_ASSERTION_VALUE)
 
 
 class MCPGatewayError(DomainOperationError):
@@ -1355,6 +1362,96 @@ def _validate(schema: dict[str, object], payload: object, *, code: str, label: s
         ) from error
 
 
+def _reject_private_output_material(
+    value: object,
+    *,
+    path: str = "$",
+    depth: int = 0,
+) -> None:
+    """Reject control-plane fields and credential strings before an MCP result leaves Anva."""
+    if depth > 20:
+        raise MCPGatewayError(
+            "invalid_tool_output",
+            "MCP output contains unsupported nesting",
+            path=path,
+            reason="nesting_limit",
+        )
+    if isinstance(value, dict):
+        for key, child in value.items():
+            key_text = str(key)
+            try:
+                reject_secrets(key_text)
+            except ValueError:
+                raise MCPGatewayError(
+                    "invalid_tool_output",
+                    "MCP output contains prohibited credential material",
+                    path=f"{path}.*",
+                    reason="secret_material",
+                ) from None
+            child_path = (
+                f"{path}.{key_text}" if key_text.replace("_", "").isalnum() else f"{path}.*"
+            )
+            normalized_key = re.sub(r"[^a-z0-9]", "", key_text.casefold())
+            if _PRIVATE_CONTROL_FIELD.search(key_text) or normalized_key.startswith(
+                ("private", "oracle", "grader", "groundtruth", "answerkey")
+            ):
+                raise MCPGatewayError(
+                    "invalid_tool_output",
+                    "MCP output contains prohibited private control material",
+                    path=child_path,
+                    reason="private_control_material",
+                )
+            _reject_private_output_material(child, path=child_path, depth=depth + 1)
+        return
+    if isinstance(value, list):
+        for index, child in enumerate(value):
+            _reject_private_output_material(child, path=f"{path}[{index}]", depth=depth + 1)
+        return
+    if isinstance(value, str):
+        try:
+            reject_secrets(value)
+        except ValueError:
+            raise MCPGatewayError(
+                "invalid_tool_output",
+                "MCP output contains prohibited credential material",
+                path=path,
+                reason="secret_material",
+            ) from None
+
+
+def _normalize_public_output(
+    tool_name: str,
+    result: dict[str, object],
+) -> dict[str, object]:
+    """Return a closed public representation for arbitrary persisted assertion JSON."""
+    if tool_name != "anva.get_context_packet":
+        return result
+    normalized = deepcopy(result)
+    data = normalized.get("data")
+    if not isinstance(data, dict):
+        return normalized
+    packet = data.get("packet")
+    if not isinstance(packet, dict):
+        return normalized
+    items = packet.get("items")
+    if not isinstance(items, list):
+        return normalized
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        payload = item.get("payload")
+        if not isinstance(payload, dict) or "value" not in payload:
+            continue
+        value = payload["value"]
+        if _PUBLIC_NATIVE_ASSERTION_VALUE_VALIDATOR.is_valid(value):
+            continue
+        payload["value"] = {
+            "format": "CANONICAL_JSON",
+            "json": canonical_payload_bytes(value).decode("utf-8"),
+        }
+    return normalized
+
+
 def _target_id(data: dict[str, object]) -> uuid.UUID | None:
     for key in (
         "proposal_id",
@@ -1445,6 +1542,8 @@ def dispatch_tool(
                     "tool": tool_name,
                     "data": data,
                 }
+            _reject_private_output_material(result)
+            result = _normalize_public_output(tool_name, result)
             if len(canonical_payload_bytes(result)) > MAX_GATEWAY_OUTPUT_BYTES:
                 raise MCPGatewayError(
                     "output_limit_exceeded",

@@ -30,6 +30,7 @@ from anva.core.models import (
     AssuranceKnowledgeProposal,
     AssuranceReport,
     AssuranceRun,
+    BootstrapRecovery,
     ContextPacketCitation,
     ContextPacketItem,
     CriterionEvidence,
@@ -151,6 +152,7 @@ class EvaluatorClaim:
     task: EvaluatorTask
     claim_token: str
     request: dict[str, object]
+    replayed: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,6 +241,82 @@ def _authorize_evaluator_source_scope(
     return authorized_actor
 
 
+def _resolve_bootstrap_reviewer_binding(
+    *,
+    actor: ActorContext,
+    repository_id: uuid.UUID,
+    reviewer_service_identity_id: uuid.UUID | None,
+    reviewer_token_id: uuid.UUID | None,
+) -> tuple[uuid.UUID | None, uuid.UUID | None]:
+    """Resolve non-secret reviewer IDs only through the caller's current bootstrap record."""
+    if (reviewer_service_identity_id is None) != (reviewer_token_id is None):
+        raise ValueError("Reviewer service identity and token IDs must be supplied together")
+    if reviewer_service_identity_id is None or reviewer_token_id is None:
+        return None, None
+    if actor.actor_type != "SERVICE" or actor.credential_id is None:
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    try:
+        initiator_service_identity_id = uuid.UUID(actor.actor_id)
+    except ValueError:
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE) from None
+    recovery = (
+        BootstrapRecovery.objects.select_related(
+            "organization",
+            "repository",
+            "service_identity",
+            "issued_token",
+            "reviewer_service_identity",
+            "reviewer_issued_token",
+        )
+        .filter(
+            organization_id=actor.organization_id,
+            repository_id=repository_id,
+            service_identity_id=initiator_service_identity_id,
+            issued_token_id=actor.credential_id,
+            reviewer_service_identity_id=reviewer_service_identity_id,
+            reviewer_issued_token_id=reviewer_token_id,
+        )
+        .first()
+    )
+    now = timezone.now()
+    reviewer = recovery.reviewer_service_identity if recovery is not None else None
+    reviewer_token = recovery.reviewer_issued_token if recovery is not None else None
+    if (
+        recovery is None
+        or reviewer is None
+        or reviewer_token is None
+        or not reviewer.is_active
+        or reviewer_token.revoked_at is not None
+        or reviewer_token.expires_at <= now
+        or reviewer_token.organization_id != actor.organization_id
+        or reviewer_token.repository_id != repository_id
+        or reviewer_token.service_identity_id != reviewer.id
+        or not isinstance(reviewer_token.allowed_actions, list)
+        or Action.ASSURANCE_REVIEW.value not in reviewer_token.allowed_actions
+    ):
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    return reviewer.id, reviewer_token.id
+
+
+def _task_reviewer_binding_matches(*, actor: ActorContext, task: EvaluatorTask) -> bool:
+    """Require the exact bootstrap reviewer identity and credential for bound tasks."""
+    reviewer_id = task.reviewer_service_identity_id
+    reviewer_token_id = task.reviewer_token_id
+    if reviewer_id is None and reviewer_token_id is None:
+        return True
+    if (
+        reviewer_id is None
+        or reviewer_token_id is None
+        or actor.actor_type != "SERVICE"
+        or actor.credential_id != reviewer_token_id
+    ):
+        return False
+    try:
+        return hmac.compare_digest(actor.actor_id, str(reviewer_id))
+    except TypeError:
+        return False
+
+
 def _create_evaluator_artifact(
     *,
     actor: ActorContext,
@@ -251,6 +329,8 @@ def _create_evaluator_artifact(
     """Persist queue output after source-boundary review authorization succeeded."""
     if task.request_artifact.access_scope_id is None:
         raise ValueError("Evaluator request artifact must have an access scope")
+    if require_claim_identity and not _task_reviewer_binding_matches(actor=actor, task=task):
+        raise LeaseConflictError("Evaluator claim is invalid or expired")
     if require_claim_identity and (
         task.claimed_by_actor_type != actor.actor_type
         or not hmac.compare_digest(task.claimed_by_actor_id, actor.actor_id)
@@ -810,6 +890,8 @@ def start_assurance(
     evaluator_version: str = DEFAULT_EVALUATOR_VERSION,
     prompt_version: str = DEFAULT_PROMPT_VERSION,
     trigger_key: str = "",
+    reviewer_service_identity_id: uuid.UUID | None = None,
+    reviewer_token_id: uuid.UUID | None = None,
 ) -> AssuranceStartResult:
     """Build exact deterministic context and enqueue one independent manual review."""
     if reference_time.tzinfo is None:
@@ -847,6 +929,12 @@ def start_assurance(
         actor=actor,
         repository_id=repository.id,
         access_scope_id=access_scope_id,
+    )
+    bound_reviewer_id, bound_reviewer_token_id = _resolve_bootstrap_reviewer_binding(
+        actor=actor,
+        repository_id=repository.id,
+        reviewer_service_identity_id=reviewer_service_identity_id,
+        reviewer_token_id=reviewer_token_id,
     )
     work_revision: WorkItemRevision | None = None
     if work_item_revision_id is not None:
@@ -939,6 +1027,11 @@ def start_assurance(
         "evaluator_version": evaluator_version,
         "prompt_version": prompt_version,
     }
+    if bound_reviewer_id is not None and bound_reviewer_token_id is not None:
+        canonical_input["reviewer_binding"] = {
+            "service_identity_id": str(bound_reviewer_id),
+            "token_id": str(bound_reviewer_token_id),
+        }
     input_digest = content_hash(canonical_input)
     existing = (
         AssuranceRun.objects.select_for_update()
@@ -956,6 +1049,13 @@ def start_assurance(
             organization_id=actor.organization_id,
             assurance_run=existing,
         )
+        if (
+            task.reviewer_service_identity_id != bound_reviewer_id
+            or task.reviewer_token_id != bound_reviewer_token_id
+        ):
+            raise IdempotencyConflictError(
+                "Assurance run is bound to a different evaluator reviewer"
+            )
         return AssuranceStartResult(existing, task, False)
 
     older_runs = list(
@@ -1125,6 +1225,8 @@ def start_assurance(
         assurance_run=run,
         repository=repository,
         request_artifact=request_artifact,
+        reviewer_service_identity_id=bound_reviewer_id,
+        reviewer_token_id=bound_reviewer_token_id,
     )
     record_transition(
         organization=organization,
@@ -1134,7 +1236,15 @@ def start_assurance(
         from_state="",
         to_state=task.state,
         revision=task.revision,
-        metadata={"content_hash": request_artifact.content_hash},
+        metadata={
+            "content_hash": request_artifact.content_hash,
+            "reviewer_service_identity_id": (
+                str(bound_reviewer_id) if bound_reviewer_id is not None else None
+            ),
+            "reviewer_token_id": (
+                str(bound_reviewer_token_id) if bound_reviewer_token_id is not None else None
+            ),
+        },
     )
     return AssuranceStartResult(run, task, True)
 
@@ -1147,6 +1257,10 @@ def claim_evaluator_task(
     claimant: str,
     lease_seconds: int = 900,
     claim_idempotency_key: str | None = None,
+    task_id: uuid.UUID | None = None,
+    assurance_run_id: uuid.UUID | None = None,
+    input_hash: str | None = None,
+    head_commit: str | None = None,
 ) -> EvaluatorClaim | None:
     """Claim one pending or expired manual evaluator task with a single-use secret."""
     claimant = _normalized_text(claimant, name="claimant", maximum=200)
@@ -1157,6 +1271,34 @@ def claim_evaluator_task(
         and re.fullmatch(r"[a-f0-9]{64}", claim_idempotency_key) is None
     ):
         raise ValueError("claim_idempotency_key must be a SHA-256 digest")
+    selector = (task_id, assurance_run_id, input_hash, head_commit)
+    if any(value is not None for value in selector) and not all(
+        value is not None for value in selector
+    ):
+        raise ValueError("Evaluator task selector fields must be supplied together")
+    exact_selector = task_id is not None
+    if input_hash is not None and re.fullmatch(r"[a-f0-9]{64}", input_hash) is None:
+        raise ValueError("input_hash must be a SHA-256 digest")
+    if head_commit is not None:
+        validate_full_commit(head_commit)
+    exact_selector_values: tuple[uuid.UUID, uuid.UUID, str, str] | None = None
+    if exact_selector:
+        assert task_id is not None
+        assert assurance_run_id is not None
+        assert input_hash is not None
+        assert head_commit is not None
+        exact_selector_values = (task_id, assurance_run_id, input_hash, head_commit)
+    selector_digest = content_hash(
+        {
+            "mode": "EXACT",
+            "task_id": str(task_id),
+            "assurance_run_id": str(assurance_run_id),
+            "input_hash": input_hash,
+            "head_commit": head_commit,
+        }
+        if exact_selector
+        else {"mode": "LEGACY"}
+    )
     actor = _authorize_assurance_review(actor=actor, repository_id=repository_id)
     repository = get_tenant_record(
         queryset=Repository.objects.filter(is_active=True),
@@ -1167,7 +1309,7 @@ def claim_evaluator_task(
     if claim_idempotency_key is not None:
         prior = (
             EvaluatorTask.objects.select_for_update(of=("self",))
-            .select_related("request_artifact")
+            .select_related("assurance_run", "request_artifact__access_scope")
             .filter(
                 organization_id=actor.organization_id,
                 repository=repository,
@@ -1176,8 +1318,20 @@ def claim_evaluator_task(
             .first()
         )
         if prior is not None:
+            if not _task_reviewer_binding_matches(actor=actor, task=prior):
+                raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+            _authorize_evaluator_source_scope(
+                actor=actor,
+                repository_id=repository.id,
+                evaluator_scope=prior.request_artifact.access_scope,
+            )
+            selector_matches = hmac.compare_digest(
+                prior.claim_selector_sha256,
+                selector_digest,
+            )
             same_claim = (
-                prior.state == EvaluatorTask.State.CLAIMED
+                selector_matches
+                and prior.state == EvaluatorTask.State.CLAIMED
                 and prior.claimant == claimant
                 and prior.claimed_by_actor_type == actor.actor_type
                 and hmac.compare_digest(prior.claimed_by_actor_id, actor.actor_id)
@@ -1202,8 +1356,9 @@ def claim_evaluator_task(
                     task=prior,
                     claim_token=token,
                     request=cast(dict[str, object], prior.request_artifact.payload),
+                    replayed=True,
                 )
-    exhausted_tasks = list(
+    exhausted_queryset = (
         EvaluatorTask.objects.select_for_update(of=("self",))
         .select_related("organization", "assurance_run", "request_artifact__access_scope")
         .filter(
@@ -1215,7 +1370,18 @@ def claim_evaluator_task(
         )
         .order_by("created_at", "id")
     )
+    if exact_selector_values is not None:
+        exact_task_id, exact_run_id, exact_input_hash, exact_head_commit = exact_selector_values
+        exhausted_queryset = exhausted_queryset.filter(
+            id=exact_task_id,
+            assurance_run_id=exact_run_id,
+            assurance_run__input_hash=exact_input_hash,
+            assurance_run__head_commit=exact_head_commit,
+        )
+    exhausted_tasks = list(exhausted_queryset)
     for exhausted in exhausted_tasks:
+        if not _task_reviewer_binding_matches(actor=actor, task=exhausted):
+            continue
         if (
             exhausted.assurance_run.initiated_by_actor_type == actor.actor_type
             and hmac.compare_digest(exhausted.assurance_run.initiated_by_actor_id, actor.actor_id)
@@ -1252,9 +1418,21 @@ def claim_evaluator_task(
         )
         .order_by("created_at", "id")
     )
+    if exact_selector_values is not None:
+        exact_task_id, exact_run_id, exact_input_hash, exact_head_commit = exact_selector_values
+        candidates = candidates.filter(
+            id=exact_task_id,
+            assurance_run_id=exact_run_id,
+            assurance_run__input_hash=exact_input_hash,
+            assurance_run__head_commit=exact_head_commit,
+        )
     excluded_task_ids: set[uuid.UUID] = set()
     task = candidates.first()
     while task is not None:
+        if not _task_reviewer_binding_matches(actor=actor, task=task):
+            excluded_task_ids.add(task.id)
+            task = candidates.exclude(id__in=excluded_task_ids).first()
+            continue
         run = task.assurance_run
         if run.initiated_by_actor_type == actor.actor_type and hmac.compare_digest(
             run.initiated_by_actor_id, actor.actor_id
@@ -1292,6 +1470,8 @@ def claim_evaluator_task(
             continue
         break
     if task is None:
+        if exact_selector:
+            raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
         return None
     actor = scoped_actor
     prior_claim_state = (
@@ -1306,6 +1486,7 @@ def claim_evaluator_task(
     task.claimed_by_actor_id = actor.actor_id
     task.claimed_by_credential_id = actor.credential_id
     task.claim_idempotency_sha256 = claim_idempotency_key or ""
+    task.claim_selector_sha256 = selector_digest if claim_idempotency_key is not None else ""
     task.claim_token_hash = hashlib.sha256(token.encode()).hexdigest()
     task.lease_expires_at = now + timedelta(seconds=lease_seconds)
     task.attempt_count += 1
@@ -1318,6 +1499,7 @@ def claim_evaluator_task(
             "claimed_by_actor_id",
             "claimed_by_credential_id",
             "claim_idempotency_sha256",
+            "claim_selector_sha256",
             "claim_token_hash",
             "lease_expires_at",
             "attempt_count",
@@ -1350,6 +1532,7 @@ def claim_evaluator_task(
         task=task,
         claim_token=token,
         request=cast(dict[str, object], task.request_artifact.payload),
+        replayed=False,
     )
 
 
@@ -2269,7 +2452,10 @@ def submit_evaluator_result(
         repository_id=task.repository_id,
         evaluator_scope=task.request_artifact.access_scope,
     )
+    if not _task_reviewer_binding_matches(actor=actor, task=task):
+        raise LeaseConflictError("Evaluator claim is invalid or expired")
     result_digest = content_hash(result)
+    expected_token_hash = hashlib.sha256(claim_token.encode()).hexdigest()
     if (
         task.claimed_by_actor_type != actor.actor_type
         or not hmac.compare_digest(task.claimed_by_actor_id, actor.actor_id)
@@ -2277,6 +2463,11 @@ def submit_evaluator_result(
     ):
         raise LeaseConflictError("Evaluator claim is invalid or expired")
     if task.state == EvaluatorTask.State.SUBMITTED and task.result_artifact is not None:
+        if not task.claim_token_hash or not hmac.compare_digest(
+            task.claim_token_hash,
+            expected_token_hash,
+        ):
+            raise LeaseConflictError("Evaluator claim is invalid or expired")
         if task.result_artifact.content_hash != result_digest:
             raise IdempotencyConflictError("Evaluator task was submitted with different content")
         run = task.assurance_run
@@ -2291,7 +2482,6 @@ def submit_evaluator_result(
             ),
             False,
         )
-    expected_token_hash = hashlib.sha256(claim_token.encode()).hexdigest()
     if (
         task.state != EvaluatorTask.State.CLAIMED
         or task.lease_expires_at is None
@@ -2424,7 +2614,6 @@ def submit_evaluator_result(
     task.result_artifact = result_artifact
     task.state = EvaluatorTask.State.SUBMITTED
     task.submitted_at = timezone.now()
-    task.claim_token_hash = ""
     task.lease_expires_at = None
     task.revision += 1
     task.save(
@@ -2432,7 +2621,6 @@ def submit_evaluator_result(
             "result_artifact",
             "state",
             "submitted_at",
-            "claim_token_hash",
             "lease_expires_at",
             "revision",
             "updated_at",
