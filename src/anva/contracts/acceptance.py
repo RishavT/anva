@@ -12,7 +12,10 @@ from typing import Final, cast
 from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import ValidationError
 
-from anva.contracts.bootstrap_scope import acceptance_bootstrap_scope_payload
+from anva.contracts.bootstrap_scope import (
+    BOOTSTRAP_SCOPE_SCHEMA,
+    acceptance_bootstrap_scope_payload,
+)
 from anva.contracts.catalog import (
     ASSURANCE_CITATION,
     DIFF_CHUNK,
@@ -48,6 +51,48 @@ BOOTSTRAP_REVIEWER_RESPONSE_PROPERTIES: Final[dict[str, object]] = {
     "reviewer_token": {"type": "string", "minLength": 32, "maxLength": 512},
     "reviewer_expires_at": DATE_TIME,
 }
+
+BOOTSTRAP_COMMON_REQUEST_PROPERTIES: Final[dict[str, object]] = {
+    "organization_slug": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 300,
+    },
+    "organization_name": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 300,
+    },
+    "idempotency_key": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$",
+    },
+}
+BOOTSTRAP_LEGACY_REQUEST_PROPERTIES: Final[dict[str, object]] = {
+    **deepcopy(BOOTSTRAP_COMMON_REQUEST_PROPERTIES),
+    **{
+        name: {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300,
+        }
+        for name in (
+            "admin_email",
+            "admin_display_name",
+            "repository_external_id",
+            "repository_name",
+            "independent_reviewer_name",
+        )
+    },
+}
+BOOTSTRAP_LEGACY_REQUEST_REQUIRED: Final[tuple[str, ...]] = (
+    "organization_slug",
+    "organization_name",
+    "admin_email",
+    "admin_display_name",
+    "repository_external_id",
+    "repository_name",
+)
 
 
 def _closed(
@@ -116,6 +161,80 @@ BOOTSTRAP_RESPONSE: Final[dict[str, object]] = {
         deepcopy(BOOTSTRAP_LEGACY_RESPONSE_WITH_REVIEWER),
         deepcopy(BOOTSTRAP_LEGACY_RESPONSE_WITHOUT_REVIEWER),
     ]
+}
+
+BOOTSTRAP_LEGACY_REQUEST: Final[dict[str, object]] = _closed(
+    deepcopy(BOOTSTRAP_LEGACY_REQUEST_PROPERTIES),
+    BOOTSTRAP_LEGACY_REQUEST_REQUIRED,
+)
+BOOTSTRAP_SCOPED_REQUEST: Final[dict[str, object]] = _closed(
+    {
+        **deepcopy(BOOTSTRAP_COMMON_REQUEST_PROPERTIES),
+        "scope": deepcopy(BOOTSTRAP_SCOPE_SCHEMA),
+    },
+    ("organization_slug", "organization_name", "scope"),
+)
+BOOTSTRAP_REQUEST: Final[dict[str, object]] = {
+    "oneOf": [
+        deepcopy(BOOTSTRAP_LEGACY_REQUEST),
+        deepcopy(BOOTSTRAP_SCOPED_REQUEST),
+    ]
+}
+
+
+def _bootstrap_exchange_branch(
+    request: dict[str, object],
+    response: dict[str, object],
+) -> dict[str, object]:
+    return _closed(
+        {
+            "request": deepcopy(request),
+            "status": {"type": "integer", "const": 201},
+            "response": deepcopy(response),
+        },
+        ("request", "status", "response"),
+    )
+
+
+BOOTSTRAP_LEGACY_REQUEST_WITH_REVIEWER: Final[dict[str, object]] = _closed(
+    deepcopy(BOOTSTRAP_LEGACY_REQUEST_PROPERTIES),
+    (*BOOTSTRAP_LEGACY_REQUEST_REQUIRED, "independent_reviewer_name"),
+)
+BOOTSTRAP_LEGACY_REQUEST_WITHOUT_REVIEWER: Final[dict[str, object]] = _closed(
+    {
+        key: deepcopy(value)
+        for key, value in BOOTSTRAP_LEGACY_REQUEST_PROPERTIES.items()
+        if key != "independent_reviewer_name"
+    },
+    BOOTSTRAP_LEGACY_REQUEST_REQUIRED,
+)
+BOOTSTRAP_EXCHANGE_201: Final[dict[str, object]] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": (
+        "https://schemas.anva.dev/v1/acceptance-bootstrapOrganization-201-exchange.schema.json"
+    ),
+    "title": "Bootstrap organization 201 request-response exchange",
+    "description": (
+        "Validates request-dependent bootstrap success semantics as one exchange; "
+        "the response schema alone intentionally cannot infer the request branch."
+    ),
+    "oneOf": [
+        _bootstrap_exchange_branch(BOOTSTRAP_SCOPED_REQUEST, BOOTSTRAP_SCOPED_RESPONSE),
+        _bootstrap_exchange_branch(
+            BOOTSTRAP_LEGACY_REQUEST_WITH_REVIEWER,
+            BOOTSTRAP_LEGACY_RESPONSE_WITH_REVIEWER,
+        ),
+        _bootstrap_exchange_branch(
+            BOOTSTRAP_LEGACY_REQUEST_WITHOUT_REVIEWER,
+            BOOTSTRAP_LEGACY_RESPONSE_WITHOUT_REVIEWER,
+        ),
+    ],
+}
+
+REQUEST_RESPONSE_CORRELATION_EXTENSION: Final[str] = "x-anva-request-response-correlation"
+REQUEST_DEPENDENT_RESPONSES_EXTENSION: Final[str] = "x-anva-request-dependent-response-variants"
+REQUEST_DEPENDENT_RESPONSE_SCHEMAS: Final[dict[tuple[str, int], dict[str, object]]] = {
+    ("bootstrapOrganization", 201): BOOTSTRAP_EXCHANGE_201,
 }
 
 
@@ -1827,6 +1946,37 @@ def apply_acceptance_http_contracts(document: dict[str, object]) -> None:
                 schemas[response_component] = response_schema
                 media["schema"] = {"$ref": f"#/components/schemas/{response_component}"}
             media["example"] = deepcopy(example)
+        correlation_schemas = {
+            str(status): schema
+            for (
+                dependent_operation_id,
+                status,
+            ), schema in REQUEST_DEPENDENT_RESPONSE_SCHEMAS.items()
+            if dependent_operation_id == operation_id
+        }
+        if correlation_schemas:
+            status_schemas: dict[str, object] = {}
+            for status, schema in sorted(correlation_schemas.items()):
+                exchange_component = f"acceptance-{operation_id}-{status}-exchange"
+                schemas[exchange_component] = deepcopy(schema)
+                status_schemas[status] = {"$ref": f"#/components/schemas/{exchange_component}"}
+            operation[REQUEST_RESPONSE_CORRELATION_EXTENSION] = {
+                "schema_version": "1.0",
+                "status_schemas": status_schemas,
+            }
+    document[REQUEST_DEPENDENT_RESPONSES_EXTENSION] = [
+        {
+            "operation_id": operation_id,
+            "statuses": sorted(
+                status
+                for candidate_operation_id, status in REQUEST_DEPENDENT_RESPONSE_SCHEMAS
+                if candidate_operation_id == operation_id
+            ),
+        }
+        for operation_id in sorted(
+            {operation_id for operation_id, _status in REQUEST_DEPENDENT_RESPONSE_SCHEMAS}
+        )
+    ]
 
 
 def _resolve_pointer(document: dict[str, object], pointer: str) -> object:
@@ -1932,15 +2082,17 @@ def acceptance_operation_document(
         if isinstance(request_body, dict):
             request = _inline_refs(request_body, openapi)
         responses = _inline_refs(operation["responses"], openapi)
-        http_values.append(
-            {
-                "operation_id": operation_id,
-                "method": method,
-                "path": path,
-                "request": request,
-                "responses": responses,
-            }
-        )
+        value: dict[str, object] = {
+            "operation_id": operation_id,
+            "method": method,
+            "path": path,
+            "request": request,
+            "responses": responses,
+        }
+        correlation = operation.get(REQUEST_RESPONSE_CORRELATION_EXTENSION)
+        if isinstance(correlation, dict):
+            value[REQUEST_RESPONSE_CORRELATION_EXTENSION] = _inline_refs(correlation, openapi)
+        http_values.append(value)
     tools = cast(list[dict[str, object]], mcp["tools"])
     by_name = {cast(str, tool["name"]): tool for tool in tools}
     mcp_examples: dict[str, dict[str, object]] = {
@@ -2032,4 +2184,7 @@ def acceptance_operation_document(
         "mcp_operations": mcp_values,
         "provenance_contract": deepcopy(RETRIEVAL_CITATION),
         "case_schema_id": "https://schemas.anva.dev/v1/acceptance-case.schema.json",
+        "request_dependent_response_variants": deepcopy(
+            openapi[REQUEST_DEPENDENT_RESPONSES_EXTENSION]
+        ),
     }

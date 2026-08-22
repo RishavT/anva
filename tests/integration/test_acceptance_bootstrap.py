@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
 from django.test import Client, override_settings
+from jsonschema import Draft202012Validator, FormatChecker
 
 from anva.contracts.acceptance import validate_acceptance_http_response
 from anva.contracts.bootstrap_scope import acceptance_bootstrap_scope_payload
@@ -61,6 +63,22 @@ def _scoped_payload(*, suffix: str = "ember") -> dict[str, object]:
     }
 
 
+def _validate_published_exchange(
+    request: dict[str, object],
+    response: dict[str, object],
+) -> None:
+    bundle = json.loads(Path("contracts/acceptance/v1/operations.json").read_text(encoding="utf-8"))
+    operation = next(
+        item
+        for item in bundle["http_operations"]
+        if item["operation_id"] == "bootstrapOrganization"
+    )
+    schema = operation["x-anva-request-response-correlation"]["status_schemas"]["201"]
+    Draft202012Validator(schema, format_checker=FormatChecker()).validate(
+        {"request": request, "status": 201, "response": response}
+    )
+
+
 @pytest.mark.integration
 @pytest.mark.django_db
 @override_settings(BOOTSTRAP_SECRET="acceptance-bootstrap-secret")
@@ -79,6 +97,7 @@ def test_bootstrap_default_returns_scope_without_creating_reviewer() -> None:
     assert result["bootstrap_mode"] == "LEGACY"
     assert "reviewer_token" not in result
     validate_acceptance_http_response("bootstrapOrganization", 201, result, request_payload=payload)
+    _validate_published_exchange(payload, result)
     assert ServiceIdentity.objects.count() == 1
 
 
@@ -119,6 +138,7 @@ def test_scoped_bootstrap_creates_only_explicit_records_bindings_and_action_gran
     result = response.json()
     assert result["bootstrap_mode"] == "SCOPED"
     validate_acceptance_http_response("bootstrapOrganization", 201, result, request_payload=payload)
+    _validate_published_exchange(payload, result)
     scope = AccessScope.objects.get(id=result["access_scope_id"])
     assert (scope.all_memberships, scope.all_repositories, scope.all_service_identities) == (
         False,
@@ -330,6 +350,7 @@ def test_opt_in_reviewer_is_distinct_least_privilege_and_token_is_never_persiste
     stored = RepositoryAccessToken.objects.get(id=result["reviewer_token_id"])
     assert stored.token_hash != reviewer_token
     validate_acceptance_http_response("bootstrapOrganization", 201, result, request_payload=payload)
+    _validate_published_exchange(payload, result)
     persisted = json.dumps(
         list(AuditEvent.objects.values("metadata", "actor_id", "authorization_path")),
         sort_keys=True,

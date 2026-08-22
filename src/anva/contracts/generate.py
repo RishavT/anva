@@ -12,11 +12,11 @@ from typing import cast
 from jsonschema import Draft202012Validator
 
 from anva.contracts.acceptance import (
+    BOOTSTRAP_REQUEST,
     EVIDENCE_UPLOAD_AUTHORIZATION_RESPONSE,
     acceptance_operation_document,
     apply_acceptance_http_contracts,
 )
-from anva.contracts.bootstrap_scope import BOOTSTRAP_SCOPE_SCHEMA
 from anva.contracts.catalog import EXAMPLES, KNOWLEDGE_CHANGE, SCHEMAS
 from anva.contracts.validation import validate_payload
 from anva.mcp.contracts import TOOL_CONTRACTS, mcp_contract_document
@@ -419,65 +419,7 @@ def openapi_document() -> dict[str, object]:
         },
         "required": ["claim_token", "result"],
     }
-    bootstrap_common_properties: dict[str, object] = {
-        "organization_slug": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 300,
-        },
-        "organization_name": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 300,
-        },
-        "idempotency_key": {
-            "type": "string",
-            "pattern": "^[a-f0-9]{64}$",
-        },
-    }
-    bootstrap_legacy_properties = {
-        **deepcopy(bootstrap_common_properties),
-        **{
-            name: {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 300,
-            }
-            for name in (
-                "admin_email",
-                "admin_display_name",
-                "repository_external_id",
-                "repository_name",
-                "independent_reviewer_name",
-            )
-        },
-    }
-    bootstrap_request: dict[str, object] = {
-        "oneOf": [
-            {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": bootstrap_legacy_properties,
-                "required": [
-                    "organization_slug",
-                    "organization_name",
-                    "admin_email",
-                    "admin_display_name",
-                    "repository_external_id",
-                    "repository_name",
-                ],
-            },
-            {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    **deepcopy(bootstrap_common_properties),
-                    "scope": deepcopy(BOOTSTRAP_SCOPE_SCHEMA),
-                },
-                "required": ["organization_slug", "organization_name", "scope"],
-            },
-        ]
-    }
+    bootstrap_request = deepcopy(BOOTSTRAP_REQUEST)
     finding_decision_request = {
         "type": "object",
         "additionalProperties": False,
