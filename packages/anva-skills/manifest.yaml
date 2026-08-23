@@ -12,3 +12,4 @@ workflows:
   - "anva-build"
   - "anva-preflight"
   - "anva-learn"
+  - "anva-assurance-review"

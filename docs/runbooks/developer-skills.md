@@ -129,5 +129,21 @@ was attempted.
 - In read-only mode, proposal tools are absent and learn remains
   `NOT_SUBMITTED`.
 
+## Complete an assurance review handoff
+
+Invoke `$anva-assurance-review` only when an operator supplies the exact
+protected `review-request.json` produced by the TST-009 evaluator adapter. Use
+a fresh Codex or Claude session for every case. This workflow does not use MCP,
+HTTP, repository search, or an Anva-managed agent runtime: it reads the one
+secret-free request and creates one no-clobber canonical
+`review-response.json` in the same mode-0700 exchange directory.
+
+Do not pass the reviewer credential, product network, private oracle, host
+state, or expected answer to the coding agent. The response is not approval or
+readiness; the evaluator adapter validates and submits it, and later private
+grading remains authoritative. If the request is non-canonical, has the wrong
+skill contract, contains credential material, or lacks enough evidence for a
+complete review, create no response.
+
 For credential rotation/revocation and server incidents, use the
 [MCP gateway runbook](mcp-gateway.md).

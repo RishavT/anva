@@ -1,0 +1,6 @@
+interface:
+  display_name: "Anva Assurance Review"
+  short_description: "Complete a bounded Anva review handoff"
+  default_prompt: "Use $anva-assurance-review to review this protected Anva request file."
+policy:
+  allow_implicit_invocation: false

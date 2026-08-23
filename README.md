@@ -20,10 +20,12 @@ does **not** contain a coding-agent runtime, workflow engine, graph database, or
 sandbox.
 
 The repository also packages host-neutral `anva-prepare`, `anva-build`,
-`anva-preflight`, and explicit-only `anva-learn` workflows for Codex and Claude
-Code. Generated repository skills and installable plugins use the existing
-authenticated MCP facade; packages contain no customer knowledge, endpoint, or
-credential.
+`anva-preflight`, explicit-only `anva-learn`, and operator-triggered
+`anva-assurance-review` workflows for Codex and Claude Code. Generated
+repository skills and installable plugins use the existing
+authenticated MCP facade for developer workflows and the protected file
+handoff for assurance review; packages contain no customer knowledge,
+endpoint, or credential.
 
 The browser product is a server-rendered, JavaScript-optional operating surface
 for onboarding, attention triage, permission-aware knowledge exploration,

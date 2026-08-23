@@ -19,7 +19,13 @@ from anva.skills.render import check_rendered, normalize_rendered_skill
 
 ROOT = Path(__file__).parents[2]
 PACKAGE_ROOT = ROOT / "packages" / "anva-skills"
-SKILL_NAMES = ("anva-prepare", "anva-build", "anva-preflight", "anva-learn")
+SKILL_NAMES = (
+    "anva-prepare",
+    "anva-build",
+    "anva-preflight",
+    "anva-learn",
+    "anva-assurance-review",
+)
 
 
 @pytest.mark.contract
@@ -56,6 +62,10 @@ def test_generated_adapters_normalize_to_one_canonical_contract() -> None:
         }
         if name == "anva-learn":
             assert claude_frontmatter["disable-model-invocation"] is True
+        if name == "anva-assurance-review":
+            assert set(claude_frontmatter) == {"name", "description"}
+            assert not (codex.parent / "references" / "common.schema.json").exists()
+            assert not (claude.parent / "references" / "common.schema.json").exists()
 
 
 @pytest.mark.contract

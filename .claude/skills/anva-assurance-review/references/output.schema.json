@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.anva.dev/skills/v1/assurance-review.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "commit_sha",
+    "completion",
+    "evaluated_at",
+    "evaluator_version",
+    "findings",
+    "limitations",
+    "organization_id",
+    "prompt_version",
+    "request_id",
+    "schema_version",
+    "usage"
+  ],
+  "properties": {
+    "commit_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "completion": {"const": "COMPLETE"},
+    "evaluated_at": {"type": "string", "format": "date-time"},
+    "evaluator_version": {"type": "string", "minLength": 1, "maxLength": 100},
+    "findings": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code", "category", "severity", "confidence", "title", "explanation",
+          "citations", "evidence_ids", "criterion_codes", "uncertainty",
+          "suggested_resolution"
+        ],
+        "properties": {
+          "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,63}$"},
+          "category": {
+            "enum": [
+              "CORRECTNESS", "SECURITY", "RELIABILITY", "MAINTAINABILITY",
+              "REQUIREMENT", "POLICY", "EVIDENCE"
+            ]
+          },
+          "severity": {"enum": ["BLOCKING", "HIGH", "MEDIUM", "LOW", "ADVISORY"]},
+          "confidence": {"enum": ["HIGH", "MEDIUM", "LOW"]},
+          "title": {"type": "string", "minLength": 1, "maxLength": 300},
+          "explanation": {"type": "string", "minLength": 1, "maxLength": 10000},
+          "citations": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 20,
+            "items": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["type", "context_citation_id"],
+                  "properties": {
+                    "type": {"const": "ANVA_SOURCE"},
+                    "context_citation_id": {"type": "string", "format": "uuid"}
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["type", "path", "side", "line"],
+                  "properties": {
+                    "type": {"const": "DIFF"},
+                    "path": {"type": "string", "minLength": 1, "maxLength": 1000},
+                    "side": {"enum": ["OLD", "NEW"]},
+                    "line": {"type": "integer", "minimum": 1}
+                  }
+                }
+              ]
+            }
+          },
+          "evidence_ids": {
+            "type": "array", "maxItems": 100, "uniqueItems": true,
+            "items": {"type": "string", "format": "uuid"}
+          },
+          "criterion_codes": {
+            "type": "array", "maxItems": 100, "uniqueItems": true,
+            "items": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,63}$"}
+          },
+          "uncertainty": {"type": "string", "minLength": 1, "maxLength": 2000},
+          "suggested_resolution": {"type": "string", "minLength": 1, "maxLength": 2000}
+        }
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1, "maxLength": 2000}
+    },
+    "organization_id": {"type": "string", "format": "uuid"},
+    "prompt_version": {"type": "string", "minLength": 1, "maxLength": 100},
+    "request_id": {"type": "string", "format": "uuid"},
+    "schema_version": {"const": "1.0"},
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input_units", "output_units"],
+      "properties": {
+        "input_units": {"type": "integer", "minimum": 0},
+        "output_units": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}
