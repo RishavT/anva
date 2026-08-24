@@ -58,7 +58,7 @@ services:
         ANVA_SOURCE: ${ANVA_SOURCE:-https://github.com/rishavt/anva}
         SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH:-1756684800}
     profiles: ["acceptance"]
-    user: "10001:10001"
+    user: "${ANVA_ACCEPTANCE_UID:-10001}:${ANVA_ACCEPTANCE_GID:-10001}"
     command:
       - anva
       - acceptance

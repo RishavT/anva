@@ -46,6 +46,7 @@ RUN uv pip install --no-deps /dist/*.whl \
     && ANVA_BUILD_REVISION="${ANVA_REVISION}" ANVA_BUILD_INPUT_SHA256="${ANVA_BUILD_INPUT_SHA256}" \
        python -c 'import json, os; from pathlib import Path; from anva.acceptance.provenance import package_sha256; root = Path(__import__("anva").__file__).resolve().parent; output = Path("/app/anva-build-provenance.json"); output.write_text(json.dumps({"schema_version": 1, "product_commit": os.environ["ANVA_BUILD_REVISION"], "build_input_sha256": os.environ["ANVA_BUILD_INPUT_SHA256"], "package_sha256": package_sha256(root)}, separators=(",", ":"), sort_keys=True) + "\n", encoding="utf-8"); output.chmod(0o444)' \
     && mkdir -p /app/acceptance/canonical \
+    && chmod 01777 /app/acceptance/canonical \
     && chown -R anva:anva /app
 USER anva
 LABEL org.opencontainers.image.title="Anva" \

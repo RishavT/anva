@@ -35,7 +35,7 @@ scoring material. The disconnected private scorer is not part of this Compose to
 | Product reads raw or control metadata | Only the adapter has the raw mount; product/runner mounts are canonical and read-only; connector root is `payload/` |
 | Adapter exfiltrates input | `network_mode: none`, no credentials, read-only root, dropped capabilities, `no-new-privileges`, and bounded tmpfs |
 | Results smuggle private grading truth into Anva | The public result schema permits only run identity/status and checksummed public artifacts; private grading occurs elsewhere |
-| Capability-less root cannot clean an image-seeded volume | Adapter runs as the fixed unprivileged image owner `10001:10001`; Compose and Dockerfile identity are tested together; chmod/unlink cleanup remains fail-closed |
+| Capability-less root cannot clean an image-seeded volume | Adapter defaults to the unprivileged image owner `10001:10001`; closed external runs may bind an explicit non-root UID/GID. The fresh task-owned volume root is sticky-writable, while every published descendant is sealed read-only; non-empty or unprovable cleanup remains fail-closed. |
 | Runner bypasses a supported boundary | Runner imports no product model/service and uses only documented HTTP plus the official Streamable HTTP MCP client |
 | Initiator evaluates its own change | Bootstrap optionally emits a distinct service identity with only `ASSURANCE_REVIEW`; reviewer claim/submit run in separate services without the initiator credential |
 | A review targets a substituted run or head | Handoff and external result must match the precommitted run/task/request/organization/head; a newer head forces `STALE` and cannot finalize |

@@ -46,8 +46,13 @@ when it does not match those preserved identities.
 `acceptance-adapter` has a read-only root filesystem, all capabilities dropped,
 `no-new-privileges`, bounded tmpfs, and `network_mode: none`. It alone receives the raw bind mount.
 Its container is additionally limited to 256 MiB memory, no swap above that limit, and 64 PIDs.
-It uses the image's fixed unprivileged UID/GID `10001:10001`, which owns Docker's image-seeded
-named-volume root, then seals copied files and directories read-only for the product services.
+It defaults to the image's unprivileged UID/GID `10001:10001`, which owns Docker's image-seeded
+named-volume root. A closed external run may set `ANVA_ACCEPTANCE_UID` and
+`ANVA_ACCEPTANCE_GID` to the protected input owner's numeric identity; both values must be supplied
+together. The image seeds the otherwise-empty task-owned canonical volume root with sticky
+world-write permissions so that the selected non-root identity can publish into a fresh volume
+without gaining access to any host path or another user's entries. The adapter then
+seals copied files and directories read-only for the product services.
 It refuses a non-empty canonical volume. API, worker, MCP, CLI, and the acceptance runner receive
 only `/app/acceptance/canonical` read-only, and the supported filesystem connector is restricted to
 its `payload/` child.

@@ -26,7 +26,7 @@ def test_only_adapter_mounts_raw_acceptance_input() -> None:
     # user. Root with every capability dropped cannot write or chmod that
     # root-owned-by-anva mount and would turn the first write failure into an
     # unprovable-cleanup failure. Keep the adapter on the owning uid instead.
-    assert adapter["user"] == "10001:10001"
+    assert adapter["user"] == "${ANVA_ACCEPTANCE_UID:-10001}:${ANVA_ACCEPTANCE_GID:-10001}"
     assert adapter["user"] != "0:0"
     assert adapter["read_only"] is True
     assert adapter["cap_drop"] == ["ALL"]
@@ -132,9 +132,12 @@ def test_runtime_image_owns_fresh_canonical_volume_seed_path() -> None:
     assert "groupadd --gid 10001 anva" in dockerfile
     assert "useradd --uid 10001 --gid anva" in dockerfile
     assert "mkdir -p /app/acceptance/canonical" in dockerfile
+    assert "chmod 01777 /app/acceptance/canonical" in dockerfile
     assert "chown -R anva:anva /app" in dockerfile
     assert "USER anva" in dockerfile
-    assert services["acceptance-adapter"]["user"] == "10001:10001"
+    assert services["acceptance-adapter"]["user"] == (
+        "${ANVA_ACCEPTANCE_UID:-10001}:${ANVA_ACCEPTANCE_GID:-10001}"
+    )
 
 
 @pytest.mark.unit

@@ -477,12 +477,21 @@ def _cleanup_canonical_output(
 ) -> bool:
     """Best-effort cleanup that never replaces the original failure with a traceback."""
     clean = True
-    for directory in (canonical, *tracked_directories):
+    for directory in tracked_directories:
         try:
             if directory.exists() and not directory.is_symlink():
                 directory.chmod(0o700)
         except OSError:
             clean = False
+    try:
+        root_info = canonical.stat(follow_symlinks=False)
+        if root_info.st_uid == os.geteuid():
+            canonical.chmod(0o700)
+        elif not (root_info.st_uid == 10001 and root_info.st_gid == 10001
+                  and stat.S_IMODE(root_info.st_mode) == 0o1777):
+            clean = False
+    except OSError:
+        clean = False
     for path in reversed(tracked_files):
         try:
             path.unlink(missing_ok=True)
@@ -570,7 +579,12 @@ def canonicalize_corpus(
             path.chmod(0o444)
         for path in reversed(created_directories):
             path.chmod(0o555)
-        canonical.chmod(0o555)
+        root_info = canonical.stat(follow_symlinks=False)
+        if root_info.st_uid == os.geteuid():
+            canonical.chmod(0o555)
+        elif not (root_info.st_uid == 10001 and root_info.st_gid == 10001
+                  and stat.S_IMODE(root_info.st_mode) == 0o1777):
+            raise OSError("canonical volume root ownership is invalid")
         return CanonicalCorpus(
             corpus_id=corpus_id,
             manifest_sha256=observed_manifest_sha256,
