@@ -21,6 +21,7 @@ from anva.contracts.validation import validate_payload
 from anva.core.exceptions import (
     AuthenticationError,
     DomainOperationError,
+    LeaseConflictError,
     RateLimitExceededError,
     ResourceNotFoundError,
 )
@@ -1982,6 +1983,37 @@ def evaluator_task_claim(request: HttpRequest, repository_id: uuid.UUID) -> Json
     )
     if claim is None:
         return JsonResponse({"status": "EMPTY"}, status=200)
+    if claim.completion is not None:
+        completion = claim.completion
+        result_artifact = claim.task.result_artifact
+        if result_artifact is None:
+            raise LeaseConflictError("Evaluator completion is unavailable")
+        return JsonResponse(
+            {
+                "status": "COMPLETED",
+                "task_id": str(claim.task.id),
+                "assurance_run_id": str(completion.run.id),
+                "input_hash": completion.run.input_hash,
+                "head_commit": completion.run.head_commit,
+                "claimant": claim.task.claimant,
+                "claimed_by": {
+                    "actor_type": claim.task.claimed_by_actor_type,
+                    "actor_id": claim.task.claimed_by_actor_id,
+                    "credential_id": (
+                        str(claim.task.claimed_by_credential_id)
+                        if claim.task.claimed_by_credential_id is not None
+                        else None
+                    ),
+                },
+                "result_hash": result_artifact.content_hash,
+                "state": completion.run.state,
+                "readiness": completion.readiness.status,
+                "reason_codes": completion.readiness.reason_codes,
+                "report_id": str(completion.report.id),
+                "finding_ids": [str(finding.id) for finding in completion.findings],
+                "replayed": True,
+            }
+        )
     return JsonResponse(
         {
             "status": "CLAIMED",

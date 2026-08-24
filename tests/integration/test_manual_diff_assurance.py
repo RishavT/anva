@@ -46,6 +46,7 @@ from anva.core.models import (
     Role,
     ServiceIdentity,
     User,
+    content_hash,
 )
 from anva.core.services.assurance import (
     MAX_LIMITATIONS,
@@ -458,6 +459,24 @@ def test_exact_replay_manual_queue_report_and_new_revision_staleness() -> None:
     assert completed.report.html == replayed.report.html
     assert completed.report.content_hash == replayed.report.content_hash
     assert completed.report.artifact.content_hash == replayed.report.artifact.content_hash
+    completion_readback = claim_evaluator_task(
+        actor=reviewer,
+        repository_id=repository.id,
+        claimant="fresh-review-agent",
+        claim_idempotency_key="9" * 64,
+        task_id=started.evaluator_task.id,
+        assurance_run_id=started.run.id,
+        input_hash=started.run.input_hash,
+        head_commit=started.run.head_commit,
+    )
+    assert completion_readback is not None
+    assert completion_readback.replayed is True
+    assert completion_readback.claim_token == ""
+    assert completion_readback.completion is not None
+    assert completion_readback.completion.created is False
+    assert completion_readback.completion.report.id == completed.report.id
+    assert completion_readback.task.result_artifact is not None
+    assert completion_readback.task.result_artifact.content_hash == content_hash(result)
     with pytest.raises(LeaseConflictError, match="invalid or expired"):
         submit_evaluator_result(
             actor=reviewer,

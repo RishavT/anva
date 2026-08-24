@@ -153,6 +153,7 @@ class EvaluatorClaim:
     claim_token: str
     request: dict[str, object]
     replayed: bool
+    completion: AssuranceCompletion | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1331,7 +1332,11 @@ def claim_evaluator_task(
             )
             same_claim = (
                 selector_matches
-                and prior.state == EvaluatorTask.State.CLAIMED
+                and prior.state
+                in {
+                    EvaluatorTask.State.CLAIMED,
+                    EvaluatorTask.State.SUBMITTED,
+                }
                 and prior.claimant == claimant
                 and prior.claimed_by_actor_type == actor.actor_type
                 and hmac.compare_digest(prior.claimed_by_actor_id, actor.actor_id)
@@ -1339,6 +1344,27 @@ def claim_evaluator_task(
             )
             if not same_claim:
                 raise LeaseConflictError("Evaluator claim idempotency key is already bound")
+            if prior.state == EvaluatorTask.State.SUBMITTED:
+                if prior.result_artifact is None:
+                    raise LeaseConflictError("Evaluator completion is unavailable")
+                run = prior.assurance_run
+                return EvaluatorClaim(
+                    task=prior,
+                    claim_token="",
+                    request=cast(dict[str, object], prior.request_artifact.payload),
+                    replayed=True,
+                    completion=AssuranceCompletion(
+                        run,
+                        ReadinessDecision.objects.get(assurance_run=run),
+                        AssuranceReport.objects.get(assurance_run=run),
+                        tuple(
+                            Finding.objects.filter(
+                                findingoccurrence__assurance_run=run,
+                            ).order_by("fingerprint")
+                        ),
+                        False,
+                    ),
+                )
             if prior.lease_expires_at is not None and prior.lease_expires_at > now:
                 token = secrets.token_urlsafe(32)
                 prior.claim_token_hash = hashlib.sha256(token.encode()).hexdigest()
