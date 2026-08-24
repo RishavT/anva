@@ -105,6 +105,7 @@ services:
     restart: "no"
 
   api:
+    user: "${ANVA_ACCEPTANCE_UID:-10001}:${ANVA_ACCEPTANCE_GID:-10001}"
     environment:
       ANVA_FILESYSTEM_ALLOWED_ROOTS: /app/acceptance/canonical/payload
       ANVA_BOOTSTRAP_SECRET: ""
