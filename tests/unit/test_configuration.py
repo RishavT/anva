@@ -107,6 +107,34 @@ def test_bootstrap_secret_reads_protected_file(
 
 
 @pytest.mark.unit
+def test_bootstrap_secret_reads_owner_private_read_only_bind_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secret = tmp_path / "bootstrap.raw"
+    secret.write_text("a" * 64)
+    secret.chmod(0o600)
+    monkeypatch.delenv("ANVA_BOOTSTRAP_SECRET", raising=False)
+    monkeypatch.setenv("ANVA_BOOTSTRAP_SECRET_FILE", str(secret))
+
+    assert bootstrap_secret() == "a" * 64
+
+
+@pytest.mark.unit
+def test_bootstrap_secret_rejects_foreign_owner_private_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secret = tmp_path / "bootstrap.raw"
+    secret.write_text("a" * 64)
+    secret.chmod(0o600)
+    monkeypatch.delenv("ANVA_BOOTSTRAP_SECRET", raising=False)
+    monkeypatch.setenv("ANVA_BOOTSTRAP_SECRET_FILE", str(secret))
+    monkeypatch.setattr(anva_settings.os, "geteuid", lambda: os.geteuid() + 1)
+
+    with pytest.raises(ImproperlyConfigured, match="unsafe"):
+        bootstrap_secret()
+
+
+@pytest.mark.unit
 def test_bootstrap_secret_rejects_direct_and_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -136,7 +164,7 @@ def test_bootstrap_secret_file_rejects_inode_and_content_attacks(
         selected = tmp_path / "linked.raw"
         os.link(secret, selected)
     elif attack == "mode":
-        secret.chmod(0o600)
+        secret.chmod(0o640)
     monkeypatch.delenv("ANVA_BOOTSTRAP_SECRET", raising=False)
     monkeypatch.setenv("ANVA_BOOTSTRAP_SECRET_FILE", str(selected))
 

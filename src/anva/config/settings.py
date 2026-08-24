@@ -53,10 +53,12 @@ def bootstrap_secret() -> str:
         raise ImproperlyConfigured("ANVA_BOOTSTRAP_SECRET_FILE must be absolute")
     try:
         info = path.lstat()
+        mode = stat.S_IMODE(info.st_mode)
         if (
             not stat.S_ISREG(info.st_mode)
             or info.st_nlink != 1
-            or stat.S_IMODE(info.st_mode) not in {0o400, 0o440, 0o444}
+            or mode not in {0o400, 0o440, 0o444, 0o600}
+            or (mode == 0o600 and info.st_uid != os.geteuid())
             or not 1 <= info.st_size <= 4096
         ):
             raise ImproperlyConfigured("ANVA_BOOTSTRAP_SECRET_FILE is unsafe")
