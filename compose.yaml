@@ -31,7 +31,7 @@ x-app-environment: &app-environment
   ANVA_TOKEN_PEPPER: ${ANVA_TOKEN_PEPPER:-local-only-token-pepper}
   ANVA_TOKEN_ISSUER: ${ANVA_TOKEN_ISSUER:-anva-local}
   ANVA_TOKEN_AUDIENCE: ${ANVA_TOKEN_AUDIENCE:-anva-api}
-  ANVA_BOOTSTRAP_SECRET: ${ANVA_BOOTSTRAP_SECRET:-anva-local-bootstrap}
+  ANVA_BOOTSTRAP_SECRET: ${ANVA_BOOTSTRAP_SECRET:-}
   ANVA_ALLOWED_HOSTS: ${ANVA_ALLOWED_HOSTS:-localhost,127.0.0.1,api,mcp}
   ANVA_DATABASE_URL: ${ANVA_DATABASE_URL:-postgresql://anva:anva-local-only@postgres:5432/anva}
   ANVA_OBJECT_STORAGE_ENDPOINT: ${ANVA_OBJECT_STORAGE_ENDPOINT:-http://minio:9000}

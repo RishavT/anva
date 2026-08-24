@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import stat
 from ipaddress import ip_address
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -37,6 +38,51 @@ def env_int(name: str, *, default: int, minimum: int, maximum: int) -> int:
     return value
 
 
+def bootstrap_secret() -> str:
+    """Read the bootstrap secret from one direct value or protected absolute file."""
+    direct = os.getenv("ANVA_BOOTSTRAP_SECRET")
+    raw_path = os.getenv("ANVA_BOOTSTRAP_SECRET_FILE")
+    if direct and raw_path:
+        raise ImproperlyConfigured(
+            "ANVA_BOOTSTRAP_SECRET and ANVA_BOOTSTRAP_SECRET_FILE are mutually exclusive"
+        )
+    if not raw_path:
+        return direct or "anva-local-bootstrap"
+    path = Path(raw_path)
+    if not path.is_absolute():
+        raise ImproperlyConfigured("ANVA_BOOTSTRAP_SECRET_FILE must be absolute")
+    try:
+        info = path.lstat()
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_nlink != 1
+            or stat.S_IMODE(info.st_mode) not in {0o400, 0o440, 0o444}
+            or not 1 <= info.st_size <= 4096
+        ):
+            raise ImproperlyConfigured("ANVA_BOOTSTRAP_SECRET_FILE is unsafe")
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            opened = os.fstat(descriptor)
+            if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+                raise ImproperlyConfigured("ANVA_BOOTSTRAP_SECRET_FILE changed during open")
+            value = os.read(descriptor, 4097)
+        finally:
+            os.close(descriptor)
+    except (OSError, UnicodeError) as error:
+        raise ImproperlyConfigured("ANVA_BOOTSTRAP_SECRET_FILE is unreadable") from error
+    if len(value) != info.st_size or b"\n" in value or b"\r" in value:
+        raise ImproperlyConfigured(
+            "ANVA_BOOTSTRAP_SECRET_FILE must contain one line without newline"
+        )
+    try:
+        decoded = value.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ImproperlyConfigured("ANVA_BOOTSTRAP_SECRET_FILE must be UTF-8") from error
+    if not decoded or decoded != decoded.strip():
+        raise ImproperlyConfigured("ANVA_BOOTSTRAP_SECRET_FILE value is invalid")
+    return decoded
+
+
 def database_settings(url: str) -> dict[str, str | int]:
     """Parse the supported PostgreSQL URL into Django's database schema."""
     parsed = urlparse(url)
@@ -69,7 +115,7 @@ if ENVIRONMENT == "production" and SECRET_KEY == "local-only-change-me":
 TOKEN_PEPPER = os.getenv("ANVA_TOKEN_PEPPER", SECRET_KEY)
 TOKEN_ISSUER = os.getenv("ANVA_TOKEN_ISSUER", "anva-local")
 TOKEN_AUDIENCE = os.getenv("ANVA_TOKEN_AUDIENCE", "anva-api")
-BOOTSTRAP_SECRET = os.getenv("ANVA_BOOTSTRAP_SECRET", "anva-local-bootstrap")
+BOOTSTRAP_SECRET = bootstrap_secret()
 if not all((TOKEN_PEPPER, TOKEN_ISSUER, TOKEN_AUDIENCE, BOOTSTRAP_SECRET)):
     raise ImproperlyConfigured("Token and bootstrap settings must not be empty")
 if ENVIRONMENT == "production" and TOKEN_PEPPER == SECRET_KEY:

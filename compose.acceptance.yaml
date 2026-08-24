@@ -107,9 +107,13 @@ services:
   api:
     environment:
       ANVA_FILESYSTEM_ALLOWED_ROOTS: /app/acceptance/canonical/payload
+      ANVA_BOOTSTRAP_SECRET: ""
+      ANVA_BOOTSTRAP_SECRET_FILE: /run/secrets/anva_bootstrap_secret
     volumes:
       - acceptance-canonical:/app/acceptance/canonical:ro
     networks: [acceptance-backend, acceptance-edge]
+    secrets:
+      - anva_bootstrap_secret
 
   worker:
     environment:
@@ -404,3 +408,7 @@ networks:
     internal: true
   acceptance-edge:
     internal: true
+
+secrets:
+  anva_bootstrap_secret:
+    file: ${ANVA_TST009_BOOTSTRAP_SECRET_FILE:-/nonexistent-anva-bootstrap-secret}

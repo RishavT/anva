@@ -10,7 +10,7 @@ import pytest
 from django.core.exceptions import ImproperlyConfigured
 
 import anva.config.settings as anva_settings
-from anva.config.settings import database_settings, env_bool, env_int
+from anva.config.settings import bootstrap_secret, database_settings, env_bool, env_int
 
 
 @pytest.mark.unit
@@ -91,6 +91,57 @@ def test_database_settings_parses_percent_encoded_credentials() -> None:
 def test_database_settings_rejects_invalid_input(url: str) -> None:
     with pytest.raises(ImproperlyConfigured):
         database_settings(url)
+
+
+@pytest.mark.unit
+def test_bootstrap_secret_reads_protected_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secret = tmp_path / "bootstrap.raw"
+    secret.write_text("a" * 64)
+    secret.chmod(0o400)
+    monkeypatch.delenv("ANVA_BOOTSTRAP_SECRET", raising=False)
+    monkeypatch.setenv("ANVA_BOOTSTRAP_SECRET_FILE", str(secret))
+
+    assert bootstrap_secret() == "a" * 64
+
+
+@pytest.mark.unit
+def test_bootstrap_secret_rejects_direct_and_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secret = tmp_path / "bootstrap.raw"
+    secret.write_text("a" * 64)
+    secret.chmod(0o400)
+    monkeypatch.setenv("ANVA_BOOTSTRAP_SECRET", "direct")
+    monkeypatch.setenv("ANVA_BOOTSTRAP_SECRET_FILE", str(secret))
+
+    with pytest.raises(ImproperlyConfigured, match="mutually exclusive"):
+        bootstrap_secret()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("attack", ["symlink", "hardlink", "mode", "newline"])
+def test_bootstrap_secret_file_rejects_inode_and_content_attacks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, attack: str
+) -> None:
+    secret = tmp_path / "bootstrap.raw"
+    secret.write_text("a" * 64 + ("\n" if attack == "newline" else ""))
+    secret.chmod(0o400)
+    selected = secret
+    if attack == "symlink":
+        selected = tmp_path / "linked.raw"
+        selected.symlink_to(secret)
+    elif attack == "hardlink":
+        selected = tmp_path / "linked.raw"
+        os.link(secret, selected)
+    elif attack == "mode":
+        secret.chmod(0o600)
+    monkeypatch.delenv("ANVA_BOOTSTRAP_SECRET", raising=False)
+    monkeypatch.setenv("ANVA_BOOTSTRAP_SECRET_FILE", str(selected))
+
+    with pytest.raises(ImproperlyConfigured):
+        bootstrap_secret()
 
 
 def _production_environment(**overrides: str) -> dict[str, str]:
