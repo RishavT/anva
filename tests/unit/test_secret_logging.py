@@ -79,6 +79,30 @@ def test_credential_id_in_authorization_path_is_not_secret_material() -> None:
 
 
 @pytest.mark.unit
+def test_permission_namespace_containing_session_is_not_credential_material() -> None:
+    permission_diff = '+    return actor.has_perm("identity:support-session:assume")'
+    assert redact_text(permission_diff) == permission_diff
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "message",
+    [
+        "session_id=highly-sensitive-cookie",
+        "session-id: highly-sensitive-cookie",
+        "session_token=highly-sensitive-token",
+        "session-token: highly-sensitive-token",
+        '"session_id": "highly-sensitive-cookie"',
+        "'session-token'='highly-sensitive-token'",
+    ],
+)
+def test_exact_session_credential_names_remain_redacted(message: str) -> None:
+    redacted = redact_text(message)
+    assert "[REDACTED]" in redacted
+    assert "highly-sensitive" not in redacted
+
+
+@pytest.mark.unit
 def test_reviewer_identity_and_token_ids_are_safe_audit_metadata_but_secrets_are_not() -> None:
     _validate_audit_value(
         {
