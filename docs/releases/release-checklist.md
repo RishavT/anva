@@ -2,12 +2,15 @@
 
 This is a fail-closed checklist. Check an item only after linking evidence from
 the exact release commit. A command in documentation is not execution evidence.
+The [release-freeze contract](release-freeze-contract.md) fixes the remaining
+scope, allowed exceptions, evidence, and retest rules.
 The [evidence index](../evidence/issue-013/README.md) records checksummed local
 candidate tests, exact read-only corpus ingestion, scans, backup/restore, and
 migration rehearsal at source commit `94231d7e...`. Checked items below mean
 that exact local evidence exists; they do not imply publication. Registry/tag/
-signature, the full external oracle/baseline suite, fresh-agent, and human
-acceptance gates remain open. This work does not add, enable, or change a
+signature, external baseline, fixed 31-case replay, representative independent
+manual review, and human acceptance gates remain open. This work does not add,
+enable, or change a
 GitHub Actions workflow.
 
 Checked local results bind to source commit
@@ -127,10 +130,13 @@ and evidence archive SHA-256
   corpus and real MCP Compose stages pass with zero unexpected skips.
 - [ ] Exact `anva-test` commit is pinned and its own non-browser and browser
   baselines pass.
-- [ ] All 31 committed `anva-test` assurance scenarios match their isolated
-  oracles when exercised through Anva.
-- [ ] Declared fresh Codex and Claude cases pass from sealed inputs on the exact
-  release commit with no hard failure.
+- [ ] All 31 committed public `anva-test` cases import and replay through Anva
+  with complete inventory, stable bindings, deterministic public results, and
+  a clean-reader verification. This breadth gate does not require 31 separate
+  human or native-agent review sessions.
+- [ ] One representative context-free manual assurance review runs from sealed
+  public inputs against the messy knowledge corpus on the exact release commit,
+  using an independent reviewer identity with no private oracle/grader access.
 
 ## Completion record
 

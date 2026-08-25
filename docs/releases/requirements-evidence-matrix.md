@@ -43,9 +43,9 @@ external/manual, and explicitly deferred requirements remain separate.
 | V3 28.16; SEC-012 | External penetration test | deferred | Required before commercial beta, not self-hosted MVP | Track as commercial-beta blocker |
 | V3 28.16; SEC-013 | Security incident runbook | missing | Feature notes and minimal telemetry triage only | Owned security incident, containment, notification and exercise record |
 | V3 23.2–23.6 | Unit/integration/contract/E2E/security suites | exact-local-verified | Broad Compose: 761 passed, one expected separately executed live-MCP skip, three browser/corpus deselections, 85.41424161141758% coverage; exact corpus: 1 passed; live MCP: 2 passed; Chromium: 2 passed; zero failures/errors | Publication/external reviewer record; no substitution of the docs descendant for tested parent `94231d7e...` |
-| V3 23.7–23.9 | Retrieval/skill/assurance evaluations | baseline/missing | Exact broad suite includes local retrieval/authored skill/deterministic assurance evals, and read-only `anva-test` corpus ingestion passed at `a66787b...`; full external baselines/oracles and native-agent results were not run | Exact thresholds, pinned inputs, all 31 external oracle scenarios and sealed native results |
+| V3 23.7–23.9 | Retrieval/skill/assurance evaluations | baseline/missing | Exact broad suite includes local retrieval/authored skill/deterministic assurance evals, and read-only `anva-test` corpus ingestion passed at `a66787b...`; the fixed release gate remains incomplete | Exact thresholds and pinned inputs; deterministic import/replay of all 31 public cases with clean-reader verification; one independent context-free manual review over the messy knowledge corpus without private oracle/grader access |
 | V3 23.10 | Model regression gate | deferred | No external model adapter | Mandatory before a model/prompt/context-format change ships |
-| V3 23.14; 30 | Definition of test/issue completion | candidate | Checksummed exact-candidate command log/evidence archive and aligned documentation exist; publication, full external-oracle, fresh-agent and human acceptance do not | Close or explicitly accept every remaining release gate without substituting local evidence for publication/manual acceptance |
+| V3 23.14; 30 | Definition of test/issue completion | candidate | Checksummed exact-candidate command log/evidence archive and aligned documentation exist; publication, fixed 31-case replay, representative independent manual review, and human acceptance do not | Close or explicitly accept every remaining release gate without substituting local evidence for publication/manual acceptance |
 | V3 24.6–24.8 | Tracing, alerts and runbooks | candidate/missing | Correlation/W3C trace IDs, process metrics and runbook are implemented | Distributed trace export, persistent scrape, alert rules and incident drill |
 | V3 M6 | Rate limits, retention, alerts, security review | candidate/missing | Limits and retention have exact-source test evidence; alerts and the completion security audit are absent | Deployed operational/security review; pilot-usage targets remain future outcomes |
 | V3 28.17; OPS-001 | Production Terraform | deferred | Compose is the MVP deployment unit | Required before managed production deployment |
@@ -55,7 +55,7 @@ external/manual, and explicitly deferred requirements remain separate.
 | V3 28.17; OPS-006–011 | Quotas, feature flags, support, pilot usage, billing export | deferred | Outside install-ready MVP | Re-enter scope for pilot/commercial beta |
 | V3 28.17; OPS-012 | Status/incident communication | missing | Feature incident notes and minimal triage only | Operator incident runbook, owners and exercise |
 | V3 28.17; OPS-013 | Processing/retention documentation | candidate | Retention/decommission runbook states current limits | Review against actual release behavior and policy |
-| V3 Appendix E | Production readiness checklist | missing | Exact local candidate items are linked; publication, full external/fresh-agent, human, alerting and managed-production gates remain incomplete | Every remaining applicable item linked; deferred items visibly justified |
+| V3 Appendix E | Production readiness checklist | missing | Exact local candidate items are linked; publication, fixed external replay/manual-review, human, alerting and managed-production gates remain incomplete | Every remaining applicable item linked; deferred items visibly justified |
 | Issue 13 | Release evidence and signed/checksummed commit/tag | missing | Immutable exact-source archive, final manifest and `SHA256SUMS` bind local image ID `c6ae3a8a...` to `94231d7e...`; no tag, signature, registry digest or publication exists | Verified signed/provenance-attested tag, registry/package identities and publication record |
 
 ## Deferred-boundary statement
@@ -66,9 +66,10 @@ beta, regulatory erasure, OAuth, external-model, billing, or multi-browser
 readiness.
 
 Exact read-only `anva-test` corpus ingestion passed. The remaining deferral
-covers that repository's full non-browser/browser baselines and 31 isolated
-oracle scenarios, sealed fresh-agent Codex/Claude executions, and human
-user/operator/developer acceptance. This work does not add, enable, or change a
+covers that repository's full non-browser/browser baselines, deterministic
+import/replay of all 31 public cases, one representative context-free manual
+review over the messy knowledge corpus, and human user/operator/developer
+acceptance. This work does not add, enable, or change a
 GitHub Actions workflow; publication or an external runner must capture the
 remaining evidence.
 
