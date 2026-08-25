@@ -21,7 +21,7 @@ and the [immutable local evidence archive](../evidence/issue-013/README.md).
 | Object storage | Application runtime accepts a configured S3-compatible bucket; operational backup drill uses Compose-managed MinIO | Authenticated bucket readiness and current paired MinIO backup/restore passed locally; external object-store backup is unsupported and unverified |
 | MCP | Contract version `1`; Streamable HTTP through the official Python SDK | Two exact-candidate official-client tests passed against write-capable and actual read-only services |
 | Context packet | Schema version `1` | 24 generated contracts verified at the exact source candidate |
-| Skills | Portable skill version `1.0.0` | Codex/Claude archives rebuilt, verified, checksummed, and indexed; fresh-agent runs remain pending |
+| Skills | Portable skill version `1.0.0` | Codex/Claude archives rebuilt, verified, checksummed, and indexed; the representative independent context-free manual review remains pending |
 | Codex | Historically tested with Codex CLI `0.145.0` | Historical evidence only; release rerun required |
 | Claude Code | Historically tested with Claude Code `2.1.220` | Historical evidence only; release rerun required |
 | Browser | Headless Chromium/ChromeDriver `151.0.7922.71` in the project browser-test image | Two exact-source browser journeys passed; decommission requires a setup-authenticated session no older than 15 minutes and has no post-setup reauthentication flow |

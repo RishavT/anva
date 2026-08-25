@@ -4,6 +4,8 @@ This is a fail-closed checklist. Check an item only after linking evidence from
 the exact release commit. A command in documentation is not execution evidence.
 The [release-freeze contract](release-freeze-contract.md) fixes the remaining
 scope, allowed exceptions, evidence, and retest rules.
+The [current readiness audit](current-release-readiness.md) maps open gates to
+release-blocker and post-MVP issues without treating documentation as evidence.
 The [evidence index](../evidence/issue-013/README.md) records checksummed local
 candidate tests, exact read-only corpus ingestion, scans, backup/restore, and
 migration rehearsal at source commit `94231d7e...`. Checked items below mean
@@ -113,7 +115,10 @@ and evidence archive SHA-256
   concurrent processes.
 - [x] Structured logs carry correlation and trace identifiers without content
   or credentials.
-- [ ] Metrics scrape, aggregation, dashboards and alert rules are verified.
+- [ ] The implemented metrics surface is scraped through the documented
+  authenticated proxy boundary and its exported series support a recorded
+  operator triage exercise. Persistent aggregation, dashboards, managed alert
+  delivery, and distributed tracing are post-MVP under issue 39.
 - [ ] Empty/missing metrics token fails closed, the valid-token scrape uses
   HTTPS, and forwarded client/protocol headers are honored only from exact
   trusted proxy IPs.
