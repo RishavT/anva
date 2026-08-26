@@ -25,6 +25,13 @@ EXPECTED_ARTIFACT_SUFFIXES = (
     "source-security.json",
     "vulnerability-exceptions.json",
 )
+GENERATED_METADATA_NAMES = frozenset({"release-manifest.json", "SHA256SUMS"})
+SAFE_ARTIFACT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,254}$")
+MANIFEST_LIMITATIONS = (
+    "The recorded image ID identifies the locally verified OCI image.",
+    "A registry digest and signed tag are recorded only by the publication step.",
+    "External fresh-agent and human acceptance evidence is not generated here.",
+)
 
 
 def _artifact_files(directory: Path) -> tuple[Path, ...]:
@@ -33,7 +40,7 @@ def _artifact_files(directory: Path) -> tuple[Path, ...]:
     files = tuple(
         path
         for path in sorted(directory.iterdir())
-        if path.name not in {"SHA256SUMS", "release-manifest.json"}
+        if path.name not in GENERATED_METADATA_NAMES
         and not path.name.endswith(".tmp")
         and path.name not in {".gitkeep", ".trivy-cache", ".trivyignore"}
     )
@@ -42,6 +49,8 @@ def _artifact_files(directory: Path) -> tuple[Path, ...]:
     if any(path.is_symlink() or not path.is_file() for path in files):
         raise ValueError("Release artifacts must be regular non-symlink files")
     names = tuple(path.name for path in files)
+    if any(SAFE_ARTIFACT_NAME.fullmatch(name) is None for name in names):
+        raise ValueError("Release artifact names must be safe portable basenames")
     for suffix in EXPECTED_ARTIFACT_SUFFIXES:
         if not any(name.endswith(suffix) for name in names):
             raise ValueError(f"Release is missing required artifact suffix: {suffix}")
@@ -51,6 +60,15 @@ def _artifact_files(directory: Path) -> tuple[Path, ...]:
 def _sha256(path: Path) -> str:
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"Release manifest contains duplicate key: {key}")
+        result[key] = value
+    return result
 
 
 def build_release_manifest(
@@ -77,18 +95,16 @@ def build_release_manifest(
         for path in artifacts
     ]
     manifest: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "artifact_kind": "anva.generated-release-manifest",
+        "publication_status": "generated_unpublished",
         "anva_version": __version__,
         "source_commit": source_commit,
         "source_date_epoch": source_date_epoch,
         "created_at": datetime.fromtimestamp(source_date_epoch, tz=UTC).isoformat(),
         "image": {"reference": image_reference, "id": image_id},
         "artifacts": records,
-        "limitations": [
-            "The recorded image ID identifies the locally verified OCI image.",
-            "A registry digest and signed tag are recorded only by the publication step.",
-            "External fresh-agent and human acceptance evidence is not generated here.",
-        ],
+        "limitations": list(MANIFEST_LIMITATIONS),
     }
     manifest_path = resolved / "release-manifest.json"
     manifest_path.write_bytes((json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode())
@@ -99,6 +115,142 @@ def build_release_manifest(
         encoding="utf-8",
     )
     return manifest
+
+
+def verify_release_manifest(
+    *,
+    directory: Path,
+    source_commit: str,
+    image_reference: str,
+    image_id: str,
+) -> dict[str, object]:
+    """Fail closed unless generated release metadata matches the exact candidate."""
+    if COMMIT_PATTERN.fullmatch(source_commit) is None:
+        raise ValueError("Source commit must be a full lowercase Git SHA")
+    if IMAGE_ID_PATTERN.fullmatch(image_id) is None:
+        raise ValueError("Image ID must be a sha256 digest")
+    resolved = directory.resolve()
+    if directory.is_symlink() or not resolved.is_dir():
+        raise ValueError("Release directory must be a regular directory")
+    manifest_path = resolved / "release-manifest.json"
+    checksum_path = resolved / "SHA256SUMS"
+    for path in (manifest_path, checksum_path):
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"Generated release metadata is missing or unsafe: {path.name}")
+        if path.stat().st_size > 8_000_000:
+            raise ValueError(f"Generated release metadata is too large: {path.name}")
+    try:
+        manifest = json.loads(manifest_path.read_bytes(), object_pairs_hook=_unique_json_object)
+    except json.JSONDecodeError as error:
+        raise ValueError("Release manifest is not valid JSON") from error
+    required_keys = {
+        "schema_version",
+        "artifact_kind",
+        "publication_status",
+        "anva_version",
+        "source_commit",
+        "source_date_epoch",
+        "created_at",
+        "image",
+        "artifacts",
+        "limitations",
+    }
+    if not isinstance(manifest, dict) or set(manifest) != required_keys:
+        raise ValueError("Release manifest structure is invalid")
+    if (
+        manifest.get("schema_version") != 2
+        or manifest.get("artifact_kind") != "anva.generated-release-manifest"
+        or manifest.get("publication_status") != "generated_unpublished"
+    ):
+        raise ValueError("Release manifest is not a current generated release asset")
+    if manifest.get("source_commit") != source_commit:
+        raise ValueError("Release manifest source commit does not match the exact candidate")
+    if manifest.get("image") != {"reference": image_reference, "id": image_id}:
+        raise ValueError("Release manifest image does not match the exact candidate")
+    source_date_epoch = manifest.get("source_date_epoch")
+    if (
+        manifest.get("anva_version") != __version__
+        or not isinstance(source_date_epoch, int)
+        or isinstance(source_date_epoch, bool)
+        or source_date_epoch < 0
+        or manifest.get("created_at")
+        != datetime.fromtimestamp(source_date_epoch, tz=UTC).isoformat()
+        or manifest.get("limitations") != list(MANIFEST_LIMITATIONS)
+    ):
+        raise ValueError("Release manifest provenance metadata is invalid")
+    records = manifest.get("artifacts")
+    if not isinstance(records, list) or not 1 <= len(records) <= 100:
+        raise ValueError("Release manifest artifact inventory is invalid")
+    expected_lines: list[str] = []
+    seen: set[str] = set()
+    for record in records:
+        if not isinstance(record, dict) or set(record) != {"path", "size", "sha256"}:
+            raise ValueError("Release manifest artifact record is invalid")
+        name, size, digest = record.get("path"), record.get("size"), record.get("sha256")
+        if (
+            not isinstance(name, str)
+            or SAFE_ARTIFACT_NAME.fullmatch(name) is None
+            or name in GENERATED_METADATA_NAMES
+            or name in seen
+        ):
+            raise ValueError("Release manifest artifact path is unsafe or duplicated")
+        if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+            raise ValueError("Release manifest artifact size is invalid")
+        if not isinstance(digest, str) or re.fullmatch(r"[a-f0-9]{64}", digest) is None:
+            raise ValueError("Release manifest artifact digest is invalid")
+        path = resolved / name
+        if path.is_symlink() or not path.is_file() or path.stat().st_size != size:
+            raise ValueError(f"Release artifact is missing, unsafe, or has changed: {name}")
+        if _sha256(path) != digest:
+            raise ValueError(f"Release artifact checksum mismatch: {name}")
+        expected_lines.append(f"{digest}  {name}\n")
+        seen.add(name)
+    actual_files = {path.name for path in _artifact_files(resolved)}
+    if actual_files != seen:
+        raise ValueError("Release directory has missing or unrecorded publishable artifacts")
+    expected_lines.append(f"{_sha256(manifest_path)}  release-manifest.json\n")
+    if checksum_path.read_text(encoding="utf-8") != "".join(expected_lines):
+        raise ValueError("SHA256SUMS is stale, malformed, or does not match the manifest")
+    return manifest
+
+
+def verify_release_worktree_status(
+    *, status: bytes, release_path: Path, manifest: dict[str, object]
+) -> None:
+    """Validate NUL-delimited Git status supplied by the trusted release host."""
+    if len(status) > 8_000_000:
+        raise ValueError("Git worktree status exceeds 8 MB")
+    if release_path.is_absolute() or any(part in {"", ".", ".."} for part in release_path.parts):
+        raise ValueError("Release directory path is unsafe")
+    records = manifest.get("artifacts")
+    if not isinstance(records, list):  # pragma: no cover - verified caller invariant.
+        raise ValueError("Release manifest artifact inventory is invalid")
+    allowed = {(release_path / str(record["path"])).as_posix() for record in records} | {
+        (release_path / name).as_posix() for name in GENERATED_METADATA_NAMES
+    }
+    unexpected: list[str] = []
+    entries = status.split(b"\0")
+    index = 0
+    while index < len(entries):
+        entry = entries[index]
+        index += 1
+        if not entry:
+            continue
+        decoded = entry.decode("utf-8", errors="strict")
+        if len(decoded) < 4 or decoded[2] != " ":
+            raise ValueError("Git worktree status output is malformed")
+        status, path = decoded[:2], decoded[3:]
+        paths = [path]
+        if "R" in status or "C" in status:
+            if index >= len(entries) or not entries[index]:
+                raise ValueError("Git worktree status rename output is malformed")
+            paths.append(entries[index].decode("utf-8", errors="strict"))
+            index += 1
+        if status != "!!" or any(candidate not in allowed for candidate in paths):
+            unexpected.extend(paths)
+    if unexpected:
+        summary = ", ".join(sorted(unexpected)[:10])
+        raise ValueError(f"Release requires a clean exact worktree; unexpected paths: {summary}")
 
 
 def build_trivy_ignorefile(
@@ -266,6 +418,13 @@ def main() -> int:
         type=int,
         default=int(os.getenv("SOURCE_DATE_EPOCH", "1756684800")),
     )
+    verify_parser = commands.add_parser("verify")
+    verify_parser.add_argument("--directory", required=True, type=Path)
+    verify_parser.add_argument("--worktree-status", type=Path)
+    verify_parser.add_argument("--release-path", type=Path)
+    verify_parser.add_argument("--source-commit", required=True)
+    verify_parser.add_argument("--image-reference", required=True)
+    verify_parser.add_argument("--image-id", required=True)
     exception_parser = commands.add_parser("exceptions")
     exception_parser.add_argument("--input", required=True, type=Path)
     exception_parser.add_argument("--report", required=True, type=Path)
@@ -278,6 +437,31 @@ def main() -> int:
             output_path=arguments.output,
         )
         print(json.dumps({"status": "validated", "exceptions": len(identifiers)}))
+        return 0
+    if arguments.command == "verify":
+        verified = verify_release_manifest(
+            directory=arguments.directory,
+            source_commit=str(arguments.source_commit),
+            image_reference=str(arguments.image_reference),
+            image_id=str(arguments.image_id),
+        )
+        if arguments.worktree_status is not None:
+            if arguments.release_path is None:
+                raise ValueError("--release-path is required with --worktree-status")
+            status_path = arguments.worktree_status
+            if status_path != Path("/dev/stdin") and (
+                status_path.is_symlink() or not status_path.is_file()
+            ):
+                raise ValueError("Worktree status input must be a regular file")
+            verify_release_worktree_status(
+                status=status_path.read_bytes(),
+                release_path=arguments.release_path,
+                manifest=verified,
+            )
+        records = verified["artifacts"]
+        if not isinstance(records, list):  # pragma: no cover - verifier invariant.
+            raise RuntimeError("Release artifact inventory is invalid")
+        print(json.dumps({"status": "verified", "artifacts": len(records)}))
         return 0
     manifest = build_release_manifest(
         directory=arguments.directory,

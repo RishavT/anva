@@ -31,10 +31,13 @@ services:
     volumes:
       - .:/workspace:ro
       - ./release:/release
-      - ./release/.trivy-cache:/cache
+      - release-trivy-cache:/cache
       - /var/run/docker.sock:/var/run/docker.sock:ro
     read_only: true
     cap_drop: ["ALL"]
     security_opt: ["no-new-privileges:true"]
     tmpfs:
       - /tmp:size=1g,mode=1777
+
+volumes:
+  release-trivy-cache:

@@ -310,11 +310,12 @@ release-scan-gate: release-scan
 	$(RELEASE_COMPOSE) --profile release run --rm release-scanner \
 		filesystem --scanners vuln,secret,misconfig --severity HIGH,CRITICAL \
 		$(TRIVY_SOURCE_SKIPS) --exit-code 1 /workspace
+	$(RELEASE_COMPOSE) --profile release run --rm release-builder \
+		rm -f /release/.trivyignore
 
 release-manifest:
-	@test -z "$$(git status --porcelain=v1 --untracked-files=all)" || \
-		(echo "release-manifest requires a clean exact commit" >&2; exit 1)
-	@source_commit=$$(git rev-parse HEAD); \
+	@set -eu; \
+	source_commit=$$(git rev-parse HEAD); \
 	image_id=$$(docker image inspect \
 		$(ANVA_IMAGE_REF) --format '{{.Id}}'); \
 	image_revision=$$(docker image inspect \
@@ -326,7 +327,16 @@ release-manifest:
 		python -m anva.release manifest --directory /release \
 		--source-commit "$$source_commit" \
 		--image-reference "$(ANVA_IMAGE_REF)" \
-		--image-id "$$image_id"
+		--image-id "$$image_id"; \
+	status_file=$$(mktemp); trap 'rm -f "$$status_file"' 0 1 2 15; \
+	git status --porcelain=v1 -z --untracked-files=all --ignored=matching \
+		> "$$status_file"; \
+	$(RELEASE_COMPOSE) --profile release run --rm -T release-builder \
+		python -m anva.release verify --directory /release \
+		--worktree-status /dev/stdin --release-path release \
+		--source-commit "$$source_commit" \
+		--image-reference "$(ANVA_IMAGE_REF)" \
+		--image-id "$$image_id" < "$$status_file"
 
 release-artifacts: release-build release-scan release-scan-gate release-manifest
 

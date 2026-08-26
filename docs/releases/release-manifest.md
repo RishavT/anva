@@ -1,0 +1,33 @@
+# Release manifest lifecycle
+
+`release/release-manifest.json` and `release/SHA256SUMS` are generated release
+assets. They are deliberately ignored by Git and must never be committed as the
+source of release truth. A manifest that embeds its own containing commit would
+create an unresolvable revision loop.
+
+The tracked contract is
+[`release-manifest.schema.json`](release-manifest.schema.json), together with the
+generator and verifier in `anva.release`. `make release-manifest` obtains the exact
+current commit and local OCI image identity, rejects an image whose OCI revision
+does not equal that commit, regenerates both metadata files, and then verifies every
+artifact byte, size, basename, and checksum. Package archives, both SBOM formats,
+image/source scans, vulnerability dispositions, release notes, and any supplied
+evidence/provenance archive are all inventoried rather than inferred.
+
+The final worktree check consumes NUL-delimited Git status from the trusted host. It
+allows only ignored paths named by the verified manifest plus the two generated
+metadata files. Modified tracked files and every other untracked or ignored path are
+release blockers. The Trivy cache is a Docker named volume so cache content cannot
+be confused with a publishable artifact.
+
+Before attaching the generated directory to a release, run the same verifier again
+with the exact commit, image reference, and image ID. `publication_status` remains
+`generated_unpublished`: registry digest and signature identity belong to the later
+authorized publication record, not to this local pre-publication manifest. Never
+reuse an existing `release/` directory for another candidate; `release-build` starts
+with `release-clean` and the verifier rejects stale candidate identity, extra files,
+unsafe paths, symlinks, and checksum drift.
+
+Schema-v1 manifests remain useful only as historical evidence. They are intentionally
+rejected by the release verifier and must be regenerated as schema v2 from the exact
+candidate; editing or copying an old manifest is not a supported migration path.

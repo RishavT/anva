@@ -8,7 +8,26 @@ from pathlib import Path
 
 import pytest
 
-from anva.release import build_release_manifest, build_trivy_ignorefile
+from anva.release import (
+    build_release_manifest,
+    build_trivy_ignorefile,
+    verify_release_manifest,
+    verify_release_worktree_status,
+)
+
+
+def _write_release_artifacts(directory: Path) -> None:
+    for name in (
+        "anva-0.1.0-py3-none-any.whl",
+        "anva-codex-skills-1.0.0.tar.gz",
+        "anva-claude-skills-1.0.0.tar.gz",
+        "anva-image.spdx.json",
+        "anva-image.cyclonedx.json",
+        "anva-image-vulnerabilities.json",
+        "anva-source-security.json",
+        "vulnerability-exceptions.json",
+    ):
+        (directory / name).write_bytes(f"artifact:{name}\n".encode())
 
 
 def _write_trivy_report(path: Path, vulnerabilities: list[dict[str, object]]) -> None:
@@ -20,17 +39,7 @@ def _write_trivy_report(path: Path, vulnerabilities: list[dict[str, object]]) ->
 
 @pytest.mark.unit
 def test_release_manifest_covers_required_artifacts_and_is_reproducible(tmp_path: Path) -> None:
-    for name in (
-        "anva-0.1.0-py3-none-any.whl",
-        "anva-codex-skills-1.0.0.tar.gz",
-        "anva-claude-skills-1.0.0.tar.gz",
-        "anva-image.spdx.json",
-        "anva-image.cyclonedx.json",
-        "anva-image-vulnerabilities.json",
-        "anva-source-security.json",
-        "vulnerability-exceptions.json",
-    ):
-        (tmp_path / name).write_bytes(f"artifact:{name}\n".encode())
+    _write_release_artifacts(tmp_path)
 
     first = build_release_manifest(
         directory=tmp_path,
@@ -53,9 +62,208 @@ def test_release_manifest_covers_required_artifacts_and_is_reproducible(tmp_path
     assert (tmp_path / "release-manifest.json").read_bytes() == first_manifest
     assert (tmp_path / "SHA256SUMS").read_bytes() == first_checksums
     manifest = json.loads(first_manifest)
+    assert manifest["schema_version"] == 2
+    assert manifest["artifact_kind"] == "anva.generated-release-manifest"
+    assert manifest["publication_status"] == "generated_unpublished"
     assert len(manifest["artifacts"]) == 8
     assert "release-manifest.json" in first_checksums.decode()
     assert "SHA256SUMS" not in first_checksums.decode()
+
+
+@pytest.mark.unit
+def test_tracked_release_manifest_schema_matches_generated_contract(tmp_path: Path) -> None:
+    schema = json.loads(
+        Path("docs/releases/release-manifest.schema.json").read_text(encoding="utf-8")
+    )
+    assert schema["properties"]["schema_version"]["const"] == 2
+    assert schema["properties"]["artifact_kind"]["const"] == ("anva.generated-release-manifest")
+    assert schema["properties"]["publication_status"]["const"] == ("generated_unpublished")
+    assert set(schema["required"]) == set(schema["properties"])
+
+
+@pytest.mark.unit
+def test_release_verifier_rejects_stale_candidate_and_tampering(tmp_path: Path) -> None:
+    _write_release_artifacts(tmp_path)
+    commit = "a" * 40
+    image_id = f"sha256:{'b' * 64}"
+    build_release_manifest(
+        directory=tmp_path,
+        source_commit=commit,
+        image_reference="anva:0.1.0",
+        image_id=image_id,
+        source_date_epoch=1_756_684_800,
+    )
+    verified = verify_release_manifest(
+        directory=tmp_path,
+        source_commit=commit,
+        image_reference="anva:0.1.0",
+        image_id=image_id,
+    )
+    assert verified["source_commit"] == commit
+
+    with pytest.raises(ValueError, match="source commit does not match"):
+        verify_release_manifest(
+            directory=tmp_path,
+            source_commit="c" * 40,
+            image_reference="anva:0.1.0",
+            image_id=image_id,
+        )
+    (tmp_path / "anva-0.1.0-py3-none-any.whl").write_bytes(b"tampered")
+    with pytest.raises(ValueError, match="has changed|checksum mismatch"):
+        verify_release_manifest(
+            directory=tmp_path,
+            source_commit=commit,
+            image_reference="anva:0.1.0",
+            image_id=image_id,
+        )
+
+
+@pytest.mark.unit
+def test_release_verifier_rejects_duplicate_manifest_keys(tmp_path: Path) -> None:
+    _write_release_artifacts(tmp_path)
+    commit = "a" * 40
+    image_id = f"sha256:{'b' * 64}"
+    build_release_manifest(
+        directory=tmp_path,
+        source_commit=commit,
+        image_reference="anva:0.1.0",
+        image_id=image_id,
+        source_date_epoch=1_756_684_800,
+    )
+    manifest_path = tmp_path / "release-manifest.json"
+    content = manifest_path.read_text(encoding="utf-8")
+    manifest_path.write_text(
+        content.replace('"schema_version": 2,', '"schema_version": 1, "schema_version": 2,'),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="duplicate key"):
+        verify_release_manifest(
+            directory=tmp_path,
+            source_commit=commit,
+            image_reference="anva:0.1.0",
+            image_id=image_id,
+        )
+
+
+@pytest.mark.unit
+def test_release_verifier_rejects_traversal_symlink_and_unrecorded_artifact(
+    tmp_path: Path,
+) -> None:
+    _write_release_artifacts(tmp_path)
+    commit = "a" * 40
+    image_id = f"sha256:{'b' * 64}"
+    build_release_manifest(
+        directory=tmp_path,
+        source_commit=commit,
+        image_reference="anva:0.1.0",
+        image_id=image_id,
+        source_date_epoch=1_756_684_800,
+    )
+    manifest_path = tmp_path / "release-manifest.json"
+    payload = json.loads(manifest_path.read_text())
+    payload["artifacts"][0]["path"] = "../escape"
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="unsafe or duplicated"):
+        verify_release_manifest(
+            directory=tmp_path,
+            source_commit=commit,
+            image_reference="anva:0.1.0",
+            image_id=image_id,
+        )
+
+    build_release_manifest(
+        directory=tmp_path,
+        source_commit=commit,
+        image_reference="anva:0.1.0",
+        image_id=image_id,
+        source_date_epoch=1_756_684_800,
+    )
+    (tmp_path / "unexpected.txt").write_text("not inventoried", encoding="utf-8")
+    with pytest.raises(ValueError, match="unrecorded publishable"):
+        verify_release_manifest(
+            directory=tmp_path,
+            source_commit=commit,
+            image_reference="anva:0.1.0",
+            image_id=image_id,
+        )
+    (tmp_path / "unexpected.txt").unlink()
+    artifact = tmp_path / "anva-0.1.0-py3-none-any.whl"
+    artifact.unlink()
+    artifact.symlink_to(tmp_path / "anva-image.spdx.json")
+    with pytest.raises(ValueError, match="unsafe"):
+        verify_release_manifest(
+            directory=tmp_path,
+            source_commit=commit,
+            image_reference="anva:0.1.0",
+            image_id=image_id,
+        )
+
+
+@pytest.mark.unit
+def test_release_worktree_allows_only_verified_ignored_bundle(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repository"
+    release = repository / "release"
+    release.mkdir(parents=True)
+    _write_release_artifacts(release)
+    commit = "a" * 40
+    image_id = f"sha256:{'b' * 64}"
+    manifest = build_release_manifest(
+        directory=release,
+        source_commit=commit,
+        image_reference="anva:0.1.0",
+        image_id=image_id,
+        source_date_epoch=1_756_684_800,
+    )
+    verified = verify_release_manifest(
+        directory=release,
+        source_commit=commit,
+        image_reference="anva:0.1.0",
+        image_id=image_id,
+    )
+    assert verified == manifest
+    status = (
+        b"".join(f"!! release/{record['path']}\0".encode() for record in verified["artifacts"])
+        + b"!! release/release-manifest.json\0!! release/SHA256SUMS\0"
+    )
+    verify_release_worktree_status(status=status, release_path=Path("release"), manifest=verified)
+
+    with pytest.raises(ValueError, match="unrelated.tmp"):
+        verify_release_worktree_status(
+            status=status + b"?? unrelated.tmp\0",
+            release_path=Path("release"),
+            manifest=verified,
+        )
+    with pytest.raises(ValueError, match="tracked.txt"):
+        verify_release_worktree_status(
+            status=status + b" M tracked.txt\0",
+            release_path=Path("release"),
+            manifest=verified,
+        )
+
+
+@pytest.mark.unit
+def test_release_worktree_rejects_unrelated_ignored_dirt(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repository"
+    release = repository / "release"
+    release.mkdir(parents=True)
+    _write_release_artifacts(release)
+    manifest = build_release_manifest(
+        directory=release,
+        source_commit="a" * 40,
+        image_reference="anva:0.1.0",
+        image_id=f"sha256:{'b' * 64}",
+        source_date_epoch=1_756_684_800,
+    )
+    with pytest.raises(ValueError, match="secret.cache"):
+        verify_release_worktree_status(
+            status=b"!! secret.cache\0",
+            release_path=Path("release"),
+            manifest=manifest,
+        )
 
 
 @pytest.mark.unit

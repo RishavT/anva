@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:anva:schema:release-manifest:v2",
+  "title": "Anva generated release manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "publication_status",
+    "anva_version",
+    "source_commit",
+    "source_date_epoch",
+    "created_at",
+    "image",
+    "artifacts",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "artifact_kind": {"const": "anva.generated-release-manifest"},
+    "publication_status": {"const": "generated_unpublished"},
+    "anva_version": {"type": "string", "minLength": 1},
+    "source_commit": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+    "source_date_epoch": {"type": "integer", "minimum": 0},
+    "created_at": {"type": "string", "format": "date-time"},
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reference", "id"],
+      "properties": {
+        "reference": {"type": "string", "minLength": 1},
+        "id": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"}
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "size", "sha256"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,254}$"
+          },
+          "size": {"type": "integer", "minimum": 0},
+          "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+        }
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  }
+}

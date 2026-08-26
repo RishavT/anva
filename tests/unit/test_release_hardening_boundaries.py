@@ -122,6 +122,26 @@ def test_release_gate_validates_current_report_before_using_waivers() -> None:
 
 
 @pytest.mark.unit
+def test_release_manifest_gate_verifies_generated_bundle_and_all_worktree_dirt() -> None:
+    makefile = Path("Makefile").read_text(encoding="utf-8")
+    gate = makefile.split("\nrelease-manifest:\n", 1)[1].split("\nrelease-artifacts:", 1)[0]
+    compose = cast(dict[str, object], yaml.safe_load(Path("compose.release.yaml").read_text()))
+    services = cast(dict[str, dict[str, object]], compose["services"])
+    scanner_volumes = cast(list[str], services["release-scanner"]["volumes"])
+
+    assert "set -eu" in gate
+    assert "--ignored=matching" in gate
+    assert "--untracked-files=all" in gate
+    assert "python -m anva.release verify" in gate
+    assert "--worktree-status /dev/stdin --release-path release" in gate
+    assert gate.index("python -m anva.release manifest") < gate.index(
+        "python -m anva.release verify"
+    )
+    assert "release-trivy-cache:/cache" in scanner_volumes
+    assert "./release/.trivy-cache:/cache" not in scanner_volumes
+
+
+@pytest.mark.unit
 def test_docker_context_excludes_runtime_artifacts_but_keeps_release_inputs() -> None:
     entries = set(Path(".dockerignore").read_text(encoding="utf-8").splitlines())
 
