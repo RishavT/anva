@@ -277,10 +277,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     evaluator_claim.add_argument("--lease-seconds", type=int, default=900)
     evaluator_claim.add_argument("--claim-idempotency-key")
-    evaluator_claim.add_argument("--task-id", type=uuid.UUID)
-    evaluator_claim.add_argument("--assurance-run-id", type=uuid.UUID)
-    evaluator_claim.add_argument("--input-hash")
-    evaluator_claim.add_argument("--head-commit")
+    exact_selector_help = (
+        "exact-task selector; use together with --task-id, --assurance-run-id, "
+        "--input-hash, and --head-commit"
+    )
+    evaluator_claim.add_argument("--task-id", type=uuid.UUID, help=exact_selector_help)
+    evaluator_claim.add_argument("--assurance-run-id", type=uuid.UUID, help=exact_selector_help)
+    evaluator_claim.add_argument("--input-hash", help=exact_selector_help)
+    evaluator_claim.add_argument("--head-commit", help=exact_selector_help)
     evaluator_submit = evaluator_commands.add_parser(
         "submit",
         help="Submit with the exact actor and credential that claimed the task",
@@ -543,6 +547,24 @@ def _assurance_request(arguments: argparse.Namespace) -> int:
 def _evaluator_request(arguments: argparse.Namespace) -> int:
     command = str(arguments.evaluator_command)
     if command == "claim":
+        selector_names = ("task_id", "assurance_run_id", "input_hash", "head_commit")
+        supplied_selectors = [
+            name for name in selector_names if getattr(arguments, name) is not None
+        ]
+        if supplied_selectors and len(supplied_selectors) != len(selector_names):
+            print(
+                json.dumps(
+                    {
+                        "code": "incomplete_exact_selector",
+                        "message": (
+                            "Exact-task selection requires --task-id, --assurance-run-id, "
+                            "--input-hash, and --head-commit together"
+                        ),
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 2
         path = f"/repositories/{arguments.repository_id}/evaluator-tasks/claim"
         payload: dict[str, object] = {
             "claimant": arguments.claimant,

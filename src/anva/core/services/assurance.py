@@ -122,8 +122,11 @@ REPORT_SAFETY_ASSERTION = re.compile(
 REPORT_MARKDOWN_MAX_CHARS = 200_000
 REPORT_HTML_MAX_CHARS = 300_000
 REPORT_INDEX_TEXT_CHARS = 24
+REPORT_NORMAL_INDEX_TEXT_CHARS = 96
 REPORT_DETAIL_EXPLANATION_CHARS = 320
 REPORT_DETAIL_OTHER_CHARS = 160
+REPORT_NORMAL_DETAIL_OTHER_CHARS = 512
+REPORT_COMPACT_FINDING_THRESHOLD = 100
 REPORT_DETAIL_SOURCE_BUDGET = 4_000
 REPORT_REASON_ITEM_CHARS = 100
 REPORT_REASON_SOURCE_BUDGET = 2_000
@@ -2006,14 +2009,18 @@ def _finding_report_location(finding: Finding) -> str:
     return "No localized location supplied"
 
 
-def _report_finding(finding: Finding) -> _ReportFinding:
+def _report_finding(finding: Finding, *, compact: bool) -> _ReportFinding:
+    index_maximum = REPORT_INDEX_TEXT_CHARS if compact else REPORT_NORMAL_INDEX_TEXT_CHARS
+    detail_other_maximum = (
+        REPORT_DETAIL_OTHER_CHARS if compact else REPORT_NORMAL_DETAIL_OTHER_CHARS
+    )
     title, title_truncated = _bounded_report_text(
         finding.title,
-        maximum=REPORT_INDEX_TEXT_CHARS,
+        maximum=index_maximum,
     )
     location, location_truncated = _bounded_report_text(
         _finding_report_location(finding),
-        maximum=REPORT_INDEX_TEXT_CHARS,
+        maximum=index_maximum,
     )
     explanation, explanation_truncated = _bounded_report_text(
         finding.explanation,
@@ -2021,11 +2028,11 @@ def _report_finding(finding: Finding) -> _ReportFinding:
     )
     uncertainty, uncertainty_truncated = _bounded_report_text(
         finding.uncertainty,
-        maximum=REPORT_DETAIL_OTHER_CHARS,
+        maximum=detail_other_maximum,
     )
     suggested_resolution, resolution_truncated = _bounded_report_text(
         finding.suggested_resolution,
-        maximum=REPORT_DETAIL_OTHER_CHARS,
+        maximum=detail_other_maximum,
     )
     identity = str(getattr(finding, "id", finding.fingerprint))
     return _ReportFinding(
@@ -2121,7 +2128,13 @@ def _render_report(
     limitations: list[str],
 ) -> tuple[str, str, list[str]]:
     ordered_entries = sorted(
-        (_report_finding(finding) for finding in findings),
+        (
+            _report_finding(
+                finding,
+                compact=len(findings) > REPORT_COMPACT_FINDING_THRESHOLD,
+            )
+            for finding in findings
+        ),
         key=lambda finding: (
             finding.finding.fingerprint,
             finding.finding.path,

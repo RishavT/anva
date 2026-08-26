@@ -853,6 +853,44 @@ def test_evaluator_cli_claim_posts_exact_selector_and_idempotency(
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    "partial_selector",
+    [
+        ["--task-id", str(uuid.uuid4())],
+        ["--input-hash", "2" * 64, "--head-commit", "3" * 40],
+    ],
+)
+def test_evaluator_cli_claim_rejects_partial_exact_selector_before_request(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    partial_selector: list[str],
+) -> None:
+    monkeypatch.setenv("ANVA_TOKEN", "CANARY-EVALUATOR-TOKEN")
+    with patch("anva.entrypoints.cli.urlopen") as open_url:
+        result = main(
+            [
+                "evaluator",
+                "claim",
+                "--repository-id",
+                str(uuid.uuid4()),
+                "--claimant",
+                "exact-review-agent",
+                *partial_selector,
+            ]
+        )
+
+    assert result == 2
+    assert json.loads(capsys.readouterr().out) == {
+        "code": "incomplete_exact_selector",
+        "message": (
+            "Exact-task selection requires --task-id, --assurance-run-id, "
+            "--input-hash, and --head-commit together"
+        ),
+    }
+    open_url.assert_not_called()
+
+
+@pytest.mark.unit
 def test_evaluator_cli_submit_fails_closed_without_claim_token(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

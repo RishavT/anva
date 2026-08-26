@@ -36,6 +36,10 @@ docker compose --profile tools run --rm \
   --repository-id <repository-uuid> --claimant review-agent-7
 ```
 
+To claim one exact sealed task, provide all four selectors together: `--task-id`,
+`--assurance-run-id`, `--input-hash`, and `--head-commit`. Omitting all four claims the next
+eligible task. Partial selector groups are rejected locally before any request is sent.
+
 Give the reviewer only the returned `request` object. Do not mount the repository, Docker socket,
 database credentials, or application environment. The reviewer must return the checked-in
 `evaluator-result` contract and cite only supplied diff coordinates or authorized context citation

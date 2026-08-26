@@ -868,6 +868,79 @@ def test_report_renders_blockers_and_empty_sections_without_html_injection() -> 
 
 
 @pytest.mark.unit
+def test_report_preserves_normal_actionable_finding_fields() -> None:
+    run = cast(
+        AssuranceRun,
+        SimpleNamespace(
+            pull_request_number=314,
+            head_commit="c" * 40,
+            diff_artifact=None,
+            context_artifact=None,
+            requirements_hash="a" * 64,
+            policy_bundle_hash="b" * 64,
+            evidence_bundle_hash="d" * 64,
+            evaluator_version="manual-review-v1",
+            prompt_version="assurance-prompt-v1",
+        ),
+    )
+    title = "Randomized incident keys bypass idempotency and permit duplicate credits"
+    resolution = (
+        "Keep the original incident_id, restore an atomic get-or-create operation with the "
+        "database uniqueness constraint, cap the stored amount at 5,000 cents, and add "
+        "repeat/concurrent/oversized-request tests."
+    )
+    finding = cast(
+        Finding,
+        SimpleNamespace(
+            severity=Finding.Severity.BLOCKING,
+            title=title,
+            path="credits/services.py",
+            line=20,
+            fingerprint="f" * 64,
+            explanation="The change removes the bounded atomic issuance path.",
+            uncertainty="Only the supplied diff and authorized context were reviewed.",
+            suggested_resolution=resolution,
+            citations=[],
+        ),
+    )
+    second_title = "Cross-account credit creation bypasses authenticated-account authorization"
+    second_resolution = (
+        "Restore the authenticated-account equality check before issuance and add a "
+        "cross-account denial test."
+    )
+    second_finding = cast(
+        Finding,
+        SimpleNamespace(
+            severity=Finding.Severity.BLOCKING,
+            title=second_title,
+            path="credits/views.py",
+            line=42,
+            fingerprint="e" * 64,
+            explanation="The change permits a caller to select another account.",
+            uncertainty="Only the supplied diff and authorized context were reviewed.",
+            suggested_resolution=second_resolution,
+            citations=[],
+        ),
+    )
+
+    markdown, rendered_html, report_limitations = _render_report(
+        run=run,
+        status="BLOCKED",
+        reasons=["SUPPORTED_MODEL_BLOCKER"],
+        findings=(finding, second_finding),
+        limitations=[],
+    )
+
+    assert title in markdown and title in rendered_html
+    assert _markdown_escape(resolution) in markdown
+    assert resolution in rendered_html
+    assert second_title in markdown and second_title in rendered_html
+    assert second_resolution in markdown and second_resolution in rendered_html
+    assert REPORT_DETAIL_LIMITATION_PREFIX not in markdown
+    assert report_limitations == []
+
+
+@pytest.mark.unit
 def test_report_renders_every_key_review_area() -> None:
     run = cast(
         AssuranceRun,
