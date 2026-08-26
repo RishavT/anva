@@ -84,6 +84,13 @@ def _write_trivy_report(path: Path, vulnerabilities: list[dict[str, object]]) ->
     )
 
 
+def _artifact_records(manifest: dict[str, object]) -> list[dict[str, object]]:
+    records = manifest["artifacts"]
+    assert isinstance(records, list)
+    assert all(isinstance(record, dict) for record in records)
+    return records
+
+
 @pytest.mark.unit
 def test_uv_build_cleanup_to_verified_manifest_boundary_is_fail_closed(tmp_path: Path) -> None:
     release = tmp_path / "release"
@@ -108,7 +115,9 @@ def test_uv_build_cleanup_to_verified_manifest_boundary_is_fail_closed(tmp_path:
         image_id=image_id,
     )
     status = (
-        b"".join(f"!! release/{record['path']}\0".encode() for record in verified["artifacts"])
+        b"".join(
+            f"!! release/{record['path']}\0".encode() for record in _artifact_records(verified)
+        )
         + b"!! release/release-manifest.json\0!! release/SHA256SUMS\0"
     )
     verify_release_worktree_status(
@@ -328,7 +337,9 @@ def test_release_worktree_allows_only_verified_ignored_bundle(
     )
     assert verified == manifest
     status = (
-        b"".join(f"!! release/{record['path']}\0".encode() for record in verified["artifacts"])
+        b"".join(
+            f"!! release/{record['path']}\0".encode() for record in _artifact_records(verified)
+        )
         + b"!! release/release-manifest.json\0!! release/SHA256SUMS\0"
     )
     verify_release_worktree_status(status=status, release_path=Path("release"), manifest=verified)
@@ -625,11 +636,16 @@ def test_risk_acceptance_binds_exact_candidate_and_preserves_tuple_evidence(
     }
     assert artifact["approved_at"] == "2026-08-26"
     assert artifact["expires_at"] == "2026-09-25"
-    assert len(artifact["exceptions"]) == 13
-    assert len(artifact["observed_high_critical_tuples"]) == 16
+    exceptions = artifact["exceptions"]
+    observed_tuples = artifact["observed_high_critical_tuples"]
+    assert isinstance(exceptions, list)
+    assert isinstance(observed_tuples, list)
+    assert all(isinstance(record, dict) for record in observed_tuples)
+    assert len(exceptions) == 13
+    assert len(observed_tuples) == 16
     assert all(
         "installed_version" in record and record["fixed_version"] is None
-        for record in artifact["observed_high_critical_tuples"]
+        for record in observed_tuples
     )
     assert json.loads(output.read_text(encoding="utf-8")) == artifact
 

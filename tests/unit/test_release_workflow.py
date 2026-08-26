@@ -7,7 +7,7 @@ import yaml
 WORKFLOW = Path(__file__).parents[2] / ".github" / "workflows" / "release.yml"
 
 
-def _workflow() -> tuple[str, dict[str, object]]:
+def _workflow() -> tuple[str, dict[object, object]]:
     text = WORKFLOW.read_text(encoding="utf-8")
     parsed = yaml.safe_load(text)
     assert isinstance(parsed, dict)
@@ -36,6 +36,9 @@ def test_release_workflow_pins_actions_and_uses_minimal_permissions() -> None:
     assert "@v" not in "\n".join(line for line in text.splitlines() if "uses:" in line)
     assert workflow["permissions"] == {"contents": "read"}
     jobs = workflow["jobs"]
+    assert isinstance(jobs, dict)
+    for job_name in ("build", "publish", "verify"):
+        assert isinstance(jobs[job_name], dict)
     assert jobs["build"]["permissions"] == {
         "attestations": "write",
         "contents": "read",

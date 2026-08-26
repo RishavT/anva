@@ -129,7 +129,7 @@ def test_bootstrap_secret_rejects_foreign_owner_private_file(
     monkeypatch.delenv("ANVA_BOOTSTRAP_SECRET", raising=False)
     monkeypatch.setenv("ANVA_BOOTSTRAP_SECRET_FILE", str(secret))
     owner_uid = os.geteuid()
-    monkeypatch.setattr(anva_settings.os, "geteuid", lambda: owner_uid + 1)
+    monkeypatch.setattr("anva.config.settings.os.geteuid", lambda: owner_uid + 1)
 
     with pytest.raises(ImproperlyConfigured, match="unsafe"):
         bootstrap_secret()
