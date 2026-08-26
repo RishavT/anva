@@ -268,14 +268,14 @@ def verify_release_worktree_status(
         decoded = entry.decode("utf-8", errors="strict")
         if len(decoded) < 4 or decoded[2] != " ":
             raise ValueError("Git worktree status output is malformed")
-        status, path = decoded[:2], decoded[3:]
+        entry_status, path = decoded[:2], decoded[3:]
         paths = [path]
-        if "R" in status or "C" in status:
+        if "R" in entry_status or "C" in entry_status:
             if index >= len(entries) or not entries[index]:
                 raise ValueError("Git worktree status rename output is malformed")
             paths.append(entries[index].decode("utf-8", errors="strict"))
             index += 1
-        if status != "!!" or any(candidate not in allowed for candidate in paths):
+        if entry_status != "!!" or any(candidate not in allowed for candidate in paths):
             unexpected.extend(paths)
     if unexpected:
         summary = ", ".join(sorted(unexpected)[:10])
@@ -297,14 +297,24 @@ def build_trivy_ignorefile(
     payload = json.loads(input_path.read_bytes())
     if not isinstance(payload, dict) or set(payload) != {
         "schema_version",
+        "release_version",
+        "approved_by",
         "reviewed_at",
         "expires_at",
         "policy",
         "exceptions",
     }:
         raise ValueError("Vulnerability exception document is invalid")
-    if payload.get("schema_version") != 1:
+    if payload.get("schema_version") != 2:
         raise ValueError("Vulnerability exception schema version is unsupported")
+    if payload.get("release_version") != __version__:
+        raise ValueError("Vulnerability exception release version is invalid")
+    if payload.get("approved_by") != {
+        "name": "Rishav Thakker",
+        "organization": "AI Soft Work",
+        "roles": ["release", "security", "application", "platform"],
+    }:
+        raise ValueError("Vulnerability exception approval identity is invalid")
     policy = payload.get("policy")
     if not isinstance(policy, str) or not 20 <= len(policy) <= 1_000:
         raise ValueError("Vulnerability exception policy is invalid")
@@ -368,7 +378,7 @@ def build_trivy_ignorefile(
         observed_packages = {match[0] for match in matches}
         if observed_packages != set(packages):
             raise ValueError("Vulnerability exception package set changed in the current image")
-        for _package, observed_severity, status, fixed_version in matches:
+        for _package, observed_severity, status, fixed_version, _installed_version in matches:
             if observed_severity != severity:
                 raise ValueError("Vulnerability exception severity changed in the current image")
             if fixed_version not in {None, ""}:
@@ -389,9 +399,99 @@ def build_trivy_ignorefile(
     return tuple(sorted(identifiers))
 
 
+def build_vulnerability_risk_acceptance(
+    *,
+    input_path: Path,
+    vulnerability_report_path: Path,
+    output_path: Path,
+    source_commit: str,
+    image_reference: str,
+    image_digest: str,
+    release_version: str,
+    current_date: date | None = None,
+) -> dict[str, object]:
+    """Generate the immutable, exact-candidate risk-acceptance release artifact."""
+    if COMMIT_PATTERN.fullmatch(source_commit) is None:
+        raise ValueError("Risk acceptance source commit is invalid")
+    if IMAGE_ID_PATTERN.fullmatch(image_digest) is None:
+        raise ValueError("Risk acceptance image digest is invalid")
+    if image_reference != f"ghcr.io/rishavt/anva@{image_digest}":
+        raise ValueError("Risk acceptance image reference is not the exact GHCR digest")
+    if release_version != __version__:
+        raise ValueError("Risk acceptance release version is invalid")
+    # Reuse the release gate's complete expiry, identity, no-fix, package-set,
+    # severity and status validation before rendering any approval artifact.
+    temporary_ignore = output_path.with_name(f".{output_path.name}.ignore.tmp")
+    try:
+        identifiers = build_trivy_ignorefile(
+            input_path=input_path,
+            vulnerability_report_path=vulnerability_report_path,
+            output_path=temporary_ignore,
+            current_date=current_date,
+        )
+    finally:
+        temporary_ignore.unlink(missing_ok=True)
+    approval = json.loads(input_path.read_bytes())
+    report_entries = _trivy_report_entries(vulnerability_report_path)
+    high_critical = {
+        identifier: records
+        for identifier, records in report_entries.items()
+        if any(record[1] in {"HIGH", "CRITICAL"} for record in records)
+    }
+    if set(high_critical) != set(identifiers):
+        raise ValueError("Risk acceptance does not cover the exact HIGH/CRITICAL CVE set")
+    tuples: list[dict[str, str | None]] = []
+    for identifier in identifiers:
+        for package, severity, status, fixed_version, installed_version in sorted(
+            high_critical[identifier]
+        ):
+            tuples.append(
+                {
+                    "id": identifier,
+                    "package": package,
+                    "severity": severity,
+                    "status": status,
+                    "installed_version": installed_version,
+                    "fixed_version": fixed_version,
+                }
+            )
+    if len(identifiers) != 13 or len(tuples) != 16:
+        raise ValueError("Risk acceptance is not the approved 13-CVE/16-tuple baseline")
+    artifact: dict[str, object] = {
+        "schema_version": 1,
+        "artifact_kind": "anva.vulnerability-risk-acceptance",
+        "release_version": release_version,
+        "source_commit": source_commit,
+        "image": {"reference": image_reference, "digest": image_digest},
+        "vulnerability_report_sha256": _sha256(vulnerability_report_path),
+        "approved_by": approval["approved_by"],
+        "approved_at": approval["reviewed_at"],
+        "expires_at": approval["expires_at"],
+        "decision": "temporarily_accepted_no_upstream_fix",
+        "policy": approval["policy"],
+        "exceptions": approval["exceptions"],
+        "observed_high_critical_tuples": tuples,
+        "invalidation_rules": [
+            "approval expired",
+            "release version, source commit, image digest, or scan checksum changed",
+            "a HIGH/CRITICAL tuple was added, removed, or changed",
+            "a scanner-recorded fixed version became available",
+            "the supported runtime or compensating controls changed",
+        ],
+    }
+    if output_path.exists() and (output_path.is_symlink() or not output_path.is_file()):
+        raise ValueError("Risk acceptance output must be a regular file")
+    if output_path.parent.is_symlink() or not output_path.parent.is_dir():
+        raise ValueError("Risk acceptance output directory is unsafe")
+    temporary = output_path.with_name(f".{output_path.name}.tmp")
+    temporary.write_bytes((json.dumps(artifact, indent=2, sort_keys=True) + "\n").encode())
+    temporary.replace(output_path)
+    return artifact
+
+
 def _trivy_report_entries(
     report_path: Path,
-) -> dict[str, tuple[tuple[str, str, str, str | None], ...]]:
+) -> dict[str, tuple[tuple[str, str, str, str | None, str], ...]]:
     if report_path.is_symlink() or not report_path.is_file():
         raise ValueError("Trivy vulnerability report must be a regular file")
     if report_path.stat().st_size > 64_000_000:
@@ -402,7 +502,7 @@ def _trivy_report_entries(
     results = payload.get("Results")
     if not isinstance(results, list):
         raise ValueError("Trivy vulnerability report is invalid")
-    entries: dict[str, list[tuple[str, str, str, str | None]]] = {}
+    entries: dict[str, list[tuple[str, str, str, str | None, str]]] = {}
     count = 0
     for result in results:
         if not isinstance(result, dict):
@@ -421,15 +521,19 @@ def _trivy_report_entries(
             severity = vulnerability.get("Severity")
             status = vulnerability.get("Status")
             fixed_version = vulnerability.get("FixedVersion")
+            installed_version = vulnerability.get("InstalledVersion", "unknown")
             if (
                 not isinstance(identifier, str)
                 or not isinstance(package, str)
                 or not isinstance(severity, str)
                 or not isinstance(status, str)
                 or (fixed_version is not None and not isinstance(fixed_version, str))
+                or not isinstance(installed_version, str)
             ):
                 raise ValueError("Trivy vulnerability report is invalid")
-            entries.setdefault(identifier, []).append((package, severity, status, fixed_version))
+            entries.setdefault(identifier, []).append(
+                (package, severity, status, fixed_version, installed_version)
+            )
     return {identifier: tuple(records) for identifier, records in entries.items()}
 
 
@@ -458,6 +562,14 @@ def main() -> int:
     exception_parser.add_argument("--input", required=True, type=Path)
     exception_parser.add_argument("--report", required=True, type=Path)
     exception_parser.add_argument("--output", required=True, type=Path)
+    approval_parser = commands.add_parser("risk-acceptance")
+    approval_parser.add_argument("--input", required=True, type=Path)
+    approval_parser.add_argument("--report", required=True, type=Path)
+    approval_parser.add_argument("--output", required=True, type=Path)
+    approval_parser.add_argument("--source-commit", required=True)
+    approval_parser.add_argument("--image-reference", required=True)
+    approval_parser.add_argument("--image-digest", required=True)
+    approval_parser.add_argument("--release-version", required=True)
     cleanup_parser = commands.add_parser("cleanup-uv-build")
     cleanup_parser.add_argument("--directory", required=True, type=Path)
     arguments = parser.parse_args()
@@ -472,6 +584,21 @@ def main() -> int:
             output_path=arguments.output,
         )
         print(json.dumps({"status": "validated", "exceptions": len(identifiers)}))
+        return 0
+    if arguments.command == "risk-acceptance":
+        artifact = build_vulnerability_risk_acceptance(
+            input_path=arguments.input,
+            vulnerability_report_path=arguments.report,
+            output_path=arguments.output,
+            source_commit=str(arguments.source_commit),
+            image_reference=str(arguments.image_reference),
+            image_digest=str(arguments.image_digest),
+            release_version=str(arguments.release_version),
+        )
+        observed = artifact.get("observed_high_critical_tuples")
+        if not isinstance(observed, list):  # pragma: no cover - generator invariant.
+            raise RuntimeError("Risk acceptance tuple inventory is invalid")
+        print(json.dumps({"status": "approved", "tuples": len(observed)}))
         return 0
     if arguments.command == "verify":
         verified = verify_release_manifest(

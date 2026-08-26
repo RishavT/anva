@@ -324,8 +324,9 @@ release-scan-gate: release-scan
 release-manifest:
 	@set -eu; \
 	source_commit=$$(git rev-parse HEAD); \
-	image_id=$$(docker image inspect \
-		$(ANVA_IMAGE_REF) --format '{{.Id}}'); \
+	image_id="$${ANVA_RELEASE_IMAGE_ID:-$$(docker image inspect \
+		$(ANVA_IMAGE_REF) --format '{{.Id}}')}"; \
+	image_reference="$${ANVA_RELEASE_IMAGE_REFERENCE:-$(ANVA_IMAGE_REF)}"; \
 	image_revision=$$(docker image inspect \
 		$(ANVA_IMAGE_REF) --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'); \
 	if [ "$$image_revision" != "$$source_commit" ]; then \
@@ -334,7 +335,7 @@ release-manifest:
 	$(RELEASE_COMPOSE) --profile release run --rm release-builder \
 		python -m anva.release manifest --directory /release \
 		--source-commit "$$source_commit" \
-		--image-reference "$(ANVA_IMAGE_REF)" \
+		--image-reference "$$image_reference" \
 		--image-id "$$image_id"; \
 	status_file=$$(mktemp); trap 'rm -f "$$status_file"' 0 1 2 15; \
 	git status --porcelain=v1 -z --untracked-files=all --ignored=matching \
@@ -343,7 +344,7 @@ release-manifest:
 		python -m anva.release verify --directory /release \
 		--worktree-status /dev/stdin --release-path release \
 		--source-commit "$$source_commit" \
-		--image-reference "$(ANVA_IMAGE_REF)" \
+		--image-reference "$$image_reference" \
 		--image-id "$$image_id" < "$$status_file"
 
 release-artifacts: release-build release-scan release-scan-gate release-manifest

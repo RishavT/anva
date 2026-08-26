@@ -11,10 +11,13 @@ import pytest
 from anva.release import (
     build_release_manifest,
     build_trivy_ignorefile,
+    build_vulnerability_risk_acceptance,
     remove_uv_build_gitignore,
     verify_release_manifest,
     verify_release_worktree_status,
 )
+
+APPROVED_DIGEST = f"sha256:{'d' * 64}"
 
 
 @pytest.mark.unit
@@ -391,9 +394,15 @@ def test_vulnerability_exceptions_are_bounded_expiring_and_reproducible(
     source.write_text(
         json.dumps(
             {
-                "schema_version": 1,
-                "reviewed_at": "2026-08-04",
-                "expires_at": "2026-08-18",
+                "schema_version": 2,
+                "release_version": "0.1.0",
+                "approved_by": {
+                    "name": "Rishav Thakker",
+                    "organization": "AI Soft Work",
+                    "roles": ["release", "security", "application", "platform"],
+                },
+                "reviewed_at": "2026-08-26",
+                "expires_at": "2026-09-25",
                 "policy": "Temporary reviewed exceptions require an exact release-image rescan.",
                 "exceptions": [
                     {
@@ -427,14 +436,14 @@ def test_vulnerability_exceptions_are_bounded_expiring_and_reproducible(
         input_path=source,
         vulnerability_report_path=report,
         output_path=output,
-        current_date=date(2026, 8, 4),
+        current_date=date(2026, 8, 26),
     )
     first_bytes = output.read_bytes()
     second = build_trivy_ignorefile(
         input_path=source,
         vulnerability_report_path=report,
         output_path=output,
-        current_date=date(2026, 8, 5),
+        current_date=date(2026, 8, 27),
     )
 
     assert first == second == ("CVE-2026-12345",)
@@ -447,9 +456,15 @@ def test_vulnerability_exceptions_fail_closed_after_expiry(tmp_path: Path) -> No
     source.write_text(
         json.dumps(
             {
-                "schema_version": 1,
-                "reviewed_at": "2026-08-04",
-                "expires_at": "2026-08-05",
+                "schema_version": 2,
+                "release_version": "0.1.0",
+                "approved_by": {
+                    "name": "Rishav Thakker",
+                    "organization": "AI Soft Work",
+                    "roles": ["release", "security", "application", "platform"],
+                },
+                "reviewed_at": "2026-08-26",
+                "expires_at": "2026-08-27",
                 "policy": "Temporary reviewed exceptions require an exact release-image rescan.",
                 "exceptions": [
                     {
@@ -473,7 +488,47 @@ def test_vulnerability_exceptions_fail_closed_after_expiry(tmp_path: Path) -> No
             input_path=source,
             vulnerability_report_path=tmp_path / "image-vulnerabilities.json",
             output_path=tmp_path / ".trivyignore",
-            current_date=date(2026, 8, 6),
+            current_date=date(2026, 8, 28),
+        )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ({"reviewed_at": "2026-08-27"}, "not currently valid"),
+        ({"expires_at": "2026-09-26"}, "at most 30 days"),
+        ({"release_version": "0.2.0"}, "release version"),
+        (
+            {
+                "approved_by": {
+                    "name": "Another Person",
+                    "organization": "AI Soft Work",
+                    "roles": ["release", "security", "application", "platform"],
+                }
+            },
+            "approval identity",
+        ),
+    ],
+)
+def test_vulnerability_exceptions_reject_invalid_approval_metadata(
+    tmp_path: Path, mutation: dict[str, object], message: str
+) -> None:
+    payload = json.loads(
+        Path("docs/security/vulnerability-exceptions.json").read_text(encoding="utf-8")
+    )
+    payload.update(mutation)
+    source = tmp_path / "exceptions.json"
+    source.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        build_trivy_ignorefile(
+            input_path=source,
+            vulnerability_report_path=Path(
+                "tests/fixtures/release/vulnerability-exceptions-sanitized-trivy.json"
+            ),
+            output_path=tmp_path / ".trivyignore",
+            current_date=date(2026, 8, 26),
         )
 
 
@@ -485,11 +540,11 @@ def test_checked_in_vulnerability_exceptions_match_current_review(tmp_path: Path
             "tests/fixtures/release/vulnerability-exceptions-sanitized-trivy.json"
         ),
         output_path=tmp_path / ".trivyignore",
-        current_date=date(2026, 8, 4),
+        current_date=date(2026, 8, 26),
     )
 
-    assert len(identifiers) == 14
-    assert identifiers[0] == "CVE-2023-45853"
+    assert len(identifiers) == 13
+    assert identifiers[0] == "CVE-2025-69720"
     assert identifiers[-1] == "CVE-2026-9538"
 
 
@@ -523,19 +578,17 @@ def test_sanitized_exception_fixture_covers_exact_reviewed_tuples() -> None:
     assert {vulnerability["Status"] for vulnerability in vulnerabilities} == {
         "affected",
         "fix_deferred",
-        "will_not_fix",
     }
     expected_statuses = {
-        "CVE-2023-45853": "will_not_fix",
         "CVE-2025-69720": "affected",
-        "CVE-2025-7458": "affected",
+        "CVE-2026-11822": "affected",
+        "CVE-2026-11824": "affected",
         "CVE-2026-13221": "affected",
-        "CVE-2026-41992": "fix_deferred",
+        "CVE-2026-41992": "affected",
         "CVE-2026-42496": "fix_deferred",
         "CVE-2026-42497": "fix_deferred",
         "CVE-2026-48962": "affected",
-        "CVE-2026-53615": "affected",
-        "CVE-2026-54369": "fix_deferred",
+        "CVE-2026-54369": "affected",
         "CVE-2026-57432": "affected",
         "CVE-2026-57433": "affected",
         "CVE-2026-8376": "affected",
@@ -546,6 +599,66 @@ def test_sanitized_exception_fixture_covers_exact_reviewed_tuples() -> None:
         for vulnerability in vulnerabilities
     } == expected_statuses
     assert all(vulnerability["FixedVersion"] is None for vulnerability in vulnerabilities)
+
+
+@pytest.mark.unit
+def test_risk_acceptance_binds_exact_candidate_and_preserves_tuple_evidence(
+    tmp_path: Path,
+) -> None:
+    report = Path("tests/fixtures/release/vulnerability-exceptions-sanitized-trivy.json")
+    output = tmp_path / "vulnerability-risk-acceptance.json"
+    artifact = build_vulnerability_risk_acceptance(
+        input_path=Path("docs/security/vulnerability-exceptions.json"),
+        vulnerability_report_path=report,
+        output_path=output,
+        source_commit="a" * 40,
+        image_reference=f"ghcr.io/rishavt/anva@{APPROVED_DIGEST}",
+        image_digest=APPROVED_DIGEST,
+        release_version="0.1.0",
+        current_date=date(2026, 8, 26),
+    )
+
+    assert artifact["source_commit"] == "a" * 40
+    assert artifact["image"] == {
+        "reference": f"ghcr.io/rishavt/anva@{APPROVED_DIGEST}",
+        "digest": APPROVED_DIGEST,
+    }
+    assert artifact["approved_at"] == "2026-08-26"
+    assert artifact["expires_at"] == "2026-09-25"
+    assert len(artifact["exceptions"]) == 13
+    assert len(artifact["observed_high_critical_tuples"]) == 16
+    assert all(
+        "installed_version" in record and record["fixed_version"] is None
+        for record in artifact["observed_high_critical_tuples"]
+    )
+    assert json.loads(output.read_text(encoding="utf-8")) == artifact
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("reference", "digest", "version", "message"),
+    [
+        (f"ghcr.io/rishavt/anva@sha256:{'e' * 64}", APPROVED_DIGEST, "0.1.0", "reference"),
+        (f"ghcr.io/rishavt/anva@{APPROVED_DIGEST}", "sha256:short", "0.1.0", "digest"),
+        (f"ghcr.io/rishavt/anva@{APPROVED_DIGEST}", APPROVED_DIGEST, "0.2.0", "version"),
+    ],
+)
+def test_risk_acceptance_rejects_candidate_identity_replay(
+    tmp_path: Path, reference: str, digest: str, version: str, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        build_vulnerability_risk_acceptance(
+            input_path=Path("docs/security/vulnerability-exceptions.json"),
+            vulnerability_report_path=Path(
+                "tests/fixtures/release/vulnerability-exceptions-sanitized-trivy.json"
+            ),
+            output_path=tmp_path / "acceptance.json",
+            source_commit="a" * 40,
+            image_reference=reference,
+            image_digest=digest,
+            release_version=version,
+            current_date=date(2026, 8, 26),
+        )
 
 
 @pytest.mark.unit
@@ -600,9 +713,15 @@ def test_vulnerability_exceptions_match_current_unfixed_image_tuple(
     source.write_text(
         json.dumps(
             {
-                "schema_version": 1,
-                "reviewed_at": "2026-08-04",
-                "expires_at": "2026-08-18",
+                "schema_version": 2,
+                "release_version": "0.1.0",
+                "approved_by": {
+                    "name": "Rishav Thakker",
+                    "organization": "AI Soft Work",
+                    "roles": ["release", "security", "application", "platform"],
+                },
+                "reviewed_at": "2026-08-26",
+                "expires_at": "2026-09-25",
                 "policy": "Temporary reviewed exceptions require an exact release-image rescan.",
                 "exceptions": [
                     {
@@ -627,7 +746,7 @@ def test_vulnerability_exceptions_match_current_unfixed_image_tuple(
             input_path=source,
             vulnerability_report_path=report,
             output_path=output,
-            current_date=date(2026, 8, 4),
+            current_date=date(2026, 8, 26),
         )
 
     assert not output.exists()

@@ -51,7 +51,9 @@ presented as a separately built product image.
 - The exact image scan reports 3 critical and 13 high package tuples across 13
   CVEs, with no scanner-recorded fixed version. Exact source reports zero high,
   zero critical, and zero secrets. These are scan facts, not risk acceptance;
-  #47 and #50 remain open.
+  Rishav Thakker approved the exact 13-CVE/16-tuple no-fix baseline for v0.1.0
+  from 2026-08-26 through 2026-09-25. Publication remains fail-closed until the
+  workflow binds that decision to the final source, scan, and GHCR digest.
 
 ## Open release blockers
 
@@ -59,7 +61,7 @@ presented as a separately built product image.
 | --- | --- | --- |
 | Immutable publication and installation | Local checksummed source/image lifecycle is proven. No authoritative release version/tag, registry/package publication, published digest, signature, or provenance attestation exists. | [#42](https://github.com/RishavT/anva/issues/42) |
 | Exact-gate aggregation | The exact-current broad, browser, 31-case, prompt-injection, and representative direct-review lanes now have evidence, but the aggregate issue remains open pending reconciliation with the selected descendant and all other authoritative blockers. | [#43](https://github.com/RishavT/anva/issues/43) |
-| Residual vulnerability risk | The 16 high/critical no-fix tuples are unchanged from the prior base. Fourteen expired exception IDs and two SQLite CVEs have not been accepted by accountable security/application/platform/release owners. | [#47](https://github.com/RishavT/anva/issues/47), [#50](https://github.com/RishavT/anva/issues/50) |
+| Residual vulnerability risk | Approved through 2026-09-25 for only the exact v0.1.0 13-CVE/16-tuple no-fix set. The workflow generates a source-, scan-, and immutable-digest-bound acceptance artifact; drift or expiry blocks release. | [#60](https://github.com/RishavT/anva/issues/60) |
 | Essential operator exercise | [Release ownership](release-ownership.md) names Rishav Thakker of AI Soft Work as the MVP release, security, application, platform, and operations/on-call owner and records the escalation contacts. The timestamped operator exercise and deployment TLS/proxy boundary evidence are still absent. | [#44](https://github.com/RishavT/anva/issues/44) |
 | MVP umbrella audit | Reconcile all applicable gates above without converting local evidence into publication, risk acceptance, or human ownership. | [#13](https://github.com/RishavT/anva/issues/13) |
 

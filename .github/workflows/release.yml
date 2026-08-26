@@ -114,6 +114,26 @@ jobs:
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           echo "reference=${ANVA_IMAGE_REPOSITORY}@${digest}" >> "$GITHUB_OUTPUT"
 
+      - name: Bind approved residual risk to the immutable image
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          IMAGE_REFERENCE: ${{ steps.image.outputs.reference }}
+        run: |
+          set -euo pipefail
+          docker compose -f compose.yaml -f compose.release.yaml -p "$COMPOSE_PROJECT" \
+            --profile release run --rm release-builder \
+            python -m anva.release risk-acceptance \
+              --input /workspace/docs/security/vulnerability-exceptions.json \
+              --report /release/anva-image-vulnerabilities.json \
+              --output /release/vulnerability-risk-acceptance.json \
+              --source-commit "$GITHUB_SHA" \
+              --image-reference "$IMAGE_REFERENCE" \
+              --image-digest "$IMAGE_DIGEST" \
+              --release-version "$ANVA_VERSION"
+          ANVA_RELEASE_IMAGE_REFERENCE="$IMAGE_REFERENCE" \
+            ANVA_RELEASE_IMAGE_ID="$IMAGE_DIGEST" make release-manifest
+          (cd release && sha256sum --check SHA256SUMS)
+
       - name: Attest the GHCR image
         uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
         with:

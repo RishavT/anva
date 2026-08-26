@@ -1,8 +1,9 @@
 # MVP release ownership and escalation
 
 This record names the accountable human for the self-hosted Anva MVP release.
-It does not record vulnerability-risk acceptance, a completed operator exercise,
-or a published release.
+The separately enforced vulnerability-risk decision is recorded in
+`docs/security/vulnerability-exceptions.json`; this record does not claim a
+completed operator exercise or published release.
 
 ## Organization and owner
 
@@ -30,13 +31,15 @@ private incident data into email subjects or public issue comments. Preserve
 timestamps, correlation identifiers, affected release identities, decisions,
 and outcomes in the deployment-owned incident record.
 
-## Still-required human actions
+## Separately enforced actions
 
 Naming an owner does not perform or prove the operator exercises required by
-issue #44. It also does not accept the residual vulnerability risk tracked by
-issues #47 and #50. Those decisions require their own dated evidence and must
-remain independently enforceable.
+issue #44. Rishav Thakker separately approved the exact v0.1.0 residual no-fix
+risk set on 2026-08-26 through 2026-09-25. Publication generates a digest-bound
+acceptance artifact and fails closed if the scan, candidate, controls, or dates
+do not match that decision.
 
 This ownership was supplied directly by Rishav Thakker on 2026-08-26 together
-with authorization to release the product. Registry, signing, and publication
-choices remain to be selected and verified under issue #42.
+with authorization to release the product. GitHub Releases, GHCR, and
+GitHub-native keyless attestations were subsequently selected for publication
+under issue #42.
