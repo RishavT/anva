@@ -94,9 +94,10 @@ and evidence archive SHA-256
   zero leakage.
 - [x] Source vulnerability, secret, and misconfiguration scans exclude only the
   documented operator-owned paths and pass their high/critical gate.
-- [x] Every image high/critical finding is fixed or appears in the reviewed,
-  unexpired exception file; all 14 current no-fix exceptions are re-reviewed no
-  later than 2026-08-18.
+- [ ] Every image high/critical finding is fixed or appears in a reviewed,
+  unexpired exception file. The 14 checked-in no-fix exceptions expired on
+  2026-08-18 and are not release authorization until the named owner records a
+  new bounded review against the exact image.
 - [ ] Dependency, container, license and repository scans pass under the
   documented severity policy.
 - [x] Retention behavior, decommission behavior, retained data, and unsupported
@@ -152,9 +153,9 @@ and evidence archive SHA-256
   SBOMs, restore report, migration report and evaluation results are indexed.
 - [x] V3 requirements map to evidence or an explicit deferred/not-applicable
   decision.
-- [ ] Known limitations and residual risks are recorded, including lower source
-  findings and the 2026-08-18 image-exception expiry; named release review is
-  still required.
+- [x] Known limitations and residual risks are recorded, including lower source
+  findings and the image exceptions that expired on 2026-08-18. The record does
+  not claim risk acceptance; named release review remains required.
 - [x] The evidenced `mvp13-runtime-final`,
   `mvp13-runtime-final-rehearsal`, and `mvp13-release` scan/manifest projects
   have zero scoped one-shots, networks, and volumes; browser/scanner resources

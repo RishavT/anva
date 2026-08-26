@@ -1,9 +1,0 @@
-interface:
-  display_name: "Anva Prepare"
-  short_description: "Prepare grounded implementation plans with Anva"
-  default_prompt: "Use $anva-prepare to prepare this task with grounded Anva context."
-dependencies:
-  tools:
-    - type: "mcp"
-      value: "anva"
-      description: "Permission-filtered Anva context and review-only proposals"

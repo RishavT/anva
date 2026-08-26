@@ -21,3 +21,9 @@ release/*
 release/.trivy-cache/*
 !release/.trivy-cache/.gitkeep
 .DS_Store
+.worktrees/
+evidence/
+docs/evidence/**/raw-host-stdout.bin
+docs/evidence/**/raw-host-stderr.bin
+docs/evidence/**/run-record.json
+docs/evidence/**/environment.json

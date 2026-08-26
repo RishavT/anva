@@ -1,0 +1,18 @@
+Anva
+Copyright (c) 2026 AI Soft Work. All rights reserved.
+
+Anva is source-available proprietary software; see LICENSE. The repository and
+release artifacts include third-party software governed by separate licenses.
+Those licenses apply only to their respective components and do not change the
+license of Anva.
+
+Direct runtime components include Django (BSD-3-Clause), Gunicorn (MIT),
+jsonschema (MIT), MCP Python SDK (MIT), pgvector-python (PostgreSQL), psycopg
+(LGPL-3.0 with exceptions), PyJWT (MIT), PyYAML (MIT), sqlparse (BSD-3-Clause),
+Uvicorn (BSD-3-Clause), and WhiteNoise (MIT). The organizational canvas vendors
+Dagre (MIT); its license is retained beside the vendored file.
+
+Release SBOMs are the authoritative inventory for the exact artifact and include
+transitive packages. Recipients must preserve third-party copyright and license
+notices supplied with those components. Report omissions to
+rishav@aisoftwork.com.

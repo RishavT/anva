@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "status": "PLAN_ONLY_NOT_EXECUTED",
+  "generated_for_head": "67cbed122d8197bcfe9c31acdf93a4d51ef5c7a8",
+  "owner": {
+    "organization": "AI Soft Work",
+    "name": "Rishav Thakker",
+    "primary_email": "rishav@aisoftwork.com",
+    "alternate_email": "i@rishavthakker.com"
+  },
+  "credential_rotation_required": false,
+  "secret_scan": {
+    "commits_scanned": 131,
+    "findings": 31,
+    "unique_current_findings_before_remediation": 16,
+    "classification": {
+      "synthetic_test_or_canary": 10,
+      "public_debian_image_metadata": 4,
+      "opaque_non_secret_anva_identifier": 1,
+      "synthetic_marker_ledger": 1,
+      "potentially_real_credential": 0
+    }
+  },
+  "path_rewrites": [
+    {
+      "paths": ["docs/evidence/issue-010/**"],
+      "category": "raw_host_and_private_evaluation_artifacts",
+      "commits": ["5d8c9ee915a63ed647deed090e925bf9b8f51742", "9f3390c8f41e8cc3d67be6385adcb47b288791f1", "ef6d9120401ba0e5d388e3b5219078f772462ec1"],
+      "operation": "remove_path_from_all_refs"
+    },
+    {
+      "paths": ["docs/evidence/issue-10/**"],
+      "category": "raw_host_hidden_grader_and_operator_artifacts",
+      "commits": ["6ab061241eb92386001094320ad470a89ff6f314", "9f3390c8f41e8cc3d67be6385adcb47b288791f1"],
+      "operation": "remove_path_from_all_refs"
+    },
+    {
+      "paths": ["evidence/issue-51-scope-discovery/**"],
+      "category": "operator_absolute_path_and_generated_evidence",
+      "commits": ["5f3b1fa0a51ad63dcdb1196837125c1d48062577"],
+      "operation": "remove_path_from_all_refs"
+    },
+    {
+      "paths": ["evidence/vuln-base-comparison-20260826/**"],
+      "category": "generated_scan_output_and_public_metadata_false_positive",
+      "commits": ["56bb664f56cc53b96471c6a806543a147f6f2530", "c1483d12f3c3f8088ac4019cbf6ae57cbd9d158f"],
+      "operation": "remove_path_from_all_refs"
+    }
+  ],
+  "author_rewrite": {
+    "from": "Rishav Thakker <i@rishavthakker.com>",
+    "to": "Rishav Thakker <rishav@aisoftwork.com>",
+    "current_tree_mailmap": ".mailmap",
+    "history_operation": "rewrite_author_and_committer_identity_on_all_rewritten_commits"
+  },
+  "ref_scope": {
+    "local_heads": ["main", "codex/mvp-011-product-ui", "feat/issue-012-organizational-canvas", "feat/issue-013-release-hardening", "feat/issue-027-acceptance-adapter", "feat/issue-033-sealed-acceptance-runner", "feat/issue-035-public-acceptance-contracts", "feat/issue-10-host-neutral-skills", "feat/issue-29-evidence-upload", "feat/issue-31-independent-evaluator-identity", "issue-1-python-foundation", "issue-2-contracts-state", "issue-3-tenancy-authorization", "issue-4-provenance-ingestion", "issue-5-permission-safe-retrieval", "issue-6-deterministic-intent-evidence", "issue-7-manual-diff-assurance", "issue-8-github-app-adapter", "issue-9-authenticated-mcp-gateway", "task/vuln-base"],
+    "remote": "origin",
+    "remote_heads_inventory_required_immediately_before_execution": true,
+    "tags_inventory_required_immediately_before_execution": true,
+    "replace_all_affected_remote_refs_atomically_if_host_allows": true
+  },
+  "execution_requires_explicit_approval": [
+    "freeze writes and archive the repository",
+    "rotate credentials if a fresh scan changes classification",
+    "run git-filter-repo from a disposable mirror clone",
+    "verify object removal and attribution in a second fresh clone",
+    "force-push every affected branch and tag with lease",
+    "invalidate or delete stale Actions artifacts caches releases and packages",
+    "coordinate existing forks and local clones",
+    "rerun gitleaks across all refs before changing visibility"
+  ]
+}

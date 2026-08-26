@@ -34,4 +34,6 @@ one-time token.
   discovering 619 files, with 23 safely isolated failures from the deliberately messy corpus.
 - No database lookup or private acceptance-harness state was used by the fresh journey.
 
-Detailed redacted evidence is in `evidence/issue-51-scope-discovery/REPORT.md`.
+The detailed operator-local evidence was reviewed before release and intentionally excluded from
+the public tree under `docs/security/public-repository-policy.md`; this sanitized review is the
+durable public record.

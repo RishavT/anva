@@ -329,3 +329,10 @@ docs/security/         Threat models
 The canonical v3 product requirements and implementation plan is checked in at
 `docs/product/anva-product-requirements-and-implementation-plan-v3.md`. Issue scope and
 acceptance criteria remain the authority for incremental delivery.
+
+## License, support, and contributions
+
+Anva is source-available proprietary software, not open-source software. See [LICENSE](LICENSE)
+and [NOTICE](NOTICE) before using or distributing it. Product support is described in
+[SUPPORT.md](SUPPORT.md), security reports must follow [SECURITY.md](SECURITY.md), and proposed
+changes must follow [CONTRIBUTING.md](CONTRIBUTING.md).

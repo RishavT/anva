@@ -1,0 +1,48 @@
+# Exact synthetic findings retained to test secret handling. Each fingerprint is
+# intentionally narrower than a path/rule allowlist. Review line changes rather
+# than updating this file mechanically.
+tests/fixtures/tst007/scn_harbor.json.upload:generic-api-key:1
+tests/integration/test_mcp_gateway.py:generic-api-key:620
+tests/integration/test_tenancy_authorization.py:stripe-access-token:862
+tests/integration/test_tenancy_authorization.py:stripe-access-token:864
+tests/unit/test_governance_boundaries.py:curl-auth-header:49
+tests/unit/test_secret_logging.py:stripe-access-token:25
+tests/unit/test_secret_logging.py:stripe-access-token:122
+tests/unit/test_trusted_skill_eval_gate.py:generic-api-key:1065
+tests/unit/test_trusted_skill_eval_gate.py:generic-api-key:1095
+tests/unit/test_trusted_skill_eval_gate.py:generic-api-key:1133
+
+# Historical fingerprints are synthetic test credentials, synthetic canaries,
+# public Debian image metadata, or opaque non-secret Anva identifiers. They are
+# retained only until the separately approved history rewrite is performed.
+0c25b26b768bff97eb659b5ff195175f0fa43671:tests/integration/test_tenancy_authorization.py:stripe-access-token:779
+0c25b26b768bff97eb659b5ff195175f0fa43671:tests/integration/test_tenancy_authorization.py:stripe-access-token:781
+0c25b26b768bff97eb659b5ff195175f0fa43671:tests/unit/test_secret_logging.py:stripe-access-token:22
+0c25b26b768bff97eb659b5ff195175f0fa43671:tests/unit/test_secret_logging.py:stripe-access-token:65
+184b2c7f526293d2c46f666ac47d7bad050fa1f4:tests/integration/test_mcp_gateway.py:generic-api-key:620
+403eb416439b721d25bc26acab683d77f68b6840:tests/fixtures/tst007/scn_harbor.json.upload:generic-api-key:1
+56bb664f56cc53b96471c6a806543a147f6f2530:evidence/vuln-base-comparison-20260826/trixie-fixed-vulnerabilities.json:generic-api-key:214
+56bb664f56cc53b96471c6a806543a147f6f2530:evidence/vuln-base-comparison-20260826/trixie-fixed-vulnerabilities.json:generic-api-key:58
+56bb664f56cc53b96471c6a806543a147f6f2530:evidence/vuln-base-comparison-20260826/trixie-vulnerabilities.json:generic-api-key:207
+56bb664f56cc53b96471c6a806543a147f6f2530:evidence/vuln-base-comparison-20260826/trixie-vulnerabilities.json:generic-api-key:57
+5f3b1fa0a51ad63dcdb1196837125c1d48062577:evidence/issue-51-scope-discovery/REPORT.md:generic-api-key:26
+67909baf8baf6fd09abd2e329bc1a8d52080efcb:tests/unit/test_governance_boundaries.py:curl-auth-header:49
+6ab061241eb92386001094320ad470a89ff6f314:docs/evidence/issue-10/native-blind-v3-20260731-q8e3d937/control/marker-ledger.json:generic-api-key:52
+733d3ba0b48ae8e018b22f24810dd4c6ec583ce8:tests/integration/test_mcp_gateway.py:generic-api-key:349
+745af9291d992942a3ec6ba87a2f6a78d2efaae7:tests/integration/test_tenancy_authorization.py:stripe-access-token:845
+745af9291d992942a3ec6ba87a2f6a78d2efaae7:tests/integration/test_tenancy_authorization.py:stripe-access-token:847
+745af9291d992942a3ec6ba87a2f6a78d2efaae7:tests/unit/test_secret_logging.py:stripe-access-token:22
+745af9291d992942a3ec6ba87a2f6a78d2efaae7:tests/unit/test_secret_logging.py:stripe-access-token:65
+89b93859ade502df8238b9396e77b3377b76d611:tests/unit/test_governance_boundaries.py:curl-auth-header:49
+8e3d93736f770e8709a08877c4ba6d5e2b1fe601:tests/unit/test_trusted_skill_eval_gate.py:generic-api-key:1065
+8e3d93736f770e8709a08877c4ba6d5e2b1fe601:tests/unit/test_trusted_skill_eval_gate.py:generic-api-key:1095
+8e3d93736f770e8709a08877c4ba6d5e2b1fe601:tests/unit/test_trusted_skill_eval_gate.py:generic-api-key:1133
+9f3390c8f41e8cc3d67be6385adcb47b288791f1:docs/evidence/issue-10/native-blind-v3-20260731-q8e3d937/control/marker-ledger.json:generic-api-key:52
+9f3390c8f41e8cc3d67be6385adcb47b288791f1:tests/unit/test_trusted_skill_eval_gate.py:generic-api-key:1065
+9f3390c8f41e8cc3d67be6385adcb47b288791f1:tests/unit/test_trusted_skill_eval_gate.py:generic-api-key:1095
+9f3390c8f41e8cc3d67be6385adcb47b288791f1:tests/unit/test_trusted_skill_eval_gate.py:generic-api-key:1133
+bfbe90b833aef6ebcfc4fa3751e5952973c08bcb:tests/fixtures/tst007/scn_harbor.json.upload:generic-api-key:1
+c1483d12f3c3f8088ac4019cbf6ae57cbd9d158f:evidence/vuln-base-comparison-20260826/trixie-fixed-vulnerabilities.json:generic-api-key:214
+c1483d12f3c3f8088ac4019cbf6ae57cbd9d158f:evidence/vuln-base-comparison-20260826/trixie-fixed-vulnerabilities.json:generic-api-key:58
+c1483d12f3c3f8088ac4019cbf6ae57cbd9d158f:evidence/vuln-base-comparison-20260826/trixie-vulnerabilities.json:generic-api-key:207
+c1483d12f3c3f8088ac4019cbf6ae57cbd9d158f:evidence/vuln-base-comparison-20260826/trixie-vulnerabilities.json:generic-api-key:57
