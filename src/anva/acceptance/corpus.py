@@ -487,8 +487,11 @@ def _cleanup_canonical_output(
         root_info = canonical.stat(follow_symlinks=False)
         if root_info.st_uid == os.geteuid():
             canonical.chmod(0o700)
-        elif not (root_info.st_uid == 10001 and root_info.st_gid == 10001
-                  and stat.S_IMODE(root_info.st_mode) == 0o1777):
+        elif not (
+            root_info.st_uid == 10001
+            and root_info.st_gid == 10001
+            and stat.S_IMODE(root_info.st_mode) == 0o1777
+        ):
             clean = False
     except OSError:
         clean = False
@@ -582,8 +585,11 @@ def canonicalize_corpus(
         root_info = canonical.stat(follow_symlinks=False)
         if root_info.st_uid == os.geteuid():
             canonical.chmod(0o555)
-        elif not (root_info.st_uid == 10001 and root_info.st_gid == 10001
-                  and stat.S_IMODE(root_info.st_mode) == 0o1777):
+        elif not (
+            root_info.st_uid == 10001
+            and root_info.st_gid == 10001
+            and stat.S_IMODE(root_info.st_mode) == 0o1777
+        ):
             raise OSError("canonical volume root ownership is invalid")
         return CanonicalCorpus(
             corpus_id=corpus_id,

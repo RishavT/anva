@@ -2,7 +2,6 @@ import json
 import re
 from pathlib import Path
 
-
 ROOT = Path(__file__).parents[2]
 ACTION_USE = re.compile(r"^\s*-?\s*uses:\s*[^#\s]+@([^\s#]+)", re.MULTILINE)
 IMMUTABLE_SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -82,7 +81,9 @@ def test_local_markdown_links_resolve() -> None:
             target = raw_target.strip("<>").split("#", 1)[0]
             if not target or "://" in target or target.startswith("mailto:"):
                 continue
-            resolved = ROOT / target.lstrip("/") if target.startswith("/") else document.parent / target
+            resolved = (
+                ROOT / target.lstrip("/") if target.startswith("/") else document.parent / target
+            )
             if not resolved.resolve().exists():
                 missing.append(f"{document.relative_to(ROOT)} -> {raw_target}")
     assert not missing
