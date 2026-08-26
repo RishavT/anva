@@ -1436,29 +1436,22 @@ def test_provider_schema_preserves_canonical_post_seal_schema(tmp_path: Path) ->
 
 
 @pytest.mark.unit
-def test_historical_v1_evidence_remains_readable_and_unchanged() -> None:
-    historical = (
-        ROOT
-        / "docs"
-        / "evidence"
-        / "issue-010"
-        / "03be1a52a5dcd85bee9c8c1e161247427d1217b5"
-        / "codex"
-    )
-    manifest = _read_manifest(historical)
+def test_v1_and_v2_manifests_remain_readable_without_private_evidence(tmp_path: Path) -> None:
+    v1 = tmp_path / "v1"
+    v1.mkdir()
+    v1_manifest = v1 / "isolation_manifest.json"
+    v1_bytes = b'{"format_version":1,"stage":"GRADED"}\n'
+    v1_manifest.write_bytes(v1_bytes)
 
-    assert manifest["format_version"] == 1
-    assert (
-        _sha256(historical / "grade-record.json")
-        == "adad68ced5faf92d3d6b5ac1afe81e07f84ce944256a380882225d65abbca7fb"
-    )
+    assert _read_manifest(v1)["format_version"] == 1
+    assert v1_manifest.read_bytes() == v1_bytes
 
-    historical_v2 = ROOT / "docs" / "evidence" / "issue-010" / "native-v2-a55dc7f-20260730"
-    assert _read_manifest(historical_v2 / "runs" / "codex")["format_version"] == 2
-    assert (
-        _sha256(historical_v2 / "SHA256SUMS")
-        == "abaec0ae08e057a9546e5575122a7c94180e43cb36d85f5ada6ea499f543c592"
-    )
+    v2 = _prepare_host(tmp_path / "v2", "codex")
+    v2_manifest = v2 / "isolation_manifest.json"
+    v2_bytes = v2_manifest.read_bytes()
+
+    assert _read_manifest(v2)["format_version"] == 2
+    assert v2_manifest.read_bytes() == v2_bytes
 
 
 @pytest.mark.unit

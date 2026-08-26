@@ -2411,11 +2411,14 @@ def test_canvas_performance_report_has_30_warm_strict_samples(
         ],
     }
     _assert_metric_summary_integrity(report)
-    PERFORMANCE_ROOT.mkdir(parents=True, exist_ok=True)
-    (PERFORMANCE_ROOT / "database.json").write_text(
+    performance_root = tmp_path / "generated-performance-evidence"
+    performance_root.mkdir(parents=True, exist_ok=True)
+    report_path = performance_root / "database.json"
+    report_path.write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    assert json.loads(report_path.read_text(encoding="utf-8")) == report
 
 
 @pytest.mark.integration

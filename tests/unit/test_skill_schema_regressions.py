@@ -231,18 +231,19 @@ def test_invocation_identifiers_do_not_satisfy_source_reference_closure() -> Non
 
 
 @pytest.mark.unit
-def test_original_v2_native_orphan_output_is_rejected_by_runtime_validation() -> None:
-    original = (
-        Path(__file__).parents[2]
-        / "docs"
-        / "evidence"
-        / "issue-010"
-        / "native-v2-a55dc7f-20260730"
-        / "runs"
-        / "claude"
-        / "structured-output.json"
+def test_v2_native_orphan_regression_is_rejected_from_public_fixture() -> None:
+    output = _fixture_output("messy-knowledge")
+    sources = output["anva_sources"]
+    assert isinstance(sources, list)
+    sources.append(
+        {
+            "source_ref": "S3",
+            "url": "https://knowledge.invalid/regressions/v2-native-orphan",
+            "locator": "public-fixture/v2-native-orphan",
+            "content_hash": "8" * 64,
+            "observed_at": "2026-07-31T00:00:00Z",
+        }
     )
-    output = json.loads(original.read_text(encoding="utf-8"))
 
     with pytest.raises(SkillContractError, match="not referenced by retained material"):
         validate_skill_output("anva-prepare", output)

@@ -84,6 +84,15 @@ def test_local_markdown_links_resolve() -> None:
             resolved = (
                 ROOT / target.lstrip("/") if target.startswith("/") else document.parent / target
             )
-            if not resolved.resolve().exists():
+            try:
+                repository_target = resolved.resolve().relative_to(ROOT.resolve())
+            except ValueError:
+                missing.append(f"{document.relative_to(ROOT)} -> {raw_target}")
+                continue
+            if (
+                not repository_target.parts
+                or repository_target.parts[0] == "evidence"
+                or not resolved.resolve().exists()
+            ):
                 missing.append(f"{document.relative_to(ROOT)} -> {raw_target}")
     assert not missing

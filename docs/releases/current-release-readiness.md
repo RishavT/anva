@@ -23,13 +23,15 @@ presented as a separately built product image.
 
 ## Proven local gates
 
-- The [final seal](../../evidence/final-seal-dce714a-20260826/RESULTS.md)
+- The final seal (`evidence/final-seal-dce714a-20260826/RESULTS.md` in the
+  private release archive)
   binds the clean archive, runtime image, installed package, SBOMs, scans, and
   lifecycle evidence. Its 35-file `SHA256SUMS` and manifest checksum verify.
   The changed-surface/contracts/smoke selection passed 190 tests; Ruff lint and
   format passed. Fresh install, readiness, demo scope discovery,
   preserve/reinstall, and clean uninstall passed.
-- The [exact-current product gate](../../evidence/issue-43-exact-current-dce714a/RESULTS.md)
+- The exact-current product gate
+  (`evidence/issue-43-exact-current-dce714a/RESULTS.md` in the private release archive)
   ran the full Compose matrix once: 1,007 passed, five documented skips, and
   one legacy assertion failure. Issue #54 corrected only that test assertion;
   its focused neighborhood then passed 16/16 with Ruff checks. No runtime defect
@@ -39,7 +41,8 @@ presented as a separately built product image.
   networkless clean reader rejected omission, duplication, reorder, product
   identity substitution, and semantic mutation. Tenant foreign-authority and
   inert-canary checks passed.
-- The [five-source prompt-injection gate](../../evidence/live31-prompt-product-final-20260826/RESULTS.md)
+- The five-source prompt-injection gate
+  (`evidence/live31-prompt-product-final-20260826/RESULTS.md` in the private release archive)
   passed for requirements, policy, evidence, pull-request diff, and
   operator/reviewer context. Its carry-forward is limited to unchanged product
   boundaries; it does not substitute for the 31-case gate.
