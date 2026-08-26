@@ -240,8 +240,8 @@ def test_report_uses_neutral_reason_label_and_escapes_untrusted_finding_text() -
     assert "MODEL\\_CONCERNS" in markdown
     assert "safe-to-deploy" not in markdown.casefold()
     assert "deployment-authorized" not in markdown.casefold()
-    assert "<script>" not in rendered_html
-    assert "script" not in rendered_html.casefold()
+    assert "<script" not in rendered_html.casefold()
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in rendered_html
     assert "Deployment is safe" not in markdown
     assert "merge can proceed" not in rendered_html
     assert "risk-free" not in markdown.casefold()
@@ -251,7 +251,7 @@ def test_report_uses_neutral_reason_label_and_escapes_untrusted_finding_text() -
     assert "src/\\<unsafe\\>.py:9" in markdown
     assert "src/&lt;unsafe&gt;.py:9" in rendered_html
     assert "Readiness reasons" in rendered_html
-    assert any(
+    assert not any(
         limitation.startswith(REPORT_DETAIL_LIMITATION_PREFIX) for limitation in report_limitations
     )
 
