@@ -1,0 +1,255 @@
+name: Release Anva
+
+on:
+  push:
+    tags: [v0.1.0]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing exact release tag to publish
+        required: true
+        default: v0.1.0
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-v0.1.0
+  cancel-in-progress: false
+
+env:
+  ANVA_VERSION: 0.1.0
+  ANVA_IMAGE_REPOSITORY: ghcr.io/rishavt/anva
+
+jobs:
+  build:
+    name: Build and attest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    environment: release
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+      packages: write
+    outputs:
+      digest: ${{ steps.image.outputs.digest }}
+      image: ${{ steps.image.outputs.reference }}
+      tag: ${{ steps.identity.outputs.tag }}
+    env:
+      COMPOSE_PROJECT: anva-release-build-${{ github.run_id }}
+    steps:
+      - name: Resolve the exact release tag
+        id: identity
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            tag="${EVENT_REF#refs/tags/}"
+          else
+            tag="$DISPATCH_TAG"
+          fi
+          [[ "$tag" == "v${ANVA_VERSION}" ]] || {
+            echo "Only v${ANVA_VERSION} may be released by this workflow" >&2
+            exit 1
+          }
+          [[ "$EVENT_REF" == "refs/tags/${tag}" ]] || {
+            echo "Dispatch the workflow with --ref ${tag}; the run ref must be the release tag" >&2
+            exit 1
+          }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the exact tag
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ steps.identity.outputs.tag }}
+
+      - name: Verify tag, version, commit, and clean source
+        env:
+          RELEASE_TAG: ${{ steps.identity.outputs.tag }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          test "$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')" = "$ANVA_VERSION"
+          test "$(git status --porcelain=v1 --untracked-files=all)" = ""
+          {
+            echo "ANVA_REVISION=$GITHUB_SHA"
+            echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct "$GITHUB_SHA")"
+            echo "ANVA_HOST_UID=$(id -u)"
+            echo "ANVA_HOST_GID=$(id -g)"
+          } >> "$GITHUB_ENV"
+
+      - name: Authenticate to GHCR with the job token
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build and fail-closed verify release artifacts
+        run: |
+          set -euo pipefail
+          ANVA_DOCKER_GID="$(stat -c '%g' /var/run/docker.sock)"
+          export ANVA_DOCKER_GID
+          make release-artifacts
+          (cd release && sha256sum --check SHA256SUMS)
+
+      - name: Push the exact image and resolve its registry digest
+        id: image
+        run: |
+          set -euo pipefail
+          image="${ANVA_IMAGE_REPOSITORY}:${ANVA_VERSION}"
+          docker push "$image" | tee /tmp/docker-push.log
+          digest="$(sed -n 's/^.*digest: \(sha256:[a-f0-9]\{64\}\).*$/\1/p' /tmp/docker-push.log | tail -1)"
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || {
+            echo "Registry did not return an immutable digest" >&2
+            exit 1
+          }
+          docker pull "${ANVA_IMAGE_REPOSITORY}@${digest}"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "reference=${ANVA_IMAGE_REPOSITORY}@${digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Attest the GHCR image
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
+        with:
+          subject-name: ${{ env.ANVA_IMAGE_REPOSITORY }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest every downloadable release artifact
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
+        with:
+          subject-path: release/*
+
+      - name: Transfer only the attested release assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-assets-${{ github.run_id }}
+          path: release/*
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Remove only build-owned resources
+        if: always()
+        run: |
+          ANVA_DOCKER_GID="$(stat -c '%g' /var/run/docker.sock)"
+          export ANVA_DOCKER_GID
+          docker compose -f compose.yaml -f compose.release.yaml -p "$COMPOSE_PROJECT" --profile release down --volumes --remove-orphans || true
+          docker logout ghcr.io || true
+
+  publish:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the exact tag without credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ needs.build.outputs.tag }}
+
+      - name: Recheck immutable release identity
+        env:
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+        run: test "$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")" = "$GITHUB_SHA"
+
+      - name: Download attested release assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-assets-${{ github.run_id }}
+          path: release
+
+      - name: Verify transferred checksums
+        run: (cd release && sha256sum --check SHA256SUMS)
+
+      - name: Create the GitHub Release after attestations
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" release/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$RELEASE_TAG" release/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "Anva ${ANVA_VERSION}" \
+              --notes-file release/RELEASE_NOTES.md \
+              --verify-tag
+          fi
+
+  verify:
+    name: Verify published release
+    needs: [build, publish]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      attestations: read
+      contents: read
+      packages: read
+    env:
+      COMPOSE_PROJECT: anva-release-verify-${{ github.run_id }}
+    steps:
+      - name: Check out the exact tag without credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ needs.build.outputs.tag }}
+
+      - name: Authenticate to GHCR with the job token
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Verify published digest, attestations, and install lifecycle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          published="$(mktemp -d)"
+          echo "PUBLISHED_DIR=$published" >> "$GITHUB_ENV"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$published"
+          (cd "$published" && sha256sum --check SHA256SUMS)
+          for artifact in "$published"/*; do
+            gh attestation verify "$artifact" --repo "$GITHUB_REPOSITORY"
+          done
+          install_root="$published/install"
+          mkdir "$install_root"
+          INSTALL_ARCHIVE="$published/anva-install-${ANVA_VERSION}.tar.gz" \
+            INSTALL_ROOT="$install_root" python3 - <<'PY'
+          import os
+          import tarfile
+
+          with tarfile.open(os.environ["INSTALL_ARCHIVE"], "r:gz") as archive:
+              archive.extractall(os.environ["INSTALL_ROOT"], filter="data")
+          PY
+          test -f "$install_root/anva-${ANVA_VERSION}/compose.yaml"
+          docker compose -f "$install_root/anva-${ANVA_VERSION}/compose.yaml" config --quiet
+          image="${ANVA_IMAGE_REPOSITORY}@${IMAGE_DIGEST}"
+          gh attestation verify "oci://${image}" --repo "$GITHUB_REPOSITORY"
+          docker pull "$image"
+          docker tag "$image" "${ANVA_IMAGE_REPOSITORY}:${ANVA_VERSION}"
+          docker run --rm --entrypoint anva "$image" --help >/dev/null
+          docker compose -p "$COMPOSE_PROJECT" up --no-build --wait
+          docker compose -p "$COMPOSE_PROJECT" --profile demo run --rm --no-deps demo >/dev/null
+
+      - name: Remove only verification-owned resources
+        if: always()
+        run: |
+          docker compose -p "$COMPOSE_PROJECT" --profile demo --profile github --profile operations down --volumes --remove-orphans || true
+          if [[ -n "${PUBLISHED_DIR:-}" && "$PUBLISHED_DIR" == /tmp/* ]]; then rm -rf "$PUBLISHED_DIR"; fi
+          docker logout ghcr.io || true

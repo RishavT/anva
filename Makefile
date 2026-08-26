@@ -282,6 +282,13 @@ release-build: release-clean
 		cp /tmp/anva-skills-dist/anva-claude-skills-1.0.0.tar.gz /release/ && \
 		cp docs/security/vulnerability-exceptions.json /release/ && \
 		cp docs/releases/mvp-013.md /release/RELEASE_NOTES.md'
+	@set -eu; \
+	temporary_archive="release/.anva-install-$(ANVA_VERSION).tar"; \
+	trap 'rm -f "$$temporary_archive"' 0 1 2 15; \
+	git archive --format=tar --prefix="anva-$(ANVA_VERSION)/" \
+		--output "$$temporary_archive" HEAD; \
+	gzip -n -c "$$temporary_archive" > \
+		"release/anva-install-$(ANVA_VERSION).tar.gz"
 
 release-scan:
 	$(RELEASE_COMPOSE) --profile release run --rm release-scanner \

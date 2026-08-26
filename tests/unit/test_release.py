@@ -62,6 +62,7 @@ def test_uv_build_gitignore_cleanup_rejects_missing_or_unsafe_directory(
 def _write_release_artifacts(directory: Path) -> None:
     for name in (
         "anva-0.1.0-py3-none-any.whl",
+        "anva-install-0.1.0.tar.gz",
         "anva-codex-skills-1.0.0.tar.gz",
         "anva-claude-skills-1.0.0.tar.gz",
         "anva-image.spdx.json",
@@ -149,7 +150,7 @@ def test_release_manifest_covers_required_artifacts_and_is_reproducible(tmp_path
     assert manifest["schema_version"] == 2
     assert manifest["artifact_kind"] == "anva.generated-release-manifest"
     assert manifest["publication_status"] == "generated_unpublished"
-    assert len(manifest["artifacts"]) == 8
+    assert len(manifest["artifacts"]) == 9
     assert "release-manifest.json" in first_checksums.decode()
     assert "SHA256SUMS" not in first_checksums.decode()
 

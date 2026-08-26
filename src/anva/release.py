@@ -18,6 +18,7 @@ IMAGE_ID_PATTERN = re.compile(r"^sha256:[a-f0-9]{64}$")
 VULNERABILITY_ID_PATTERN = re.compile(r"^CVE-[0-9]{4}-[0-9]{4,}$")
 EXPECTED_ARTIFACT_SUFFIXES = (
     ".whl",
+    "install-0.1.0.tar.gz",
     "-codex-skills-1.0.0.tar.gz",
     "-claude-skills-1.0.0.tar.gz",
     "image.spdx.json",
