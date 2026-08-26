@@ -275,6 +275,7 @@ release-build: release-clean
 	$(RELEASE_COMPOSE) --profile release run --rm --build release-builder \
 		sh -eu -c 'uv build --python /app/.venv/bin/python \
 		--no-build-isolation --offline --wheel --out-dir /release && \
+		python -m anva.release cleanup-uv-build --directory /release && \
 		python -m anva.entrypoints.cli skills package --output /tmp/anva-skills-dist && \
 		python -m anva.entrypoints.cli skills verify --output /tmp/anva-skills-dist && \
 		cp /tmp/anva-skills-dist/anva-codex-skills-1.0.0.tar.gz /release/ && \

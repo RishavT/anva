@@ -11,9 +11,52 @@ import pytest
 from anva.release import (
     build_release_manifest,
     build_trivy_ignorefile,
+    remove_uv_build_gitignore,
     verify_release_manifest,
     verify_release_worktree_status,
 )
+
+
+@pytest.mark.unit
+def test_uv_build_gitignore_cleanup_accepts_only_exact_regular_byproduct(
+    tmp_path: Path,
+) -> None:
+    generated = tmp_path / ".gitignore"
+    generated.write_bytes(b"*")
+
+    remove_uv_build_gitignore(tmp_path)
+
+    assert not generated.exists()
+
+    for content in (b"*\n", b"*\nextra\n", b"!.keep\n"):
+        generated.write_bytes(content)
+        with pytest.raises(ValueError, match="unexpected content"):
+            remove_uv_build_gitignore(tmp_path)
+        assert generated.read_bytes() == content
+        generated.unlink()
+
+    target = tmp_path / "target"
+    target.write_bytes(b"*")
+    generated.symlink_to(target)
+    with pytest.raises(ValueError, match="regular non-symlink"):
+        remove_uv_build_gitignore(tmp_path)
+    assert generated.is_symlink()
+    assert target.read_bytes() == b"*"
+
+
+@pytest.mark.unit
+def test_uv_build_gitignore_cleanup_rejects_missing_or_unsafe_directory(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="did not create"):
+        remove_uv_build_gitignore(tmp_path)
+
+    real_directory = tmp_path / "real"
+    real_directory.mkdir()
+    linked_directory = tmp_path / "linked"
+    linked_directory.symlink_to(real_directory, target_is_directory=True)
+    with pytest.raises(ValueError, match="regular directory"):
+        remove_uv_build_gitignore(linked_directory)
 
 
 def _write_release_artifacts(directory: Path) -> None:
@@ -35,6 +78,47 @@ def _write_trivy_report(path: Path, vulnerabilities: list[dict[str, object]]) ->
         json.dumps({"Results": [{"Vulnerabilities": vulnerabilities}]}),
         encoding="utf-8",
     )
+
+
+@pytest.mark.unit
+def test_uv_build_cleanup_to_verified_manifest_boundary_is_fail_closed(tmp_path: Path) -> None:
+    release = tmp_path / "release"
+    release.mkdir()
+    _write_release_artifacts(release)
+    (release / ".gitignore").write_bytes(b"*")
+    commit = "a" * 40
+    image_id = f"sha256:{'b' * 64}"
+
+    remove_uv_build_gitignore(release)
+    manifest = build_release_manifest(
+        directory=release,
+        source_commit=commit,
+        image_reference="anva:0.1.0",
+        image_id=image_id,
+        source_date_epoch=1_756_684_800,
+    )
+    verified = verify_release_manifest(
+        directory=release,
+        source_commit=commit,
+        image_reference="anva:0.1.0",
+        image_id=image_id,
+    )
+    status = (
+        b"".join(f"!! release/{record['path']}\0".encode() for record in verified["artifacts"])
+        + b"!! release/release-manifest.json\0!! release/SHA256SUMS\0"
+    )
+    verify_release_worktree_status(
+        status=status,
+        release_path=Path("release"),
+        manifest=manifest,
+    )
+
+    with pytest.raises(ValueError, match="unrelated.cache"):
+        verify_release_worktree_status(
+            status=status + b"!! unrelated.cache\0",
+            release_path=Path("release"),
+            manifest=manifest,
+        )
 
 
 @pytest.mark.unit
@@ -196,6 +280,22 @@ def test_release_verifier_rejects_traversal_symlink_and_unrecorded_artifact(
             source_commit=commit,
             image_reference="anva:0.1.0",
             image_id=image_id,
+        )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("name", [".gitignore", ".credentials", "..hidden"])
+def test_release_manifest_rejects_every_extra_dotfile(tmp_path: Path, name: str) -> None:
+    _write_release_artifacts(tmp_path)
+    (tmp_path / name).write_text("untrusted ignored dirt\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="safe portable basenames"):
+        build_release_manifest(
+            directory=tmp_path,
+            source_commit="a" * 40,
+            image_reference="anva:0.1.0",
+            image_id=f"sha256:{'b' * 64}",
+            source_date_epoch=1_756_684_800,
         )
 
 

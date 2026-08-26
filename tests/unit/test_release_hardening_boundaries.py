@@ -216,3 +216,7 @@ def test_release_builder_locks_build_backends_and_packages_offline() -> None:
     )[0]
     assert "uv build --python /app/.venv/bin/python" in release_build
     assert "--no-build-isolation --offline --wheel --out-dir /release" in release_build
+    cleanup = "python -m anva.release cleanup-uv-build --directory /release"
+    assert cleanup in release_build
+    assert release_build.index("uv build") < release_build.index(cleanup)
+    assert release_build.index(cleanup) < release_build.index("skills package")

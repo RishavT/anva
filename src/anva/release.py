@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -32,6 +33,33 @@ MANIFEST_LIMITATIONS = (
     "A registry digest and signed tag are recorded only by the publication step.",
     "External fresh-agent and human acceptance evidence is not generated here.",
 )
+UV_BUILD_GITIGNORE_CONTENT = b"*"
+
+
+def remove_uv_build_gitignore(directory: Path) -> None:
+    """Remove only uv's exact build-directory ignore-file byproduct."""
+    if directory.is_symlink() or not directory.is_dir():
+        raise ValueError("Release directory must be a regular directory")
+    path = directory / ".gitignore"
+    try:
+        initial = path.lstat()
+    except FileNotFoundError as error:
+        raise ValueError("uv build did not create its expected .gitignore") from error
+    if not stat.S_ISREG(initial.st_mode):
+        raise ValueError("uv build .gitignore must be a regular non-symlink file")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        opened = os.fstat(descriptor)
+        content = os.read(descriptor, len(UV_BUILD_GITIGNORE_CONTENT) + 1)
+    finally:
+        os.close(descriptor)
+    current = path.lstat()
+    if (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino):
+        raise ValueError("uv build .gitignore changed while it was validated")
+    if content != UV_BUILD_GITIGNORE_CONTENT:
+        raise ValueError("uv build .gitignore has unexpected content")
+    path.unlink()
 
 
 def _artifact_files(directory: Path) -> tuple[Path, ...]:
@@ -429,7 +457,13 @@ def main() -> int:
     exception_parser.add_argument("--input", required=True, type=Path)
     exception_parser.add_argument("--report", required=True, type=Path)
     exception_parser.add_argument("--output", required=True, type=Path)
+    cleanup_parser = commands.add_parser("cleanup-uv-build")
+    cleanup_parser.add_argument("--directory", required=True, type=Path)
     arguments = parser.parse_args()
+    if arguments.command == "cleanup-uv-build":
+        remove_uv_build_gitignore(arguments.directory)
+        print(json.dumps({"status": "removed", "artifact": ".gitignore"}))
+        return 0
     if arguments.command == "exceptions":
         identifiers = build_trivy_ignorefile(
             input_path=arguments.input,
