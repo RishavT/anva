@@ -19,7 +19,8 @@ descendant of `dce714a`: its diff changes only three assertions in
 Later documentation-only descendants likewise do not create a new runtime
 identity.
 No status below implies an external publication, signature, vulnerability-risk
-approval, or operational-owner assignment.
+approval, or completed operator exercise. Operational ownership is recorded in
+[`release-ownership.md`](release-ownership.md).
 
 | Authority | Requirement | Status | Authoritative current evidence | Remaining closure |
 | --- | --- | --- | --- | --- |
@@ -39,17 +40,17 @@ approval, or operational-owner assignment.
 | Issue 29; SEC-010 | Artifact upload security | exact-runtime-verified | Authorization, archive bounds, object read-back, immutable evidence binding, deletion recovery, and six pinned byte classes are in exact-current suites | Deployment-specific S3/TLS/IAM/outage validation is not claimed; external-store scope is #38 |
 | SEC-005 | External model data governance | deferred | No external model adapter is in the MVP runtime | Must be implemented before any provider integration |
 | SEC-011/012 | Remote OAuth and external penetration test | deferred | Exact-repository bearer revocation exists; remote OAuth/commercial-beta penetration testing are outside self-hosted MVP | Required before shared remote/commercial deployment (#40) |
-| SEC-013; OPS-012 | Security incident ownership and exercise | missing | Reusable incident and triage instructions exist | Real release/security/operations owners, escalation path, deployment boundary, and timestamped exercise (#44) |
+| SEC-013; OPS-012 | Security incident ownership and exercise | partial | Rishav Thakker of AI Soft Work is the named MVP release/security/application/platform/operations owner; primary and alternate escalation contacts are recorded in `release-ownership.md`; reusable incident and triage instructions exist | Deployment boundary and timestamped operator exercise remain #44; naming the owner does not prove the exercise |
 | V3 23.2–23.6 | Unit/integration/contract/E2E/security suites | exact-runtime-verified | Single exact full run: 1,007 passed, five documented skips, one stale assertion failure; #54 corrected only that test and the focused neighborhood passed 16/16. Final changed-surface seal separately passed 190 with Ruff | This is honestly a runtime pass plus disclosed test-contract correction, not a fabricated 1,013/1,013 rerun |
 | V3 23.7–23.9 | Retrieval/skill/assurance evaluations | exact-runtime-verified | 31/31 imports and 31/31 idempotent replays passed with stable identities, double aggregate, clean-reader mutation probes, foreign-authority denial, and inert canary | Aggregate with other #43 evidence; do not substitute private 31-review ceremonies |
 | V3 23.7–23.9 | Representative context-free manual review | verified-carried | One independent direct review over the messy corpus passed at `5f3b1fa`, found two minor defects, and those defects were fixed/tested in #52/#53 before `dce714a` | `anva-test#18` remains a separate automation defect and is not evidence for or against this direct review |
 | V3 23.10 | External model regression gate | deferred | No external model/prompt adapter is shipped | Mandatory before a model, prompt, or context-format integration ships |
-| V3 23.14; 30 | Definition of completion | partial | Exact-current local gates and checksum-verifiable evidence exist | #42, #44, #47, #49, #50, and umbrella #13 remain open; #43 needs authoritative aggregation |
+| V3 23.14; 30 | Definition of completion | partial | Exact-current local gates, checksum-verifiable evidence, and named MVP ownership exist | #42, #44, #47, #50, and umbrella #13 remain open; #43 needs authoritative aggregation; #49 is explicitly deferred post-MVP |
 | V3 24.6–24.8; OPS-003/004 | Tracing, alerts, runbooks | partial/deferred | Correlation/W3C trace IDs, authenticated process metrics, and triage instructions are implemented | MVP human exercise is #44; persistent aggregation, dashboards, alerts, and trace export are post-MVP #39 |
-| V3 M6 | Performance budget | partial | Exact-current 300-node gate passed once at 235.4 ms p95 but another exact-current run failed at 354.1 ms; prior results are variable. Rejected `longest-path` candidate broke interaction correctness | Reproducible exclusive measurement and/or correctness-preserving optimization at unchanged 250 ms p95 (#49) |
+| V3 M6 | Performance budget | deferred | Exact-current 300-node gate passed once at 235.4 ms p95 but another exact-current run failed at 354.1 ms; prior results are variable. Rejected `longest-path` candidate broke interaction correctness. The owner explicitly deferred this minor performance variability post-MVP | Preserve the unchanged 250 ms p95 target and pursue reproducible measurement and/or correctness-preserving optimization under #49; do not reinterpret prior results |
 | OPS-001/005–011 | Terraform, cost, quotas, flags, support, billing, pilot | deferred | Compose is the self-hosted MVP unit; no paid inference/billing boundary is shipped | Re-enter scope for managed/pilot/commercial deployment (#40) |
 | OPS-013 | Processing/retention documentation | exact-runtime-verified | Current runbooks describe retention/decommission behavior and limitations | Deployment policy choices remain operator-owned; no regulatory-erasure claim |
-| V3 Appendix E | Production readiness checklist | partial | Local product, lifecycle, security, replay, and representative-review evidence is indexed | External publication/signing, human operations, residual-risk approval, and reproducible performance remain open |
+| V3 Appendix E | Production readiness checklist | partial | Local product, lifecycle, security, replay, representative-review evidence, and named ownership are indexed | External publication/signing, operator exercise, and residual-risk approval remain open; performance follow-up is deferred #49 |
 | Issue 13 | Signed/checksummed release commit/tag | missing | Local source/image archives and checksum manifests exist | No signed or provenance-attested tag, published registry/package digest, or authorized release exists (#42) |
 
 ## Exact evidence indexes

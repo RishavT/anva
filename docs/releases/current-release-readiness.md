@@ -2,8 +2,8 @@
 
 This is a documentation-only audit of the frozen runtime product and its
 test-only descendant under the [release-freeze contract](release-freeze-contract.md).
-It does not publish an artifact, approve vulnerability risk, assign an owner,
-or turn a historical result into exact-current evidence.
+It does not publish an artifact, approve vulnerability risk, perform an
+operator exercise, or turn a historical result into exact-current evidence.
 
 ## Authoritative identities
 
@@ -60,12 +60,10 @@ presented as a separately built product image.
 | Immutable publication and installation | Local checksummed source/image lifecycle is proven. No authoritative release version/tag, registry/package publication, published digest, signature, or provenance attestation exists. | [#42](https://github.com/RishavT/anva/issues/42) |
 | Exact-gate aggregation | The exact-current broad, browser, 31-case, prompt-injection, and representative direct-review lanes now have evidence, but the aggregate issue remains open pending reconciliation with the selected descendant and all other authoritative blockers. | [#43](https://github.com/RishavT/anva/issues/43) |
 | Residual vulnerability risk | The 16 high/critical no-fix tuples are unchanged from the prior base. Fourteen expired exception IDs and two SQLite CVEs have not been accepted by accountable security/application/platform/release owners. | [#47](https://github.com/RishavT/anva/issues/47), [#50](https://github.com/RishavT/anva/issues/50) |
-| Canvas performance reproducibility | One exact-current predeclared run passed at 235.4 ms p95 against the unchanged 250 ms gate, while another exact-current run failed at 354.1 ms. Earlier runs were also variable. The attempted `longest-path` optimization was rejected after breaking interaction correctness; no optimization or threshold change was merged. | [#49](https://github.com/RishavT/anva/issues/49) |
-| Essential operational ownership | Runbooks exist, but genuine release/security/operations owners, escalation contacts, deployment TLS/proxy boundary, and a timestamped operator exercise are absent. Documentation cannot invent them. | [#44](https://github.com/RishavT/anva/issues/44) |
+| Essential operator exercise | [Release ownership](release-ownership.md) names Rishav Thakker of AI Soft Work as the MVP release, security, application, platform, and operations/on-call owner and records the escalation contacts. The timestamped operator exercise and deployment TLS/proxy boundary evidence are still absent. | [#44](https://github.com/RishavT/anva/issues/44) |
 | MVP umbrella audit | Reconcile all applicable gates above without converting local evidence into publication, risk acceptance, or human ownership. | [#13](https://github.com/RishavT/anva/issues/13) |
 
-The release is therefore **not complete**. In particular, the 235.4 ms Canvas
-result does not erase the 354.1 ms result, and the absence of scanner-recorded
+The release is therefore **not complete**. The absence of scanner-recorded
 fixes does not approve residual vulnerability risk.
 
 ## Explicit post-MVP boundary
@@ -75,6 +73,11 @@ fixes does not approve residual vulnerability risk.
 - Persistent aggregation, dashboards, managed alerts, and distributed tracing:
   [#39](https://github.com/RishavT/anva/issues/39).
 - Managed-deployment security and operations baseline: [#40](https://github.com/RishavT/anva/issues/40).
+- Canvas 300-node p95 reproducibility and correctness-preserving optimization:
+  [#49](https://github.com/RishavT/anva/issues/49). The owner explicitly deferred
+  this minor performance variability after reviewing the observed results. The
+  250 ms target is unchanged, the 235.4 ms pass and 354.1 ms failure remain in
+  the record, and no failed result is reclassified.
 - The multi-stage acceptance harness contracts-root defect:
   [RishavT/anva-test#18](https://github.com/RishavT/anva-test/issues/18).
 
