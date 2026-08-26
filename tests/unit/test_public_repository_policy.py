@@ -37,17 +37,25 @@ def test_all_github_actions_are_pinned_to_immutable_shas() -> None:
     assert not [(path.name, ref) for path, ref in uses if not IMMUTABLE_SHA.fullmatch(ref)]
 
 
-def test_history_plan_is_explicitly_non_executed_and_complete() -> None:
+def test_history_decision_and_remote_ref_proposal_are_complete() -> None:
     plan = json.loads(
         (ROOT / "docs/security/history-rewrite-plan.json").read_text(encoding="utf-8")
     )
-    assert plan["status"] == "PLAN_ONLY_NOT_EXECUTED"
-    assert plan["credential_rotation_required"] is False
-    assert plan["secret_scan"]["findings"] == 31
-    assert plan["secret_scan"]["classification"]["potentially_real_credential"] == 0
+    assert plan["status"] == "OWNER_ACCEPTED_HISTORY_WITHOUT_REWRITE"
+    assert plan["decision"]["rewrite_history"] is False
+    assert plan["decision"]["rewrite_authorship"] is False
+    assert plan["decision"]["credential_rotation_required"] is False
+    assert plan["decision"]["potentially_real_credentials_found"] == 0
     assert plan["owner"]["organization"] == "AI Soft Work"
-    assert plan["path_rewrites"]
-    assert plan["execution_requires_explicit_approval"]
+    inventory = plan["remote_inventory"]
+    assert inventory["repository_visibility_at_inventory"] == "PRIVATE"
+    assert inventory["tags"] == []
+    assert len(inventory["refs"]) == 14
+    assert plan["proposed_ref_actions"]["keep"] == ["refs/heads/main"]
+    assert len(plan["proposed_ref_actions"]["delete_before_public"]) == 13
+    assert plan["proposed_ref_actions"]["archive"] == []
+    assert plan["mutation_performed_by_this_inventory"] is False
+    assert plan["pre_visibility_requirements"]
 
 
 def test_generated_private_artifacts_are_ignored() -> None:

@@ -1,73 +1,78 @@
 {
-  "schema_version": 1,
-  "status": "PLAN_ONLY_NOT_EXECUTED",
-  "generated_for_head": "67cbed122d8197bcfe9c31acdf93a4d51ef5c7a8",
+  "schema_version": 2,
+  "status": "OWNER_ACCEPTED_HISTORY_WITHOUT_REWRITE",
+  "inventory_at": "2026-08-26",
+  "inspected_local_head": "5920502a5bbc4392732f04d44e8f91fd2e673395",
+  "inspected_remote_main": "184b2c7f526293d2c46f666ac47d7bad050fa1f4",
   "owner": {
     "organization": "AI Soft Work",
     "name": "Rishav Thakker",
     "primary_email": "rishav@aisoftwork.com",
     "alternate_email": "i@rishavthakker.com"
   },
-  "credential_rotation_required": false,
-  "secret_scan": {
-    "commits_scanned": 131,
-    "findings": 31,
-    "unique_current_findings_before_remediation": 16,
-    "classification": {
-      "synthetic_test_or_canary": 10,
-      "public_debian_image_metadata": 4,
-      "opaque_non_secret_anva_identifier": 1,
-      "synthetic_marker_ledger": 1,
-      "potentially_real_credential": 0
-    }
+  "decision": {
+    "rewrite_history": false,
+    "rewrite_authorship": false,
+    "credential_rotation_required": false,
+    "accepted_residual_history": [
+      "synthetic test and evaluator fixtures",
+      "public operating-system package metadata",
+      "historical operator-local absolute paths"
+    ],
+    "potentially_real_credentials_found": 0,
+    "limitations": "This decision accepts disclosure of the classified historical material; it is not a secret-scan waiver. Customer data, private credentials, signing material, and new unclassified findings remain prohibited."
   },
-  "path_rewrites": [
-    {
-      "paths": ["docs/evidence/issue-010/**"],
-      "category": "raw_host_and_private_evaluation_artifacts",
-      "commits": ["5d8c9ee915a63ed647deed090e925bf9b8f51742", "9f3390c8f41e8cc3d67be6385adcb47b288791f1", "ef6d9120401ba0e5d388e3b5219078f772462ec1"],
-      "operation": "remove_path_from_all_refs"
-    },
-    {
-      "paths": ["docs/evidence/issue-10/**"],
-      "category": "raw_host_hidden_grader_and_operator_artifacts",
-      "commits": ["6ab061241eb92386001094320ad470a89ff6f314", "9f3390c8f41e8cc3d67be6385adcb47b288791f1"],
-      "operation": "remove_path_from_all_refs"
-    },
-    {
-      "paths": ["evidence/issue-51-scope-discovery/**"],
-      "category": "operator_absolute_path_and_generated_evidence",
-      "commits": ["5f3b1fa0a51ad63dcdb1196837125c1d48062577"],
-      "operation": "remove_path_from_all_refs"
-    },
-    {
-      "paths": ["evidence/vuln-base-comparison-20260826/**"],
-      "category": "generated_scan_output_and_public_metadata_false_positive",
-      "commits": ["56bb664f56cc53b96471c6a806543a147f6f2530", "c1483d12f3c3f8088ac4019cbf6ae57cbd9d158f"],
-      "operation": "remove_path_from_all_refs"
-    }
-  ],
-  "author_rewrite": {
-    "from": "Rishav Thakker <i@rishavthakker.com>",
-    "to": "Rishav Thakker <rishav@aisoftwork.com>",
-    "current_tree_mailmap": ".mailmap",
-    "history_operation": "rewrite_author_and_committer_identity_on_all_rewritten_commits"
+  "prohibited_history_path_groups": {
+    "raw_evaluator_operator": ["docs/evidence/issue-010/**", "docs/evidence/issue-10/**"],
+    "generated_scope_evidence": ["evidence/issue-51-scope-discovery/**"],
+    "generated_scan_evidence": ["evidence/vuln-base-comparison-20260826/**"]
   },
-  "ref_scope": {
-    "local_heads": ["main", "codex/mvp-011-product-ui", "feat/issue-012-organizational-canvas", "feat/issue-013-release-hardening", "feat/issue-027-acceptance-adapter", "feat/issue-033-sealed-acceptance-runner", "feat/issue-035-public-acceptance-contracts", "feat/issue-10-host-neutral-skills", "feat/issue-29-evidence-upload", "feat/issue-31-independent-evaluator-identity", "issue-1-python-foundation", "issue-2-contracts-state", "issue-3-tenancy-authorization", "issue-4-provenance-ingestion", "issue-5-permission-safe-retrieval", "issue-6-deterministic-intent-evidence", "issue-7-manual-diff-assurance", "issue-8-github-app-adapter", "issue-9-authenticated-mcp-gateway", "task/vuln-base"],
-    "remote": "origin",
-    "remote_heads_inventory_required_immediately_before_execution": true,
-    "tags_inventory_required_immediately_before_execution": true,
-    "replace_all_affected_remote_refs_atomically_if_host_allows": true
+  "remote_inventory": {
+    "repository_visibility_at_inventory": "PRIVATE",
+    "default_branch": "main",
+    "tags": [],
+    "refs": [
+      {"ref":"refs/heads/main","tip":"184b2c7f526293d2c46f666ac47d7bad050fa1f4","ancestor_of_local_main":true,"unique_commits_vs_local_main":0,"local_main_unique_commits":22,"pull_requests":[],"reachable_prohibited_path_groups":["raw_evaluator_operator"],"proposed_action":"keep"},
+      {"ref":"refs/heads/codex/mvp-011-product-ui","tip":"d69864c067ba3bf36db459963d2d167b257fca9e","ancestor_of_local_main":false,"unique_commits_vs_local_main":3,"local_main_unique_commits":30,"pull_requests":[{"number":24,"state":"MERGED"}],"reachable_prohibited_path_groups":["raw_evaluator_operator"],"proposed_action":"delete_before_public"},
+      {"ref":"refs/heads/feat/issue-012-organizational-canvas","tip":"e1d12072fd1b87f288ccc094344404875a753ea4","ancestor_of_local_main":false,"unique_commits_vs_local_main":22,"local_main_unique_commits":29,"pull_requests":[{"number":25,"state":"MERGED"}],"reachable_prohibited_path_groups":["raw_evaluator_operator"],"proposed_action":"delete_before_public"},
+      {"ref":"refs/heads/feat/issue-013-release-hardening","tip":"441f73fffe19822ada01db943b4cb66f07226537","ancestor_of_local_main":false,"unique_commits_vs_local_main":4,"local_main_unique_commits":28,"pull_requests":[{"number":26,"state":"MERGED"}],"reachable_prohibited_path_groups":["raw_evaluator_operator"],"proposed_action":"delete_before_public"},
+      {"ref":"refs/heads/feat/issue-027-acceptance-adapter","tip":"2bb15715a776ba6d0a89ae3e6e1b2fef1fab032e","ancestor_of_local_main":false,"unique_commits_vs_local_main":2,"local_main_unique_commits":27,"pull_requests":[{"number":28,"state":"MERGED"}],"reachable_prohibited_path_groups":["raw_evaluator_operator"],"proposed_action":"delete_before_public"},
+      {"ref":"refs/heads/feat/issue-033-sealed-acceptance-runner","tip":"8b7f044633aee29cfb21849193b7eb2bc38e17da","ancestor_of_local_main":false,"unique_commits_vs_local_main":5,"local_main_unique_commits":24,"pull_requests":[{"number":34,"state":"MERGED"}],"reachable_prohibited_path_groups":["raw_evaluator_operator"],"proposed_action":"delete_before_public"},
+      {"ref":"refs/heads/feat/issue-10-host-neutral-skills","tip":"6ab061241eb92386001094320ad470a89ff6f314","ancestor_of_local_main":false,"unique_commits_vs_local_main":11,"local_main_unique_commits":31,"pull_requests":[{"number":23,"state":"MERGED"}],"reachable_prohibited_path_groups":["raw_evaluator_operator"],"proposed_action":"delete_before_public"},
+      {"ref":"refs/heads/feat/issue-29-evidence-upload","tip":"6240c7b59a90827736727e1d26cacabd1f738927","ancestor_of_local_main":false,"unique_commits_vs_local_main":3,"local_main_unique_commits":26,"pull_requests":[{"number":30,"state":"MERGED"}],"reachable_prohibited_path_groups":["raw_evaluator_operator"],"proposed_action":"delete_before_public"},
+      {"ref":"refs/heads/feat/issue-31-independent-evaluator-identity","tip":"83e1f0ffd4010866212611af4d964dbabfe04b08","ancestor_of_local_main":false,"unique_commits_vs_local_main":3,"local_main_unique_commits":25,"pull_requests":[{"number":32,"state":"MERGED"}],"reachable_prohibited_path_groups":["raw_evaluator_operator"],"proposed_action":"delete_before_public"},
+      {"ref":"refs/heads/issue-5-permission-safe-retrieval","tip":"510b2a463496e924f0f299d4073aec5388872c7e","ancestor_of_local_main":false,"unique_commits_vs_local_main":8,"local_main_unique_commits":36,"pull_requests":[{"number":18,"state":"MERGED"}],"reachable_prohibited_path_groups":[],"proposed_action":"delete_before_public"},
+      {"ref":"refs/heads/issue-6-deterministic-intent-evidence","tip":"7732b0133dd51c712d09c6f4e46b976513833e59","ancestor_of_local_main":false,"unique_commits_vs_local_main":3,"local_main_unique_commits":35,"pull_requests":[{"number":19,"state":"MERGED"}],"reachable_prohibited_path_groups":[],"proposed_action":"delete_before_public"},
+      {"ref":"refs/heads/issue-7-manual-diff-assurance","tip":"fb411c3007d00377af407320976944fa18330470","ancestor_of_local_main":false,"unique_commits_vs_local_main":5,"local_main_unique_commits":34,"pull_requests":[{"number":20,"state":"MERGED"}],"reachable_prohibited_path_groups":[],"proposed_action":"delete_before_public"},
+      {"ref":"refs/heads/issue-8-github-app-adapter","tip":"e3df426257ddb3fd232be37852397e31347b0481","ancestor_of_local_main":false,"unique_commits_vs_local_main":3,"local_main_unique_commits":33,"pull_requests":[{"number":21,"state":"MERGED"}],"reachable_prohibited_path_groups":[],"proposed_action":"delete_before_public"},
+      {"ref":"refs/heads/issue-9-authenticated-mcp-gateway","tip":"baf26f633ebb19e2d2e06888298a3adf1c3b89a8","ancestor_of_local_main":false,"unique_commits_vs_local_main":3,"local_main_unique_commits":32,"pull_requests":[{"number":22,"state":"MERGED"}],"reachable_prohibited_path_groups":[],"proposed_action":"delete_before_public"}
+    ]
   },
-  "execution_requires_explicit_approval": [
-    "freeze writes and archive the repository",
-    "rotate credentials if a fresh scan changes classification",
-    "run git-filter-repo from a disposable mirror clone",
-    "verify object removal and attribution in a second fresh clone",
-    "force-push every affected branch and tag with lease",
-    "invalidate or delete stale Actions artifacts caches releases and packages",
-    "coordinate existing forks and local clones",
-    "rerun gitleaks across all refs before changing visibility"
+  "proposed_ref_actions": {
+    "keep": ["refs/heads/main"],
+    "delete_before_public": [
+      "refs/heads/codex/mvp-011-product-ui",
+      "refs/heads/feat/issue-012-organizational-canvas",
+      "refs/heads/feat/issue-013-release-hardening",
+      "refs/heads/feat/issue-027-acceptance-adapter",
+      "refs/heads/feat/issue-033-sealed-acceptance-runner",
+      "refs/heads/feat/issue-10-host-neutral-skills",
+      "refs/heads/feat/issue-29-evidence-upload",
+      "refs/heads/feat/issue-31-independent-evaluator-identity",
+      "refs/heads/issue-5-permission-safe-retrieval",
+      "refs/heads/issue-6-deterministic-intent-evidence",
+      "refs/heads/issue-7-manual-diff-assurance",
+      "refs/heads/issue-8-github-app-adapter",
+      "refs/heads/issue-9-authenticated-mcp-gateway"
+    ],
+    "archive": []
+  },
+  "mutation_performed_by_this_inventory": false,
+  "pre_visibility_requirements": [
+    "fast-forward reviewed main while the repository remains private",
+    "re-fetch and verify the remote inventory has not drifted",
+    "minimize public refs according to the proposed list through a separately authorized operation",
+    "scan every retained ref and a fresh clone/export with Gitleaks using exact fingerprint allowlisting",
+    "review GitHub issues, Actions logs and artifacts, releases, packages, caches, and forks as separate disclosure surfaces"
   ]
 }

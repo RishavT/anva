@@ -27,7 +27,17 @@ The narrow `.gitleaksignore` contains exact fingerprints for intentional
 synthetic secret-handling tests. New or moved findings fail closed and require
 human classification. A path-level or generic regex suppression is prohibited.
 
-Before changing repository visibility, scan both the current tracked tree and
-all refs, execute the approved history plan, re-scan a fresh clone, and review
-GitHub issues, Actions logs/artifacts, releases, packages, caches, and forks as
-separate disclosure surfaces.
+The owner explicitly chose to retain existing Git history without rewriting or
+re-attributing it. That preserves classified historical synthetic evaluator
+fixtures, public package metadata, and operator-local paths. The all-ref review
+found no potentially real credential, but that result is not a waiver for a new
+secret or prohibited current-tree content.
+
+Before changing repository visibility, minimize hosted refs to the reviewed
+set, scan every retained ref, scan a fresh clone and its exported public tree,
+and review GitHub issues, Actions logs/artifacts, releases, packages, caches,
+and forks as separate disclosure surfaces. The machine-readable inventory and
+non-destructive keep/delete proposal are in
+[`history-rewrite-plan.json`](history-rewrite-plan.json); despite its retained
+filename, it records the explicit **no-rewrite** decision. Gitleaks remains a
+fail-closed gate with only exact-fingerprint exceptions.

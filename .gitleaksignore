@@ -14,7 +14,9 @@ tests/unit/test_trusted_skill_eval_gate.py:generic-api-key:1133
 
 # Historical fingerprints are synthetic test credentials, synthetic canaries,
 # public Debian image metadata, or opaque non-secret Anva identifiers. They are
-# retained only until the separately approved history rewrite is performed.
+# retained because the owner explicitly accepted existing history without a
+# rewrite. They do not allow new or moved findings; every entry remains an
+# exact fingerprint and all-ref scanning remains fail closed.
 0c25b26b768bff97eb659b5ff195175f0fa43671:tests/integration/test_tenancy_authorization.py:stripe-access-token:779
 0c25b26b768bff97eb659b5ff195175f0fa43671:tests/integration/test_tenancy_authorization.py:stripe-access-token:781
 0c25b26b768bff97eb659b5ff195175f0fa43671:tests/unit/test_secret_logging.py:stripe-access-token:22

@@ -34,7 +34,7 @@ approval, or completed operator exercise. Operational ownership is recorded in
 | V3 20.3; SEC-003 | Five-source prompt injection | verified-carried | `evidence/live31-prompt-product-final-20260826`: all five frozen source classes passed with inert excerpts, tenant isolation, no mutation, and cleanup | Carry-forward is limited to unchanged product/package/contracts/dependencies; it does not replace 31-case replay |
 | V3 20.2/20.7; SEC-004 | Secret redaction | exact-runtime-verified | Final exact source scan reports zero secrets; exact gates assert log/result canary absence and one-time token redaction | Publication-wide scan must be repeated over the bytes actually published (#42) |
 | V3 20.4; SEC-009 | Skill supply chain | partial | Deterministic archives/checksums and safe installer contracts are tested | Publish and verify current skill/package artifacts, provenance, security contact, and revocation record (#42) |
-| Issue 13; V3 20.2 | Dependency/container scan and SBOM | partial | Fresh exact image: 3 critical/13 high/53 medium/66 low/3 unknown; exact source: 0 high, 0 critical, 0 secrets; SPDX/CycloneDX sealed | #47 must adjudicate expired exceptions; #50 must adjudicate SQLite CVEs; no risk is accepted by this matrix |
+| Issue 13; V3 20.2 | Dependency/container scan and SBOM | partial | Fresh exact image: 3 critical/13 high/53 medium/66 low/3 unknown; exact source: 0 high, 0 critical, 0 secrets; SPDX/CycloneDX sealed. Rishav Thakker approved the exact 13-CVE/16-tuple no-fix set from 2026-08-26 through 2026-09-25 under #60 | Publication must freshly prove the identical no-fix tuple set and generate acceptance bound to the final source, scan hash, version, and immutable GHCR digest; drift, a fixed version, or expiry fails closed |
 | V3 20.9 | Source revocation | exact-runtime-verified | Exact full matrix covers source/GitHub/token revocation and permission-safe retrieval | Published/deployed operational exercise remains scoped to #42/#44 |
 | V3 20.9 | Cross-tenant API/search/Canvas/MCP/artifact isolation | exact-runtime-verified | Exact full matrix plus 31-case foreign-authority indistinguishable 404 and inert-canary probes | No remaining local product gate identified; managed deployment remains #40 |
 | Issue 29; SEC-010 | Artifact upload security | exact-runtime-verified | Authorization, archive bounds, object read-back, immutable evidence binding, deletion recovery, and six pinned byte classes are in exact-current suites | Deployment-specific S3/TLS/IAM/outage validation is not claimed; external-store scope is #38 |
@@ -45,7 +45,7 @@ approval, or completed operator exercise. Operational ownership is recorded in
 | V3 23.7–23.9 | Retrieval/skill/assurance evaluations | exact-runtime-verified | 31/31 imports and 31/31 idempotent replays passed with stable identities, double aggregate, clean-reader mutation probes, foreign-authority denial, and inert canary | Aggregate with other #43 evidence; do not substitute private 31-review ceremonies |
 | V3 23.7–23.9 | Representative context-free manual review | verified-carried | One independent direct review over the messy corpus passed at `5f3b1fa`, found two minor defects, and those defects were fixed/tested in #52/#53 before `dce714a` | `anva-test#18` remains a separate automation defect and is not evidence for or against this direct review |
 | V3 23.10 | External model regression gate | deferred | No external model/prompt adapter is shipped | Mandatory before a model, prompt, or context-format integration ships |
-| V3 23.14; 30 | Definition of completion | partial | Exact-current local gates, checksum-verifiable evidence, and named MVP ownership exist | #42, #44, #47, #50, and umbrella #13 remain open; #43 needs authoritative aggregation; #49 is explicitly deferred post-MVP |
+| V3 23.14; 30 | Definition of completion | partial | Exact-current local gates, checksum-verifiable evidence, named MVP ownership, and the bounded #60 risk decision exist | #42, #44, and umbrella #13 remain open; #43 needs authoritative aggregation; release-time digest binding remains mandatory; #49 is explicitly deferred post-MVP |
 | V3 24.6–24.8; OPS-003/004 | Tracing, alerts, runbooks | partial/deferred | Correlation/W3C trace IDs, authenticated process metrics, and triage instructions are implemented | MVP human exercise is #44; persistent aggregation, dashboards, alerts, and trace export are post-MVP #39 |
 | V3 M6 | Performance budget | deferred | Exact-current 300-node gate passed once at 235.4 ms p95 but another exact-current run failed at 354.1 ms; prior results are variable. Rejected `longest-path` candidate broke interaction correctness. The owner explicitly deferred this minor performance variability post-MVP | Preserve the unchanged 250 ms p95 target and pursue reproducible measurement and/or correctness-preserving optimization under #49; do not reinterpret prior results |
 | OPS-001/005–011 | Terraform, cost, quotas, flags, support, billing, pilot | deferred | Compose is the self-hosted MVP unit; no paid inference/billing boundary is shipped | Re-enter scope for managed/pilot/commercial deployment (#40) |
@@ -60,9 +60,10 @@ approval, or completed operator exercise. Operational ownership is recorded in
   and `SHA256SUMS`
 - `evidence/live31-prompt-product-final-20260826/RESULTS.md` and
   `SHA256SUMS`
-- GitHub issues #42–#50 and umbrella #13 provide the authoritative current
-  decision state. Closed #45/#46 document resolved applicability groups; they
-  do not accept the residual groups tracked by #47/#50.
+- GitHub issues #42–#50, #60, and umbrella #13 provide the authoritative current
+  decision state. Closed #45/#46 document resolved applicability groups; #60
+  records the bounded owner approval for the exact residual set and requires a
+  separately generated digest-bound acceptance artifact at publication.
 
 The final-seal 35-file manifest and its manifest checksum, the exact-current
 gate manifest, and the prompt-gate manifest have been revalidated during this

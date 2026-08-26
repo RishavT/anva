@@ -94,10 +94,11 @@ and evidence archive SHA-256
   zero leakage.
 - [x] Source vulnerability, secret, and misconfiguration scans exclude only the
   documented operator-owned paths and pass their high/critical gate.
-- [ ] Every image high/critical finding is fixed or appears in a reviewed,
-  unexpired exception file. The 14 checked-in no-fix exceptions expired on
-  2026-08-18 and are not release authorization until the named owner records a
-  new bounded review against the exact image.
+- [x] Every image high/critical finding is fixed or appears in the reviewed,
+  unexpired 13-CVE/16-tuple exception approved by Rishav Thakker for v0.1.0
+  from 2026-08-26 through 2026-09-25. Publication still fails closed until the
+  release workflow proves the exact tuple set and generates acceptance bound to
+  the final source, scan hash, and immutable GHCR digest.
 - [ ] Dependency, container, license and repository scans pass under the
   documented severity policy.
 - [x] Retention behavior, decommission behavior, retained data, and unsupported
@@ -154,8 +155,10 @@ and evidence archive SHA-256
 - [x] V3 requirements map to evidence or an explicit deferred/not-applicable
   decision.
 - [x] Known limitations and residual risks are recorded, including lower source
-  findings and the image exceptions that expired on 2026-08-18. The record does
-  not claim risk acceptance; named release review remains required.
+  findings and the approved 13-CVE/16-tuple no-fix exception. The checked-in
+  owner decision is not itself the digest-bound release acceptance; that
+  generated artifact is required from the exact published image and expires
+  after 2026-09-25 UTC.
 - [x] The evidenced `mvp13-runtime-final`,
   `mvp13-runtime-final-rehearsal`, and `mvp13-release` scan/manifest projects
   have zero scoped one-shots, networks, and volumes; browser/scanner resources
