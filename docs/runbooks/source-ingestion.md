@@ -12,6 +12,12 @@
 
 Never place a repository token in command arguments, logs, source configuration, or job payloads.
 
+For a fresh local installation, `anva demo` prints a single JSON object containing the
+`repository_id`, the authoritative `access_scope_id` bound to that repository and service
+identity, and a one-time `token`. Capture the identifiers from the attached terminal and place the
+token only in the `ANVA_TOKEN` environment variable for the commands below. Do not redirect,
+persist, or add the complete response to shell history because it contains the one-time token.
+
 ## Connect and synchronize
 
 The CLI calls the authenticated `/api/v1` endpoints:
@@ -27,6 +33,10 @@ anva source connect \
 anva source sync <source-connection-uuid>
 anva source inspect <source-connection-uuid>
 ```
+
+For example, substitute the `repository_id` and `access_scope_id` returned by `anva demo` directly
+for the two UUID placeholders above. The demo output is the supported discovery path for this
+fresh-install workflow; database queries and private acceptance-state files are not required.
 
 `connect` is idempotent for identical configuration and rejects reuse of an external key for a
 different root/scope/repository. `sync` captures the current access boundary before enqueueing.

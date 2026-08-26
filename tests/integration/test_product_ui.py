@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -46,6 +47,7 @@ from anva.core.services.bootstrap import bootstrap_local_organization
 from anva.core.services.context import ActorContext
 from anva.core.services.product_ui import ProductUIFacade
 from anva.core.services.scopes import derive_scope_intersection
+from anva.entrypoints.cli import main as cli_main
 
 
 def _signed_in_client() -> tuple[Client, Repository]:
@@ -138,6 +140,35 @@ def test_bootstrap_form_creates_workspace_and_starts_redacted_session() -> None:
     assert "anva_web_credential_id" not in session
     assert "bootstrap_secret" not in session
     assert "token" not in " ".join(session.keys()).lower()
+
+
+@pytest.mark.integration
+@pytest.mark.contract
+@pytest.mark.django_db
+def test_demo_cli_returns_the_authoritative_repository_access_scope(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    result = cli_main(
+        [
+            "demo",
+            "--organization-slug",
+            "scope-discovery",
+            "--repository-external-id",
+            "RishavT/anva-test",
+        ]
+    )
+
+    assert result == 0
+    response = json.loads(capsys.readouterr().out)
+    scope = AccessScope.objects.get(id=response["access_scope_id"])
+    repository = Repository.objects.get(id=response["repository_id"])
+    service_identity = ServiceIdentity.objects.get(id=response["service_identity_id"])
+    assert scope.organization_id == uuid.UUID(response["organization_id"])
+    assert repository.organization_id == scope.organization_id
+    assert service_identity.organization_id == scope.organization_id
+    assert scope.all_repositories is True
+    assert scope.all_service_identities is True
+    assert response["token"]
 
 
 @pytest.mark.integration

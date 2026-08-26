@@ -62,6 +62,8 @@ The checked-in Compose defaults also allow `docker compose up --build -d` withou
 file. Copying `.env.example` makes local configuration explicit and gives you one place to
 change credentials. `make install-demo` builds the wheel-installed runtime, waits for the
 dependencies and migrations, and idempotently creates synthetic demo data. The demo repository
+JSON response includes `repository_id` and its usable `access_scope_id`; use those values with
+the documented [`anva source connect`](docs/runbooks/source-ingestion.md) command. The repository
 token is printed only to the attached terminal: the one-shot container uses no Docker logging
 driver and is removed after the command. Do not redirect or retain that output. Use `make up` when
 demo data is not wanted. The base stack publishes no host ports, which makes these commands safe

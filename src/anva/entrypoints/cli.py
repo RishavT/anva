@@ -780,6 +780,7 @@ def _bootstrap_demo(arguments: argparse.Namespace) -> int:
                 "status": "created",
                 "organization_id": str(result.organization.id),
                 "repository_id": str(result.repository.id),
+                "access_scope_id": str(result.access_scope.id),
                 "service_identity_id": str(result.service_identity.id),
                 "token": result.issued_token.plaintext,
                 "token_expires_at": result.issued_token.record.expires_at.isoformat(),
