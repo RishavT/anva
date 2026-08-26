@@ -1,62 +1,92 @@
 # Current install-ready MVP release readiness
 
-This is a documentation-only audit of candidate input
-`a954fd458b72aec8d3c5c622b6ea263342e6f58c`. It classifies existing evidence
-under the [release-freeze contract](release-freeze-contract.md). It is not new
-execution evidence and does not change historical results.
+This is a documentation-only audit of the frozen runtime product and its
+test-only descendant under the [release-freeze contract](release-freeze-contract.md).
+It does not publish an artifact, approve vulnerability risk, assign an owner,
+or turn a historical result into exact-current evidence.
 
-## Proven documentation and static artifacts
+## Authoritative identities
 
-- Installation, upgrade, rollback, preserve-data uninstall, and destructive
-  clean uninstall are covered by the
-  [lifecycle runbook](../runbooks/install-upgrade-uninstall.md).
-- Paired database/object backup, verification, clean-project restore, failure
-  handling, and post-restore identity checks are covered by the
-  [backup runbook](../runbooks/backup-and-restore.md).
-- Metrics authentication, proxy trust, rate-limit triage, and current
-  process-local limitations are covered by the
-  [observability runbook](../runbooks/observability-and-rate-limits.md).
-- Historical Chromium screenshots and browser/performance records remain
-  indexed under `docs/evidence/issue-011` and `docs/evidence/issue-012`. They
-  demonstrate implemented UI behavior at their recorded identities; they are
-  not browser evidence for the current candidate.
-- Release packaging, manifest, checksum, SBOM, and scan commands exist. Their
-  historical outputs remain valid only for the commits and image IDs they name.
-
-These documents are sufficient instructions for execution. An unchecked
-release-checklist item must not be checked merely because its command or
-historical artifact exists.
-
-## Release blockers
-
-| Blocker | Required evidence | Tracking |
+| Identity | Value | Meaning |
 | --- | --- | --- |
-| Immutable publication and install | Authoritative version, provenance-attested tag, registry/package digests, and fresh published-artifact lifecycle exercise | [#42](https://github.com/RishavT/anva/issues/42) |
-| Exact-candidate product/security/UI gate | Current Compose product suites, browser/UI artifacts, tenant/revocation and security gates, 31-case deterministic replay, and one representative independent manual review | [#43](https://github.com/RishavT/anva/issues/43) |
-| Vulnerability closure | Exact-current SBOM/source/image scans proving the `sqlparse` findings are removed, plus current disposition of every remaining finding and exception | [#41](https://github.com/RishavT/anva/issues/41) and [#43](https://github.com/RishavT/anva/issues/43) |
-| Essential operational ownership | Deployment-owned release, security-incident, and operations/on-call contacts plus exercised essential incident runbooks | [#44](https://github.com/RishavT/anva/issues/44) |
-| MVP umbrella review | Reconcile every applicable unchecked checklist item and explicitly accept only freeze-contract deferrals | [#13](https://github.com/RishavT/anva/issues/13) |
+| Runtime source | `dce714a346826235b4b1d918d2f7370649c4d49f` | Frozen product source exercised by the final seal and exact-current product gate |
+| Runtime tree | `333d6063692bc283477da60b53ee6d3ebc4d9dc3` | Tree embedded in the sealed runtime provenance |
+| Local runtime image | `sha256:189788fd23dc852c7192c0f37448bdf5c2ab48a24863b8c507b94d945e818f85` | Locally built and checksummed image; not a registry digest or publication |
+| Audit-input/test descendant | `996e8ebd39b735db27e56227ff2cb6c4a70fe386` | Test-only descendant of `dce714a`; later documentation-only descendants do not create a new runtime identity |
 
-The metrics release gate is limited to the implemented surface: authenticated
-scrape, trusted-proxy behavior, usable exported series, and a recorded triage
-exercise. Provisioned dashboards, persistent aggregation, distributed tracing,
-and managed alert delivery are not implemented MVP claims.
+`git diff dce714a..996e8eb` changes only
+`tests/unit/test_assurance_review_fixes.py` (three assertion substitutions).
+Product source, contracts, dependency inputs, packaging, Dockerfile, and
+Compose inputs are unchanged. Accordingly, `dce714a`/`189788...` remains the
+runtime identity; `996e8eb` records the corrected test contract and must not be
+presented as a separately built product image.
 
-## Post-MVP
+## Proven local gates
 
-- Supported human login/recovery after logout or expiry: [#37](https://github.com/RishavT/anva/issues/37).
+- The [final seal](../../evidence/final-seal-dce714a-20260826/RESULTS.md)
+  binds the clean archive, runtime image, installed package, SBOMs, scans, and
+  lifecycle evidence. Its 35-file `SHA256SUMS` and manifest checksum verify.
+  The changed-surface/contracts/smoke selection passed 190 tests; Ruff lint and
+  format passed. Fresh install, readiness, demo scope discovery,
+  preserve/reinstall, and clean uninstall passed.
+- The [exact-current product gate](../../evidence/issue-43-exact-current-dce714a/RESULTS.md)
+  ran the full Compose matrix once: 1,007 passed, five documented skips, and
+  one legacy assertion failure. Issue #54 corrected only that test assertion;
+  its focused neighborhood then passed 16/16 with Ruff checks. No runtime defect
+  was identified and the broad run was not repeated.
+- The same exact-current gate passed the single predeclared Chromium journey
+  2/2 and passed all 31 public policy imports and all 31 exact replays. The
+  networkless clean reader rejected omission, duplication, reorder, product
+  identity substitution, and semantic mutation. Tenant foreign-authority and
+  inert-canary checks passed.
+- The [five-source prompt-injection gate](../../evidence/live31-prompt-product-final-20260826/RESULTS.md)
+  passed for requirements, policy, evidence, pull-request diff, and
+  operator/reviewer context. Its carry-forward is limited to unchanged product
+  boundaries; it does not substitute for the 31-case gate.
+- One independent, context-free representative review over the messy corpus
+  completed at `5f3b1fa`. It found two minor product defects, fixed and
+  focused-tested by #52 and #53 before the frozen runtime. This direct review
+  is distinct from the still-broken multi-stage automation in
+  `RishavT/anva-test#18`.
+- The exact image scan reports 3 critical and 13 high package tuples across 13
+  CVEs, with no scanner-recorded fixed version. Exact source reports zero high,
+  zero critical, and zero secrets. These are scan facts, not risk acceptance;
+  #47 and #50 remain open.
+
+## Open release blockers
+
+| Blocker | Current disposition | Tracking |
+| --- | --- | --- |
+| Immutable publication and installation | Local checksummed source/image lifecycle is proven. No authoritative release version/tag, registry/package publication, published digest, signature, or provenance attestation exists. | [#42](https://github.com/RishavT/anva/issues/42) |
+| Exact-gate aggregation | The exact-current broad, browser, 31-case, prompt-injection, and representative direct-review lanes now have evidence, but the aggregate issue remains open pending reconciliation with the selected descendant and all other authoritative blockers. | [#43](https://github.com/RishavT/anva/issues/43) |
+| Residual vulnerability risk | The 16 high/critical no-fix tuples are unchanged from the prior base. Fourteen expired exception IDs and two SQLite CVEs have not been accepted by accountable security/application/platform/release owners. | [#47](https://github.com/RishavT/anva/issues/47), [#50](https://github.com/RishavT/anva/issues/50) |
+| Canvas performance reproducibility | One exact-current predeclared run passed at 235.4 ms p95 against the unchanged 250 ms gate, while another exact-current run failed at 354.1 ms. Earlier runs were also variable. The attempted `longest-path` optimization was rejected after breaking interaction correctness; no optimization or threshold change was merged. | [#49](https://github.com/RishavT/anva/issues/49) |
+| Essential operational ownership | Runbooks exist, but genuine release/security/operations owners, escalation contacts, deployment TLS/proxy boundary, and a timestamped operator exercise are absent. Documentation cannot invent them. | [#44](https://github.com/RishavT/anva/issues/44) |
+| MVP umbrella audit | Reconcile all applicable gates above without converting local evidence into publication, risk acceptance, or human ownership. | [#13](https://github.com/RishavT/anva/issues/13) |
+
+The release is therefore **not complete**. In particular, the 235.4 ms Canvas
+result does not erase the 354.1 ms result, and the absence of scanner-recorded
+fixes does not approve residual vulnerability risk.
+
+## Explicit post-MVP boundary
+
+- Supported human session entry after logout or expiry: [#37](https://github.com/RishavT/anva/issues/37).
 - External object-store and deployment-sized recovery: [#38](https://github.com/RishavT/anva/issues/38).
-- Persistent observability, dashboards, managed alerts, and distributed tracing: [#39](https://github.com/RishavT/anva/issues/39).
-- Managed deployment, remote identity, penetration testing, quotas, support,
-  billing, and status operations: [#40](https://github.com/RishavT/anva/issues/40).
+- Persistent aggregation, dashboards, managed alerts, and distributed tracing:
+  [#39](https://github.com/RishavT/anva/issues/39).
+- Managed-deployment security and operations baseline: [#40](https://github.com/RishavT/anva/issues/40).
+- The multi-stage acceptance harness contracts-root defect:
+  [RishavT/anva-test#18](https://github.com/RishavT/anva-test/issues/18).
 
-These issues do not block the self-hosted install-ready MVP unless their scope
-is separately moved into the fixed release contract.
+The first four are legitimate deferrals only for the self-hosted install-ready
+MVP. `anva-test#18` remains an open harness defect, but it neither proves nor
+invalidates the separately completed direct context-free review and is not a
+reason to rebuild the frozen harness before this product release.
 
 ## Completion rule
 
-Close a blocker only from evidence bound to the selected clean candidate and
-published artifact identities. When a closure change alters candidate identity,
-apply the freeze contract's scoped retest rule. Do not rerun an already passing
-lane or create another evidence root unless a changed dependency, contract,
-migration, authorization boundary, package, or runtime image makes it relevant.
+Close each blocker only from its own authoritative evidence. A human must make
+human-owned risk and operations decisions; an authorized publisher must create
+and verify external artifacts. Do not rerun an already passing lane unless a
+changed dependency, contract, migration, authorization boundary, package, or
+runtime image makes the scoped retest rule applicable.
