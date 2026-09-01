@@ -4,13 +4,22 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from email.message import Message
+from io import BytesIO
 from pathlib import Path
 from typing import Self, cast
 from unittest.mock import patch
+from urllib.error import HTTPError, URLError
 
 import pytest
 
-from anva.acceptance.client import AcceptanceBoundaryError, PublicAPI
+from anva.acceptance.client import (
+    MAX_RESPONSE_BYTES,
+    AcceptanceBoundaryError,
+    PublicAPI,
+    StreamableHTTPMCP,
+    _decoded_object,
+)
 from anva.contracts.acceptance import HTTP_OPERATION_EXAMPLES
 from anva.contracts.generate import rendered_artifacts
 from anva.mcp.contracts import validate_tool_output
@@ -162,3 +171,76 @@ def test_acceptance_mcp_outputs_require_complete_citation_provenance() -> None:
     invalid["data"]["packet"]["items"][0]["anva_sources"][0].pop("observed_at")
     with pytest.raises(ValueError, match="MCP output contract failed"):
         validate_tool_output("anva.get_context_packet", invalid)
+
+
+@pytest.mark.unit
+def test_public_api_serializes_requests_and_redacts_transport_failures() -> None:
+    api = PublicAPI("https://anva.invalid/api/v1", token="acceptance-token", timeout=12)
+    with patch(
+        "anva.acceptance.client.urlopen", return_value=_Response(202, {"ok": True})
+    ) as open_url:
+        response = api.request(
+            "POST",
+            "/evidence",
+            payload={"z": 1, "a": "value"},
+            headers={"X-Request-Source": "unit-test"},
+            expected=frozenset({202}),
+        )
+
+    request = open_url.call_args.args[0]
+    assert response.payload == {"ok": True}
+    assert request.full_url == "https://anva.invalid/api/v1/evidence"
+    assert request.data == b'{"a":"value","z":1}'
+    assert request.get_header("Content-type") == "application/json"
+    assert request.get_header("Authorization") == "Bearer acceptance-token"
+    assert request.get_header("X-request-source") == "unit-test"
+    assert open_url.call_args.kwargs["timeout"] == 12
+
+    with patch("anva.acceptance.client.urlopen", side_effect=URLError("private host detail")):
+        with pytest.raises(AcceptanceBoundaryError, match="API is unavailable") as failure:
+            api.request("GET", "/evidence")
+    assert failure.value.code == "api_unavailable"
+    assert "private host detail" not in str(failure.value)
+
+
+@pytest.mark.unit
+def test_public_api_rejects_invalid_inputs_and_reports_safe_http_errors() -> None:
+    api = PublicAPI("https://anva.invalid/api/v1")
+    for endpoint in (
+        "ftp://anva.invalid/api/v1",
+        "https://user@anva.invalid/api/v1",
+        "https://anva.invalid/v2",
+    ):
+        with pytest.raises(ValueError):
+            PublicAPI(endpoint)
+    with pytest.raises(ValueError, match="path"):
+        api.request("GET", "/safe/../escape")
+    with pytest.raises(ValueError, match="mix"):
+        api.request("POST", "/evidence", payload={}, content=b"bytes")
+    with pytest.raises(ValueError, match="token"):
+        api.with_token("")
+
+    error = HTTPError(
+        "https://anva.invalid",
+        429,
+        "too many",
+        Message(),
+        BytesIO(b'{"code":"rate_limited","detail":"internal"}'),
+    )
+    with patch("anva.acceptance.client.urlopen", side_effect=error):
+        with pytest.raises(AcceptanceBoundaryError, match="rejected") as failure:
+            api.request("GET", "/evidence", expected=frozenset({200}))
+    assert failure.value.code == "rate_limited"
+    assert failure.value.status == 429
+
+
+@pytest.mark.unit
+def test_response_and_mcp_boundaries_fail_closed_without_exposing_payloads() -> None:
+    with pytest.raises(AcceptanceBoundaryError, match="invalid response"):
+        _decoded_object(b"[")
+    with pytest.raises(AcceptanceBoundaryError, match="invalid response"):
+        _decoded_object(b"[]")
+    with pytest.raises(AcceptanceBoundaryError, match="exceeded"):
+        _decoded_object(b"x" * (MAX_RESPONSE_BYTES + 1))
+    with pytest.raises(ValueError, match="MCP token"):
+        StreamableHTTPMCP("https://anva.invalid/mcp", "")
