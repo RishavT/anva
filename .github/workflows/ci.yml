@@ -24,7 +24,7 @@ jobs:
       - name: Validate Compose configuration
         run: docker compose config --quiet
       - name: Run the same checks as local development
-        run: make ci
+        run: ANVA_HOST_UID="$(id -u)" ANVA_HOST_GID="$(id -g)" make ci
       - name: Retain Canvas performance evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
