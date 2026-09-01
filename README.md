@@ -165,9 +165,11 @@ refuses tracked or untracked worktree changes and verifies that the image's OCI
 revision is the exact source commit. Skill archives are rebuilt and verified in
 the release builder. The source gate excludes operator-owned secrets, backups,
 release outputs, `.git`, and local tool caches from the distributable scan, then
-gates vulnerability, secret, and misconfiguration findings. The image gate has
-14 reviewed no-vendor-fix exceptions that expire on 2026-08-18; it does not
-claim that the image has no high/critical findings. On Linux, set
+gates vulnerability, secret, and misconfiguration findings. The image gate uses
+the exact approved 13-CVE/16-package-tuple no-fix set through 2026-09-25, as
+recorded in
+[`vulnerability-exceptions.json`](docs/security/vulnerability-exceptions.json);
+it does not claim that the image has no high/critical findings. On Linux, set
 `ANVA_DOCKER_GID` to the group ID of `/var/run/docker.sock` so the non-root
 scanner can inspect the local image. This creates local, ignored artifacts; it
 does not publish, sign, or tag them.
@@ -188,7 +190,7 @@ make shell
 make down
 ```
 
-Release-candidate lifecycle operations are also Compose-owned:
+Release lifecycle operations are also Compose-owned:
 
 ```bash
 make backup
@@ -202,12 +204,13 @@ Read the [operator guide](docs/guides/operator.md), [user
 guide](docs/guides/user.md), and [developer guide](docs/guides/developer.md),
 plus the [install/upgrade/uninstall](docs/runbooks/install-upgrade-uninstall.md)
 and [backup/restore](docs/runbooks/backup-and-restore.md) runbooks before using
-these beyond local evaluation. The source candidate at `94231d7e...` has a
-checksummed local build, exact test/operations/scan evidence archive, manifest,
-and `SHA256SUMS`, but no release tag, registry digest, signature/provenance, or
-published package/image. See the [MVP-013 release notes](docs/releases/mvp-013.md),
-[compatibility matrix](docs/releases/compatibility.md), and [evidence
-index](docs/evidence/issue-013/README.md) for the exact boundary.
+these beyond local evaluation. Use the GitHub-native release assets and
+digest-addressed GHCR image only after completing the verification steps in the
+install runbook; source-checkout installation remains available as a fallback.
+See the [MVP-013 release notes](docs/releases/mvp-013.md), [compatibility
+matrix](docs/releases/compatibility.md), and [evidence
+index](docs/evidence/issue-013/README.md) for the historical local-evidence
+boundary.
 
 After a test or drill, remove only the named task project with `make test-down`
 or `COMPOSE_PROJECT=<exact-project> make uninstall-clean`; inspect the resolved
