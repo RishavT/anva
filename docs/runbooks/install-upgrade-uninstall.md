@@ -1,11 +1,65 @@
 # Install, upgrade, rollback, and uninstall
 
-This runbook covers the implemented source-checkout installation and lifecycle
-commands. It is not evidence that a release image or deployment bundle has been
-published or accepted: MVP-013 has no tag, registry digest, signature, or public
-release.
+This runbook covers the GitHub-native `v0.1.0` installation path and the
+source-checkout fallback. The release path is usable only after the release
+workflow has successfully published and verified the tag, assets, attestations,
+and GHCR image; before publication, its download command fails closed.
 
-## Source-checkout installation
+## GitHub-native v0.1.0 installation
+
+Install Docker Engine with the Compose v2 plugin, GitHub CLI, `jq`, and standard
+`sha256sum` and `tar` utilities. Authenticate GitHub CLI if GitHub requires it.
+Download the release into a new directory, verify its checksum inventory, and
+verify GitHub build-provenance attestations for every downloaded asset:
+
+```sh
+gh release download v0.1.0 --repo rishavt/anva --dir anva-v0.1.0
+(cd anva-v0.1.0 && sha256sum --check SHA256SUMS)
+for artifact in anva-v0.1.0/*; do
+  gh attestation verify "$artifact" --repo rishavt/anva
+done
+```
+
+The attested `release-manifest.json` records the immutable GHCR reference. Read
+and validate that reference, verify the OCI attestation, pull by digest, and tag
+that verified local image with the version reference expected by the shipped
+Compose file:
+
+```sh
+ANVA_RELEASE_IMAGE="$(jq -er \
+  '.image.reference | select(test("^ghcr\\.io/rishavt/anva@sha256:[0-9a-f]{64}$"))' \
+  anva-v0.1.0/release-manifest.json)"
+export ANVA_RELEASE_IMAGE
+gh attestation verify "oci://${ANVA_RELEASE_IMAGE}" --repo rishavt/anva
+docker pull "${ANVA_RELEASE_IMAGE}"
+docker tag "${ANVA_RELEASE_IMAGE}" ghcr.io/rishavt/anva:0.1.0
+```
+
+Extract the already verified install bundle, make local configuration explicit,
+and start without allowing a source rebuild to replace the verified image:
+
+```sh
+mkdir anva-install
+tar -xzf anva-v0.1.0/anva-install-0.1.0.tar.gz -C anva-install
+cd anva-install/anva-0.1.0
+cp .env.example .env
+# Replace local-only credentials before any non-development deployment.
+export ANVA_IMAGE_REPOSITORY=ghcr.io/rishavt/anva
+export ANVA_VERSION=0.1.0
+docker compose config --quiet
+docker compose up --no-build --wait
+```
+
+Run `docker compose --profile demo run --rm --no-deps demo` only when synthetic
+demo data is wanted. The one-shot command prints a newly issued repository token
+only to the invoking terminal; do not redirect, transcribe, or expose it.
+
+Keep `ANVA_IMAGE_REPOSITORY` and `ANVA_VERSION` set for later lifecycle commands
+from this bundle. Record `ANVA_RELEASE_IMAGE` as the installed immutable identity;
+the local version tag exists only so the shipped Compose contract can select the
+already verified digest-pulled image.
+
+## Source-checkout fallback
 
 From the repository root, install the current checkout, wait for dependencies,
 run migrations, start the application, and idempotently seed the synthetic demo:
@@ -23,8 +77,9 @@ The source Compose file builds a wheel-installed runtime image from local source
 uses digest-pinned base/dependency images, and applies read-only filesystems,
 dropped capabilities, no-new-privileges, and bounded writable mounts to Anva
 application containers. Do not generalize those controls to every third-party
-database or object-storage container in the topology. This is still not an
-immutable, registry-digest-pinned published release installation.
+database or object-storage container in the topology. This path builds the
+current checkout locally; it is not the digest-addressed release installation
+above.
 
 An exact replay of `make install-demo` returns an `already_exists` demo result
 rather than creating a second tenant. The one-shot demo runs attached with
@@ -123,11 +178,11 @@ Application rollback is safe only when the previous application version is
 compatible with the current schema. If release notes declare that compatibility,
 restore the previous digest-pinned configuration and run `up -d --wait`.
 
-No prior public Anva release exists, and an older application binary has not
-been accepted against the MVP-013 schema. For an incompatible or partially
-applied migration, stop all writers and restore the database and object store
-from the same pre-upgrade recovery point. Do not mix a
-new database snapshot with old object data, or the reverse. See
+Roll back only to a previously verified digest whose release notes declare
+compatibility with the current schema. If no such release is available, or for
+an incompatible or partially applied migration, stop all writers and restore
+the database and object store from the same pre-upgrade recovery point. Do not
+mix a new database snapshot with old object data, or the reverse. See
 [Backup and restore](backup-and-restore.md).
 
 ## Uninstall while preserving data
