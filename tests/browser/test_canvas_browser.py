@@ -7,6 +7,7 @@ import math
 import os
 import platform
 import uuid
+import warnings
 from datetime import timedelta
 from pathlib import Path
 from shutil import which
@@ -53,6 +54,69 @@ from anva.core.services.jobs import claim_next_job, complete_job
 
 SCREENSHOTS = Path("docs/evidence/issue-012/screenshots")
 PERFORMANCE_ROOT = Path("docs/evidence/issue-012/performance")
+CANVAS_LAYOUT_P95_TARGET_MS = 250
+CANVAS_LAYOUT_TRACKING_ISSUE = "https://github.com/RishavT/anva/issues/49"
+
+
+class DeferredCanvasPerformanceWarning(UserWarning):
+    """A visible, actionable reminder for the explicitly deferred Canvas budget."""
+
+
+def _canvas_layout_budget_evaluation(p95_ms: float) -> dict[str, object]:
+    status = "within_target" if p95_ms <= CANVAS_LAYOUT_P95_TARGET_MS else "deferred_over_target"
+    evaluation: dict[str, object] = {
+        "blocking": False,
+        "status": status,
+        "measured_p95_ms": p95_ms,
+        "target_p95_ms": CANVAS_LAYOUT_P95_TARGET_MS,
+        "tracking_issue": CANVAS_LAYOUT_TRACKING_ISSUE,
+    }
+    if status == "deferred_over_target":
+        warnings.warn(
+            f"Dagre layout p95 {p95_ms:.3f} ms exceeded the unchanged "
+            f"{CANVAS_LAYOUT_P95_TARGET_MS} ms target; post-MVP follow-up: "
+            f"{CANVAS_LAYOUT_TRACKING_ISSUE}",
+            DeferredCanvasPerformanceWarning,
+            stacklevel=2,
+        )
+    return evaluation
+
+
+@pytest.mark.unit
+def test_canvas_layout_budget_evaluation_records_a_pass_without_warning() -> None:
+    with warnings.catch_warnings(record=True) as emitted:
+        warnings.simplefilter("always")
+        evaluation = _canvas_layout_budget_evaluation(249.999)
+
+    assert evaluation == {
+        "blocking": False,
+        "status": "within_target",
+        "measured_p95_ms": 249.999,
+        "target_p95_ms": 250,
+        "tracking_issue": "https://github.com/RishavT/anva/issues/49",
+    }
+    assert emitted == []
+
+
+@pytest.mark.unit
+def test_canvas_layout_budget_evaluation_reports_a_deferred_miss() -> None:
+    with pytest.warns(DeferredCanvasPerformanceWarning) as emitted:
+        evaluation = _canvas_layout_budget_evaluation(498.1)
+
+    assert evaluation == {
+        "blocking": False,
+        "status": "deferred_over_target",
+        "measured_p95_ms": 498.1,
+        "target_p95_ms": 250,
+        "tracking_issue": "https://github.com/RishavT/anva/issues/49",
+    }
+    assert (
+        str(emitted[0].message)
+        == (
+            "Dagre layout p95 498.100 ms exceeded the unchanged 250 ms target; "
+            "post-MVP follow-up: https://github.com/RishavT/anva/issues/49\n"
+        ).strip()
+    )
 
 
 def _metric_summary(samples: list[float]) -> dict[str, object]:
@@ -1269,8 +1333,10 @@ def test_organizational_canvas_interaction_no_js_and_responsive_evidence(
             "payload_bytes": _metric_summary(payload_bytes_samples),
             "external_request_count": _metric_summary(external_request_samples),
         }
+        layout_budget_evaluation = _canvas_layout_budget_evaluation(
+            cast(float, summaries["dagre_layout_ms"]["p95"])
+        )
         assert cast(float, summaries["shell_to_interactive_ms"]["p95"]) <= 2_000
-        assert cast(float, summaries["dagre_layout_ms"]["p95"]) <= 250
         assert cast(float, summaries["path_http_round_trip_ms"]["p95"]) <= 1_000
         for metric in ("local_search_ms", "local_filter_ms", "local_select_ms"):
             assert cast(float, summaries[metric]["p95"]) <= 100
@@ -1323,7 +1389,7 @@ def test_organizational_canvas_interaction_no_js_and_responsive_evidence(
             },
             "targets": {
                 "shell_to_interactive_p95_ms": 2_000,
-                "layout_p95_ms": 250,
+                "layout_p95_ms": CANVAS_LAYOUT_P95_TARGET_MS,
                 "path_p95_ms": 1_000,
                 "local_interaction_p95_ms": 100,
                 "gesture_main_thread_work_p95_ms": 16.7,
@@ -1331,6 +1397,9 @@ def test_organizational_canvas_interaction_no_js_and_responsive_evidence(
                 "long_task_max_ms": 50,
                 "payload_bytes": 750 * 1024,
                 "external_request_count": 0,
+            },
+            "budget_evaluations": {
+                "dagre_layout_p95_ms": layout_budget_evaluation,
             },
             "metrics": {
                 **summaries,

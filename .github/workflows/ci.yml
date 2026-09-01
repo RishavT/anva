@@ -25,6 +25,16 @@ jobs:
         run: docker compose config --quiet
       - name: Run the same checks as local development
         run: make ci
+      - name: Retain Canvas performance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: canvas-performance-${{ github.run_id }}
+          path: |
+            docs/evidence/issue-012/performance/browser.json
+            docs/evidence/issue-012/screenshots/05-canvas-300-node-performance.png
+          if-no-files-found: warn
+          retention-days: 14
       - name: Preserve Compose diagnostics on failure
         if: failure()
         run: docker compose -p anva-tests --profile test logs --no-color
