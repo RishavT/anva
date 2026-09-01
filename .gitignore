@@ -22,6 +22,7 @@ release/.trivy-cache/*
 !release/.trivy-cache/.gitkeep
 .DS_Store
 .worktrees/
+.ci-artifacts/
 evidence/
 docs/evidence/**/raw-host-stdout.bin
 docs/evidence/**/raw-host-stderr.bin
