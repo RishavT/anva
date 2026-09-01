@@ -590,6 +590,8 @@ services:
       ANVA_MCP_PUBLIC_BASE_URL: http://mcp:8001
       ANVA_MCP_READ_ONLY: "false"
       ANVA_GITHUB_WEBHOOK_SECRETS: test-github-webhook-secret
+      ANVA_CANVAS_PERFORMANCE_ROOT: ${ANVA_CANVAS_PERFORMANCE_ROOT:-docs/evidence/issue-012/performance}
+      ANVA_CANVAS_SCREENSHOT_ROOT: ${ANVA_CANVAS_SCREENSHOT_ROOT:-docs/evidence/issue-012/screenshots}
       PYTEST_ADDOPTS: "-o cache_dir=/tmp/anva-pytest-cache"
     depends_on:
       test-postgres:

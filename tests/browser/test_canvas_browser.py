@@ -52,8 +52,12 @@ from anva.core.services.ingestion import (
 )
 from anva.core.services.jobs import claim_next_job, complete_job
 
-SCREENSHOTS = Path("docs/evidence/issue-012/screenshots")
-PERFORMANCE_ROOT = Path("docs/evidence/issue-012/performance")
+SCREENSHOTS = Path(
+    os.environ.get("ANVA_CANVAS_SCREENSHOT_ROOT", "docs/evidence/issue-012/screenshots")
+)
+PERFORMANCE_ROOT = Path(
+    os.environ.get("ANVA_CANVAS_PERFORMANCE_ROOT", "docs/evidence/issue-012/performance")
+)
 CANVAS_LAYOUT_P95_TARGET_MS = 250
 CANVAS_LAYOUT_TRACKING_ISSUE = "https://github.com/RishavT/anva/issues/49"
 

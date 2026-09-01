@@ -192,8 +192,16 @@ def test_primary_product_journey_and_responsive_states(live_server: object) -> N
                 (By.TAG_NAME, "main"), "service:payments"
             )
         )
-        driver.find_element(By.CSS_SELECTOR, 'button[name="decision"][value="CONFIRM"]').click()
-        wait.until(expected_conditions.url_contains("/app/review"))
+        confirm_button = driver.find_element(
+            By.CSS_SELECTOR, 'button[name="decision"][value="CONFIRM"]'
+        )
+        confirm_button.click()
+        wait.until(expected_conditions.staleness_of(confirm_button))
+        wait.until(
+            expected_conditions.text_to_be_present_in_element(
+                (By.TAG_NAME, "main"), "This queue is clear"
+            )
+        )
         assertion.refresh_from_db()
         assert assertion.review_state == KnowledgeAssertion.ReviewState.HUMAN_CONFIRMED
         assert "This queue is clear" in driver.find_element(By.TAG_NAME, "main").text
