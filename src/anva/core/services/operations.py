@@ -44,6 +44,7 @@ MAX_DECOMMISSION_SOURCES = 1_000
 MAX_EVIDENCE_BLOB_DELETIONS = 10_000
 MAX_DECOMMISSION_UPLOADS = 10_000
 MAX_PREAUTH_RATE_BUCKET_PURGE = 1_000
+DECOMMISSION_CLEANUP_CLAIM_TTL = timedelta(minutes=15)
 
 
 @dataclass(frozen=True, slots=True)
@@ -303,6 +304,7 @@ def _finish_decommission_cleanup_attempt(
     upload_ids: list[uuid.UUID],
     now: datetime,
     summary: dict[str, object],
+    retry_actor: ActorContext | None = None,
 ) -> RetentionRun:
     """Run one bounded cleanup batch and prove terminality before completion."""
     upload_cleaned = upload_failed = deleted = failed = 0
@@ -331,6 +333,16 @@ def _finish_decommission_cleanup_attempt(
             id=run.id,
             organization=locked_organization,
         )
+        if retry_actor is not None and (
+            locked_run.state != RetentionRun.State.RUNNING
+            or locked_run.summary.get("cleanup_retry_attempts")
+            != summary.get("cleanup_retry_attempts")
+            or locked_run.summary.get("cleanup_retry_claim_request_id")
+            != str(retry_actor.request_id)
+        ):
+            # A newer claimant owns this run. Storage cleanup is idempotent, but
+            # the superseded worker must never publish its terminal result.
+            raise ResourceNotFoundError("Governed record was not found")
         remaining_blob = bool(
             list(
                 EvidenceBlob.objects.select_for_update()
@@ -356,8 +368,13 @@ def _finish_decommission_cleanup_attempt(
         cleanup_incomplete = bool(
             candidate_error or failed or upload_failed or remaining_blob or remaining_upload
         )
+        terminal_summary = {
+            key: value
+            for key, value in summary.items()
+            if key not in {"cleanup_retry_claimed_at", "cleanup_retry_claim_request_id"}
+        }
         locked_run.summary = {
-            **summary,
+            **terminal_summary,
             "evidence_blob_candidates": len(blob_ids),
             "evidence_blob_bytes_deleted": deleted,
             "evidence_blob_bytes_delete_failed": failed,
@@ -375,6 +392,22 @@ def _finish_decommission_cleanup_attempt(
         )
         locked_run.completed_at = now
         locked_run.save(update_fields=["summary", "state", "error_code", "completed_at"])
+        if retry_actor is not None:
+            attempts = locked_run.summary.get("cleanup_retry_attempts", 1)
+            revision = attempts * 2 if isinstance(attempts, int) else 2
+            record_transition(
+                organization=locked_organization,
+                actor=retry_actor,
+                target_type="retention_run",
+                target_id=locked_run.id,
+                from_state=RetentionRun.State.RUNNING,
+                to_state=locked_run.state,
+                revision=revision,
+                metadata={
+                    "kind": RetentionRun.Kind.ORGANIZATION_DECOMMISSION,
+                    "error_code": locked_run.error_code,
+                },
+            )
         return locked_run
 
 
@@ -684,6 +717,8 @@ def retry_decommission_cleanup(
     *,
     actor: ActorContext,
     run_id: uuid.UUID,
+    expected_request_hash: str | None = None,
+    expected_retry_attempt: int | None = None,
     reference_time: datetime | None = None,
 ) -> RetentionRun:
     """Retry decommission storage cleanup through a system-only inactive-tenant path."""
@@ -718,12 +753,37 @@ def retry_decommission_cleanup(
         )
         if run is None:
             raise ResourceNotFoundError("Governed record was not found")
-        if run.state == RetentionRun.State.COMPLETED:
-            return run
-        if (
-            run.state != RetentionRun.State.FAILED
-            or run.error_code != "DECOMMISSION_STORAGE_CLEANUP_RETRY_REQUIRED"
+        if expected_request_hash is not None and not hmac.compare_digest(
+            run.request_hash,
+            expected_request_hash,
         ):
+            raise ResourceNotFoundError("Governed record was not found")
+        attempts = run.summary.get("cleanup_retry_attempts", 0)
+        current_attempt = attempts if isinstance(attempts, int) else 0
+        if run.state == RetentionRun.State.COMPLETED:
+            if expected_retry_attempt is not None and expected_retry_attempt not in {
+                current_attempt,
+                max(0, current_attempt - 1),
+            }:
+                raise ResourceNotFoundError("Governed record was not found")
+            return run
+        if expected_retry_attempt is not None and expected_retry_attempt != current_attempt:
+            raise ResourceNotFoundError("Governed record was not found")
+        previous_state = run.state
+        reclaiming_expired_claim = False
+        if run.state == RetentionRun.State.FAILED:
+            if run.error_code != "DECOMMISSION_STORAGE_CLEANUP_RETRY_REQUIRED":
+                raise ResourceNotFoundError("Governed record was not found")
+        elif run.state == RetentionRun.State.RUNNING:
+            claimed_at_raw = run.summary.get("cleanup_retry_claimed_at")
+            try:
+                claimed_at = datetime.fromisoformat(str(claimed_at_raw))
+            except ValueError:
+                raise ResourceNotFoundError("Governed record was not found") from None
+            if claimed_at.tzinfo is None or now < claimed_at + DECOMMISSION_CLEANUP_CLAIM_TTL:
+                raise ResourceNotFoundError("Governed record was not found")
+            reclaiming_expired_claim = True
+        else:
             raise ResourceNotFoundError("Governed record was not found")
         upload_ids = list(
             EvidenceUploadAuthorization.objects.filter(
@@ -733,6 +793,34 @@ def retry_decommission_cleanup(
             .order_by("id")
             .values_list("id", flat=True)[:MAX_DECOMMISSION_UPLOADS]
         )
+        retry_attempt = current_attempt + 1
+        run.summary = {
+            **run.summary,
+            "cleanup_retry_attempts": retry_attempt,
+            "cleanup_retry_claimed_at": now.isoformat(),
+            "cleanup_retry_claim_request_id": str(actor.request_id),
+        }
+        run.state = RetentionRun.State.RUNNING
+        run.error_code = ""
+        run.completed_at = None
+        run.save(update_fields=["summary", "state", "error_code", "completed_at"])
+        record_transition(
+            organization=organization,
+            actor=actor,
+            target_type="retention_run",
+            target_id=run.id,
+            from_state=previous_state,
+            to_state=RetentionRun.State.RUNNING,
+            revision=(retry_attempt * 2) - 1,
+            metadata={
+                "kind": RetentionRun.Kind.ORGANIZATION_DECOMMISSION,
+                **(
+                    {"failure_code": "STALE_DECOMMISSION_CLEANUP_CLAIM_RECLAIMED"}
+                    if reclaiming_expired_claim
+                    else {}
+                ),
+            },
+        )
 
     return _finish_decommission_cleanup_attempt(
         organization=organization,
@@ -740,4 +828,5 @@ def retry_decommission_cleanup(
         upload_ids=upload_ids,
         now=now,
         summary=run.summary,
+        retry_actor=actor,
     )
