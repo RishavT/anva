@@ -18,14 +18,14 @@ IMAGE_ID_PATTERN = re.compile(r"^sha256:[a-f0-9]{64}$")
 VULNERABILITY_ID_PATTERN = re.compile(r"^CVE-[0-9]{4}-[0-9]{4,}$")
 EXPECTED_ARTIFACT_SUFFIXES = (
     ".whl",
-    "install-0.1.0.tar.gz",
+    f"install-{__version__}.tar.gz",
     "-codex-skills-1.0.0.tar.gz",
     "-claude-skills-1.0.0.tar.gz",
     "image.spdx.json",
     "image.cyclonedx.json",
     "image-vulnerabilities.json",
     "source-security.json",
-    "vulnerability-exceptions.json",
+    "vulnerability-risk-acceptance.json",
 )
 GENERATED_METADATA_NAMES = frozenset({"release-manifest.json", "SHA256SUMS"})
 SAFE_ARTIFACT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,254}$")

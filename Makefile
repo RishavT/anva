@@ -1,7 +1,7 @@
 COMPOSE_PROJECT ?= anva
 TEST_PROJECT ?= anva-tests
 ANVA_IMAGE_REPOSITORY ?= anva
-ANVA_VERSION ?= 0.1.0
+ANVA_VERSION ?= 0.1.1
 ANVA_REVISION ?= $(shell git rev-parse --verify HEAD 2>/dev/null)
 ANVA_IMAGE_SHA256 ?=
 ANVA_BUILD_INPUT_SHA256 ?=
@@ -28,6 +28,7 @@ override REHEARSAL_COMPOSE := \
 	docker compose -f compose.yaml -p $(REHEARSAL_PROJECT)
 TRIVY_SOURCE_SKIPS := --skip-dirs /workspace/.git --skip-dirs /workspace/.secrets --skip-dirs /workspace/secrets --skip-dirs /workspace/backups --skip-dirs /workspace/release --skip-dirs /workspace/.venv --skip-dirs /workspace/.pytest_cache --skip-dirs /workspace/.mypy_cache --skip-dirs /workspace/.ruff_cache --skip-dirs /workspace/htmlcov --skip-files /workspace/.env
 export ANVA_IMAGE_REPOSITORY ANVA_VERSION ANVA_REVISION ANVA_IMAGE_SHA256 ANVA_BUILD_INPUT_SHA256
+export ANVA_DRILL_IMAGE ANVA_DRILL_SOURCE_COMMIT
 COMPOSE := docker compose -p $(COMPOSE_PROJECT)
 EXPOSED_COMPOSE := $(COMPOSE) -f compose.yaml -f compose.expose.yaml
 RELEASE_COMPOSE := $(COMPOSE) -f compose.yaml -f compose.release.yaml
@@ -37,6 +38,8 @@ ACCEPTANCE_PROJECT ?= anva-acceptance
 ACCEPTANCE_CASE_COMPOSE = $(if $(strip $(ANVA_ACCEPTANCE_CASE_FILE)),-f compose.acceptance.case.yaml,)
 ACCEPTANCE_COMPOSE = docker compose -p $(ACCEPTANCE_PROJECT) -f compose.yaml -f compose.acceptance.yaml $(ACCEPTANCE_CASE_COMPOSE)
 DRILL_PROJECT ?= anva-issue44-drill
+ANVA_DRILL_IMAGE ?=
+ANVA_DRILL_SOURCE_COMMIT ?=
 DRILL_COMPOSE := docker compose -p $(DRILL_PROJECT) -f compose.yaml -f compose.drill.yaml
 DRILL_FAULT_COMPOSE := $(DRILL_COMPOSE) -f compose.drill.restore-fault.yaml
 
@@ -302,11 +305,15 @@ drill-probes:
 
 drill-evidence-template:
 	@test -n "$(DRILL_ID)" || (echo "DRILL_ID is required" >&2; exit 2)
+	@test -n "$(ANVA_DRILL_IMAGE)" && test -n "$(ANVA_DRILL_SOURCE_COMMIT)" || (echo "exact candidate image and source commit are required" >&2; exit 2)
 	@mkdir -p "$${ANVA_DRILL_EVIDENCE_DIR:-evidence/issue-044}"
 	ANVA_DRILL_TOOL_USER="$$(id -u):$$(id -g)" $(DRILL_COMPOSE) --profile drill-tools run --rm --no-deps drill-tool create-evidence \
 		--drill-id "$(DRILL_ID)" \
-		--source-revision "$(ANVA_REVISION)" \
-		--image-digest "sha256:29af794b9fda21e75461866437dd4853db54b54072252d0df9aa2eed77807c2d" \
+		--source-revision "$(ANVA_DRILL_SOURCE_COMMIT)" \
+		--product-version "$(ANVA_VERSION)" \
+		--product-source-commit "$(ANVA_DRILL_SOURCE_COMMIT)" \
+		--operator-cli-in-product \
+		--image-digest "$${ANVA_DRILL_IMAGE#*@}" \
 		--output-dir /evidence
 
 drill-evidence-provisional-validate:
@@ -401,8 +408,7 @@ release-build: release-clean
 		python -m anva.entrypoints.cli skills verify --output /tmp/anva-skills-dist && \
 		cp /tmp/anva-skills-dist/anva-codex-skills-1.0.0.tar.gz /release/ && \
 		cp /tmp/anva-skills-dist/anva-claude-skills-1.0.0.tar.gz /release/ && \
-		cp docs/security/vulnerability-exceptions.json /release/ && \
-		cp docs/releases/mvp-013.md /release/RELEASE_NOTES.md'
+		cp docs/releases/v0.1.1.md /release/RELEASE_NOTES.md'
 	@set -eu; \
 	temporary_archive="release/.anva-install-$(ANVA_VERSION).tar"; \
 	trap 'rm -f "$$temporary_archive"' 0 1 2 15; \

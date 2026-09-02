@@ -18,6 +18,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from anva import __version__
+
 PRODUCT_SOURCE_COMMIT = "d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac"
 SIGNER_WORKFLOW = "RishavT/anva/.github/workflows/operator-drill-signoff.yml"
 PREDICATE_TYPE = "https://github.com/RishavT/anva/attestations/operator-drill-signoff/v1"
@@ -227,7 +229,7 @@ def record_release_boundary(
     eligible = (
         operator_cli_in_product
         and product_source_commit == operator_source_commit
-        and product_version != "0.1.0"
+        and product_version == __version__
     )
     return {
         "operator_cli_binding": "PRODUCT_IMAGE" if eligible else "SOURCE_BOUND_DEVELOPMENT_HELPER",
@@ -239,10 +241,21 @@ def record_release_boundary(
     }
 
 
-def build_evidence(*, drill_id: str, source_revision: str, image_digest: str) -> dict[str, Any]:
+def build_evidence(
+    *,
+    drill_id: str,
+    source_revision: str,
+    image_digest: str,
+    product_version: str = "0.1.0",
+    product_source_commit: str | None = None,
+    operator_cli_in_product: bool = False,
+) -> dict[str, Any]:
+    product_source = product_source_commit or source_revision
     if (
         not UUID.fullmatch(drill_id)
         or not COMMIT.fullmatch(source_revision)
+        or not COMMIT.fullmatch(product_source)
+        or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", product_version)
         or not SHA256.fullmatch(image_digest)
     ):
         raise EvidenceRejectedError("header identities must be an exact UUID and SHA-256 values")
@@ -252,10 +265,10 @@ def build_evidence(*, drill_id: str, source_revision: str, image_digest: str) ->
         "payload": {
             "drill_id": drill_id,
             "release_boundary": record_release_boundary(
-                product_version="0.1.0",
-                product_source_commit=PRODUCT_SOURCE_COMMIT,
+                product_version=product_version,
+                product_source_commit=product_source,
                 operator_source_commit=source_revision,
-                operator_cli_in_product=False,
+                operator_cli_in_product=operator_cli_in_product,
             ),
             "runtime": {"image_digest": image_digest, "source_revision": source_revision},
             "schema_version": 3,
@@ -651,6 +664,9 @@ def _write_evidence(arguments: argparse.Namespace) -> int:
             drill_id=arguments.drill_id,
             source_revision=arguments.source_revision,
             image_digest=arguments.image_digest,
+            product_version=arguments.product_version,
+            product_source_commit=arguments.product_source_commit,
+            operator_cli_in_product=arguments.operator_cli_in_product,
         )
     )
     validate_evidence([header])
@@ -687,6 +703,9 @@ def main(argv: list[str] | None = None) -> int:
     create = commands.add_parser("create-evidence")
     create.add_argument("--drill-id", required=True)
     create.add_argument("--source-revision", required=True)
+    create.add_argument("--product-version", required=True)
+    create.add_argument("--product-source-commit", required=True)
+    create.add_argument("--operator-cli-in-product", action="store_true")
     create.add_argument("--image-digest", required=True)
     create.add_argument("--output-dir", required=True)
     validate = commands.add_parser("validate-provisional")

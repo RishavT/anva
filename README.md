@@ -165,11 +165,12 @@ refuses tracked or untracked worktree changes and verifies that the image's OCI
 revision is the exact source commit. Skill archives are rebuilt and verified in
 the release builder. The source gate excludes operator-owned secrets, backups,
 release outputs, `.git`, and local tool caches from the distributable scan, then
-gates vulnerability, secret, and misconfiguration findings. The image gate uses
-the exact approved 13-CVE/16-package-tuple no-fix set through 2026-09-25, as
-recorded in
-[`vulnerability-exceptions.json`](docs/security/vulnerability-exceptions.json);
-it does not claim that the image has no high/critical findings. On Linux, set
+gates vulnerability, secret, and misconfiguration findings. The checked-in
+[`vulnerability-exceptions.json`](docs/security/vulnerability-exceptions.json)
+is the historical v0.1.0 decision and is deliberately rejected for v0.1.1. A
+fresh exact-candidate scan and explicit RishavT approval are required before the
+v0.1.1 gate can pass; no approval claims that the image has no high/critical
+findings. On Linux, set
 `ANVA_DOCKER_GID` to the group ID of `/var/run/docker.sock` so the non-root
 scanner can inspect the local image. This creates local, ignored artifacts; it
 does not publish, sign, or tag them.
@@ -207,10 +208,11 @@ and [backup/restore](docs/runbooks/backup-and-restore.md) runbooks before using
 these beyond local evaluation. Use the GitHub-native release assets and
 digest-addressed GHCR image only after completing the verification steps in the
 install runbook; source-checkout installation remains available as a fallback.
-See the [MVP-013 release notes](docs/releases/mvp-013.md), [compatibility
+See the [v0.1.1 release notes](docs/releases/v0.1.1.md), [compatibility
 matrix](docs/releases/compatibility.md), and [current readiness
-audit](docs/releases/current-release-readiness.md) for the public `v0.1.0`
-identity and its still-open human gates.
+audit](docs/releases/current-release-readiness.md) for the pending same-source
+patch identity and its still-open human gates. The published `v0.1.0` identity
+remains historical until the protected v0.1.1 release completes.
 
 After a test or drill, remove only the named task project with `make test-down`
 or `COMPOSE_PROJECT=<exact-project> make uninstall-clean`; inspect the resolved
