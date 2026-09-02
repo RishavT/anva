@@ -145,6 +145,7 @@ def test_release_manifest_gate_verifies_generated_bundle_and_all_worktree_dirt()
     compose = cast(dict[str, object], yaml.safe_load(Path("compose.release.yaml").read_text()))
     services = cast(dict[str, dict[str, object]], compose["services"])
     scanner_volumes = cast(list[str], services["release-scanner"]["volumes"])
+    scanner = services["release-scanner"]
 
     assert "set -eu" in gate
     assert "--ignored=matching" in gate
@@ -154,8 +155,17 @@ def test_release_manifest_gate_verifies_generated_bundle_and_all_worktree_dirt()
     assert gate.index("python -m anva.release manifest") < gate.index(
         "python -m anva.release verify"
     )
-    assert "release-trivy-cache:/cache" in scanner_volumes
+    assert "release-trivy-cache:/tmp" in scanner_volumes
     assert "./release/.trivy-cache:/cache" not in scanner_volumes
+    assert cast(dict[str, str], scanner["environment"])["TRIVY_CACHE_DIR"] == (
+        "/tmp/trivy-cache"  # noqa: S108 - asserts the container-only cache mount
+    )
+    assert scanner["user"] == "${ANVA_HOST_UID:-1000}:${ANVA_HOST_GID:-1000}"
+    assert scanner["read_only"] is True
+    assert scanner["cap_drop"] == ["ALL"]
+    assert scanner["security_opt"] == ["no-new-privileges:true"]
+    assert "/var/run/docker.sock:/var/run/docker.sock:ro" in scanner_volumes
+    assert "tmpfs" not in scanner
 
 
 @pytest.mark.unit

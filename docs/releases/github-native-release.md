@@ -27,13 +27,23 @@ artifact and the pushed OCI digest. Actions are pinned to immutable commits.
    `v0.1.0` from the reviewed `main` commit. The workflow independently checks
    the tag, project version, exact commit, `main` ancestry, and clean checkout.
 
-The workflow never runs on pull requests. A manual dispatch accepts only an
-already-existing exact `v0.1.0` tag and must itself be dispatched with that tag
-as its Git ref; it is not an escape hatch for arbitrary refs or versions:
+The workflow never runs on pull requests. For the `v0.1.0` recovery, wait until
+the cache correction has been reviewed and merged to `main`, then load that
+corrected workflow definition from `main`:
 
 ```sh
-gh workflow run release.yml --repo rishavt/anva --ref v0.1.0 -f tag=v0.1.0
+gh workflow run release.yml --repo rishavt/anva --ref main -f tag=v0.1.0
 ```
+
+Workflow identity and product-source identity are deliberately separate. The
+dispatch ref selects the reviewed workflow on `main`; the workflow checks out
+the existing `v0.1.0` tag, independently resolves it, and requires its commit
+to remain `d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac`. Before checkout replaces
+the working tree with that immutable source, the reviewed workflow prepares the
+run-owned Trivy cache before checking out the tag. Every build, scan, manifest,
+attestation, and publication target is bound to that tag commit. Do not move,
+delete, or recreate the tag, and do not dispatch the recovery before the
+correction is reviewed and merged.
 
 ## Publish
 

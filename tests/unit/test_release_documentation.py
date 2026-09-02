@@ -10,6 +10,7 @@ README = ROOT / "README.md"
 INSTALL_RUNBOOK = ROOT / "docs" / "runbooks" / "install-upgrade-uninstall.md"
 EXCEPTIONS = ROOT / "docs" / "security" / "vulnerability-exceptions.json"
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
+RELEASE_RUNBOOK = ROOT / "docs" / "releases" / "github-native-release.md"
 
 
 def test_readme_reports_the_exact_current_approved_residual_risk() -> None:
@@ -74,3 +75,15 @@ def test_install_runbook_matches_github_release_assets_and_image() -> None:
         "## Source-checkout fallback",
     ):
         assert documented_contract in runbook
+
+
+def test_release_recovery_documents_separate_workflow_and_source_identities() -> None:
+    recovery = RELEASE_RUNBOOK.read_text(encoding="utf-8")
+    normalized = " ".join(recovery.split())
+
+    assert "--ref main -f tag=v0.1.0" in recovery
+    assert "--ref v0.1.0" not in recovery
+    assert "d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac" in recovery
+    assert "Do not move, delete, or recreate the tag" in normalized
+    assert "before the correction is reviewed and merged" in normalized
+    assert "prepares the run-owned Trivy cache before checking out the tag" in normalized
