@@ -4,19 +4,20 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 CLASSIFIER = Path(__file__).parents[2] / "scripts" / "classify_release_source_scan.py"
 
 
 def _report(*findings: tuple[str, str]) -> dict[str, object]:
-    result: dict[str, object] = {"Target": "fixture"}
+    result: dict[str, Any] = {"Target": "fixture"}
     for kind, severity in findings:
         if kind == "vulnerability":
-            result.setdefault("Vulnerabilities", []).append(  # type: ignore[union-attr]
+            result.setdefault("Vulnerabilities", []).append(
                 {"VulnerabilityID": f"CVE-{severity}", "Severity": severity}
             )
         elif kind == "secret":
-            result.setdefault("Secrets", []).append(  # type: ignore[union-attr]
+            result.setdefault("Secrets", []).append(
                 {
                     "RuleID": f"SECRET-{severity}",
                     "Severity": severity,
@@ -25,7 +26,7 @@ def _report(*findings: tuple[str, str]) -> dict[str, object]:
                 }
             )
         else:
-            result.setdefault("Misconfigurations", []).append(  # type: ignore[union-attr]
+            result.setdefault("Misconfigurations", []).append(
                 {"ID": f"MISCONFIG-{severity}", "Severity": severity}
             )
     return {"SchemaVersion": 2, "Results": [result]}
@@ -195,7 +196,7 @@ def test_sanitized_report_is_deterministic_across_finding_order(tmp_path: Path) 
 def test_canonical_order_is_total_for_duplicate_ids_and_results(tmp_path: Path) -> None:
     a = {"VulnerabilityID": "CVE-DUP", "Severity": "LOW", "PkgName": "z"}
     b = {"VulnerabilityID": "CVE-DUP", "Severity": "LOW", "PkgName": "a"}
-    first = {
+    first: dict[str, Any] = {
         "SchemaVersion": 2,
         "Results": [
             {"Target": "same", "Vulnerabilities": [a, b], "marker": "z"},
