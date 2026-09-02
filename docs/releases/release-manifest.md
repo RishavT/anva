@@ -28,6 +28,14 @@ reuse an existing `release/` directory for another candidate; `release-build` st
 with `release-clean` and the verifier rejects stale candidate identity, extra files,
 unsafe paths, symlinks, and checksum drift.
 
+`release-build` obtains the runtime image from the Compose `api` build definition
+through BuildKit Bake and requires the Docker exporter to rewrite layer timestamps
+to `SOURCE_DATE_EPOCH`. The Dockerfile also removes timestamp-bearing apt logs and
+cache data and uv's installation-cache record. Those files are not runtime inputs;
+retaining them would make identical source builds produce different layer DiffIDs.
+Changing the source revision or another declared build input must still change the
+image identity.
+
 Schema-v1 manifests remain useful only as historical evidence. They are intentionally
 rejected by the release verifier and must be regenerated as schema v2 from the exact
 candidate; editing or copying an old manifest is not a supported migration path.

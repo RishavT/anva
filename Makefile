@@ -3,8 +3,11 @@ TEST_PROJECT ?= anva-tests
 ANVA_IMAGE_REPOSITORY ?= anva
 ANVA_VERSION ?= 0.1.1
 ANVA_REVISION ?= $(shell git rev-parse --verify HEAD 2>/dev/null)
+ANVA_SOURCE ?= https://github.com/rishavt/anva
+SOURCE_DATE_EPOCH ?= $(shell git show -s --format=%ct HEAD 2>/dev/null)
 ANVA_IMAGE_SHA256 ?=
 ANVA_BUILD_INPUT_SHA256 ?=
+ANVA_IMAGE_BUILD_INPUT_SHA256 := $(if $(strip $(ANVA_BUILD_INPUT_SHA256)),$(ANVA_BUILD_INPUT_SHA256),0000000000000000000000000000000000000000000000000000000000000000)
 ANVA_IMAGE_REF := $(ANVA_IMAGE_REPOSITORY):$(ANVA_VERSION)
 REHEARSAL_PROJECT ?= $(COMPOSE_PROJECT)-migration-rehearsal
 override OPERATIONS_LOCK_CONTAINER := $(COMPOSE_PROJECT)-operations-lock
@@ -27,7 +30,7 @@ override REHEARSAL_COMPOSE := \
 	ANVA_MINIO_ROOT_PASSWORD=anva-rehearsal-only \
 	docker compose -f compose.yaml -p $(REHEARSAL_PROJECT)
 TRIVY_SOURCE_SKIPS := --skip-dirs /workspace/.git --skip-dirs /workspace/.secrets --skip-dirs /workspace/secrets --skip-dirs /workspace/backups --skip-dirs /workspace/release --skip-dirs /workspace/.venv --skip-dirs /workspace/.pytest_cache --skip-dirs /workspace/.mypy_cache --skip-dirs /workspace/.ruff_cache --skip-dirs /workspace/htmlcov --skip-files /workspace/.env
-export ANVA_IMAGE_REPOSITORY ANVA_VERSION ANVA_REVISION ANVA_IMAGE_SHA256 ANVA_BUILD_INPUT_SHA256
+export ANVA_IMAGE_REPOSITORY ANVA_VERSION ANVA_REVISION ANVA_SOURCE SOURCE_DATE_EPOCH ANVA_IMAGE_SHA256 ANVA_BUILD_INPUT_SHA256
 export ANVA_DRILL_IMAGE ANVA_DRILL_SOURCE_COMMIT
 COMPOSE := docker compose -p $(COMPOSE_PROJECT)
 EXPOSED_COMPOSE := $(COMPOSE) -f compose.yaml -f compose.expose.yaml
@@ -43,7 +46,7 @@ ANVA_DRILL_SOURCE_COMMIT ?=
 DRILL_COMPOSE := docker compose -p $(DRILL_PROJECT) -f compose.yaml -f compose.drill.yaml
 DRILL_FAULT_COMPOSE := $(DRILL_COMPOSE) -f compose.drill.restore-fault.yaml
 
-.PHONY: help install-demo up up-exposed down uninstall uninstall-clean backup backup-verify restore migration-rehearsal rate-limit-cleanup decommission-cleanup-status drill-network-preflight drill-up drill-probes drill-evidence-template drill-evidence-record drill-evidence-decision-proposal drill-evidence-cleanup drill-evidence-provisional-validate drill-evidence-finalize drill-evidence-final-validate drill-restore-fault drill-storage-interrupt drill-storage-resume drill-decommission-retry drill-down release-build release-scan release-scan-gate release-manifest release-artifacts release-clean reset logs migrate migrations-check shell cli lock contracts contracts-check skills-render skills-package skills-check format format-check lint type unit integration acceptance-canonicalize acceptance-verify acceptance-start acceptance-review-request acceptance-review-submit acceptance-finalize acceptance-down contract smoke browser coverage test test-down check ci
+.PHONY: help install-demo up up-exposed down uninstall uninstall-clean backup backup-verify restore migration-rehearsal rate-limit-cleanup decommission-cleanup-status drill-network-preflight drill-up drill-probes drill-evidence-template drill-evidence-record drill-evidence-decision-proposal drill-evidence-cleanup drill-evidence-provisional-validate drill-evidence-finalize drill-evidence-final-validate drill-restore-fault drill-storage-interrupt drill-storage-resume drill-decommission-retry drill-down release-image-build release-build release-scan release-scan-gate release-manifest release-artifacts release-clean reset logs migrate migrations-check shell cli lock contracts contracts-check skills-render skills-package skills-check format format-check lint type unit integration acceptance-canonicalize acceptance-verify acceptance-start acceptance-review-request acceptance-review-submit acceptance-finalize acceptance-down contract smoke browser coverage test test-down check ci
 
 help:
 	@echo "Anva development commands (all application tooling runs in Compose)"
@@ -398,8 +401,12 @@ release-clean:
 	$(RELEASE_COMPOSE) --profile release run --rm --build release-builder \
 		sh -eu -c 'find /release -maxdepth 1 -type f ! -name .gitkeep -delete'
 
-release-build: release-clean
-	$(COMPOSE) build api
+release-image-build:
+	ANVA_BUILD_INPUT_SHA256=$(ANVA_IMAGE_BUILD_INPUT_SHA256) \
+		docker buildx bake -f compose.yaml api \
+		--set api.output=type=docker,rewrite-timestamp=true
+
+release-build: release-clean release-image-build
 	$(RELEASE_COMPOSE) --profile release run --rm --build release-builder \
 		sh -eu -c 'uv build --python /app/.venv/bin/python \
 		--no-build-isolation --offline --wheel --out-dir /release && \
