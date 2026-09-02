@@ -9,9 +9,10 @@ reproducing the technically verified self-hosted installation.
 ## GitHub-native v0.1.0 installation
 
 Install Docker Engine with the Compose v2 plugin, GitHub CLI, `jq`, and standard
-`sha256sum` and `tar` utilities. Authenticate GitHub CLI if GitHub requires it.
-Download the release into a new directory, verify its checksum inventory, and
-verify GitHub standard build-provenance attestations for every downloaded asset:
+`sha256sum` and `tar` utilities. Public release asset download and checksum
+validation do not require GitHub authentication. GitHub attestation lookup does,
+so authenticate `gh` (for example, with `gh auth login` or a scoped `GH_TOKEN`)
+before verifying standard build-provenance for every downloaded asset:
 
 ```sh
 gh release download v0.1.0 --repo rishavt/anva --dir anva-v0.1.0

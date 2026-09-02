@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import shutil
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -189,6 +190,13 @@ def verify_replacement_closure(current: Path, replacement: Path) -> None:
         raise ValueError("replacement checksum closure differs")
 
 
+def snapshot_release_body(payload: bytes, output: Path) -> None:
+    response = json.loads(payload)
+    if not isinstance(response, dict) or not isinstance(response.get("body"), str):
+        raise ValueError("release API response must contain a string body")
+    output.write_bytes(response["body"].encode("utf-8"))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -200,10 +208,12 @@ def main() -> None:
     generate.add_argument("output", type=Path)
     generate.add_argument("--metadata-commit", required=True)
     generate.add_argument("--repair-run", required=True)
+    snapshot = subparsers.add_parser("snapshot-body")
+    snapshot.add_argument("output", type=Path)
     arguments = parser.parse_args()
     if arguments.command == "verify-current":
         assert_current_assets(arguments.directory)
-    else:
+    elif arguments.command == "generate":
         generate_replacement_closure(
             arguments.current,
             arguments.notes,
@@ -211,6 +221,8 @@ def main() -> None:
             arguments.metadata_commit,
             arguments.repair_run,
         )
+    else:
+        snapshot_release_body(sys.stdin.buffer.read(), arguments.output)
 
 
 if __name__ == "__main__":

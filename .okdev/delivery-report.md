@@ -1,70 +1,50 @@
-# Delivery report: issue #71
+# Delivery report: issue #77
 
 ## Status
 
-Ready for review. The pull request is intentionally unmerged. No release retry,
-tag change, package change, repository-settings change, or Release mutation was
-performed while fixing this bug.
+Ready for review. The pull request is intentionally unmerged. No repair
+redispatch, manual body edit, release/tag/package/settings mutation, or protected
+branch mutation was performed while fixing this bug.
 
 ## Root cause and correction
 
-Recovery run `33592278376` successfully built, scanned, risk-gated, manifested,
-published, and attested `v0.1.0`, then `gh release create` returned HTTP 403.
-The publish job had effective `contents: write`; the unnecessary
-`--target d919...` made GitHub apply the workflow-file write gate because that
-commit differs from default `main` in `.github/workflows/release.yml`.
-`GITHUB_TOKEN` cannot be granted that permission.
+Metadata repair run `33620337769` succeeded through upload and attestation, then
+explicitly removed `GH_TOKEN` and `GITHUB_TOKEN` from post-upload
+`gh attestation verify`. GitHub CLI requires authentication for attestation API
+lookup, even though the repository and artifacts are public.
 
-The workflow now creates the Release for the already-existing immutable tag
-with `--verify-tag` and no `--target`. Immediately before create or upload it
-re-resolves the live tag, including annotated-tag peeling, and requires exact
-agreement among the remote commit, build output, pinned release commit, and
-checkout HEAD. After the mutation it queries the Release's tag, re-resolves it,
-and again requires the exact source commit.
-
-No PAT, workflow-write permission, default-permission change, tag movement, or
-tag-rule change was introduced.
+The ensuing rollback restored the old assets/body, but verification compared a
+body rendered by `gh release view --jq`, which appended CLI output framing. The
+workflow now retains its job-scoped least-privilege token for attestation lookup
+while public release-asset downloads remain anonymous. Body snapshot and
+rollback verification use `gh api` JSON decoded directly to exact UTF-8 bytes.
+Consumer docs state this authentication boundary explicitly.
 
 ## Regression and verification evidence
 
-- Focused Docker release workflow/documentation/hardening contracts: 27 passed,
-  including executable fail-closed tag-resolution error paths.
-- Full Docker `make check`: formatting, Ruff, mypy (195 files), migrations,
-  33 generated contracts, skill packages, 1,074 tests, 85% coverage, and real
-  Chromium 2/2 passed. Five expected profile/stage skips remained.
-- Pinned real-Trivy release regression passed old-cache failure, prepared-cache
-  first scan and reuse, security controls, foreign collision refusal, and exact
-  cleanup.
-- `git diff --check`: passed.
-- Browser emitted only the already-tracked deferred #49 Canvas performance
-  warning (258.3 ms p95 versus unchanged 250 ms); no UI changed in #71.
-- All issue-scoped containers, networks, volumes, and generated images were
-  removed. Browser-generated tracked evidence was restored to the clean base.
-- Independent review round 2: approved with no remaining findings after the
-  round-1 Bash command-substitution failure-propagation correction.
+- Focused Docker Ruff and workflow regressions: 23 passed.
+- Executable rollback matrix: bodies ending in zero, one, and two newlines,
+  crossed with ordinary failure, HUP, INT, and TERM, restore exact body bytes and
+  audited assets.
+- Executable post-upload loop test requires a present `GH_TOKEN` for the real
+  extracted workflow commands.
+- actionlint v1.7.12: passed for the changed workflow.
+- Full unique-project Docker `make check`: formatting, Ruff, mypy, migrations,
+  generated contracts, skills, 1,112 tests, five expected skips, 85% coverage,
+  and real Chromium 2/2 passed.
+- Chromium emitted only deferred issue #49's unchanged Canvas p95 warning
+  (255.8 ms versus 250 ms); browser-generated tracked evidence was restored.
+- Public read-only Docker dry-run with both GitHub tokens removed downloaded and
+  verified all 13 assets and decoded/matched the exact 9,687-byte Release body.
+- Authenticated read-only attestation lookup returned four statements for the
+  repaired `RELEASE_NOTES.md` digest.
+- Independent review: approved with no findings; independent focused Docker run
+  passed 23/23 and review resources were cleaned.
 
-## Live immutable evidence
+## Recovery boundary
 
-- `main`: `e56fd6137e5d401b13aedc521fe0d8c06095d499` before the fix.
-- `v0.1.0`: `d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac`.
-- Canonical GHCR digest:
-  `sha256:71a484754b92bf06c35c075eba7b86419f1da0980b7794f53d59f8cc0f6f2f20`.
-- GitHub attestation API returned two attestations for that digest, matching the
-  successful standard and custom source-binding steps.
-- GitHub Release lookup remained 404.
-- Active tag ruleset `22026475` covers `refs/tags/v*`, blocks update and
-  deletion, and has no bypass actor.
-- The retained `release-assets-33592278376` artifact was unexpired.
-
-## Safe recovery decision
-
-GitHub re-runs retain the original event's `GITHUB_SHA` and `GITHUB_REF`. Run
-`33592278376` is bound to `e56fd613`, whose workflow contains the broken
-`--target`; therefore re-running failed jobs cannot load this correction. After
-the PR is reviewed and merged, recovery must be a new dispatch from corrected
-protected `main` for `tag=v0.1.0`, after rechecking the immutable tag, canonical
-digest, attestations, and absence/source binding of the GitHub Release.
-
-Do not rerun the current failed run. Do not move, delete, or recreate the tag.
-Do not delete or overwrite the canonical GHCR package or attestations merely to
-repair GitHub Release creation.
+The failed repair workflow must not be redispatched from this fix. After review
+and merge, a human may decide whether to run the corrected repair workflow.
+Before any future mutation, recheck protected main, immutable tag/source,
+current release inventory/body, canonical package digest, attestations, and the
+workflow's replacement closure and rollback gates.

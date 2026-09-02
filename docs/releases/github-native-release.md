@@ -88,8 +88,11 @@ Only this successful lifecycle completes the workflow.
 
 ## Consumer verification
 
-Install GitHub CLI, authenticate if GitHub requires it, and verify downloaded
-assets and the exact OCI image:
+Install GitHub CLI and verify downloaded assets and the exact OCI image. Public
+release asset download and checksum validation do not require GitHub
+authentication. GitHub attestation lookup does: authenticate `gh` before every
+`gh attestation verify` command (for example, with `gh auth login` or a scoped
+`GH_TOKEN`):
 
 ```sh
 gh release download v0.1.0 --repo rishavt/anva --dir anva-v0.1.0

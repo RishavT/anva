@@ -68,3 +68,26 @@
   confirmed the explicit resolver failure propagation, executable failure-path
   regression, release side-effect ordering, recovery decision, Ruff, format,
   and `git diff --check`; no remaining findings.
+- 2026-09-02 — issue #77 environment/specify: HAClean clear; isolated worktree
+  from protected `main` `146f4ec`; created issue #77 from failed run
+  `33620337769`. Exact logs proved unauthenticated `gh attestation verify`
+  failed and CLI/JQ body rendering made rollback verification non-byte-exact.
+- 2026-09-02 — issue #77 implement: retain anonymous asset downloads, use the
+  least-privilege job token for attestation API lookup, and snapshot/compare the
+  Release API JSON body through a byte-exact Python decoder. Documentation now
+  states the public-download versus authenticated-attestation boundary.
+- 2026-09-02 — issue #77 focused testing: Docker Ruff and 23/23 regression
+  tests passed, including actual workflow-loop token enforcement and exact
+  rollback for zero, one, or multiple trailing newlines across ordinary
+  failure, HUP, INT, and TERM. actionlint v1.7.12 passed.
+- 2026-09-02 — issue #77 public dry-run: with GitHub tokens removed, downloaded
+  and verified all 13 public release assets in an ephemeral Docker container;
+  decoded and matched all 9,687 current body bytes. Authenticated read-only
+  attestation lookup returned four statements for the repaired notes digest.
+- 2026-09-02 — issue #77 full testing: unique-project Docker `make check`
+  passed format, Ruff, mypy, migrations, contracts, skills, 1,112 tests, five
+  expected skips, 85% coverage, and real Chromium 2/2. Generated browser
+  evidence was restored; only deferred issue #49's unchanged p95 warning fired.
+- 2026-09-02 — issue #77 independent review: APPROVED with no findings.
+  Reviewer independently passed the 23 focused Docker tests and diff check,
+  then cleaned all review resources.
