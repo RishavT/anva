@@ -30,11 +30,20 @@ gh workflow run release.yml --repo rishavt/anva --ref main \
    an exception. It uploads a GitHub-attested canonical proposal containing the
    exact tag/source, locally resolved registry digest, fresh report checksum,
    complete HIGH/CRITICAL tuples, runtime-controls fingerprint, and expiry. The
-   original Trivy JSON report and database metadata are retained beside the
-   proposal, SHA-bound by it, GitHub-attested, and uploaded for inspection.
+   canonical image vulnerability report, SPDX/CycloneDX SBOMs, and database
+   metadata are retained beside the proposal. Every Trivy invocation records an
+   explicit engine exit and canonical command identity, then receives
+   format-specific semantic validation. The secret-redacted source report also
+   applies the HIGH/CRITICAL policy. A content-hashed evidence manifest binds all
+   successful reports, SBOMs, status manifests, diagnostics, bounded logs, and
+   database metadata into the proposal and eventual decision. An engine error,
+   malformed JSON schema, or source-policy finding fails before proposal/digest
+   creation; an `always()` artifact safely retains every completed non-secret or
+   sanitized output for that exact run attempt.
 5. The publishing job waits at the protected `release` environment. RishavT
-   downloads the proposal artifact, verifies all three GitHub attestations and
-   SHA-256 values, inspects the exact report and database evidence, and
+   downloads the proposal artifact, verifies every GitHub attestation and
+   SHA-256 value, inspects the exact image report, validated source report,
+   passing scan diagnostic, and database evidence, and
    personally approves or rejects the pending
    environment deployment in GitHub. No workflow, agent, or API call approves it.
 6. After approval, the job queries GitHub's immutable review history for this
