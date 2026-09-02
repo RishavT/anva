@@ -1,9 +1,9 @@
 {
   "workflow": "bugfix",
   "status": "in_progress",
-  "phase": "delivery",
+  "phase": "review",
   "workspace": "/home/rishav/Documents/personal/brain/anva",
-  "issue": 67,
-  "branch": "fix/release-trivy-cache-recovery",
-  "review_rounds": 3
+  "issue": 71,
+  "branch": "fix/release-create-existing-tag",
+  "review_rounds": 2
 }

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 from typing import cast
 
@@ -113,7 +115,8 @@ def test_dispatch_uses_main_workflow_but_binds_products_to_the_tag_commit() -> N
     assert 'echo "commit=$source_commit" >> "$GITHUB_OUTPUT"' in text
     assert '--source-commit "$ANVA_REVISION"' in text
     assert "needs.build.outputs.source_commit" in text
-    assert '--target "$SOURCE_COMMIT"' in text
+    assert "--target" not in text
+    assert "--verify-tag" in text
     assert "$GITHUB_SHA" not in text
 
 
@@ -327,6 +330,150 @@ def test_publish_rechecks_remote_tag_before_any_release_side_effect() -> None:
     assert names.index("Recheck immutable release identity") < names.index(
         "Create the GitHub Release after attestations"
     )
+
+
+def test_release_creation_uses_existing_verified_tag_without_target_and_rechecks_it() -> None:
+    _, workflow = _workflow()
+    publish = _jobs(workflow)["publish"]
+    steps = cast(list[dict[str, object]], publish["steps"])
+    release_step = next(
+        step for step in steps if step["name"] == "Create the GitHub Release after attestations"
+    )
+    script = cast(str, release_step["run"])
+
+    assert "--target" not in script
+    assert "--verify-tag" in script
+    assert "resolve_remote_tag() {" in script
+    assert '"refs/tags/${tag}" "refs/tags/${tag}^{}")" || return 1' in script
+    assert 'test "$direct_count" -eq 1 || return 1' in script
+    assert 'test "$peeled_count" -le 1 || return 1' in script
+    assert '[[ "$remote_commit" =~ ^[a-f0-9]{40}$ ]] || return 1' in script
+    assert 'remote_commit="$(resolve_remote_tag "$RELEASE_TAG")"' in script
+    assert 'test "$SOURCE_COMMIT" = "$ANVA_RELEASE_COMMIT"' in script
+    assert 'test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"' in script
+    assert 'test "$remote_commit" = "$SOURCE_COMMIT"' in script
+    assert 'gh release create "$RELEASE_TAG" release/*' in script
+    assert script.index('test "$remote_commit" = "$SOURCE_COMMIT"') < script.index(
+        'gh release create "$RELEASE_TAG" release/*'
+    )
+    assert script.index('test "$remote_commit" = "$SOURCE_COMMIT"') < script.index(
+        'gh release upload "$RELEASE_TAG" release/*'
+    )
+
+    assert '"repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}"' in script
+    assert "--jq .tag_name" in script
+    assert 'test "$release_tag" = "$RELEASE_TAG"' in script
+    assert 'release_commit="$(resolve_remote_tag "$release_tag")"' in script
+    assert 'test "$release_commit" = "$SOURCE_COMMIT"' in script
+    assert script.index('gh release create "$RELEASE_TAG" release/*') < script.index(
+        'test "$release_commit" = "$SOURCE_COMMIT"'
+    )
+
+
+def test_release_tag_resolution_failures_exit_before_release_side_effect(tmp_path: Path) -> None:
+    _, workflow = _workflow()
+    publish = _jobs(workflow)["publish"]
+    steps = cast(list[dict[str, object]], publish["steps"])
+    release_step = next(
+        step for step in steps if step["name"] == "Create the GitHub Release after attestations"
+    )
+    script = cast(str, release_step["run"])
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    side_effect_log = tmp_path / "release-side-effects"
+    source_commit = "d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac"
+
+    git = bin_dir / "git"
+    git.write_text(
+        """#!/bin/sh
+set -eu
+if [ "$1" = ls-remote ]; then
+  case "$TAG_RESPONSE" in
+    nonzero_partial)
+      printf '%s\\trefs/tags/v0.1.0\\n' "$SOURCE_COMMIT"
+      exit 2
+      ;;
+    missing) exit 2 ;;
+    malformed) printf '%s\\trefs/tags/v0.1.0\\n' not-a-commit ;;
+    duplicate_direct)
+      printf '%s\\trefs/tags/v0.1.0\\n' "$SOURCE_COMMIT"
+      printf '%s\\trefs/tags/v0.1.0\\n' "$SOURCE_COMMIT"
+      ;;
+    duplicate_peeled)
+      printf '%s\\trefs/tags/v0.1.0\\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      printf '%s\\trefs/tags/v0.1.0^{}\\n' "$SOURCE_COMMIT"
+      printf '%s\\trefs/tags/v0.1.0^{}\\n' "$SOURCE_COMMIT"
+      ;;
+    valid) printf '%s\\trefs/tags/v0.1.0\\n' "$SOURCE_COMMIT" ;;
+  esac
+elif [ "$1" = rev-parse ]; then
+  printf '%s\\n' "$SOURCE_COMMIT"
+else
+  exit 64
+fi
+""",
+        encoding="utf-8",
+    )
+    git.chmod(0o755)
+
+    gh = bin_dir / "gh"
+    gh.write_text(
+        """#!/bin/sh
+set -eu
+if [ "$1" = release ] && [ "$2" = view ]; then
+  exit 1
+fi
+if [ "$1" = release ] && { [ "$2" = create ] || [ "$2" = upload ]; }; then
+  printf '%s\\n' "$2" >> "$SIDE_EFFECT_LOG"
+  exit 0
+fi
+if [ "$1" = api ]; then
+  printf '%s\\n' v0.1.0
+  exit 0
+fi
+exit 64
+""",
+        encoding="utf-8",
+    )
+    gh.chmod(0o755)
+
+    base_environment = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "SOURCE_COMMIT": source_commit,
+        "ANVA_RELEASE_COMMIT": source_commit,
+        "RELEASE_TAG": "v0.1.0",
+        "ANVA_VERSION": "0.1.0",
+        "GITHUB_REPOSITORY": "RishavT/anva",
+        "SIDE_EFFECT_LOG": str(side_effect_log),
+    }
+    for response in (
+        "nonzero_partial",
+        "missing",
+        "malformed",
+        "duplicate_direct",
+        "duplicate_peeled",
+    ):
+        side_effect_log.unlink(missing_ok=True)
+        result = subprocess.run(  # noqa: S603 - executes the trusted workflow contract.
+            ["/bin/bash", "-c", script],
+            check=False,
+            capture_output=True,
+            env={**base_environment, "TAG_RESPONSE": response},
+            text=True,
+        )
+        assert result.returncode != 0, (response, result.stdout, result.stderr)
+        assert not side_effect_log.exists(), response
+
+    result = subprocess.run(  # noqa: S603 - executes the trusted workflow contract.
+        ["/bin/bash", "-c", script],
+        check=False,
+        capture_output=True,
+        env={**base_environment, "TAG_RESPONSE": "valid"},
+        text=True,
+    )
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert side_effect_log.read_text(encoding="utf-8") == "create\n"
 
 
 def test_verify_rechecks_remote_tag_before_authentication_or_download() -> None:
