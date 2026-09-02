@@ -266,6 +266,22 @@ services:
     environment: *app-environment
     depends_on: *app-dependencies
 
+  decommission-cleanup-operator:
+    <<: *app-security
+    image: ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.0}
+    build: *app-build
+    logging: *bounded-logging
+    profiles: ["operations"]
+    command: ["python", "-m", "anva.entrypoints.cli", "maintenance", "retry-decommission-cleanup"]
+    environment:
+      <<: *app-environment
+      ANVA_DECOMMISSION_OPERATOR_CREDENTIAL_FILE: /run/secrets/decommission_operator_credential
+      ANVA_DECOMMISSION_OPERATOR_CREDENTIAL_SHA256: ${ANVA_DECOMMISSION_OPERATOR_CREDENTIAL_SHA256:-}
+    secrets:
+      - decommission_operator_credential
+    depends_on: *app-dependencies
+    restart: "no"
+
   demo:
     <<: *app-security
     image: ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.0}
@@ -632,3 +648,5 @@ volumes:
 secrets:
   github_app_private_key:
     file: ${ANVA_GITHUB_APP_PRIVATE_KEY_FILE_HOST:-./secrets/github-app-private-key.pem}
+  decommission_operator_credential:
+    file: ${ANVA_DECOMMISSION_OPERATOR_CREDENTIAL_FILE_HOST:-./secrets/decommission-operator-credential.json}

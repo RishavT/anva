@@ -16,7 +16,36 @@ import pytest
 
 from anva import __version__
 from anva.entrypoints.cli import main
+from anva.entrypoints.decommission_retry import DecommissionCleanupStatus
 from anva.foundation.services import DependencyStatus, ReadinessStatus
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--organization-id", "not-a-uuid"],
+        ["--organization-id", str(uuid.uuid4()), "--run-id", "not-a-uuid"],
+        [
+            "--organization-id",
+            str(uuid.uuid4()),
+            "--run-id",
+            str(uuid.uuid4()),
+            "--expected-attempt",
+            "-1",
+        ],
+    ],
+)
+def test_decommission_cleanup_parser_rejections_are_correlated(
+    arguments: list[str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    result = main(["maintenance", "retry-decommission-cleanup", *arguments])
+
+    assert result == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["code"] == "operator_input_rejected"
+    assert payload["operation"] == "retry_decommission_cleanup"
+    assert uuid.UUID(payload["request_id"])
 
 
 def _write_acceptance_bundle(raw: Path) -> str:
@@ -245,6 +274,337 @@ def test_system_maintenance_cleanup_has_a_bounded_compose_invocation() -> None:
 
     assert "$(COMPOSE) --profile tools run --rm cli" in recipe
     assert "python -m anva.entrypoints.cli maintenance purge-preauth-rate-buckets" in recipe
+
+    compose = Path("compose.yaml").read_text(encoding="utf-8")
+    assert "decommission-cleanup-operator:" in compose
+    assert "ANVA_DECOMMISSION_OPERATOR_CREDENTIAL_SHA256" in compose
+    assert "decommission_operator_credential" in compose
+
+
+def _operator_credential(
+    path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    actions: list[str] | None = None,
+) -> Path:
+    payload = json.dumps(
+        {
+            "actions": actions if actions is not None else ["retry_decommission_cleanup"],
+            "credential": "c" * 64,
+            "operator_id": "release-on-call",
+            "schema_version": 1,
+        },
+        sort_keys=True,
+    ).encode()
+    path.write_bytes(payload)
+    monkeypatch.setenv(
+        "ANVA_DECOMMISSION_OPERATOR_CREDENTIAL_SHA256",
+        hashlib.sha256(payload).hexdigest(),
+    )
+    return path
+
+
+@pytest.mark.unit
+def test_decommission_cleanup_status_requires_deployment_local_credential(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    credential = _operator_credential(tmp_path / "operator.json", monkeypatch)
+    monkeypatch.setenv("ANVA_DECOMMISSION_OPERATOR_CREDENTIAL_SHA256", "f" * 64)
+
+    with patch("anva.entrypoints.cli.configure_django") as configure:
+        result = main(
+            [
+                "maintenance",
+                "retry-decommission-cleanup",
+                "--organization-id",
+                str(uuid.uuid4()),
+                "--run-id",
+                str(uuid.uuid4()),
+                "--credential-file",
+                str(credential),
+                "--status",
+            ]
+        )
+
+    assert result == 2
+    configure.assert_called_once_with()
+    output = json.loads(capsys.readouterr().out)
+    assert output == {
+        "code": "operator_authorization_rejected",
+        "message": "Deployment-local operator authorization was rejected",
+        "operation": "retry_decommission_cleanup",
+        "request_id": output["request_id"],
+    }
+    uuid.UUID(output["request_id"])
+
+
+@pytest.mark.unit
+def test_decommission_cleanup_status_requires_authorized_operator_action(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    credential = _operator_credential(
+        tmp_path / "operator.json",
+        monkeypatch,
+        actions=["inspect_decommission_cleanup"],
+    )
+
+    with patch("anva.entrypoints.cli.configure_django"):
+        result = main(
+            [
+                "maintenance",
+                "retry-decommission-cleanup",
+                "--organization-id",
+                str(uuid.uuid4()),
+                "--run-id",
+                str(uuid.uuid4()),
+                "--credential-file",
+                str(credential),
+                "--status",
+            ]
+        )
+
+    assert result == 2
+    assert json.loads(capsys.readouterr().out)["code"] == "operator_authorization_rejected"
+
+
+@pytest.mark.unit
+def test_decommission_cleanup_status_is_exact_and_correlation_friendly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    credential = _operator_credential(tmp_path / "operator.json", monkeypatch)
+    organization_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    request_hash = "a" * 64
+    correlation_id = uuid.uuid4()
+    status = DecommissionCleanupStatus(
+        organization_id=organization_id,
+        run_id=run_id,
+        request_hash=request_hash,
+        state="FAILED",
+        error_code="DECOMMISSION_STORAGE_CLEANUP_RETRY_REQUIRED",
+        cleanup_retry_attempts=1,
+    )
+
+    with (
+        patch("anva.entrypoints.cli.configure_django"),
+        patch("anva.entrypoints.decommission_retry._load_status", return_value=status),
+    ):
+        result = main(
+            [
+                "maintenance",
+                "retry-decommission-cleanup",
+                "--organization-id",
+                str(organization_id),
+                "--run-id",
+                str(run_id),
+                "--credential-file",
+                str(credential),
+                "--request-id",
+                str(correlation_id),
+                "--status",
+            ]
+        )
+
+    assert result == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "claim_expires_at": None,
+        "cleanup_retry_attempts": 1,
+        "eligible": True,
+        "error_code": "DECOMMISSION_STORAGE_CLEANUP_RETRY_REQUIRED",
+        "operation": "retry_decommission_cleanup",
+        "organization_id": str(organization_id),
+        "request_hash": request_hash,
+        "request_id": str(correlation_id),
+        "run_id": str(run_id),
+        "state": "FAILED",
+        "status": "inspection_complete",
+    }
+
+
+@pytest.mark.unit
+def test_decommission_cleanup_retry_binds_exact_confirmation_and_revision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    credential = _operator_credential(tmp_path / "operator.json", monkeypatch)
+    organization_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    request_hash = "b" * 64
+    correlation_id = uuid.uuid4()
+    status = DecommissionCleanupStatus(
+        organization_id=organization_id,
+        run_id=run_id,
+        request_hash=request_hash,
+        state="FAILED",
+        error_code="DECOMMISSION_STORAGE_CLEANUP_RETRY_REQUIRED",
+        cleanup_retry_attempts=0,
+    )
+
+    with (
+        patch("anva.entrypoints.cli.configure_django"),
+        patch("anva.entrypoints.decommission_retry._load_status", return_value=status),
+        patch("anva.core.services.operations.retry_decommission_cleanup") as retry,
+    ):
+        retry.return_value = type(
+            "Run",
+            (),
+            {"state": "COMPLETED", "error_code": "", "summary": {"cleanup_retry_attempts": 1}},
+        )()
+        result = main(
+            [
+                "maintenance",
+                "retry-decommission-cleanup",
+                "--organization-id",
+                str(organization_id),
+                "--run-id",
+                str(run_id),
+                "--expected-request-hash",
+                request_hash,
+                "--expected-attempt",
+                "0",
+                "--credential-file",
+                str(credential),
+                "--request-id",
+                str(correlation_id),
+                "--confirm",
+                (f"RETRY DECOMMISSION CLEANUP {organization_id} {run_id} {request_hash} ATTEMPT 0"),
+            ]
+        )
+
+    assert result == 0
+    actor = retry.call_args.kwargs["actor"]
+    assert actor.organization_id == organization_id
+    assert actor.actor_id == "anva-retention-worker"
+    assert actor.authorization_path == "deployment-local:decommission-cleanup:release-on-call"
+    assert actor.request_id == correlation_id
+    assert retry.call_args.kwargs["run_id"] == run_id
+    assert retry.call_args.kwargs["expected_request_hash"] == request_hash
+    assert retry.call_args.kwargs["expected_retry_attempt"] == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "completed"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("run_state", "run_error", "expected_exit", "expected_status"),
+    [
+        ("RUNNING", "", 4, "decommission_cleanup_not_retryable"),
+        (
+            "FAILED",
+            "DECOMMISSION_STORAGE_CLEANUP_RETRY_REQUIRED",
+            5,
+            "retry_required",
+        ),
+    ],
+)
+def test_decommission_cleanup_retry_returns_stable_collision_and_storage_exit_codes(
+    run_state: str,
+    run_error: str,
+    expected_exit: int,
+    expected_status: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    credential = _operator_credential(tmp_path / "operator.json", monkeypatch)
+    organization_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    request_hash = "d" * 64
+    status = DecommissionCleanupStatus(
+        organization_id=organization_id,
+        run_id=run_id,
+        request_hash=request_hash,
+        state=run_state,
+        error_code=run_error,
+        cleanup_retry_attempts=1,
+    )
+    arguments = [
+        "maintenance",
+        "retry-decommission-cleanup",
+        "--organization-id",
+        str(organization_id),
+        "--run-id",
+        str(run_id),
+        "--expected-request-hash",
+        request_hash,
+        "--expected-attempt",
+        "1",
+        "--credential-file",
+        str(credential),
+        "--confirm",
+        (f"RETRY DECOMMISSION CLEANUP {organization_id} {run_id} {request_hash} ATTEMPT 1"),
+    ]
+
+    with (
+        patch("anva.entrypoints.cli.configure_django"),
+        patch("anva.entrypoints.decommission_retry._load_status", return_value=status),
+        patch("anva.core.services.operations.retry_decommission_cleanup") as retry,
+    ):
+        retry.return_value = type(
+            "Run",
+            (),
+            {
+                "state": "FAILED",
+                "error_code": "DECOMMISSION_STORAGE_CLEANUP_RETRY_REQUIRED",
+                "summary": {"cleanup_retry_attempts": 2},
+            },
+        )()
+        result = main(arguments)
+
+    assert result == expected_exit
+    output = json.loads(capsys.readouterr().out)
+    assert output.get("status", output.get("code")) == expected_status
+    assert retry.called is (run_state == "FAILED")
+
+
+@pytest.mark.unit
+def test_decommission_cleanup_dependency_failure_has_safe_correlation_exit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from django.db import DatabaseError
+
+    credential = _operator_credential(tmp_path / "operator.json", monkeypatch)
+    correlation_id = uuid.uuid4()
+
+    with (
+        patch("anva.entrypoints.cli.configure_django"),
+        patch(
+            "anva.entrypoints.decommission_retry._load_status",
+            side_effect=DatabaseError("private database detail"),
+        ),
+    ):
+        result = main(
+            [
+                "maintenance",
+                "retry-decommission-cleanup",
+                "--organization-id",
+                str(uuid.uuid4()),
+                "--run-id",
+                str(uuid.uuid4()),
+                "--credential-file",
+                str(credential),
+                "--request-id",
+                str(correlation_id),
+                "--status",
+            ]
+        )
+
+    assert result == 6
+    output = json.loads(capsys.readouterr().out)
+    assert output == {
+        "code": "operator_dependency_unavailable",
+        "message": "A required operator dependency is unavailable",
+        "operation": "retry_decommission_cleanup",
+        "request_id": str(correlation_id),
+    }
 
 
 @pytest.mark.unit

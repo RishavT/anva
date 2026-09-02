@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
+import io
 import json
 import os
 import re
+import sys
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -28,6 +31,16 @@ def _maintenance_batch_limit(raw: str) -> int:
     if not 1 <= limit <= 1_000:
         raise argparse.ArgumentTypeError("maintenance batch limit must be between 1 and 1000")
     return limit
+
+
+def _nonnegative_attempt(raw: str) -> int:
+    try:
+        attempt = int(raw)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("expected attempt must be an integer") from error
+    if attempt < 0:
+        raise argparse.ArgumentTypeError("expected attempt must not be negative")
+    return attempt
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -76,6 +89,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Delete one bounded batch of expired anonymous request counters",
     )
     purge_preauth.add_argument("--limit", type=_maintenance_batch_limit, default=1_000)
+    retry_cleanup = maintenance_commands.add_parser(
+        "retry-decommission-cleanup",
+        help="Inspect or retry one exact failed decommission cleanup",
+    )
+    retry_cleanup.add_argument("--organization-id", required=True, type=uuid.UUID)
+    retry_cleanup.add_argument("--run-id", required=True, type=uuid.UUID)
+    retry_cleanup.add_argument("--expected-request-hash")
+    retry_cleanup.add_argument("--expected-attempt", type=_nonnegative_attempt)
+    retry_cleanup.add_argument(
+        "--credential-file",
+        default=os.getenv(
+            "ANVA_DECOMMISSION_OPERATOR_CREDENTIAL_FILE",
+            "/run/secrets/decommission_operator_credential",
+        ),
+    )
+    retry_cleanup.add_argument("--request-id", type=uuid.UUID)
+    retry_mode = retry_cleanup.add_mutually_exclusive_group(required=True)
+    retry_mode.add_argument("--status", action="store_true")
+    retry_mode.add_argument("--dry-run", action="store_true")
+    retry_mode.add_argument("--confirm")
     acceptance = subparsers.add_parser(
         "acceptance",
         help="Canonicalize or verify an oracle-isolated public acceptance corpus",
@@ -733,6 +766,10 @@ def _operations_request(arguments: argparse.Namespace) -> int:
 
 def _maintenance_request(arguments: argparse.Namespace) -> int:
     """Run local system maintenance without exposing tenant deletion counts."""
+    if arguments.maintenance_command == "retry-decommission-cleanup":
+        from anva.entrypoints.decommission_retry import execute_decommission_cleanup
+
+        return execute_decommission_cleanup(arguments)
     if arguments.maintenance_command != "purge-preauth-rate-buckets":
         raise ValueError("Unknown maintenance command")
     from anva.core.services.operations import purge_expired_pre_auth_rate_buckets
@@ -1192,7 +1229,38 @@ def _acceptance_request(arguments: argparse.Namespace) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Execute one CLI command and return a process exit code."""
-    arguments = build_parser().parse_args(argv)
+    raw_arguments = list(argv) if argv is not None else sys.argv[1:]
+    is_cleanup_retry = raw_arguments[:2] == [
+        "maintenance",
+        "retry-decommission-cleanup",
+    ]
+    if is_cleanup_retry:
+        request_id = uuid.uuid4()
+        try:
+            request_id_index = raw_arguments.index("--request-id") + 1
+            request_id = uuid.UUID(raw_arguments[request_id_index])
+        except (ValueError, IndexError):
+            pass
+        with contextlib.redirect_stderr(io.StringIO()):
+            try:
+                arguments = build_parser().parse_args(raw_arguments)
+            except SystemExit as error:
+                if error.code == 0:
+                    raise
+                print(
+                    json.dumps(
+                        {
+                            "code": "operator_input_rejected",
+                            "message": "The decommission cleanup operator input was rejected",
+                            "operation": "retry_decommission_cleanup",
+                            "request_id": str(request_id),
+                        },
+                        sort_keys=True,
+                    )
+                )
+                return 2
+    else:
+        arguments = build_parser().parse_args(raw_arguments)
     if arguments.command == "version":
         print(__version__)
         return 0

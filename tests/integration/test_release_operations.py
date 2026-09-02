@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -60,6 +63,7 @@ from anva.core.services.web_auth import (
     WEB_USER_SESSION_KEY,
     resolve_web_principal,
 )
+from anva.entrypoints.cli import main
 
 
 @dataclass(frozen=True, slots=True)
@@ -762,9 +766,55 @@ def test_failed_decommission_cleanup_requires_system_retry_before_completion() -
         credential_actions=frozenset({Action.RETENTION_MANAGE.value}),
     )
 
+    with pytest.raises(ResourceNotFoundError, match="Governed record was not found"):
+        retry_decommission_cleanup(
+            actor=system_actor,
+            run_id=run.id,
+            expected_request_hash="f" * 64,
+            expected_retry_attempt=0,
+        )
+    run.refresh_from_db()
+    assert run.state == RetentionRun.State.FAILED
+
+    other = _operations_tenant("decommission-retry-other")
+    wrong_tenant_actor = ActorContext(
+        organization_id=other.organization.id,
+        actor_type="SYSTEM",
+        actor_id="anva-retention-worker",
+        authorization_path="system:retention-worker",
+        request_id=uuid.uuid4(),
+        credential_actions=frozenset({Action.RETENTION_MANAGE.value}),
+    )
+    with pytest.raises(ResourceNotFoundError, match="Governed record was not found"):
+        retry_decommission_cleanup(
+            actor=wrong_tenant_actor,
+            run_id=run.id,
+            expected_request_hash=run.request_hash,
+            expected_retry_attempt=0,
+        )
+
+    run.state = RetentionRun.State.RUNNING
+    run.completed_at = None
+    run.error_code = ""
+    run.save(update_fields=["state", "completed_at", "error_code"])
+    with pytest.raises(ResourceNotFoundError, match="Governed record was not found"):
+        retry_decommission_cleanup(
+            actor=system_actor,
+            run_id=run.id,
+            expected_request_hash=run.request_hash,
+            expected_retry_attempt=0,
+        )
+    run.state = RetentionRun.State.FAILED
+    run.completed_at = timezone.now()
+    run.error_code = "DECOMMISSION_STORAGE_CLEANUP_RETRY_REQUIRED"
+    run.save(update_fields=["state", "completed_at", "error_code"])
+
     def delete_bytes(
         *, organization_id: uuid.UUID, blob_id: uuid.UUID, reason: str
     ) -> EvidenceBlob:
+        claimed = RetentionRun.objects.get(id=run.id)
+        assert claimed.state == RetentionRun.State.RUNNING
+        assert claimed.summary["cleanup_retry_attempts"] == 1
         assert organization_id == tenant.organization.id
         assert blob_id == blob.id
         assert reason == "organization_decommission"
@@ -782,15 +832,240 @@ def test_failed_decommission_cleanup_requires_system_retry_before_completion() -
         "anva.core.services.operations.delete_evidence_blob_bytes",
         side_effect=delete_bytes,
     ):
-        retried = retry_decommission_cleanup(actor=system_actor, run_id=run.id)
+        retried = retry_decommission_cleanup(
+            actor=system_actor,
+            run_id=run.id,
+            expected_request_hash=run.request_hash,
+            expected_retry_attempt=0,
+        )
 
     assert retried.state == RetentionRun.State.COMPLETED
     assert retried.error_code == ""
     blob.refresh_from_db()
     assert blob.storage_state == EvidenceBlob.StorageState.DELETED
-    replay = retry_decommission_cleanup(actor=system_actor, run_id=run.id)
+    assert AuditEvent.objects.filter(
+        organization=tenant.organization,
+        target_type="retention_run",
+        target_id=run.id,
+        request_id=system_actor.request_id,
+        from_state=RetentionRun.State.FAILED,
+        to_state=RetentionRun.State.RUNNING,
+    ).exists()
+    assert AuditEvent.objects.filter(
+        organization=tenant.organization,
+        target_type="retention_run",
+        target_id=run.id,
+        request_id=system_actor.request_id,
+        from_state=RetentionRun.State.RUNNING,
+        to_state=RetentionRun.State.COMPLETED,
+    ).exists()
+    replay = retry_decommission_cleanup(
+        actor=system_actor,
+        run_id=run.id,
+        expected_request_hash=run.request_hash,
+        expected_retry_attempt=0,
+    )
     assert replay.id == retried.id
     assert replay.state == RetentionRun.State.COMPLETED
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_stale_retry_revision_is_rejected_and_expired_claim_is_recoverable() -> None:
+    tenant = _operations_tenant("decommission-stale-claim")
+    with patch(
+        "anva.core.services.operations._decommission_blob_candidates",
+        side_effect=ValueError("simulated candidate failure"),
+    ):
+        run = decommission_organization(
+            actor=tenant.actor,
+            confirmation=tenant.organization.slug,
+            acknowledgement=f"DECOMMISSION {tenant.organization.slug}",
+        )
+    system_actor = ActorContext(
+        organization_id=tenant.organization.id,
+        actor_type="SYSTEM",
+        actor_id="anva-retention-worker",
+        authorization_path="deployment-local:decommission-cleanup:test-operator",
+        request_id=uuid.uuid4(),
+        credential_actions=frozenset({Action.RETENTION_MANAGE.value}),
+    )
+    run.summary = {**run.summary, "cleanup_retry_attempts": 1}
+    run.save(update_fields=["summary"])
+
+    with pytest.raises(ResourceNotFoundError, match="Governed record was not found"):
+        retry_decommission_cleanup(
+            actor=system_actor,
+            run_id=run.id,
+            expected_request_hash=run.request_hash,
+            expected_retry_attempt=0,
+        )
+
+    now = timezone.now()
+    run.state = RetentionRun.State.RUNNING
+    run.error_code = ""
+    run.completed_at = None
+    run.summary = {
+        **run.summary,
+        "cleanup_retry_claimed_at": (now - timedelta(minutes=16)).isoformat(),
+        "cleanup_retry_claim_request_id": str(uuid.uuid4()),
+    }
+    run.save(update_fields=["state", "error_code", "completed_at", "summary"])
+
+    retried = retry_decommission_cleanup(
+        actor=system_actor,
+        run_id=run.id,
+        expected_request_hash=run.request_hash,
+        expected_retry_attempt=1,
+        reference_time=now,
+    )
+
+    assert retried.state == RetentionRun.State.COMPLETED
+    assert retried.summary["cleanup_retry_attempts"] == 2
+    assert "cleanup_retry_claimed_at" not in retried.summary
+    assert AuditEvent.objects.filter(
+        organization=tenant.organization,
+        target_type="retention_run",
+        target_id=run.id,
+        request_id=system_actor.request_id,
+        from_state=RetentionRun.State.RUNNING,
+        to_state=RetentionRun.State.RUNNING,
+    ).exists()
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_superseded_retry_claim_cannot_publish_a_terminal_result() -> None:
+    tenant = _operations_tenant("decommission-claim-fence")
+    with patch(
+        "anva.core.services.operations._decommission_blob_candidates",
+        side_effect=ValueError("simulated candidate failure"),
+    ):
+        run = decommission_organization(
+            actor=tenant.actor,
+            confirmation=tenant.organization.slug,
+            acknowledgement=f"DECOMMISSION {tenant.organization.slug}",
+        )
+    old_request_id = uuid.uuid4()
+    newer_request_id = uuid.uuid4()
+    actor = ActorContext(
+        organization_id=tenant.organization.id,
+        actor_type="SYSTEM",
+        actor_id="anva-retention-worker",
+        authorization_path="deployment-local:decommission-cleanup:test-operator",
+        request_id=old_request_id,
+        credential_actions=frozenset({Action.RETENTION_MANAGE.value}),
+    )
+
+    def supersede_claim(*args: object, **kwargs: object) -> list[uuid.UUID]:
+        claimed = RetentionRun.objects.get(id=run.id)
+        claimed.summary = {
+            **claimed.summary,
+            "cleanup_retry_attempts": 2,
+            "cleanup_retry_claim_request_id": str(newer_request_id),
+            "cleanup_retry_claimed_at": timezone.now().isoformat(),
+        }
+        claimed.save(update_fields=["summary"])
+        return []
+
+    with (
+        patch(
+            "anva.core.services.operations._decommission_blob_candidates",
+            side_effect=supersede_claim,
+        ),
+        pytest.raises(ResourceNotFoundError, match="Governed record was not found"),
+    ):
+        retry_decommission_cleanup(
+            actor=actor,
+            run_id=run.id,
+            expected_request_hash=run.request_hash,
+            expected_retry_attempt=0,
+        )
+
+    run.refresh_from_db()
+    assert run.state == RetentionRun.State.RUNNING
+    assert run.summary["cleanup_retry_attempts"] == 2
+    assert run.summary["cleanup_retry_claim_request_id"] == str(newer_request_id)
+    assert not AuditEvent.objects.filter(
+        organization=tenant.organization,
+        target_id=run.id,
+        request_id=old_request_id,
+        from_state=RetentionRun.State.RUNNING,
+    ).exists()
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_operator_cli_executes_exact_revision_retry_end_to_end(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    tenant = _operations_tenant("decommission-operator-cli")
+    with patch(
+        "anva.core.services.operations._decommission_blob_candidates",
+        side_effect=ValueError("simulated candidate failure"),
+    ):
+        run = decommission_organization(
+            actor=tenant.actor,
+            confirmation=tenant.organization.slug,
+            acknowledgement=f"DECOMMISSION {tenant.organization.slug}",
+        )
+
+    credential = tmp_path / "operator.json"
+    credential.write_text(
+        json.dumps(
+            {
+                "actions": ["retry_decommission_cleanup"],
+                "credential": "a" * 64,
+                "operator_id": "integration-operator",
+                "schema_version": 1,
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(
+        "ANVA_DECOMMISSION_OPERATOR_CREDENTIAL_SHA256",
+        hashlib.sha256(credential.read_bytes()).hexdigest(),
+    )
+    base_arguments = [
+        "maintenance",
+        "retry-decommission-cleanup",
+        "--organization-id",
+        str(tenant.organization.id),
+        "--run-id",
+        str(run.id),
+        "--expected-request-hash",
+        run.request_hash,
+        "--expected-attempt",
+        "0",
+        "--credential-file",
+        str(credential),
+    ]
+
+    assert main([*base_arguments, "--dry-run"]) == 0
+    dry_run = json.loads(capsys.readouterr().out)
+    assert dry_run["eligible"] is True
+    assert dry_run["cleanup_retry_attempts"] == 0
+
+    confirmation = (
+        f"RETRY DECOMMISSION CLEANUP {tenant.organization.id} {run.id} {run.request_hash} ATTEMPT 0"
+    )
+    assert main([*base_arguments, "--confirm", confirmation]) == 0
+    completed = json.loads(capsys.readouterr().out)
+    assert completed["state"] == RetentionRun.State.COMPLETED
+    assert completed["cleanup_retry_attempts"] == 1
+    assert completed["request_id"]
+
+    run.refresh_from_db()
+    assert run.state == RetentionRun.State.COMPLETED
+    assert AuditEvent.objects.filter(
+        organization=tenant.organization,
+        target_id=run.id,
+        request_id=completed["request_id"],
+        to_state=RetentionRun.State.COMPLETED,
+    ).exists()
 
 
 @pytest.mark.integration

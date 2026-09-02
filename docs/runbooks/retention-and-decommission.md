@@ -112,6 +112,85 @@ operator-controlled backup and an approved, isolated restoration procedure; a
 restore can also revive credentials or data that policy says must remain
 disabled. Escalate rather than manually editing lifecycle fields.
 
+### Retry failed decommission storage cleanup
+
+Use this deployment-local workflow only when the exact decommission run is
+`FAILED` with `DECOMMISSION_STORAGE_CLEANUP_RETRY_REQUIRED`. It has no HTTP
+endpoint and does not accept a bearer token. Do not run it against a release or
+tenant unless the approved recovery procedure names that exact organization
+and run. Never repair the state with direct database or object-store edits.
+
+An authorized deployment owner creates an operator credential outside the
+repository and image. The JSON must contain a random 32-byte hex credential,
+an operator identifier, and only the required action:
+
+```json
+{
+  "actions": ["retry_decommission_cleanup"],
+  "credential": "<64 lowercase hex characters from a cryptographic generator>",
+  "operator_id": "release-on-call",
+  "schema_version": 1
+}
+```
+
+Restrict the file to the approved operator, record the SHA-256 of its exact
+bytes in deployment-owned configuration, and set these variables only in the
+controlled operator shell:
+
+```sh
+export ANVA_DECOMMISSION_OPERATOR_CREDENTIAL_FILE_HOST=/absolute/operator-controlled/operator.json
+export ANVA_DECOMMISSION_OPERATOR_CREDENTIAL_SHA256=<sha256-of-exact-json-bytes>
+```
+
+First inspect using the exact organization and run UUIDs from the original
+decommission response or audit evidence:
+
+```sh
+ORGANIZATION_ID=<organization-uuid> RUN_ID=<run-uuid> make decommission-cleanup-status
+```
+
+The status JSON returns the immutable `request_hash`, mutable
+`cleanup_retry_attempts` revision, and any active `claim_expires_at`. Compare
+all four identities with the approved incident record. Then perform a read-only
+eligibility check, preserving the returned `request_id` as correlation
+evidence:
+
+```sh
+docker compose -p anva --profile operations run --rm decommission-cleanup-operator \
+  python -m anva.entrypoints.cli maintenance retry-decommission-cleanup \
+  --organization-id <organization-uuid> --run-id <run-uuid> \
+  --expected-request-hash <request-hash> \
+  --expected-attempt <cleanup-retry-attempts> --dry-run
+```
+
+If it reports `eligible: true`, record a fresh correlation UUID and invoke the
+mutation with the exact, case-sensitive confirmation:
+
+```sh
+docker compose -p anva --profile operations run --rm decommission-cleanup-operator \
+  python -m anva.entrypoints.cli maintenance retry-decommission-cleanup \
+  --organization-id <organization-uuid> --run-id <run-uuid> \
+  --expected-request-hash <request-hash> --request-id <correlation-uuid> \
+  --expected-attempt <cleanup-retry-attempts> \
+  --confirm "RETRY DECOMMISSION CLEANUP <organization-uuid> <run-uuid> <request-hash> ATTEMPT <cleanup-retry-attempts>"
+```
+
+The retry atomically claims the exact attempt revision before touching storage.
+A concurrent or stale invocation is rejected; a completed run is an idempotent
+success. A `RUNNING` claim expires after 15 minutes so an interrupted operator
+process can be recovered with the attempt revision returned by a fresh status
+inspection. The original claim, stale-claim recovery, and outcome are audit
+events tied to their correlation UUIDs. Every command result, including safe
+rejections, contains `operation` and `request_id`; preserve that JSON and the
+matching audit event, but not the credential or customer content. Exit codes
+are: `0` inspected/dry-run/completed/already complete; `2` invalid input,
+credential, authorization, or confirmation; `3` exact tenant/run identity not
+found; `4` stale revision, collision, active claim, or non-retryable state; `5`
+storage cleanup remains failed and may be retried after remediation; `6` the
+database or another required operator dependency is unavailable. After exit
+`5` or `6`, repair only the named dependency, repeat status and dry-run, and
+retry with a new correlation UUID and the newly reported attempt revision.
+
 ## Known limitations
 
 - No login or post-setup reauthentication flow refreshes the decommission
@@ -123,7 +202,8 @@ disabled. Escalate rather than manually editing lifecycle fields.
   demonstrated. Accepted evidence-byte deletion is not source deletion or
   complete tenant erasure.
 - The operations are transaction-bounded and have deterministic replay
-  identities, and object deletion has retryable `DELETE_FAILED` state, but
-  large-tenant timing and manual interruption/recovery exercises remain open.
+  identities, and object deletion has retryable `DELETE_FAILED` state through
+  the deployment-local command above. Large-tenant timing and the release
+  recovery exercise remain open.
 - A successful HTTP status is not sufficient acceptance evidence; verify state,
   isolation, audit records, and retained/deleted data explicitly.
