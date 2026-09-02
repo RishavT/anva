@@ -24,6 +24,7 @@ env:
   ANVA_RELEASE_COMMIT: d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac
   ANVA_SOURCE_PREDICATE_TYPE: https://github.com/RishavT/anva/attestations/source/v1
   ANVA_TRIVY_IMAGE: aquasec/trivy:0.64.1@sha256:a8ca29078522f30393bdb34225e4c0994d38f37083be81a42da3a2a7e1488e9e
+  ANVA_REGISTRY_IMAGE: registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
 
 jobs:
   build:
@@ -138,11 +139,17 @@ jobs:
           test "$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')" = "$ANVA_VERSION"
           test "$(git status --porcelain=v1 --untracked-files=all)" = ""
           echo "commit=$source_commit" >> "$GITHUB_OUTPUT"
+          docker_gid="$(stat -c '%g' /var/run/docker.sock)"
+          [[ "$docker_gid" =~ ^[0-9]+$ ]] || {
+            echo "Docker socket group ID must be numeric" >&2
+            exit 1
+          }
           {
             echo "ANVA_REVISION=$source_commit"
             echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct "$source_commit")"
             echo "ANVA_HOST_UID=$(id -u)"
             echo "ANVA_HOST_GID=$(id -g)"
+            echo "ANVA_DOCKER_GID=$docker_gid"
           } >> "$GITHUB_ENV"
 
       - name: Authenticate to GHCR with the job token
@@ -153,57 +160,8 @@ jobs:
       - name: Build and fail-closed verify release artifacts
         run: |
           set -euo pipefail
-          ANVA_DOCKER_GID="$(stat -c '%g' /var/run/docker.sock)"
-          export ANVA_DOCKER_GID
           make release-artifacts
           (cd release && sha256sum --check SHA256SUMS)
-
-      - name: Push the exact image and resolve its registry digest
-        id: image
-        run: |
-          set -euo pipefail
-          image="${ANVA_IMAGE_REPOSITORY}:${ANVA_VERSION}"
-          docker push "$image" | tee /tmp/docker-push.log
-          digest="$(sed -n 's/^.*digest: \(sha256:[a-f0-9]\{64\}\).*$/\1/p' /tmp/docker-push.log | tail -1)"
-          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || {
-            echo "Registry did not return an immutable digest" >&2
-            exit 1
-          }
-          docker pull "${ANVA_IMAGE_REPOSITORY}@${digest}"
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          echo "reference=${ANVA_IMAGE_REPOSITORY}@${digest}" >> "$GITHUB_OUTPUT"
-
-      - name: Bind approved residual risk to the immutable image
-        env:
-          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
-          IMAGE_REFERENCE: ${{ steps.image.outputs.reference }}
-        run: |
-          set -euo pipefail
-          docker compose -f compose.yaml -f compose.release.yaml -p "$COMPOSE_PROJECT" \
-            --profile release run --rm release-builder \
-            python -m anva.release risk-acceptance \
-              --input /workspace/docs/security/vulnerability-exceptions.json \
-              --report /release/anva-image-vulnerabilities.json \
-              --output /release/vulnerability-risk-acceptance.json \
-              --source-commit "$ANVA_REVISION" \
-              --image-reference "$IMAGE_REFERENCE" \
-              --image-digest "$IMAGE_DIGEST" \
-              --release-version "$ANVA_VERSION"
-          ANVA_RELEASE_IMAGE_REFERENCE="$IMAGE_REFERENCE" \
-            ANVA_RELEASE_IMAGE_ID="$IMAGE_DIGEST" make release-manifest
-          (cd release && sha256sum --check SHA256SUMS)
-
-      - name: Attest the GHCR image
-        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
-        with:
-          subject-name: ${{ env.ANVA_IMAGE_REPOSITORY }}
-          subject-digest: ${{ steps.image.outputs.digest }}
-          push-to-registry: true
-
-      - name: Attest every downloadable release artifact
-        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
-        with:
-          subject-path: release/*
 
       - name: Create the immutable product source binding
         id: source-binding
@@ -230,6 +188,106 @@ jobs:
               output.write("\n")
           PY
           echo "predicate=$predicate" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare the run-owned local digest registry
+        id: local-registry
+        run: |
+          set -euo pipefail
+          registry_container="${COMPOSE_PROJECT}-digest-registry"
+          if docker container inspect "$registry_container" >/dev/null 2>&1; then
+            echo "Refusing to reuse pre-existing digest registry: $registry_container" >&2
+            exit 1
+          fi
+          docker run --detach \
+            --name "$registry_container" \
+            --label "com.anva.release.owner=$COMPOSE_PROJECT" \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --tmpfs /var/lib/registry:rw,nosuid,nodev,noexec,size=1g \
+            --publish 127.0.0.1::5000 \
+            "$ANVA_REGISTRY_IMAGE"
+          test "$(docker inspect --format '{{ index .Config.Labels "com.anva.release.owner" }}' "$registry_container")" = "$COMPOSE_PROJECT"
+          registry_address="$(docker port "$registry_container" 5000/tcp)"
+          [[ "$registry_address" =~ ^127\.0\.0\.1:[0-9]+$ ]] || {
+            echo "Digest registry must bind only to a loopback TCP port" >&2
+            exit 1
+          }
+          ready=false
+          for _ in {1..20}; do
+            if curl --fail --silent "http://${registry_address}/v2/" >/dev/null; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = true
+          echo "endpoint=$registry_address" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve the exact image digest without remote publication
+        id: image
+        env:
+          LOCAL_REGISTRY: ${{ steps.local-registry.outputs.endpoint }}
+        run: |
+          set -euo pipefail
+          image="${ANVA_IMAGE_REPOSITORY}:${ANVA_VERSION}"
+          [[ "$LOCAL_REGISTRY" =~ ^127\.0\.0\.1:[0-9]+$ ]]
+          local_image="${LOCAL_REGISTRY}/anva:${ANVA_VERSION}"
+          docker tag "$image" "$local_image"
+          docker push "$local_image" | tee /tmp/docker-push.log
+          digest="$(sed -n 's/^.*digest: \(sha256:[a-f0-9]\{64\}\).*$/\1/p' /tmp/docker-push.log | tail -1)"
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || {
+            echo "Local digest registry did not return an immutable digest" >&2
+            exit 1
+          }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "reference=${ANVA_IMAGE_REPOSITORY}@${digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Bind approved residual risk to the immutable image
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          IMAGE_REFERENCE: ${{ steps.image.outputs.reference }}
+        run: |
+          set -euo pipefail
+          docker compose -f compose.yaml -f compose.release.yaml -p "$COMPOSE_PROJECT" \
+            --profile release run --rm release-builder \
+            python -m anva.release risk-acceptance \
+              --input /workspace/docs/security/vulnerability-exceptions.json \
+              --report /release/anva-image-vulnerabilities.json \
+              --output /release/vulnerability-risk-acceptance.json \
+              --source-commit "$ANVA_REVISION" \
+              --image-reference "$IMAGE_REFERENCE" \
+              --image-digest "$IMAGE_DIGEST" \
+              --release-version "$ANVA_VERSION"
+          ANVA_RELEASE_IMAGE_REFERENCE="$IMAGE_REFERENCE" \
+            ANVA_RELEASE_IMAGE_ID="$IMAGE_DIGEST" make release-manifest
+          (cd release && sha256sum --check SHA256SUMS)
+
+      - name: Publish the exact version image after local release gates
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          image="${ANVA_IMAGE_REPOSITORY}:${ANVA_VERSION}"
+          docker push "$image" | tee /tmp/docker-version-push.log
+          published_digest="$(sed -n 's/^.*digest: \(sha256:[a-f0-9]\{64\}\).*$/\1/p' /tmp/docker-version-push.log | tail -1)"
+          [[ "$published_digest" =~ ^sha256:[a-f0-9]{64}$ ]] || {
+            echo "Registry did not return an immutable version digest" >&2
+            exit 1
+          }
+          test "$published_digest" = "$IMAGE_DIGEST"
+
+      - name: Attest the GHCR image
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
+        with:
+          subject-name: ${{ env.ANVA_IMAGE_REPOSITORY }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest every downloadable release artifact
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
+        with:
+          subject-path: release/*
 
       - name: Attest the image digest to the immutable product source
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
@@ -260,8 +318,17 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          ANVA_DOCKER_GID="$(stat -c '%g' /var/run/docker.sock)"
-          export ANVA_DOCKER_GID
+          registry_container="${COMPOSE_PROJECT}-digest-registry"
+          if docker container inspect "$registry_container" >/dev/null 2>&1; then
+            test "$(docker inspect --format '{{ index .Config.Labels "com.anva.release.owner" }}' "$registry_container")" = "$COMPOSE_PROJECT"
+            docker rm --force "$registry_container"
+          fi
+          docker_gid="$(stat -c '%g' /var/run/docker.sock)"
+          [[ "$docker_gid" =~ ^[0-9]+$ ]] || {
+            echo "Docker socket group ID must be numeric" >&2
+            exit 1
+          }
+          export ANVA_DOCKER_GID="$docker_gid"
           cache_volume="${COMPOSE_PROJECT}_release-trivy-cache"
           validate_cache_volume() {
             project_label="$(docker volume inspect --format '{{ index .Labels "com.docker.compose.project" }}' "$cache_volume")"

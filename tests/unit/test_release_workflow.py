@@ -67,20 +67,26 @@ def test_release_order_is_fail_closed() -> None:
     text, _ = _workflow()
     identity = text.index("Verify tag, version, commit, and clean source")
     artifacts = text.index("Build and fail-closed verify release artifacts")
-    push = text.index("Push the exact image and resolve its registry digest")
+    source_binding = text.index("Create the immutable product source binding")
+    local_registry = text.index("Prepare the run-owned local digest registry")
+    digest = text.index("Resolve the exact image digest without remote publication")
+    risk = text.index("Bind approved residual risk to the immutable image")
+    publish_image = text.index("Publish the exact version image after local release gates")
     image_attest = text.index("Attest the GHCR image")
     file_attest = text.index("Attest every downloadable release artifact")
-    source_binding = text.index("Create the immutable product source binding")
     source_attest = text.index("Attest artifact digests to the immutable product source")
     release = text.index("Create the GitHub Release after attestations")
     published_verify = text.index("Verify published digest, attestations, and install lifecycle")
     assert (
         identity
         < artifacts
-        < push
+        < source_binding
+        < local_registry
+        < digest
+        < risk
+        < publish_image
         < image_attest
         < file_attest
-        < source_binding
         < source_attest
         < release
         < published_verify
@@ -199,6 +205,95 @@ def test_recovery_prepares_only_its_labeled_cache_before_tag_checkout() -> None:
     assert 'docker volume rm "$cache_volume"' in cleanup
     assert 'test "$project_label" = "$COMPOSE_PROJECT"' in cleanup
     assert 'test "$volume_label" = "release-trivy-cache"' in cleanup
+
+
+def test_release_compose_receives_a_validated_docker_gid_across_step_boundaries() -> None:
+    _, workflow = _workflow()
+    build = _jobs(workflow)["build"]
+    steps = cast(list[dict[str, object]], build["steps"])
+    named_steps = {cast(str, step["name"]): step for step in steps}
+
+    source = named_steps["Verify tag, version, commit, and clean source"]
+    source_script = cast(str, source["run"])
+    assert "docker_gid=\"$(stat -c '%g' /var/run/docker.sock)\"" in source_script
+    assert '[[ "$docker_gid" =~ ^[0-9]+$ ]]' in source_script
+    assert 'echo "ANVA_DOCKER_GID=$docker_gid"' in source_script
+    assert '} >> "$GITHUB_ENV"' in source_script
+
+    release_compose_steps = [
+        cast(str, step["name"])
+        for step in steps
+        if "run" in step
+        and (
+            "compose.release.yaml" in cast(str, step["run"])
+            or "make release-artifacts" in cast(str, step["run"])
+            or "make release-manifest" in cast(str, step["run"])
+        )
+    ]
+    assert release_compose_steps == [
+        "Build and fail-closed verify release artifacts",
+        "Bind approved residual risk to the immutable image",
+        "Remove only build-owned resources",
+    ]
+
+    source_index = steps.index(source)
+    for name in release_compose_steps[:-1]:
+        assert source_index < steps.index(named_steps[name])
+
+    cleanup_script = cast(str, named_steps[release_compose_steps[-1]]["run"])
+    assert "docker_gid=\"$(stat -c '%g' /var/run/docker.sock)\"" in cleanup_script
+    assert '[[ "$docker_gid" =~ ^[0-9]+$ ]]' in cleanup_script
+    assert 'export ANVA_DOCKER_GID="$docker_gid"' in cleanup_script
+
+
+def test_release_resolves_digest_locally_and_withholds_remote_push_until_gates() -> None:
+    text, workflow = _workflow()
+    build = _jobs(workflow)["build"]
+    steps = cast(list[dict[str, object]], build["steps"])
+    names = [cast(str, step["name"]) for step in steps]
+
+    registry_name = "Prepare the run-owned local digest registry"
+    digest_name = "Resolve the exact image digest without remote publication"
+    risk_name = "Bind approved residual risk to the immutable image"
+    source_binding_name = "Create the immutable product source binding"
+    publish_name = "Publish the exact version image after local release gates"
+    attest_name = "Attest the GHCR image"
+    assert names.index(source_binding_name) < names.index(registry_name)
+    assert names.index(registry_name) < names.index(digest_name)
+    assert names.index(digest_name) < names.index(risk_name)
+    assert names.index(risk_name) < names.index(publish_name)
+    assert names.index(publish_name) < names.index(attest_name)
+
+    environment = cast(dict[str, str], workflow["env"])
+    assert environment["ANVA_REGISTRY_IMAGE"] == (
+        "registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373"
+    )
+    registry = cast(str, steps[names.index(registry_name)]["run"])
+    assert "--publish 127.0.0.1::5000" in registry
+    assert "--read-only" in registry
+    assert "--cap-drop ALL" in registry
+    assert "--security-opt no-new-privileges" in registry
+    assert "--tmpfs /var/lib/registry:rw,nosuid,nodev,noexec,size=1g" in registry
+
+    digest = cast(str, steps[names.index(digest_name)]["run"])
+    assert '[[ "$LOCAL_REGISTRY" =~ ^127\\.0\\.0\\.1:[0-9]+$ ]]' in digest
+    assert 'local_image="${LOCAL_REGISTRY}/anva:${ANVA_VERSION}"' in digest
+    assert 'docker push "$local_image"' in digest
+    assert "ANVA_IMAGE_REPOSITORY}:release-candidate" not in digest
+    assert 'docker push "$image"' not in digest
+
+    publish = cast(str, steps[names.index(publish_name)]["run"])
+    assert 'image="${ANVA_IMAGE_REPOSITORY}:${ANVA_VERSION}"' in publish
+    assert 'docker push "$image"' in publish
+    assert 'test "$published_digest" = "$IMAGE_DIGEST"' in publish
+    assert "docker build" not in publish
+    assert "make release" not in publish
+    assert text.count("name: Publish the exact version image after local release gates") == 1
+
+    cleanup = cast(str, steps[names.index("Remove only build-owned resources")]["run"])
+    assert 'registry_container="${COMPOSE_PROJECT}-digest-registry"' in cleanup
+    assert 'test "$(docker inspect --format' in cleanup
+    assert 'docker rm --force "$registry_container"' in cleanup
 
 
 def test_publish_rechecks_remote_tag_before_any_release_side_effect() -> None:
