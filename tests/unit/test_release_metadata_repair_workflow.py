@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -31,6 +33,19 @@ def _workflow() -> tuple[str, dict[object, object]]:
     parsed = yaml.safe_load(text)
     assert isinstance(parsed, dict)
     return text, parsed
+
+
+def _mutation_script() -> str:
+    _, workflow = _workflow()
+    jobs = cast(dict[str, object], workflow["jobs"])
+    repair = cast(dict[str, object], jobs["repair"])
+    steps = cast(list[dict[str, object]], repair["steps"])
+    step = next(
+        item
+        for item in steps
+        if item.get("name") == "Replace only the metadata closure and verify or roll back"
+    )
+    return cast(str, step["run"])
 
 
 def test_repair_is_manual_protected_serialized_and_least_privilege() -> None:
@@ -138,3 +153,130 @@ def test_apply_mode_has_verified_rollback_and_anonymous_post_checks() -> None:
     assert "gh attestation verify" in mutation
     assert "up --no-build --wait" in mutation
     assert "github.event.inputs.mode == 'apply'" in text
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_status"), [("normal", 41), ("TERM", 143), ("INT", 130)]
+)
+def test_lifecycle_failure_restores_snapshot_from_workspace(
+    tmp_path: Path, failure: str, expected_status: int
+) -> None:
+    mutation = _mutation_script()
+    lifecycle = mutation[mutation.index('install_root="$(mktemp -d)"') :]
+    assert '(\n  cd "$install_root/anva-0.1.0"' in lifecycle
+    assert lifecycle.index("(") < lifecycle.index('cd "$install_root/anva-0.1.0"')
+    assert lifecycle.index('cd "$install_root/anva-0.1.0"') < lifecycle.index(")\nsucceeded=true")
+
+    rollback_prefix = mutation[
+        : mutation.index("python scripts/release_metadata_repair.py verify-current current")
+    ]
+    old = tmp_path / "old"
+    public = tmp_path / "public"
+    fake_bin = tmp_path / "bin"
+    install = tmp_path / "install"
+    for directory in (old, public, fake_bin, install):
+        directory.mkdir()
+    assets = ("RELEASE_NOTES.md", "release-manifest.json", "SHA256SUMS")
+    for name in assets:
+        (old / name).write_text(f"old {name}\n", encoding="utf-8")
+        (public / name).write_text(f"partial new {name}\n", encoding="utf-8")
+    (tmp_path / "old-release-body.md").write_text("old release body\n", encoding="utf-8")
+    (tmp_path / "public-body.md").write_text("partial new body\n", encoding="utf-8")
+
+    gh = fake_bin / "gh"
+    gh.write_text(
+        """#!/bin/sh
+set -eu
+command="$1 $2"
+shift 2
+case "$command" in
+  "release upload")
+    shift
+    while [ "$#" -gt 0 ] && [ "$1" != "--clobber" ]; do
+      cp "$1" "$FAKE_PUBLIC/$(basename "$1")"
+      shift
+    done
+    ;;
+  "release edit")
+    shift
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = "--notes-file" ]; then
+        cp "$2" "$FAKE_PUBLIC_BODY"
+        exit 0
+      fi
+      shift
+    done
+    exit 2
+    ;;
+  "release download")
+    shift
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = "--dir" ]; then
+        mkdir -p "$2"
+        cp "$FAKE_PUBLIC"/* "$2"/
+        exit 0
+      fi
+      shift
+    done
+    exit 2
+    ;;
+  "release view")
+    cat "$FAKE_PUBLIC_BODY"
+    ;;
+  *) exit 2 ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    gh.chmod(0o755)
+    python = fake_bin / "python"
+    python.write_text(
+        """#!/bin/sh
+set -eu
+test "$PWD" = "$EXPECTED_WORKSPACE"
+test "$1" = "scripts/release_metadata_repair.py"
+test "$2" = "verify-current"
+test "$3" = "rollback-check"
+for name in RELEASE_NOTES.md release-manifest.json SHA256SUMS; do
+  cmp "$OLD_SNAPSHOT/$name" "rollback-check/$name"
+done
+touch "$VERIFICATION_MARKER"
+""",
+        encoding="utf-8",
+    )
+    python.chmod(0o755)
+
+    if failure == "normal":
+        trigger = "(cd install; exit 41)"
+    else:
+        trigger = f'(cd install; kill -{failure} "$parent_pid"; sleep 1)'
+    harness = (
+        rollback_prefix
+        + "\nmutated=true\n"
+        + "parent_pid=$$\n"
+        + trigger
+        + "\necho lifecycle unexpectedly continued >&2\nexit 99\n"
+    )
+    environment = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "ANVA_RELEASE_TAG": "v0.1.0",
+        "GITHUB_REPOSITORY": "RishavT/anva",
+        "FAKE_PUBLIC": str(public),
+        "FAKE_PUBLIC_BODY": str(tmp_path / "public-body.md"),
+        "EXPECTED_WORKSPACE": str(tmp_path),
+        "OLD_SNAPSHOT": str(old),
+        "VERIFICATION_MARKER": str(tmp_path / "verified"),
+    }
+    result = subprocess.run(  # noqa: S603 - controlled regression harness
+        ["/bin/bash", "-c", harness], cwd=tmp_path, env=environment, check=False, timeout=10
+    )
+
+    assert result.returncode == expected_status
+    assert {path.name for path in public.iterdir()} == set(assets)
+    for name in assets:
+        assert (public / name).read_bytes() == (old / name).read_bytes()
+    assert (tmp_path / "public-body.md").read_bytes() == (
+        tmp_path / "old-release-body.md"
+    ).read_bytes()
+    assert (tmp_path / "verified").is_file()

@@ -281,13 +281,15 @@ jobs:
           done
           install_root="$(mktemp -d)"
           tar -xzf anonymous/anva-install-0.1.0.tar.gz -C "$install_root"
-          cd "$install_root/anva-0.1.0"
-          export ANVA_IMAGE_REPOSITORY ANVA_VERSION=0.1.0
-          docker pull "${ANVA_IMAGE_REPOSITORY}@${ANVA_IMAGE_DIGEST}"
-          docker tag "${ANVA_IMAGE_REPOSITORY}@${ANVA_IMAGE_DIGEST}" "${ANVA_IMAGE_REPOSITORY}:${ANVA_VERSION}"
-          docker compose -p "anva-metadata-${GITHUB_RUN_ID}" up --no-build --wait
-          docker compose -p "anva-metadata-${GITHUB_RUN_ID}" --profile demo run --rm --no-deps demo >/dev/null
-          docker compose -p "anva-metadata-${GITHUB_RUN_ID}" --profile demo down --volumes --remove-orphans
+          (
+            cd "$install_root/anva-0.1.0"
+            export ANVA_IMAGE_REPOSITORY ANVA_VERSION=0.1.0
+            docker pull "${ANVA_IMAGE_REPOSITORY}@${ANVA_IMAGE_DIGEST}"
+            docker tag "${ANVA_IMAGE_REPOSITORY}@${ANVA_IMAGE_DIGEST}" "${ANVA_IMAGE_REPOSITORY}:${ANVA_VERSION}"
+            docker compose -p "anva-metadata-${GITHUB_RUN_ID}" up --no-build --wait
+            docker compose -p "anva-metadata-${GITHUB_RUN_ID}" --profile demo run --rm --no-deps demo >/dev/null
+            docker compose -p "anva-metadata-${GITHUB_RUN_ID}" --profile demo down --volumes --remove-orphans
+          )
           succeeded=true
 
       - name: Remove only repair-owned resources
