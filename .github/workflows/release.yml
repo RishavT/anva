@@ -429,6 +429,23 @@ jobs:
           name: release-risk-proposal-${{ github.run_id }}
           path: ${{ runner.temp }}/risk-proposal
 
+      - name: Materialize approval validator from reviewed workflow source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          reviewed_dir="$RUNNER_TEMP/reviewed-workflow"
+          validator="$reviewed_dir/validate_release_approvals.py"
+          mkdir -p "$reviewed_dir"
+          response="$(gh api --method GET \
+            "repos/${GITHUB_REPOSITORY}/contents/scripts/validate_release_approvals.py" \
+            -f "ref=${GITHUB_SHA}")"
+          expected_blob="$(jq -er .sha <<<"$response")"
+          jq -er .content <<<"$response" | tr -d '\n' | base64 --decode > "$validator"
+          test -s "$validator"
+          test "$(git hash-object "$validator")" = "$expected_blob"
+          echo "REVIEWED_APPROVAL_VALIDATOR=$validator" >> "$GITHUB_ENV"
+
       - name: Verify exact RishavT environment approval and proposal provenance
         id: human-approval
         env:
@@ -460,7 +477,7 @@ jobs:
             "$(jq -r .scan_evidence_manifest_sha256 "$RUNNER_TEMP/risk-proposal/release-risk-proposal.json")"
           test "$(jq -r .classification "$RUNNER_TEMP/risk-proposal/release-risk-source-scan-diagnostic.json")" = passed
           approvals="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/approvals")"
-          approval_sha256="$(python3 scripts/validate_release_approvals.py \
+          approval_sha256="$(python3 "$REVIEWED_APPROVAL_VALIDATOR" \
             --require-single <<<"$approvals")"
           echo "record=$approval_sha256" >> "$GITHUB_OUTPUT"
           echo "proposal=$actual_proposal_sha256" >> "$GITHUB_OUTPUT"
@@ -859,6 +876,23 @@ jobs:
       contents: write
       packages: read
     steps:
+      - name: Materialize approval validator from reviewed workflow source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          reviewed_dir="$RUNNER_TEMP/reviewed-workflow"
+          validator="$reviewed_dir/validate_release_approvals.py"
+          mkdir -p "$reviewed_dir"
+          response="$(gh api --method GET \
+            "repos/${GITHUB_REPOSITORY}/contents/scripts/validate_release_approvals.py" \
+            -f "ref=${GITHUB_SHA}")"
+          expected_blob="$(jq -er .sha <<<"$response")"
+          jq -er .content <<<"$response" | tr -d '\n' | base64 --decode > "$validator"
+          test -s "$validator"
+          test "$(git hash-object "$validator")" = "$expected_blob"
+          echo "REVIEWED_APPROVAL_VALIDATOR=$validator" >> "$GITHUB_ENV"
+
       - name: Check out the verified source commit without credentials
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -965,7 +999,7 @@ jobs:
           done
           approvals="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/approvals")"
           APPROVAL_RECORD_SHA256="$(jq -er .environment_approval_record_sha256 "$decision")"
-          python3 scripts/validate_release_approvals.py \
+          python3 "$REVIEWED_APPROVAL_VALIDATOR" \
             --expected-sha256 "$APPROVAL_RECORD_SHA256" <<<"$approvals"
           export APPROVAL_RECORD_SHA256
           export DECISION_PATH="$decision" PROPOSAL_PATH="$proposal"
