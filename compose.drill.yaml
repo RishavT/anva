@@ -1,0 +1,192 @@
+services:
+  postgres:
+    networks: [backend]
+
+  minio:
+    environment:
+      MINIO_ROOT_PASSWORD: ${ANVA_DRILL_OBJECT_STORAGE_SECRET:?set a unique drill object storage secret}
+    networks: [backend]
+
+  minio-init:
+    environment:
+      MINIO_ROOT_PASSWORD: ${ANVA_DRILL_OBJECT_STORAGE_SECRET:?set a unique drill object storage secret}
+    networks: [backend]
+
+  migrate:
+    image: ghcr.io/rishavt/anva@sha256:29af794b9fda21e75461866437dd4853db54b54072252d0df9aa2eed77807c2d
+    pull_policy: always
+    environment:
+      ANVA_BOOTSTRAP_SECRET: ${ANVA_DRILL_BOOTSTRAP_SECRET:?set a unique drill bootstrap secret}
+      ANVA_DEBUG: "false"
+      ANVA_ENV: production
+      ANVA_METRICS_TOKEN: ${ANVA_DRILL_METRICS_TOKEN:?set a unique drill metrics token}
+      ANVA_OBJECT_STORAGE_SECRET_KEY: ${ANVA_DRILL_OBJECT_STORAGE_SECRET:?set a unique drill object storage secret}
+      ANVA_SECRET_KEY: ${ANVA_DRILL_SECRET_KEY:?set a unique drill application secret}
+      ANVA_TOKEN_PEPPER: ${ANVA_DRILL_TOKEN_PEPPER:?set a unique drill token pepper}
+    networks: [backend]
+
+  api:
+    image: ghcr.io/rishavt/anva@sha256:29af794b9fda21e75461866437dd4853db54b54072252d0df9aa2eed77807c2d
+    pull_policy: always
+    environment:
+      ANVA_ALLOWED_HOSTS: localhost,api,drill-tls,${ANVA_DRILL_HOSTNAME:-drill.localhost}
+      ANVA_BOOTSTRAP_SECRET: ${ANVA_DRILL_BOOTSTRAP_SECRET:?set a unique drill bootstrap secret}
+      ANVA_CSRF_TRUSTED_ORIGINS: https://${ANVA_DRILL_HOSTNAME:-drill.localhost}:${ANVA_DRILL_HTTPS_PORT:-8443}
+      ANVA_DEBUG: "false"
+      ANVA_ENV: production
+      ANVA_METRICS_TOKEN: ${ANVA_DRILL_METRICS_TOKEN:?set a unique drill metrics token}
+      ANVA_OBJECT_STORAGE_SECRET_KEY: ${ANVA_DRILL_OBJECT_STORAGE_SECRET:?set a unique drill object storage secret}
+      ANVA_PUBLIC_BASE_URL: https://${ANVA_DRILL_HOSTNAME:-drill.localhost}:${ANVA_DRILL_HTTPS_PORT:-8443}
+      ANVA_SECRET_KEY: ${ANVA_DRILL_SECRET_KEY:?set a unique drill application secret}
+      ANVA_TOKEN_PEPPER: ${ANVA_DRILL_TOKEN_PEPPER:?set a unique drill token pepper}
+      ANVA_TRUSTED_PROXY_IPS: ${ANVA_DRILL_PROXY_IP:-172.31.44.10}
+    networks: [backend]
+
+  worker:
+    image: ghcr.io/rishavt/anva@sha256:29af794b9fda21e75461866437dd4853db54b54072252d0df9aa2eed77807c2d
+    pull_policy: always
+    environment:
+      ANVA_BOOTSTRAP_SECRET: ${ANVA_DRILL_BOOTSTRAP_SECRET:?set a unique drill bootstrap secret}
+      ANVA_DEBUG: "false"
+      ANVA_ENV: production
+      ANVA_METRICS_TOKEN: ${ANVA_DRILL_METRICS_TOKEN:?set a unique drill metrics token}
+      ANVA_OBJECT_STORAGE_SECRET_KEY: ${ANVA_DRILL_OBJECT_STORAGE_SECRET:?set a unique drill object storage secret}
+      ANVA_SECRET_KEY: ${ANVA_DRILL_SECRET_KEY:?set a unique drill application secret}
+      ANVA_TOKEN_PEPPER: ${ANVA_DRILL_TOKEN_PEPPER:?set a unique drill token pepper}
+    networks: [backend]
+
+  drill-certgen:
+    image: alpine/openssl@sha256:0cb8b9948f86d73f196cef2f828ca0b60e40c7c74d8edf9e60d9990cbb7b8b76
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command:
+      - >-
+        if test ! -e /certs/ca.key; then
+        openssl req -x509 -newkey rsa:2048 -nodes -days 2
+        -subj '/CN=Anva disposable drill CA' -keyout /certs/ca.key -out /certs/ca.crt &&
+        openssl req -newkey rsa:2048 -nodes -subj '/CN=drill.localhost'
+        -keyout /certs/server.key -out /certs/server.csr &&
+        printf 'subjectAltName=DNS:drill.localhost,DNS:drill-tls,DNS:%s\n' "$${ANVA_DRILL_HOSTNAME:-drill.localhost}" >/certs/ext.cnf &&
+        openssl x509 -req -days 2 -in /certs/server.csr -CA /certs/ca.crt -CAkey /certs/ca.key
+        -CAcreateserial -extfile /certs/ext.cnf -out /certs/server.crt &&
+        chmod 0600 /certs/*.key; fi
+    environment:
+      ANVA_DRILL_HOSTNAME: ${ANVA_DRILL_HOSTNAME:-drill.localhost}
+    volumes:
+      - drill-certs:/certs
+    restart: "no"
+
+  drill-tls:
+    image: nginx@sha256:4ff102c5d78d254a6f0da062b3cf39eaf07f01eec0927fd21e219d0af8bc0591
+    depends_on:
+      api:
+        condition: service_healthy
+      drill-certgen:
+        condition: service_completed_successfully
+    ports: ["127.0.0.1:${ANVA_DRILL_HTTPS_PORT:-8443}:8443"]
+    networks:
+      frontend: {}
+      backend:
+        ipv4_address: ${ANVA_DRILL_PROXY_IP:-172.31.44.10}
+    volumes:
+      - ./deploy/drill/nginx.conf:/etc/nginx/nginx.conf:ro
+      - drill-certs:/certs:ro
+    restart: "no"
+
+  drill-scrape:
+    image: curlimages/curl@sha256:94e9e444bcba979c2ea12e27ae39bee4cd10bc7041a472c4727a558e213744e6
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command:
+      - >-
+        missing=$$(curl --silent --output /dev/null --write-out '%{http_code}' --cacert /certs/ca.crt https://drill-tls:8443/metrics);
+        wrong=$$(curl --silent --output /dev/null --write-out '%{http_code}' --cacert /certs/ca.crt -H 'Authorization: Bearer deliberately-wrong' https://drill-tls:8443/metrics);
+        correct=$$(curl --silent --output /tmp/metrics --write-out '%{http_code}' --cacert /certs/ca.crt -H "Authorization: Bearer $${ANVA_DRILL_METRICS_TOKEN}" https://drill-tls:8443/metrics);
+        test "$$missing:$$wrong:$$correct" = '404:404:200';
+        count=$$(grep -c '^anva_' /tmp/metrics);
+        printf '{"check_code":"METRICS_AUTH","correct_token_code":200,"metric_sample_count":%s,"missing_token_code":404,"outcome":"PASS","wrong_token_code":404}\n' "$$count"
+    environment:
+      ANVA_DRILL_METRICS_TOKEN: ${ANVA_DRILL_METRICS_TOKEN:?set a unique drill metrics token}
+    networks: [frontend]
+    volumes:
+      - drill-certs:/certs:ro
+    restart: "no"
+
+  drill-untrusted-probe:
+    image: curlimages/curl@sha256:94e9e444bcba979c2ea12e27ae39bee4cd10bc7041a472c4727a558e213744e6
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command:
+      - >-
+        code=$$(curl --silent --output /dev/null --write-out '%{http_code}'
+        -H 'X-Forwarded-Proto: https' -H 'X-Forwarded-For: 203.0.113.44'
+        -H "Authorization: Bearer $${ANVA_DRILL_METRICS_TOKEN}" http://api:8000/metrics);
+        test "$$code" = 301;
+        printf '{"check_code":"PROXY_SPOOF","outcome":"PASS","redirect_code":301}\n'
+    environment:
+      ANVA_DRILL_METRICS_TOKEN: ${ANVA_DRILL_METRICS_TOKEN:?set a unique drill metrics token}
+    networks: [backend]
+    restart: "no"
+
+  drill-tool:
+    build:
+      context: .
+      target: test
+    entrypoint: ["python", "-m", "anva.operator_drill"]
+    user: ${ANVA_DRILL_TOOL_USER:-65532:65532}
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    network_mode: none
+    tmpfs: ["/tmp"]
+    profiles: ["drill-tools"]
+    volumes:
+      - ${ANVA_DRILL_EVIDENCE_DIR:-./evidence/issue-044}:/evidence
+      - ${ANVA_DRILL_INPUT_DIR:-./deploy/drill}:/drill-input:ro
+    restart: "no"
+
+  drill-finalizer:
+    build:
+      context: .
+      target: test
+    entrypoint: ["python", "-m", "anva.operator_drill"]
+    user: ${ANVA_DRILL_TOOL_USER:-65532:65532}
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    environment:
+      GH_CONFIG_DIR: /gh-config
+    profiles: ["drill-finalize"]
+    networks: [finalizer-egress]
+    volumes:
+      - ${ANVA_DRILL_EVIDENCE_DIR:-./evidence/issue-044}:/evidence
+      - ${ANVA_DRILL_INPUT_DIR:?set the directory containing only the downloaded anchor}:/drill-input:ro
+      - ${ANVA_DRILL_GH_CONFIG_DIR:?set the narrow GitHub CLI config directory}:/gh-config:ro
+      - ${ANVA_DRILL_GH_BIN:?set the exact host gh executable}:/usr/local/bin/gh:ro
+    restart: "no"
+
+  drill-decommission-operator:
+    build:
+      context: .
+      target: runtime
+    command: ["python", "-m", "anva.entrypoints.cli", "maintenance", "retry-decommission-cleanup"]
+    environment:
+      ANVA_DATABASE_URL: ${ANVA_DATABASE_URL:-postgresql://anva:anva@postgres:5432/anva}
+      ANVA_DECOMMISSION_OPERATOR_CREDENTIAL_FILE: /run/secrets/decommission_operator_credential
+      ANVA_DECOMMISSION_OPERATOR_CREDENTIAL_SHA256: ${ANVA_DECOMMISSION_OPERATOR_CREDENTIAL_SHA256:-}
+    profiles: ["drill-tools"]
+    networks: [backend]
+    secrets: [decommission_operator_credential]
+    restart: "no"
+
+networks:
+  backend:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${ANVA_DRILL_SUBNET:-172.31.44.0/24}
+  frontend:
+    internal: false
+  finalizer-egress:
+    internal: false
+
+volumes:
+  drill-certs:

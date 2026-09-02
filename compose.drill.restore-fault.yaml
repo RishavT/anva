@@ -1,0 +1,5 @@
+services:
+  restore-objects:
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command:
+      - "printf '%s\\n' DRILL_OBJECT_RESTORE_FAULT >&2; exit 44"
