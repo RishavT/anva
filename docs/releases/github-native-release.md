@@ -11,6 +11,13 @@ GitHub records keyless standard build-provenance attestations and supplemental
 product-source attestations for every downloadable artifact and the pushed OCI
 digest. Actions are pinned to immutable commits.
 
+Technical publication completed in
+[run 33596661334](https://github.com/RishavT/anva/actions/runs/33596661334):
+`v0.1.0` resolves to `d919a2c...`, the immutable image digest is
+`sha256:29af794b...`, and all 13 assets and the install lifecycle verified.
+The procedure below is retained as the audited mechanism, not as a pending step.
+Human acceptance gates #43 and #44 remain open.
+
 ## Repository and environment setup
 
 1. Make the repository public before publishing. Releases and GHCR packages do
@@ -30,13 +37,15 @@ digest. Actions are pinned to immutable commits.
    `v0.1.0` from the reviewed `main` commit. The workflow independently checks
    the tag, project version, exact commit, `main` ancestry, and clean checkout.
 
-The workflow never runs on pull requests. For the `v0.1.0` recovery, wait until
-the cache correction has been reviewed and merged to `main`, then load that
-corrected workflow definition from `main`:
+The workflow never runs on pull requests. The successful `v0.1.0` recovery
+loaded its reviewed workflow definition from `main`:
 
 ```sh
 gh workflow run release.yml --repo rishavt/anva --ref main -f tag=v0.1.0
 ```
+
+The recovery rule was: never dispatch before the correction is reviewed and
+merged. The same review-before-apply rule governs the separate metadata repair.
 
 Workflow identity and product-source identity are deliberately separate. The
 dispatch ref selects the reviewed workflow on `main`; the workflow checks out
@@ -52,8 +61,8 @@ statement binds each file or OCI subject digest to the independently resolved
 verification jobs cryptographically verify the GitHub signature and signer
 workflow, then inspect those predicate fields against the build outputs before
 accepting the subjects.
-Do not move, delete, or recreate the tag, and do not dispatch the recovery
-before the correction is reviewed and merged.
+Do not move, delete, or recreate the tag. Do not rerun product publication to
+repair documentation metadata.
 
 ## Publish
 

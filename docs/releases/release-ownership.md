@@ -3,7 +3,7 @@
 This record names the accountable human for the self-hosted Anva MVP release.
 The separately enforced vulnerability-risk decision is recorded in
 `docs/security/vulnerability-exceptions.json`; this record does not claim a
-completed operator exercise or published release.
+completed operator exercise. The technical `v0.1.0` publication is complete.
 
 ## Organization and owner
 
@@ -35,11 +35,11 @@ and outcomes in the deployment-owned incident record.
 
 Naming an owner does not perform or prove the operator exercises required by
 issue #44. Rishav Thakker separately approved the exact v0.1.0 residual no-fix
-risk set on 2026-08-26 through 2026-09-25. Publication generates a digest-bound
-acceptance artifact and fails closed if the scan, candidate, controls, or dates
-do not match that decision.
+risk set on 2026-08-26 through 2026-09-25. Run `33596661334` generated the
+digest-bound acceptance for source `d919...` and image `sha256:29af...`. Drift,
+a recorded fix, or expiry still fails closed.
 
 This ownership was supplied directly by Rishav Thakker on 2026-08-26 together
 with authorization to release the product. GitHub Releases, GHCR, and
-GitHub-native keyless attestations were subsequently selected for publication
-under issue #42.
+GitHub-native keyless attestations were used for the completed technical
+publication under issue #42. That automation does not perform the #44 exercise.

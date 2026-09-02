@@ -18,14 +18,14 @@ descendant of `dce714a`: its diff changes only three assertions in
 `tests/unit/test_assurance_review_fixes.py`. It is not a new runtime identity.
 Later documentation-only descendants likewise do not create a new runtime
 identity.
-No status below implies an external publication, signature, vulnerability-risk
-approval, or completed operator exercise. Operational ownership is recorded in
+Technical publication, signature, and digest-bound risk evidence exist for
+`v0.1.0`; no status below implies completed #43/#44 human gates. Ownership is recorded in
 [`release-ownership.md`](release-ownership.md).
 
 | Authority | Requirement | Status | Authoritative current evidence | Remaining closure |
 | --- | --- | --- | --- | --- |
-| Issue 13 | Compose fresh install/bootstrap/demo | exact-runtime-verified | Final seal: fresh migration/start, API/MCP readiness, demo with authoritative `access_scope_id`, token redaction, idempotent reinstall | Repeat from immutable **published** artifacts under #42 |
-| Issue 13 | Versioned image/packages/checksums | partial | Clean source archive, local Docker archive, installed-package hash, image provenance, SBOMs, scans, and 35-file checksum manifest bind `dce714a`/`189788...` | Authoritative version/tag, registry/package publication, published digests, signature/attestation (#42) |
+| Issue 13 | Compose fresh install/bootstrap/demo | exact-runtime-verified | Run `33596661334` pulled and installed the immutable published digest, migrated, checked readiness, and seeded the demo | Human operator exercise remains #44 |
+| Issue 13 | Versioned image/packages/checksums | exact-runtime-verified | Public `v0.1.0`, source `d919...`, image `sha256:29af...`, 13 assets, checksums, and standard/custom attestations | #74 changes only the closed metadata triplet/body; ten assets remain byte-identical |
 | Issue 13; OPS-002 | Backup/restore/migration/rollback | exact-runtime-verified | Prior exact local lifecycle evidence plus final-seal preserve/reinstall prove the Compose-managed path and identity preservation | External-store and deployment-sized recovery are explicit post-MVP #38; do not overclaim them |
 | Issue 13/29; SEC-006–008 | Retention/deletion | partial | Server-owned time, tenant cleanup, governed evidence deletion, and decommission safety have focused and matrix coverage | Supported post-expiry human entry is #37; external erasure/regulatory claims are not made |
 | Issue 13; V3 20.2 | Rate limits/abuse protection | exact-runtime-verified | Exact full matrix includes fixed-window, actor/channel, retry, proxy-attribution, and bounded pre-auth tests | Deployment-specific capacity exercise belongs with real operator ownership (#44) |
@@ -34,7 +34,7 @@ approval, or completed operator exercise. Operational ownership is recorded in
 | V3 20.3; SEC-003 | Five-source prompt injection | verified-carried | `evidence/live31-prompt-product-final-20260826`: all five frozen source classes passed with inert excerpts, tenant isolation, no mutation, and cleanup | Carry-forward is limited to unchanged product/package/contracts/dependencies; it does not replace 31-case replay |
 | V3 20.2/20.7; SEC-004 | Secret redaction | exact-runtime-verified | Final exact source scan reports zero secrets; exact gates assert log/result canary absence and one-time token redaction | Publication-wide scan must be repeated over the bytes actually published (#42) |
 | V3 20.4; SEC-009 | Skill supply chain | partial | Deterministic archives/checksums and safe installer contracts are tested | Publish and verify current skill/package artifacts, provenance, security contact, and revocation record (#42) |
-| Issue 13; V3 20.2 | Dependency/container scan and SBOM | partial | Fresh exact image: 3 critical/13 high/53 medium/66 low/3 unknown; exact source: 0 high, 0 critical, 0 secrets; SPDX/CycloneDX sealed. Rishav Thakker approved the exact 13-CVE/16-tuple no-fix set from 2026-08-26 through 2026-09-25 under #60 | Publication must freshly prove the identical no-fix tuple set and generate acceptance bound to the final source, scan hash, version, and immutable GHCR digest; drift, a fixed version, or expiry fails closed |
+| Issue 13; V3 20.2 | Dependency/container scan and SBOM | exact-runtime-verified | Published scans/SBOMs and digest-bound acceptance prove the approved exact 13-CVE/16-tuple no-fix set through 2026-09-25 | Drift, a recorded fix, control change, or expiry fails closed |
 | V3 20.9 | Source revocation | exact-runtime-verified | Exact full matrix covers source/GitHub/token revocation and permission-safe retrieval | Published/deployed operational exercise remains scoped to #42/#44 |
 | V3 20.9 | Cross-tenant API/search/Canvas/MCP/artifact isolation | exact-runtime-verified | Exact full matrix plus 31-case foreign-authority indistinguishable 404 and inert-canary probes | No remaining local product gate identified; managed deployment remains #40 |
 | Issue 29; SEC-010 | Artifact upload security | exact-runtime-verified | Authorization, archive bounds, object read-back, immutable evidence binding, deletion recovery, and six pinned byte classes are in exact-current suites | Deployment-specific S3/TLS/IAM/outage validation is not claimed; external-store scope is #38 |
@@ -51,7 +51,7 @@ approval, or completed operator exercise. Operational ownership is recorded in
 | OPS-001/005–011 | Terraform, cost, quotas, flags, support, billing, pilot | deferred | Compose is the self-hosted MVP unit; no paid inference/billing boundary is shipped | Re-enter scope for managed/pilot/commercial deployment (#40) |
 | OPS-013 | Processing/retention documentation | exact-runtime-verified | Current runbooks describe retention/decommission behavior and limitations | Deployment policy choices remain operator-owned; no regulatory-erasure claim |
 | V3 Appendix E | Production readiness checklist | partial | Local product, lifecycle, security, replay, representative-review evidence, and named ownership are indexed | External publication/signing, operator exercise, and residual-risk approval remain open; performance follow-up is deferred #49 |
-| Issue 13 | Signed/checksummed release commit/tag | missing | Local source/image archives and checksum manifests exist | No signed or provenance-attested tag, published registry/package digest, or authorized release exists (#42) |
+| Issue 13 | Signed/checksummed release commit/tag | exact-runtime-verified | Verified `v0.1.0` -> `d919...`; public checksum closure, GHCR digest, and attestations passed in run `33596661334` | Human gates #43/#44 remain distinct |
 
 ## Exact evidence indexes
 
@@ -68,7 +68,7 @@ approval, or completed operator exercise. Operational ownership is recorded in
 The final-seal 35-file manifest and its manifest checksum, the exact-current
 gate manifest, and the prompt-gate manifest have been revalidated during this
 documentation audit. Evidence paths are repository-relative; external
-publication has not occurred.
+publication occurred in run `33596661334`; local archives remain historical evidence.
 
 ## Deferred-boundary statement
 

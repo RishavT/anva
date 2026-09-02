@@ -1,0 +1,298 @@
+name: Repair v0.1.0 release metadata
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Generate and verify only, or apply after this workflow is reviewed and merged
+        required: true
+        default: dry-run
+        type: choice
+        options: [dry-run, apply]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-v0.1.0
+  cancel-in-progress: false
+
+env:
+  ANVA_RELEASE_TAG: v0.1.0
+  ANVA_PRODUCT_SOURCE: d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac
+  ANVA_IMAGE_REPOSITORY: ghcr.io/rishavt/anva
+  ANVA_IMAGE_DIGEST: sha256:29af794b9fda21e75461866437dd4853db54b54072252d0df9aa2eed77807c2d
+  ANVA_CORRECTION_REASON: Correct stale unpublished-candidate claims after verified publication
+  ANVA_REPAIR_PREDICATE_TYPE: https://github.com/RishavT/anva/attestations/release-metadata-repair/v1
+
+jobs:
+  repair:
+    name: Attest before controlled metadata replacement
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+      issues: read
+    steps:
+      - name: Check out the reviewed metadata commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Assert protected main and immutable product identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_REF: ${{ github.ref }}
+          METADATA_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$EVENT_REF" = refs/heads/main
+          remote_main="$(git ls-remote --exit-code origin refs/heads/main | cut -f1)"
+          test "$remote_main" = "$METADATA_COMMIT"
+          test "$(git rev-parse HEAD)" = "$METADATA_COMMIT"
+          test -z "$(git status --porcelain)"
+          tag_commit="$(git ls-remote --exit-code origin "refs/tags/${ANVA_RELEASE_TAG}" | cut -f1)"
+          test "$tag_commit" = "$ANVA_PRODUCT_SOURCE"
+          release_tag="$(gh release view "$ANVA_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)"
+          test "$release_tag" = "$ANVA_RELEASE_TAG"
+          test "$(gh issue view 43 --repo "$GITHUB_REPOSITORY" --json state --jq .state)" = OPEN
+          test "$(gh issue view 44 --repo "$GITHUB_REPOSITORY" --json state --jq .state)" = OPEN
+
+      - name: Download and assert the exact current 13 assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir current old
+          gh release download "$ANVA_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir current
+          python scripts/release_metadata_repair.py verify-current current
+          cp --preserve=mode,timestamps current/* old/
+          gh release view "$ANVA_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body > old-release-body.md
+          manifest_image="$(jq -r .image.reference current/release-manifest.json)"
+          test "$manifest_image" = "${ANVA_IMAGE_REPOSITORY}@${ANVA_IMAGE_DIGEST}"
+
+      - name: Generate and verify the exact three-file replacement closure
+        env:
+          METADATA_COMMIT: ${{ github.sha }}
+          REPAIR_RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          python scripts/release_metadata_repair.py generate \
+            current docs/releases/mvp-013.md replacement \
+            --metadata-commit "$METADATA_COMMIT" \
+            --repair-run "$REPAIR_RUN"
+          test "$(find replacement -maxdepth 1 -type f -printf '%f\n' | sort | tr '\n' ' ')" = \
+            "RELEASE_NOTES.md SHA256SUMS release-manifest.json "
+
+      - name: Create the metadata correction predicate
+        if: github.event.inputs.mode == 'apply'
+        id: repair-predicate
+        env:
+          METADATA_COMMIT: ${{ github.sha }}
+          REPAIR_RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          predicate = {
+              "productSourceCommit": os.environ["ANVA_PRODUCT_SOURCE"],
+              "productSourceRef": f"refs/tags/{os.environ['ANVA_RELEASE_TAG']}",
+              "imageDigest": os.environ["ANVA_IMAGE_DIGEST"],
+              "metadataCommit": os.environ["METADATA_COMMIT"],
+              "correctionReason": os.environ["ANVA_CORRECTION_REASON"],
+              "repairRun": os.environ["REPAIR_RUN"],
+              "replacedAssets": ["RELEASE_NOTES.md", "release-manifest.json", "SHA256SUMS"],
+          }
+          Path("repair-predicate.json").write_text(
+              json.dumps(predicate, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          PY
+
+      - name: Attest the replacement metadata files
+        if: github.event.inputs.mode == 'apply'
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2.2.0
+        with:
+          subject-path: replacement/RELEASE_NOTES.md
+
+      - name: Attest the replacement release manifest
+        if: github.event.inputs.mode == 'apply'
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2.2.0
+        with:
+          subject-path: replacement/release-manifest.json
+
+      - name: Attest the replacement checksum closure
+        if: github.event.inputs.mode == 'apply'
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2.2.0
+        with:
+          subject-path: replacement/SHA256SUMS
+
+      - name: Attest the metadata correction record
+        if: github.event.inputs.mode == 'apply'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: replacement/RELEASE_NOTES.md
+          predicate-type: ${{ env.ANVA_REPAIR_PREDICATE_TYPE }}
+          predicate-path: repair-predicate.json
+
+      - name: Attest the manifest correction record
+        if: github.event.inputs.mode == 'apply'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: replacement/release-manifest.json
+          predicate-type: ${{ env.ANVA_REPAIR_PREDICATE_TYPE }}
+          predicate-path: repair-predicate.json
+
+      - name: Attest the checksum correction record
+        if: github.event.inputs.mode == 'apply'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: replacement/SHA256SUMS
+          predicate-type: ${{ env.ANVA_REPAIR_PREDICATE_TYPE }}
+          predicate-path: repair-predicate.json
+
+      - name: Verify replacement attestations before upload
+        if: github.event.inputs.mode == 'apply'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          METADATA_COMMIT: ${{ github.sha }}
+          REPAIR_RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          for artifact in replacement/RELEASE_NOTES.md replacement/release-manifest.json replacement/SHA256SUMS; do
+            gh attestation verify "$artifact" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-metadata-repair.yml"
+            verification="$(gh attestation verify "$artifact" \
+              --repo "$GITHUB_REPOSITORY" \
+              --predicate-type "$ANVA_REPAIR_PREDICATE_TYPE" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-metadata-repair.yml" \
+              --format json)"
+            jq -e \
+              --arg product "$ANVA_PRODUCT_SOURCE" \
+              --arg ref "refs/tags/$ANVA_RELEASE_TAG" \
+              --arg image "$ANVA_IMAGE_DIGEST" \
+              --arg metadata "$METADATA_COMMIT" \
+              --arg reason "$ANVA_CORRECTION_REASON" \
+              --arg run "$REPAIR_RUN" \
+              'map(select(.verificationResult.statement.predicate.productSourceCommit == $product)
+                | select(.verificationResult.statement.predicate.productSourceRef == $ref)
+                | select(.verificationResult.statement.predicate.imageDigest == $image)
+                | select(.verificationResult.statement.predicate.metadataCommit == $metadata)
+                | select(.verificationResult.statement.predicate.correctionReason == $reason)
+                | select(.verificationResult.statement.predicate.repairRun == $run)
+                | select(.verificationResult.statement.predicate.replacedAssets
+                    == ["RELEASE_NOTES.md", "release-manifest.json", "SHA256SUMS"]))
+                | length > 0' <<<"$verification"
+          done
+
+      - name: Replace only the metadata closure and verify or roll back
+        if: github.event.inputs.mode == 'apply'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          METADATA_COMMIT: ${{ github.sha }}
+          REPAIR_RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          mutated=false
+          succeeded=false
+          verify_old_snapshot() {
+            rm -rf rollback-check
+            mkdir rollback-check
+            gh release download "$ANVA_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir rollback-check
+            python scripts/release_metadata_repair.py verify-current rollback-check
+            cmp old-release-body.md <(gh release view "$ANVA_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)
+          }
+          rollback() {
+            status=$?
+            trap - EXIT HUP INT TERM
+            if [ "$mutated" = true ] && [ "$succeeded" != true ]; then
+              gh release upload "$ANVA_RELEASE_TAG" \
+                old/RELEASE_NOTES.md old/release-manifest.json old/SHA256SUMS \
+                --clobber --repo "$GITHUB_REPOSITORY"
+              gh release edit "$ANVA_RELEASE_TAG" --notes-file old-release-body.md --repo "$GITHUB_REPOSITORY"
+              verify_old_snapshot
+            fi
+            exit "$status"
+          }
+          trap rollback EXIT
+          trap 'exit 129' HUP
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          python scripts/release_metadata_repair.py verify-current current
+          tag_commit="$(git ls-remote --exit-code origin "refs/tags/${ANVA_RELEASE_TAG}" | cut -f1)"
+          test "$tag_commit" = "$ANVA_PRODUCT_SOURCE"
+          mutated=true
+          gh release upload "$ANVA_RELEASE_TAG" replacement/* --clobber --repo "$GITHUB_REPOSITORY"
+          gh release edit "$ANVA_RELEASE_TAG" --notes-file replacement/RELEASE_NOTES.md --repo "$GITHUB_REPOSITORY"
+
+          rm -rf anonymous
+          mkdir anonymous
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$ANVA_RELEASE_TAG" \
+            --jq '.assets[] | [.name, .browser_download_url] | @tsv' > asset-urls.tsv
+          while IFS=$'\t' read -r name download_url; do
+            env -u GH_TOKEN -u GITHUB_TOKEN curl --fail --location --proto '=https' --tlsv1.2 \
+              --output "anonymous/$name" "$download_url"
+          done < asset-urls.tsv
+          python scripts/release_metadata_repair.py verify-current old
+          python scripts/release_metadata_repair.py verify-current current
+          python scripts/release_metadata_repair.py generate \
+            old docs/releases/mvp-013.md expected \
+            --metadata-commit "$METADATA_COMMIT" --repair-run "$REPAIR_RUN"
+          for name in RELEASE_NOTES.md release-manifest.json SHA256SUMS; do
+            cmp "expected/$name" "anonymous/$name"
+          done
+          mkdir anonymous-replacement
+          cp anonymous/RELEASE_NOTES.md anonymous/release-manifest.json anonymous/SHA256SUMS \
+            anonymous-replacement/
+          python - <<'PY'
+          from pathlib import Path
+          from scripts.release_metadata_repair import (
+              assert_exact_inventory,
+              assert_unchanged_assets,
+              verify_replacement_closure,
+          )
+          assert_exact_inventory(Path("anonymous"))
+          assert_unchanged_assets(Path("old"), Path("anonymous"))
+          verify_replacement_closure(Path("anonymous"), Path("anonymous-replacement"))
+          PY
+          (cd anonymous && sha256sum --check SHA256SUMS)
+          for artifact in anonymous/RELEASE_NOTES.md anonymous/release-manifest.json anonymous/SHA256SUMS; do
+            env -u GH_TOKEN -u GITHUB_TOKEN gh attestation verify "$artifact" --repo "$GITHUB_REPOSITORY"
+            verification="$(env -u GH_TOKEN -u GITHUB_TOKEN gh attestation verify "$artifact" \
+              --repo "$GITHUB_REPOSITORY" \
+              --predicate-type "$ANVA_REPAIR_PREDICATE_TYPE" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-metadata-repair.yml" \
+              --format json)"
+            jq -e \
+              --arg product "$ANVA_PRODUCT_SOURCE" \
+              --arg metadata "$METADATA_COMMIT" \
+              --arg reason "$ANVA_CORRECTION_REASON" \
+              --arg run "$REPAIR_RUN" \
+              'map(select(.verificationResult.statement.predicate.productSourceCommit == $product)
+                | select(.verificationResult.statement.predicate.metadataCommit == $metadata)
+                | select(.verificationResult.statement.predicate.correctionReason == $reason)
+                | select(.verificationResult.statement.predicate.repairRun == $run))
+                | length > 0' <<<"$verification"
+          done
+          install_root="$(mktemp -d)"
+          tar -xzf anonymous/anva-install-0.1.0.tar.gz -C "$install_root"
+          cd "$install_root/anva-0.1.0"
+          export ANVA_IMAGE_REPOSITORY ANVA_VERSION=0.1.0
+          docker pull "${ANVA_IMAGE_REPOSITORY}@${ANVA_IMAGE_DIGEST}"
+          docker tag "${ANVA_IMAGE_REPOSITORY}@${ANVA_IMAGE_DIGEST}" "${ANVA_IMAGE_REPOSITORY}:${ANVA_VERSION}"
+          docker compose -p "anva-metadata-${GITHUB_RUN_ID}" up --no-build --wait
+          docker compose -p "anva-metadata-${GITHUB_RUN_ID}" --profile demo run --rm --no-deps demo >/dev/null
+          docker compose -p "anva-metadata-${GITHUB_RUN_ID}" --profile demo down --volumes --remove-orphans
+          succeeded=true
+
+      - name: Remove only repair-owned resources
+        if: always()
+        run: |
+          set -euo pipefail
+          project="anva-metadata-${GITHUB_RUN_ID}"
+          docker compose -p "$project" --profile demo down --volumes --remove-orphans || true

@@ -31,3 +31,14 @@ unsafe paths, symlinks, and checksum drift.
 Schema-v1 manifests remain useful only as historical evidence. They are intentionally
 rejected by the release verifier and must be regenerated as schema v2 from the exact
 candidate; editing or copying an old manifest is not a supported migration path.
+
+## Published v0.1.0 metadata correction
+
+The original public schema-v2 manifest honestly described its pre-publication
+generation state, but became stale once run `33596661334` successfully published
+and verified the release. Issue #74's controlled repair derives a schema-v3
+`anva.published-release-manifest` from the exact downloaded bytes. It records the
+tag, product source, immutable image digest, publication run, reviewed metadata
+commit, repair run, correction reason, and exact three replaced assets. The
+pre-publication generator and schema-v2 contract remain unchanged; the repair
+script separately verifies the public schema-v3 closure and ten immutable assets.

@@ -29,6 +29,14 @@ flow. The exact job permissions are:
 
 No release job receives `artifact-metadata` access.
 
+The one-time `release-metadata-repair.yml` uses the same protected environment
+and `release-v0.1.0` concurrency group. Its single job receives content,
+attestation, and OIDC write access; it cannot run on pull requests, rebuild or
+push the image, or create/move a tag. Apply mode asserts protected `main`, the
+existing product identity, and exact 13 assets; attests the new three-file
+metadata closure before upload; and restores and verifies the prior triplet and
+body if any post-mutation check fails.
+
 Branch protection should require CI, prevent force pushes and deletion, require
 review for workflow changes, and require conversation resolution. GitHub-hosted
 OIDC and artifact attestations avoid a long-lived signing key. A release tag must
