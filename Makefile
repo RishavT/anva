@@ -37,7 +37,7 @@ ACCEPTANCE_PROJECT ?= anva-acceptance
 ACCEPTANCE_CASE_COMPOSE = $(if $(strip $(ANVA_ACCEPTANCE_CASE_FILE)),-f compose.acceptance.case.yaml,)
 ACCEPTANCE_COMPOSE = docker compose -p $(ACCEPTANCE_PROJECT) -f compose.yaml -f compose.acceptance.yaml $(ACCEPTANCE_CASE_COMPOSE)
 
-.PHONY: help install-demo up up-exposed down uninstall uninstall-clean backup backup-verify restore migration-rehearsal rate-limit-cleanup release-build release-scan release-scan-gate release-manifest release-artifacts release-clean reset logs migrate migrations-check shell cli lock contracts contracts-check skills-render skills-package skills-check format format-check lint type unit integration acceptance-canonicalize acceptance-verify acceptance-start acceptance-review-request acceptance-review-submit acceptance-finalize acceptance-down contract smoke browser coverage test test-down check ci
+.PHONY: help install-demo up up-exposed down uninstall uninstall-clean backup backup-verify restore migration-rehearsal rate-limit-cleanup decommission-cleanup-status release-build release-scan release-scan-gate release-manifest release-artifacts release-clean reset logs migrate migrations-check shell cli lock contracts contracts-check skills-render skills-package skills-check format format-check lint type unit integration acceptance-canonicalize acceptance-verify acceptance-start acceptance-review-request acceptance-review-submit acceptance-finalize acceptance-down contract smoke browser coverage test test-down check ci
 
 help:
 	@echo "Anva development commands (all application tooling runs in Compose)"
@@ -47,6 +47,7 @@ help:
 	@echo "  make backup        Quiesce writers and back up PostgreSQL plus object storage"
 	@echo "  make restore       Verify and restore a backup, then migrate"
 	@echo "  make rate-limit-cleanup Delete one bounded batch of expired pre-auth counters"
+	@echo "  make decommission-cleanup-status Inspect one exact failed cleanup (operator credential required)"
 	@echo "  make release-artifacts  Build wheel, SBOMs, scans, manifest, and checksums"
 	@echo "  make release-scan-gate Fail on unwaived high/critical image vulnerabilities"
 	@echo "  make uninstall     Remove services while preserving named data volumes"
@@ -265,6 +266,13 @@ migration-rehearsal:
 rate-limit-cleanup:
 	$(COMPOSE) --profile tools run --rm cli \
 		python -m anva.entrypoints.cli maintenance purge-preauth-rate-buckets
+
+decommission-cleanup-status:
+	@test -n "$(ORGANIZATION_ID)" && test -n "$(RUN_ID)" || \
+		(echo "ORGANIZATION_ID and RUN_ID are required" >&2; exit 2)
+	$(COMPOSE) --profile operations run --rm decommission-cleanup-operator \
+		python -m anva.entrypoints.cli maintenance retry-decommission-cleanup \
+		--organization-id "$(ORGANIZATION_ID)" --run-id "$(RUN_ID)" --status
 
 release-clean:
 	$(RELEASE_COMPOSE) --profile release run --rm --build release-builder \
