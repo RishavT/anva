@@ -124,12 +124,13 @@ def test_release_gate_validates_current_report_before_using_waivers() -> None:
 @pytest.mark.unit
 def test_github_release_binds_risk_after_digest_before_manifest_and_attestation() -> None:
     workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
-    push = workflow.index("name: Push the exact image")
+    digest = workflow.index("name: Resolve the exact image digest without remote publication")
     approval = workflow.index("name: Bind approved residual risk")
     manifest = workflow.index("make release-manifest", approval)
+    publish = workflow.index("name: Publish the exact version image")
     attestation = workflow.index("name: Attest the GHCR image")
 
-    assert push < approval < manifest < attestation
+    assert digest < approval < manifest < publish < attestation
     assert '--image-reference "$IMAGE_REFERENCE"' in workflow
     assert '--image-digest "$IMAGE_DIGEST"' in workflow
     assert 'ANVA_RELEASE_IMAGE_REFERENCE="$IMAGE_REFERENCE"' in workflow
