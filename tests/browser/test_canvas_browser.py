@@ -360,6 +360,16 @@ def _canvas_is_interactive(driver: webdriver.Chrome) -> bool:
         return False
 
 
+def _canvas_navigation_is_interactive(driver: webdriver.Chrome, *, previous_url: str) -> bool:
+    """Wait through an old ready page until its requested navigation commits."""
+    try:
+        if driver.current_url == previous_url:
+            return False
+    except WebDriverException:
+        return False
+    return _canvas_is_interactive(driver)
+
+
 def test_canvas_interactive_wait_predicate_retries_only_navigation_races() -> None:
     driver = Mock(spec=webdriver.Chrome)
     ready = Mock()
@@ -372,6 +382,31 @@ def test_canvas_interactive_wait_predicate_retries_only_navigation_races() -> No
     driver.find_element.side_effect = WebDriverException("non-navigation browser failure")
     with pytest.raises(WebDriverException, match="non-navigation browser failure"):
         _canvas_is_interactive(typed_driver)
+
+
+def test_canvas_navigation_wait_does_not_accept_the_old_interactive_page() -> None:
+    driver = Mock(spec=webdriver.Chrome)
+    ready = Mock()
+    ready.get_attribute.return_value = "true"
+    driver.find_element.return_value = ready
+    driver.current_url = "http://web:8000/app/canvas?view=old"
+    typed_driver = cast(webdriver.Chrome, driver)
+
+    assert _canvas_is_interactive(typed_driver) is True
+    assert (
+        _canvas_navigation_is_interactive(
+            typed_driver, previous_url="http://web:8000/app/canvas?view=old"
+        )
+        is False
+    )
+
+    driver.current_url = "http://web:8000/app/canvas?semantic_controls=1&focus=service&depth=1"
+    assert (
+        _canvas_navigation_is_interactive(
+            typed_driver, previous_url="http://web:8000/app/canvas?view=old"
+        )
+        is True
+    )
 
 
 def _setup(driver: webdriver.Chrome, base_url: str) -> None:
@@ -1449,8 +1484,13 @@ def test_organizational_canvas_interaction_no_js_and_responsive_evidence(
             str(entities["service"].id)
         )
         Select(focus_form.find_element(By.NAME, "depth")).select_by_value("1")
+        previous_url = driver.current_url
         focus_form.find_element(By.CSS_SELECTOR, 'button[type="submit"]').click()
-        wait.until(_canvas_is_interactive)
+        wait.until(
+            lambda current_driver: _canvas_navigation_is_interactive(
+                current_driver, previous_url=previous_url
+            )
+        )
         focused_graph = driver.execute_script(
             "return JSON.parse(document.getElementById('canvas-data').textContent)"
         )

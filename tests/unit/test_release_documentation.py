@@ -11,6 +11,7 @@ INSTALL_RUNBOOK = ROOT / "docs" / "runbooks" / "install-upgrade-uninstall.md"
 EXCEPTIONS = ROOT / "docs" / "security" / "vulnerability-exceptions.json"
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 RELEASE_RUNBOOK = ROOT / "docs" / "releases" / "github-native-release.md"
+TRUST_BOUNDARY = ROOT / "docs" / "security" / "github-actions-trust-boundary.md"
 
 
 def test_readme_reports_the_exact_current_approved_residual_risk() -> None:
@@ -63,9 +64,12 @@ def test_install_runbook_matches_github_release_assets_and_image() -> None:
         "gh release download v0.1.0 --repo rishavt/anva --dir anva-v0.1.0",
         "sha256sum --check SHA256SUMS",
         'gh attestation verify "$artifact" --repo rishavt/anva',
+        "ANVA_SOURCE_VERSION=0.1.0",
         "ANVA_SOURCE_PREDICATE_TYPE=https://github.com/RishavT/anva/attestations/source/v1",
         '--predicate-type "$ANVA_SOURCE_PREDICATE_TYPE"',
+        '--arg version "$ANVA_SOURCE_VERSION"',
         'select(.verificationResult.statement.predicate["sourceCommit"] == $commit)',
+        'select(.verificationResult.statement.predicate["version"] == $version)',
         "anva-install-0.1.0.tar.gz",
         'gh attestation verify "oci://${ANVA_RELEASE_IMAGE}" --repo rishavt/anva',
         'docker pull "${ANVA_RELEASE_IMAGE}"',
@@ -78,6 +82,29 @@ def test_install_runbook_matches_github_release_assets_and_image() -> None:
         "## Source-checkout fallback",
     ):
         assert documented_contract in runbook
+
+
+def test_consumer_source_binding_requires_the_exact_release_version() -> None:
+    for document in (INSTALL_RUNBOOK, RELEASE_RUNBOOK):
+        text = document.read_text(encoding="utf-8")
+        assert "ANVA_SOURCE_VERSION=0.1.0" in text
+        assert '--arg version "$ANVA_SOURCE_VERSION"' in text
+        assert 'select(.verificationResult.statement.predicate["version"] == $version)' in text
+
+
+def test_release_permission_docs_match_the_exact_least_privilege_contract() -> None:
+    for document in (RELEASE_RUNBOOK, TRUST_BOUNDARY):
+        text = document.read_text(encoding="utf-8")
+        normalized = " ".join(text.split())
+        assert "`contents: read`" in normalized
+        assert "`packages: write`" in normalized
+        assert "`id-token: write`" in normalized
+        assert "`attestations: write`" in normalized
+        assert "`packages: read`" in normalized
+        assert "`attestations: read`" in normalized
+        assert "`contents: write`" in normalized
+        assert "No release job" in normalized
+        assert "`artifact-metadata` access" in normalized
 
 
 def test_release_recovery_documents_separate_workflow_and_source_identities() -> None:

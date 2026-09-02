@@ -23,11 +23,12 @@ done
 Standard SLSA provenance identifies the reviewed workflow-dispatch revision on
 `main`. Product source is independently authoritative only after the
 supplemental predicate's GitHub signature, signer workflow, subject digest, and
-exact tag/commit fields all verify:
+exact tag, commit, and release-version fields all verify:
 
 ```sh
 ANVA_SOURCE_COMMIT=d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac
 ANVA_SOURCE_TAG=v0.1.0
+ANVA_SOURCE_VERSION=0.1.0
 ANVA_SOURCE_PREDICATE_TYPE=https://github.com/RishavT/anva/attestations/source/v1
 verify_source_binding() {
   gh attestation verify "$1" --repo rishavt/anva \
@@ -38,10 +39,12 @@ verify_source_binding() {
       --arg ref "refs/tags/$ANVA_SOURCE_TAG" \
       --arg repository "https://github.com/RishavT/anva" \
       --arg tag "$ANVA_SOURCE_TAG" \
+      --arg version "$ANVA_SOURCE_VERSION" \
       'map(select(.verificationResult.statement.predicate["sourceCommit"] == $commit)
         | select(.verificationResult.statement.predicate["sourceRef"] == $ref)
         | select(.verificationResult.statement.predicate["sourceRepository"] == $repository)
-        | select(.verificationResult.statement.predicate["sourceTag"] == $tag))
+        | select(.verificationResult.statement.predicate["sourceTag"] == $tag)
+        | select(.verificationResult.statement.predicate["version"] == $version))
         | length > 0'
 }
 for artifact in anva-v0.1.0/*; do

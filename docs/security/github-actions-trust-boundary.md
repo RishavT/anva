@@ -20,9 +20,14 @@ The `release` environment is the only boundary allowed to publish Anva. Protect
 it with Rishav Thakker as required reviewer, prevent self-review when another
 reviewer becomes available, restrict deployment branches/tags to protected
 `v*` tags, and keep environment secrets empty for the GitHub-native keyless
-flow. The build job receives narrowly scoped `packages: write`,
-`attestations: write`, and `id-token: write`; publication receives only
-`contents: write`; verification is read-only.
+flow. The exact job permissions are:
+
+- build: `contents: read`, `packages: write`, `attestations: write`, and
+  `id-token: write`;
+- publish: `packages: read`, `attestations: read`, and `contents: write`;
+- verify: `packages: read`, `attestations: read`, and `contents: read`.
+
+No release job receives `artifact-metadata` access.
 
 Branch protection should require CI, prevent force pushes and deletion, require
 review for workflow changes, and require conversation resolution. GitHub-hosted

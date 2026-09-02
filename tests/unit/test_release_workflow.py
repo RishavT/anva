@@ -46,7 +46,6 @@ def test_release_workflow_pins_actions_and_uses_minimal_permissions() -> None:
     for job_name in ("build", "publish", "verify"):
         assert isinstance(jobs[job_name], dict)
     assert jobs["build"]["permissions"] == {
-        "artifact-metadata": "write",
         "attestations": "write",
         "contents": "read",
         "id-token": "write",
@@ -149,9 +148,11 @@ def test_publish_and_verify_cryptographically_inspect_product_source_binding() -
         assert '--predicate-type "$ANVA_SOURCE_PREDICATE_TYPE"' in script
         assert '--signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml"' in script
         assert "--format json" in script
+        assert '--arg version "$ANVA_VERSION"' in script
         assert '.verificationResult.statement.predicate["sourceCommit"] == $commit' in script
         assert '.verificationResult.statement.predicate["sourceRef"] == $ref' in script
         assert '.verificationResult.statement.predicate["sourceTag"] == $tag' in script
+        assert '.verificationResult.statement.predicate["version"] == $version' in script
         assert (
             '.verificationResult.statement.predicate["sourceRepository"] == $repository' in script
         )

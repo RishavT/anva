@@ -21,9 +21,11 @@ digest. Actions are pinned to immutable commits.
 2. Create a protected GitHub Actions environment named `release`. Require Rishav
    Thakker (`RishavT`) as reviewer and prevent self-review if another authorized
    reviewer is available. Restrict deployment branches/tags to `v0.1.0`.
-3. Keep the repository's default workflow-token permission read-only. The
-   release job requests only `contents`, `packages`, `id-token`, and
-   `attestations` write permissions.
+3. Keep the repository's default workflow-token permission read-only. The build
+   job requests `contents: read`, `packages: write`, `id-token: write`, and
+   `attestations: write`. Publish requests `packages: read`, `attestations: read`,
+   and `contents: write`; verification requests those three permissions
+   read-only. No release job requests `artifact-metadata` access.
 4. Enable tag protection/rules for `v*` and require the release owner to create
    `v0.1.0` from the reviewed `main` commit. The workflow independently checks
    the tag, project version, exact commit, `main` ancestry, and clean checkout.
@@ -46,9 +48,10 @@ records the main dispatch identity, which identifies the reviewed workflow but
 is not the product-source identity. The separate, supplemental source-binding
 predicate is the authoritative product-source binding: its signed in-toto
 statement binds each file or OCI subject digest to the independently resolved
-`sourceTag`, `sourceRef`, and `sourceCommit`. Publish and verification jobs
-cryptographically verify the GitHub signature and signer workflow, then inspect
-those predicate fields against the build outputs before accepting the subjects.
+`sourceTag`, `sourceRef`, `sourceCommit`, and release `version`. Publish and
+verification jobs cryptographically verify the GitHub signature and signer
+workflow, then inspect those predicate fields against the build outputs before
+accepting the subjects.
 Do not move, delete, or recreate the tag, and do not dispatch the recovery
 before the correction is reviewed and merged.
 
@@ -90,6 +93,7 @@ gh attestation verify 'oci://ghcr.io/rishavt/anva@sha256:<digest>' \
 
 ANVA_SOURCE_COMMIT=d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac
 ANVA_SOURCE_TAG=v0.1.0
+ANVA_SOURCE_VERSION=0.1.0
 ANVA_SOURCE_PREDICATE_TYPE=https://github.com/RishavT/anva/attestations/source/v1
 verify_source_binding() {
   gh attestation verify "$1" --repo rishavt/anva \
@@ -100,10 +104,12 @@ verify_source_binding() {
       --arg ref "refs/tags/$ANVA_SOURCE_TAG" \
       --arg repository "https://github.com/RishavT/anva" \
       --arg tag "$ANVA_SOURCE_TAG" \
+      --arg version "$ANVA_SOURCE_VERSION" \
       'map(select(.verificationResult.statement.predicate["sourceCommit"] == $commit)
         | select(.verificationResult.statement.predicate["sourceRef"] == $ref)
         | select(.verificationResult.statement.predicate["sourceRepository"] == $repository)
-        | select(.verificationResult.statement.predicate["sourceTag"] == $tag))
+        | select(.verificationResult.statement.predicate["sourceTag"] == $tag)
+        | select(.verificationResult.statement.predicate["version"] == $version))
         | length > 0'
 }
 for artifact in anva-v0.1.0/*; do

@@ -32,7 +32,6 @@ jobs:
     timeout-minutes: 90
     environment: release
     permissions:
-      artifact-metadata: write
       attestations: write
       contents: read
       id-token: write
@@ -352,12 +351,14 @@ jobs:
               --arg ref "refs/tags/$RELEASE_TAG" \
               --arg repository "https://github.com/$GITHUB_REPOSITORY" \
               --arg tag "$RELEASE_TAG" \
+              --arg version "$ANVA_VERSION" \
               'any(.[];
                 .verificationResult.statement.predicateType == $type and
                 .verificationResult.statement.predicate["sourceCommit"] == $commit and
                 .verificationResult.statement.predicate["sourceRef"] == $ref and
                 .verificationResult.statement.predicate["sourceRepository"] == $repository and
-                .verificationResult.statement.predicate["sourceTag"] == $tag
+                .verificationResult.statement.predicate["sourceTag"] == $tag and
+                .verificationResult.statement.predicate["version"] == $version
               )' <<<"$verification" >/dev/null
           }
           for artifact in "$published"/*; do
@@ -455,12 +456,14 @@ jobs:
               --arg ref "refs/tags/$RELEASE_TAG" \
               --arg repository "https://github.com/$GITHUB_REPOSITORY" \
               --arg tag "$RELEASE_TAG" \
+              --arg version "$ANVA_VERSION" \
               'any(.[];
                 .verificationResult.statement.predicateType == $type and
                 .verificationResult.statement.predicate["sourceCommit"] == $commit and
                 .verificationResult.statement.predicate["sourceRef"] == $ref and
                 .verificationResult.statement.predicate["sourceRepository"] == $repository and
-                .verificationResult.statement.predicate["sourceTag"] == $tag
+                .verificationResult.statement.predicate["sourceTag"] == $tag and
+                .verificationResult.statement.predicate["version"] == $version
               )' <<<"$verification" >/dev/null
           }
           for artifact in "$published"/*; do
