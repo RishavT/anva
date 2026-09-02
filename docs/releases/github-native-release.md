@@ -38,10 +38,14 @@ gh workflow run release.yml --repo rishavt/anva --ref main \
    personally approves or rejects the pending
    environment deployment in GitHub. No workflow, agent, or API call approves it.
 6. After approval, the job queries GitHub's immutable review history for this
-   exact run and requires exactly one `approved` review for environment
-   `release`, by `RishavT`, with no other approver. It rebuilds and rescans from
-   the same source and requires digest, tuples, and runtime controls to equal the
-   reviewed proposal. It then creates and attests a decision binding the
+   exact run and requires exactly one initial `approved` review for environment
+   `release`, by `RishavT`, with no other approver. It canonically binds that
+   record into the decision. Later protected jobs may add approval records, but
+   publication requires every approved record to be unambiguously for `release`
+   by exact `RishavT`, and requires the original bound hash to match exactly one
+   record. It rebuilds and rescans from the same source and requires digest,
+   tuples, and runtime controls to equal the reviewed proposal. It then creates
+   and attests a decision binding the
    proposal SHA-256, GitHub approval-record SHA-256, both report checksums,
    source, digest, tuples, controls, run, reviewer, and expiry. The decision and
    its attestation verify before any publication mutation. The v0.1.0 approval
@@ -56,6 +60,10 @@ runtime, reviewer, run, and current-expiry field, then rechecks the live tag.
 A source or evidence mismatch fails closed.
 
 ## Artifacts and attestations
+
+Public release asset download and checksum validation do not require GitHub
+authentication. GitHub attestation lookup does, so authenticate with
+`gh auth login` or a scoped `GH_TOKEN` before verifying provenance.
 
 The exact checkout produces the wheel, install archive, skill archives,
 SPDX/CycloneDX SBOMs, Trivy reports, reviewed risk record, release notes,
