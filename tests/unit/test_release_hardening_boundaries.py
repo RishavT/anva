@@ -131,8 +131,8 @@ def test_github_release_binds_risk_after_digest_before_manifest_and_attestation(
     attestation = workflow.index("name: Attest the GHCR image")
 
     assert digest < approval < manifest < publish < attestation
-    assert '--image-reference "$IMAGE_REFERENCE"' in workflow
-    assert '--image-digest "$IMAGE_DIGEST"' in workflow
+    assert "IMAGE_REFERENCE: ${{ steps.image.outputs.reference }}" in workflow
+    assert "IMAGE_DIGEST: ${{ steps.image.outputs.digest }}" in workflow
     assert 'ANVA_RELEASE_IMAGE_REFERENCE="$IMAGE_REFERENCE"' in workflow
     assert 'ANVA_RELEASE_IMAGE_ID="$IMAGE_DIGEST"' in workflow
     assert "environment: release" in workflow
