@@ -14,7 +14,7 @@ commit resolved from the existing `v0.1.1` tag.
 | Gate | Current disposition |
 | --- | --- |
 | Candidate identity | Pending reviewed merge and exact tag-to-commit binding. |
-| Candidate build and scan | Pending two clean builds and a fresh run-owned Trivy database against the exact image. |
+| Candidate build and scan | The first exact-source run `33674993082` failed opaquely in Trivy source scanning and published nothing. A retry is blocked until #85 is reviewed and merged. The hardened candidate records engine status and canonical command identity for image vulnerability, SPDX, CycloneDX, and source stages; validates every JSON schema; distinguishes engine/schema/source-policy failures; retains safe diagnostics on failure; and binds successful evidence plus a fresh run-owned Trivy database into one manifest. |
 | Residual risk | Pending an attested proposal followed by an explicit RishavT decision through personal protected-environment approval for the exact source, digest, report, tuple set, runtime controls, and expiry. GitHub's exact-run approval record and proposal SHA must bind the generated decision. The v0.1.0 decision is invalid here. |
 | Publication | Pending separate tag creation and protected `release` environment approval. |
 | Human acceptance #44 | Still separate. Harness success cannot approve or finalize it. |

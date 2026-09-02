@@ -132,6 +132,8 @@ def test_risk_decision_requires_exact_proposal_and_actual_environment_approval()
         '"runtime_controls_sha256": controls',
         '"high_critical_tuples": tuples',
         '"proposal_sha256": proposal_sha',
+        '"proposal_source_security_report_sha256"',
+        '"proposal_source_scan_diagnostic_sha256"',
         '"environment_approval_record_sha256"',
         '"approved_by": "RishavT"',
         "if expiry < today or (expiry - today).days > 30",
@@ -153,23 +155,126 @@ def test_candidate_retains_and_attests_original_scan_and_database_metadata() -> 
     candidate = _jobs(workflow)["candidate"]
     steps = cast(list[dict[str, object]], candidate["steps"])
     named = {cast(str, step["name"]): step for step in steps}
-    build = cast(str, named["Build and scan without applying a risk decision"]["run"])
+    build = cast(
+        str,
+        named["Build release assets without applying a risk decision"]["run"],
+    )
+    source_scan = cast(str, named["Run and explicitly validate every candidate scan stage"]["run"])
+    diagnostics = named["Retain all completed scan diagnostics before cleanup"]
     proposal = cast(str, named["Create canonical exact-candidate risk proposal"]["run"])
     attestation = cast(dict[str, str], named["Attest exact-candidate risk proposal"]["with"])[
         "subject-path"
     ]
     upload = cast(dict[str, object], named["Upload proposal for personal review"]["with"])
-    assert "cp release/anva-image-vulnerabilities.json release-risk-report.json" in build
-    assert "/cache/db/metadata.json" in build
+    assert "make release-build" in build
+    assert "/cache/db/metadata.json" in source_scan
     assert '"report_sha256"' in proposal
     assert '"database_metadata_sha256"' in proposal
+    assert '"source_security_report_sha256"' in proposal
+    assert '"source_scan_diagnostic_sha256"' in proposal
+    assert 'source_diagnostic.get("classification") != "passed"' in proposal
+    assert 'source_diagnostic.get("engine_exit_code") != 0' in proposal
+    assert 'source_diagnostic.get("blocking_findings") != []' in proposal
+    assert 'source_report.get("SchemaVersion") != 2' in proposal
+    assert "source security report does not match its diagnostic" in proposal
+    assert "source scan database metadata does not match" in proposal
     for evidence in (
         "release-risk-proposal.json",
         "release-risk-report.json",
         "release-risk-db-metadata.json",
+        "release-risk-source-security.json",
+        "release-risk-source-scan-diagnostic.json",
     ):
         assert evidence in attestation
         assert evidence in cast(str, upload["path"])
+    assert "--exit-code 0" in source_scan
+    assert "scripts/classify_release_source_scan.py" in source_scan
+    assert 'git show "${GITHUB_SHA}:scripts/classify_release_source_scan.py"' in source_scan
+    assert "run-release-scan-stage.py" in source_scan
+    assert "local rc=$?" in source_scan
+    assert "--report-kind" in source_scan
+    assert "trap 'rm -f \"$source_raw\"' EXIT" in source_scan
+    assert source_scan.count("--skip-dir ") == 10
+    assert source_scan.count("--skip-dirs ") == 10
+    assert source_scan.count("--skip-file /workspace/.env") == 1
+    assert source_scan.count("--skip-files /workspace/.env") == 1
+    assert "image --scanners vuln --format spdx-json" in source_scan
+    assert "image --scanners vuln --format cyclonedx" in source_scan
+    assert diagnostics["if"] == "always()"
+    assert diagnostics["uses"] == (
+        "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+    )
+    diagnostics_with = cast(dict[str, object], diagnostics["with"])
+    assert diagnostics_with["if-no-files-found"] == "warn"
+    assert "${{ github.run_attempt }}" in cast(str, diagnostics_with["name"])
+
+    names = [cast(str, step["name"]) for step in steps]
+    assert names.index("Run and explicitly validate every candidate scan stage") < names.index(
+        "Retain all completed scan diagnostics before cleanup"
+    )
+    assert names.index("Retain all completed scan diagnostics before cleanup") < names.index(
+        "Resolve candidate registry digest locally"
+    )
+    assert names.index("Resolve candidate registry digest locally") < names.index(
+        "Create canonical exact-candidate risk proposal"
+    )
+    assert names.index("Retain all completed scan diagnostics before cleanup") < names.index(
+        "Remove only candidate-owned resources"
+    )
+
+
+def test_source_scan_failure_cannot_reach_protected_or_proposal_jobs() -> None:
+    _, workflow = _workflow()
+    jobs = _jobs(workflow)
+    candidate = jobs["candidate"]
+    steps = cast(list[dict[str, object]], candidate["steps"])
+    named = {cast(str, step["name"]): step for step in steps}
+    scan = named["Run and explicitly validate every candidate scan stage"]
+    proposal = named["Create canonical exact-candidate risk proposal"]
+
+    assert "continue-on-error" not in scan
+    assert "if" not in proposal
+    assert jobs["build"]["needs"] == "candidate"
+    assert jobs["build"]["environment"] == "release"
+    assert jobs["publish"]["needs"] == ["candidate", "build"]
+    assert jobs["verify"]["needs"] == ["build", "publish"]
+
+
+def test_validated_source_scan_evidence_remains_bound_through_publication() -> None:
+    _, workflow = _workflow()
+    jobs = _jobs(workflow)
+    build_steps = cast(list[dict[str, object]], jobs["build"]["steps"])
+    build_named = {cast(str, step["name"]): step for step in build_steps}
+    approval = cast(
+        str,
+        build_named["Verify exact RishavT environment approval and proposal provenance"]["run"],
+    )
+    for evidence in (
+        "release-risk-source-security.json",
+        "release-risk-source-scan-diagnostic.json",
+        ".source_security_report_sha256",
+        ".source_scan_diagnostic_sha256",
+        ".classification",
+    ):
+        assert evidence in approval
+
+    publish_steps = cast(list[dict[str, object]], jobs["publish"]["steps"])
+    publish = cast(
+        str,
+        next(
+            step
+            for step in publish_steps
+            if step["name"] == "Create the GitHub Release after attestations"
+        )["run"],
+    )
+    for binding in (
+        "release-risk-source-security.json",
+        "release-risk-source-scan-diagnostic.json",
+        '"proposal_source_security_report_sha256"',
+        '"proposal_source_scan_diagnostic_sha256"',
+        'get("classification") != "passed"',
+    ):
+        assert binding in publish
 
 
 def test_remote_tag_is_rechecked_immediately_before_first_ghcr_push() -> None:
@@ -208,7 +313,7 @@ def test_dispatch_uses_main_workflow_but_binds_products_to_the_tag_commit() -> N
     assert 'echo "commit=$source_commit" >> "$GITHUB_OUTPUT"' in text
     assert '"source_commit": os.environ["ANVA_REVISION"]' in text
     assert "needs.build.outputs.source_commit" in text
-    assert "--target" not in text
+    assert "target: product-source" not in text
     assert "--verify-tag" in text
     assert "$GITHUB_SHA" not in text
 
@@ -445,6 +550,8 @@ def test_release_creation_uses_existing_verified_tag_without_target_and_rechecks
         '"proposal_sha256"',
         '"proposal_report_sha256"',
         '"proposal_database_metadata_sha256"',
+        '"proposal_source_security_report_sha256"',
+        '"proposal_source_scan_diagnostic_sha256"',
         '"verification_report_sha256"',
         '"source_commit": os.environ["SOURCE_COMMIT"]',
         '"image_digest": os.environ["IMAGE_DIGEST"]',

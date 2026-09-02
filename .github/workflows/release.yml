@@ -85,7 +85,7 @@ jobs:
             echo "ANVA_DOCKER_GID=$docker_gid"
           } >> "$GITHUB_ENV"
 
-      - name: Build and scan without applying a risk decision
+      - name: Build release assets without applying a risk decision
         env:
           CACHE_VOLUME: anva-release-proposal-${{ github.run_id }}_release-trivy-cache
         run: |
@@ -101,14 +101,133 @@ jobs:
             --entrypoint /bin/sh "$ANVA_TRIVY_IMAGE" -eu -c \
             'umask 077; mkdir /tmp/fanal; test -w /tmp/fanal'
           make release-build
-          make release-scan
-          cp release/anva-image-vulnerabilities.json release-risk-report.json
-          docker run --rm --user "$(id -u):$(id -g)" --network none \
-            --read-only --cap-drop ALL --security-opt no-new-privileges \
-            --mount "type=volume,src=${CACHE_VOLUME},dst=/cache,readonly" \
-            --mount "type=bind,src=${GITHUB_WORKSPACE},dst=/evidence" \
-            --entrypoint /bin/sh "$ANVA_TRIVY_IMAGE" -eu -c \
-            'test -s /cache/db/metadata.json; cp /cache/db/metadata.json /evidence/release-risk-db-metadata.json'
+
+      - name: Run and explicitly validate every candidate scan stage
+        env:
+          CACHE_VOLUME: anva-release-proposal-${{ github.run_id }}_release-trivy-cache
+        run: |
+          set -euo pipefail
+          classifier="$RUNNER_TEMP/classify-release-source-scan.py"
+          runner="$RUNNER_TEMP/run-release-scan-stage.py"
+          git show "${GITHUB_SHA}:scripts/classify_release_source_scan.py" > "$classifier"
+          git show "${GITHUB_SHA}:scripts/run_release_scan_stage.py" > "$runner"
+          test -s "$classifier" && test -s "$runner"
+          scanner_version="$(docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges "$ANVA_TRIVY_IMAGE" --version | head -1)"
+          test -n "$scanner_version"
+          common=(--scanner-image "$ANVA_TRIVY_IMAGE" --scanner-version "$scanner_version"
+            --compose-project "$COMPOSE_PROJECT" --compose-file compose.yaml
+            --compose-file compose.release.yaml)
+          classify() {
+            local stage="$1" report="$2" log="$3" sanitized="$4" diagnostic="$5" engine="$6"
+            python3 "$classifier" --report-kind "$stage" --report "$report" --raw-log "$log" \
+              --sanitized-report "$sanitized" --sanitized-log "$log" --diagnostic "$diagnostic" \
+              --database-metadata release-risk-db-metadata.json --scanner-image "$ANVA_TRIVY_IMAGE" \
+              --scanner-version "$scanner_version" --engine-exit "$engine" --run-id "$GITHUB_RUN_ID" \
+              --run-attempt "$GITHUB_RUN_ATTEMPT" --source-commit "$ANVA_REVISION" --tag "${{ inputs.tag }}"
+          }
+          run_stage() {
+            local stage="$1" scanners="$2" target="$3" format="$4" output="$5"; shift 5
+            local metadata=()
+            while test "${1:-}" != --; do
+              test "$#" -ge 2
+              metadata+=("$1" "$2")
+              shift 2
+            done
+            shift
+            local status="release-risk-${stage}-status.json" log="release-risk-${stage}.log"
+            set +e
+            python3 "$runner" --stage "$stage" --status-output "$status" --log-output "$log" \
+              "${common[@]}" --scanner-set "$scanners" --target "$target" --format "$format" \
+              --output "$output" "${metadata[@]}" -- docker compose -f compose.yaml -f compose.release.yaml \
+              -p "$COMPOSE_PROJECT" --profile release run --rm release-scanner "$@"
+            local rc=$?
+            set -e
+            return "$rc"
+          }
+          # Each invocation has an explicit engine result before semantic validation.
+          run_stage image-vulnerability vuln "${ANVA_IMAGE_REPOSITORY}:${ANVA_VERSION}" json \
+            /release/anva-image-vulnerabilities.json -- image --scanners vuln --format json \
+            --exit-code 0 --output /release/anva-image-vulnerabilities.json \
+            "${ANVA_IMAGE_REPOSITORY}:${ANVA_VERSION}"
+          cp release/anva-image-vulnerabilities.json release-risk-image-vulnerability.raw.json
+          docker run --rm --user "$(id -u):$(id -g)" --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --mount "type=volume,src=${CACHE_VOLUME},dst=/cache,readonly" \
+            --mount "type=bind,src=${GITHUB_WORKSPACE},dst=/evidence" --entrypoint /bin/sh \
+            "$ANVA_TRIVY_IMAGE" -eu -c 'test -s /cache/db/metadata.json; cp /cache/db/metadata.json /evidence/release-risk-db-metadata.json'
+          classify image-vulnerability release/anva-image-vulnerabilities.json \
+            release-risk-image-vulnerability.log release-risk-report.json \
+            release-risk-image-vulnerability-diagnostic.json 0
+          run_stage spdx "vuln" "${ANVA_IMAGE_REPOSITORY}:${ANVA_VERSION}" spdx-json \
+            /release/anva-image.spdx.json -- image --scanners vuln --format spdx-json \
+            --output /release/anva-image.spdx.json "${ANVA_IMAGE_REPOSITORY}:${ANVA_VERSION}"
+          cp release/anva-image.spdx.json release-risk-image.spdx.raw.json
+          classify spdx release/anva-image.spdx.json release-risk-spdx.log \
+            release-risk-image.spdx.json release-risk-spdx-diagnostic.json 0
+          run_stage cyclonedx "vuln" "${ANVA_IMAGE_REPOSITORY}:${ANVA_VERSION}" cyclonedx \
+            /release/anva-image.cyclonedx.json -- image --scanners vuln --format cyclonedx \
+            --output /release/anva-image.cyclonedx.json "${ANVA_IMAGE_REPOSITORY}:${ANVA_VERSION}"
+          cp release/anva-image.cyclonedx.json release-risk-image.cyclonedx.raw.json
+          classify cyclonedx release/anva-image.cyclonedx.json release-risk-cyclonedx.log \
+            release-risk-image.cyclonedx.json release-risk-cyclonedx-diagnostic.json 0
+          source_raw=release/anva-source-security.raw.json
+          trap 'rm -f "$source_raw"' EXIT
+          run_stage source vuln,secret,misconfig /workspace json /release/anva-source-security.raw.json \
+            --skip-dir /workspace/.git --skip-dir /workspace/.secrets --skip-dir /workspace/secrets \
+            --skip-dir /workspace/backups --skip-dir /workspace/release --skip-dir /workspace/.venv \
+            --skip-dir /workspace/.pytest_cache --skip-dir /workspace/.mypy_cache \
+            --skip-dir /workspace/.ruff_cache --skip-dir /workspace/htmlcov --skip-file /workspace/.env \
+            -- filesystem --scanners vuln,secret,misconfig --format json --exit-code 0 \
+            --skip-dirs /workspace/.git --skip-dirs /workspace/.secrets --skip-dirs /workspace/secrets \
+            --skip-dirs /workspace/backups --skip-dirs /workspace/release --skip-dirs /workspace/.venv \
+            --skip-dirs /workspace/.pytest_cache --skip-dirs /workspace/.mypy_cache \
+            --skip-dirs /workspace/.ruff_cache --skip-dirs /workspace/htmlcov \
+            --skip-files /workspace/.env --output /release/anva-source-security.raw.json /workspace
+          classify source "$source_raw" release-risk-source.log release-risk-source-security.json \
+            release-risk-source-scan-diagnostic.json 0
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+
+          names = sorted(
+              str(path) for path in Path(".").glob("release-risk-*")
+              if path.is_file() and path.name != "release-risk-scan-evidence-manifest.json"
+          )
+          required = {
+              "release-risk-report.json", "release-risk-image.spdx.json",
+              "release-risk-image.cyclonedx.json", "release-risk-source-security.json",
+              "release-risk-db-metadata.json",
+          }
+          if not required.issubset(names):
+              raise SystemExit("successful scan evidence is incomplete")
+          evidence = {
+              name: hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in names
+          }
+          manifest = {
+              "schema_version": 1,
+              "kind": "anva.release-scan-evidence-manifest",
+              "github_run_id": os.environ["GITHUB_RUN_ID"],
+              "github_run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+              "source_commit": os.environ["ANVA_REVISION"],
+              "tag": "${{ inputs.tag }}",
+              "scanner_image": os.environ["ANVA_TRIVY_IMAGE"],
+              "evidence_sha256": evidence,
+          }
+          Path("release-risk-scan-evidence-manifest.json").write_text(
+              json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n"
+          )
+          PY
+
+      - name: Retain all completed scan diagnostics before cleanup
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-scan-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            release-risk-*.json
+            release-risk-*.log
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Resolve candidate registry digest locally
         id: digest
@@ -145,9 +264,32 @@ jobs:
           today = datetime.now(UTC).date()
           if expiry < today or (expiry - today).days > 30:
               raise SystemExit("risk expiry must be today through 30 days")
-          report_path = Path("release/anva-image-vulnerabilities.json")
+          report_path = Path("release-risk-report.json")
           database_metadata_path = Path("release-risk-db-metadata.json")
           report = json.loads(report_path.read_bytes())
+          source_report_path = Path("release-risk-source-security.json")
+          source_diagnostic_path = Path("release-risk-source-scan-diagnostic.json")
+          scan_manifest_path = Path("release-risk-scan-evidence-manifest.json")
+          source_report = json.loads(source_report_path.read_bytes())
+          source_diagnostic = json.loads(source_diagnostic_path.read_bytes())
+          if source_report.get("SchemaVersion") != 2 or not isinstance(
+              source_report.get("Results"), list
+          ):
+              raise SystemExit("validated source security report is malformed")
+          if (
+              source_diagnostic.get("classification") != "passed"
+              or source_diagnostic.get("engine_exit_code") != 0
+              or source_diagnostic.get("blocking_findings") != []
+          ):
+              raise SystemExit("source security scan is not explicitly passing")
+          if source_diagnostic.get("sanitized_report_sha256") != hashlib.sha256(
+              source_report_path.read_bytes()
+          ).hexdigest():
+              raise SystemExit("source security report does not match its diagnostic")
+          if source_diagnostic.get("database_metadata_sha256") != hashlib.sha256(
+              database_metadata_path.read_bytes()
+          ).hexdigest():
+              raise SystemExit("source scan database metadata does not match")
           tuples = []
           for result in report.get("Results", []):
               for item in result.get("Vulnerabilities") or []:
@@ -175,6 +317,12 @@ jobs:
               "report_sha256": hashlib.sha256(report_path.read_bytes()).hexdigest(),
               "database_metadata_sha256": hashlib.sha256(
                   database_metadata_path.read_bytes()).hexdigest(),
+              "source_security_report_sha256": hashlib.sha256(
+                  source_report_path.read_bytes()).hexdigest(),
+              "source_scan_diagnostic_sha256": hashlib.sha256(
+                  source_diagnostic_path.read_bytes()).hexdigest(),
+              "scan_evidence_manifest_sha256": hashlib.sha256(
+                  scan_manifest_path.read_bytes()).hexdigest(),
               "runtime_controls_sha256": controls,
               "high_critical_tuples": tuples,
               "decision_expires_on": os.environ["RISK_EXPIRES_ON"],
@@ -192,6 +340,11 @@ jobs:
             release-risk-proposal.json
             release-risk-report.json
             release-risk-db-metadata.json
+            release-risk-source-security.json
+            release-risk-source-scan-diagnostic.json
+            release-risk-scan-evidence-manifest.json
+            release-risk-image.spdx.json
+            release-risk-image.cyclonedx.json
 
       - name: Upload proposal for personal review
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -202,6 +355,11 @@ jobs:
             release-risk-proposal.sha256
             release-risk-report.json
             release-risk-db-metadata.json
+            release-risk-source-security.json
+            release-risk-source-scan-diagnostic.json
+            release-risk-scan-evidence-manifest.json
+            release-risk-image.spdx.json
+            release-risk-image.cyclonedx.json
           if-no-files-found: error
           retention-days: 90
 
@@ -276,7 +434,10 @@ jobs:
           actual_proposal_sha256="$(sha256sum "$RUNNER_TEMP/risk-proposal/release-risk-proposal.json" | cut -d' ' -f1)"
           test "$actual_proposal_sha256" = "$EXPECTED_PROPOSAL_SHA256"
           test "$(cat "$RUNNER_TEMP/risk-proposal/release-risk-proposal.sha256")" = "$EXPECTED_PROPOSAL_SHA256"
-          for evidence in release-risk-proposal.json release-risk-report.json release-risk-db-metadata.json; do
+          for evidence in release-risk-proposal.json release-risk-report.json release-risk-db-metadata.json \
+            release-risk-source-security.json release-risk-source-scan-diagnostic.json \
+            release-risk-scan-evidence-manifest.json release-risk-image.spdx.json \
+            release-risk-image.cyclonedx.json; do
             gh attestation verify "$RUNNER_TEMP/risk-proposal/$evidence" \
               --repo "$GITHUB_REPOSITORY" \
               --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml"
@@ -285,6 +446,13 @@ jobs:
             "$(jq -r .report_sha256 "$RUNNER_TEMP/risk-proposal/release-risk-proposal.json")"
           test "$(sha256sum "$RUNNER_TEMP/risk-proposal/release-risk-db-metadata.json" | cut -d' ' -f1)" = \
             "$(jq -r .database_metadata_sha256 "$RUNNER_TEMP/risk-proposal/release-risk-proposal.json")"
+          test "$(sha256sum "$RUNNER_TEMP/risk-proposal/release-risk-source-security.json" | cut -d' ' -f1)" = \
+            "$(jq -r .source_security_report_sha256 "$RUNNER_TEMP/risk-proposal/release-risk-proposal.json")"
+          test "$(sha256sum "$RUNNER_TEMP/risk-proposal/release-risk-source-scan-diagnostic.json" | cut -d' ' -f1)" = \
+            "$(jq -r .source_scan_diagnostic_sha256 "$RUNNER_TEMP/risk-proposal/release-risk-proposal.json")"
+          test "$(sha256sum "$RUNNER_TEMP/risk-proposal/release-risk-scan-evidence-manifest.json" | cut -d' ' -f1)" = \
+            "$(jq -r .scan_evidence_manifest_sha256 "$RUNNER_TEMP/risk-proposal/release-risk-proposal.json")"
+          test "$(jq -r .classification "$RUNNER_TEMP/risk-proposal/release-risk-source-scan-diagnostic.json")" = passed
           approvals="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/approvals")"
           approval_sha256="$(python3 scripts/validate_release_approvals.py \
             --require-single <<<"$approvals")"
@@ -528,6 +696,12 @@ jobs:
               "proposal_sha256": proposal_sha,
               "proposal_report_sha256": proposal["report_sha256"],
               "proposal_database_metadata_sha256": proposal["database_metadata_sha256"],
+              "proposal_source_security_report_sha256": proposal[
+                  "source_security_report_sha256"],
+              "proposal_source_scan_diagnostic_sha256": proposal[
+                  "source_scan_diagnostic_sha256"],
+              "proposal_scan_evidence_manifest_sha256": proposal[
+                  "scan_evidence_manifest_sha256"],
               "verification_report_sha256": hashlib.sha256(report_path.read_bytes()).hexdigest(),
               **expected,
               "expires_on": proposal["decision_expires_on"],
@@ -771,7 +945,10 @@ jobs:
           proposal="$RUNNER_TEMP/risk-proposal/release-risk-proposal.json"
           gh attestation verify "$decision" --repo "$GITHUB_REPOSITORY" \
             --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml"
-          for evidence in release-risk-proposal.json release-risk-report.json release-risk-db-metadata.json; do
+          for evidence in release-risk-proposal.json release-risk-report.json release-risk-db-metadata.json \
+            release-risk-source-security.json release-risk-source-scan-diagnostic.json \
+            release-risk-scan-evidence-manifest.json release-risk-image.spdx.json \
+            release-risk-image.cyclonedx.json; do
             gh attestation verify "$RUNNER_TEMP/risk-proposal/$evidence" \
               --repo "$GITHUB_REPOSITORY" \
               --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml"
@@ -795,6 +972,9 @@ jobs:
           report = Path("release/anva-image-vulnerabilities.json").read_bytes()
           original_report = Path(os.environ["RUNNER_TEMP"] + "/risk-proposal/release-risk-report.json").read_bytes()
           database_metadata = Path(os.environ["RUNNER_TEMP"] + "/risk-proposal/release-risk-db-metadata.json").read_bytes()
+          source_security = Path(os.environ["RUNNER_TEMP"] + "/risk-proposal/release-risk-source-security.json").read_bytes()
+          source_diagnostic = Path(os.environ["RUNNER_TEMP"] + "/risk-proposal/release-risk-source-scan-diagnostic.json").read_bytes()
+          scan_manifest = Path(os.environ["RUNNER_TEMP"] + "/risk-proposal/release-risk-scan-evidence-manifest.json").read_bytes()
           controls = hashlib.sha256(b"".join(
               Path(name).read_bytes() for name in (
                   "Dockerfile", "compose.yaml", "compose.release.yaml",
@@ -810,6 +990,9 @@ jobs:
               "proposal_sha256": proposal_sha,
               "proposal_report_sha256": hashlib.sha256(original_report).hexdigest(),
               "proposal_database_metadata_sha256": hashlib.sha256(database_metadata).hexdigest(),
+              "proposal_source_security_report_sha256": hashlib.sha256(source_security).hexdigest(),
+              "proposal_source_scan_diagnostic_sha256": hashlib.sha256(source_diagnostic).hexdigest(),
+              "proposal_scan_evidence_manifest_sha256": hashlib.sha256(scan_manifest).hexdigest(),
               "verification_report_sha256": hashlib.sha256(report).hexdigest(),
               "version": os.environ["ANVA_VERSION"],
               "source_commit": os.environ["SOURCE_COMMIT"],
@@ -825,6 +1008,14 @@ jobs:
               raise SystemExit("original candidate report bytes changed")
           if proposal.get("database_metadata_sha256") != expected["proposal_database_metadata_sha256"]:
               raise SystemExit("original Trivy database metadata changed")
+          if proposal.get("source_security_report_sha256") != expected["proposal_source_security_report_sha256"]:
+              raise SystemExit("validated source security report changed")
+          if proposal.get("source_scan_diagnostic_sha256") != expected["proposal_source_scan_diagnostic_sha256"]:
+              raise SystemExit("source scan diagnostic changed")
+          if proposal.get("scan_evidence_manifest_sha256") != expected["proposal_scan_evidence_manifest_sha256"]:
+              raise SystemExit("scan evidence manifest changed")
+          if json.loads(source_diagnostic).get("classification") != "passed":
+              raise SystemExit("source scan diagnostic is not passing")
           if any(decision.get(key) != value for key, value in expected.items()):
               raise SystemExit("risk decision binding is incomplete or stale")
           expiry = date.fromisoformat(str(decision.get("expires_on")))
