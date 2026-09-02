@@ -1,9 +1,10 @@
 # Install, upgrade, rollback, and uninstall
 
 This runbook covers the GitHub-native `v0.1.0` installation path and the
-source-checkout fallback. The release path is usable only after the release
-workflow has successfully published and verified the tag, assets, attestations,
-and GHCR image; before publication, its download command fails closed.
+source-checkout fallback. Release run `33596661334` successfully published and
+verified the tag, 13 assets, attestations, immutable GHCR image, and install
+lifecycle. Human gates #43/#44 remain open and are not prerequisites for
+reproducing the technically verified self-hosted installation.
 
 ## GitHub-native v0.1.0 installation
 

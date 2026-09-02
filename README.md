@@ -208,9 +208,9 @@ these beyond local evaluation. Use the GitHub-native release assets and
 digest-addressed GHCR image only after completing the verification steps in the
 install runbook; source-checkout installation remains available as a fallback.
 See the [MVP-013 release notes](docs/releases/mvp-013.md), [compatibility
-matrix](docs/releases/compatibility.md), and [evidence
-index](docs/evidence/issue-013/README.md) for the historical local-evidence
-boundary.
+matrix](docs/releases/compatibility.md), and [current readiness
+audit](docs/releases/current-release-readiness.md) for the public `v0.1.0`
+identity and its still-open human gates.
 
 After a test or drill, remove only the named task project with `make test-down`
 or `COMPOSE_PROJECT=<exact-project> make uninstall-clean`; inspect the resolved

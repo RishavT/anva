@@ -6,14 +6,10 @@ The [release-freeze contract](release-freeze-contract.md) fixes the remaining
 scope, allowed exceptions, evidence, and retest rules.
 The [current readiness audit](current-release-readiness.md) maps open gates to
 release-blocker and post-MVP issues without treating documentation as evidence.
-The [evidence index](../evidence/issue-013/README.md) records checksummed local
-candidate tests, exact read-only corpus ingestion, scans, backup/restore, and
-migration rehearsal at source commit `94231d7e...`. Checked items below mean
-that exact local evidence exists; they do not imply publication. Registry/tag/
-signature, external baseline, fixed 31-case replay, representative independent
-manual review, and human acceptance gates remain open. This work does not add,
-enable, or change a
-GitHub Actions workflow.
+The historical evidence index records local candidate lanes. Public technical
+publication is separately proven by `v0.1.0`, source `d919...`, image digest
+`sha256:29af...`, 13 assets, and successful run `33596661334`. Human gates
+#43/#44 remain open.
 
 Checked local results bind to source commit
 `94231d7e57767b18a4cd9546ad5bf33afc13a735`, tree
@@ -25,13 +21,9 @@ and evidence archive SHA-256
 
 ## Identity and artifacts
 
-- [ ] Release version has one authoritative source; the local manifest records
-  `0.1.0`, but publication must designate and verify the authoritative version
-  source.
-- [ ] Signed or otherwise provenance-attested release tag and exact commit are
-  recorded and independently verified.
-- [ ] Runtime image is published by version and commit and its registry digest
-  is recorded.
+- [x] Version `0.1.0`, tag `v0.1.0`, and source `d919...` are authoritative.
+- [x] Standard and supplemental provenance attest the downloadable subjects.
+- [x] Runtime image is published and verified at `sha256:29af794b...`.
 - [x] Worktree has no tracked or untracked changes, and the runtime image OCI
   revision exactly equals the clean candidate commit.
 - [x] Runtime base images and Compose dependencies are pinned by digest.
@@ -48,15 +40,15 @@ and evidence archive SHA-256
   `ANVA_DEBUG=false`, exact hosts/URLs, out-of-band unique secrets, a metrics
   token, TLS termination, exact trusted-proxy IPs, and reviewed resolved Compose
   configuration.
-- [ ] Fresh-clone published-image Compose install passes without host Python,
+- [x] Fresh-bundle published-image Compose install passes without host Python,
   Node.js, npm, or Go.
-- [ ] One-command synthetic demo/bootstrap passes and is idempotent or fails
+- [x] One-command synthetic demo/bootstrap passes and is idempotent or fails
   safely on replay.
 - [ ] Demo token is observed only in the attached terminal; its `run --rm`
   container, Docker logs, redirected output, and operator transcript retain no
   token.
-- [ ] Preserve-data uninstall is verified.
-- [ ] Clean-data uninstall names and removes only the intended Compose volumes.
+- [x] Preserve-data uninstall is verified.
+- [x] Clean-data uninstall names and removes only the intended Compose volumes.
 - [ ] Skill and MCP uninstall procedures refuse to overwrite or remove modified
   user content.
 
@@ -166,7 +158,8 @@ and evidence archive SHA-256
   candidate/runtime artifacts were retained and the measured task footprint is
   recorded against the 5 GB working limit. This does not claim removal of
   legacy development/runtime support or MinIO client resources.
-- [ ] MVP-013 self-review contains no unverified completion claim.
+- [ ] Human completion remains blocked on #43 and #44; technical publication
+  must not be presented as closing either gate.
 
 ## Documentation descendant
 

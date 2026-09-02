@@ -1,13 +1,13 @@
 # Operator guide
 
-This guide is for operators evaluating the unreleased MVP-013 candidate. It does
-not replace the release checklist. Source-checkout install, release artifact,
-backup/restore, migration rehearsal, and uninstall Compose workflows are
-implemented; no image, package, tag, or deployment bundle is published.
+This guide is for operators evaluating published Anva `v0.1.0`. It does not
+replace the release checklist or the still-open human exercise in #44. Use the
+verified digest-addressed image and public release assets; source checkout is a
+fallback, not the public product identity.
 
 ## Operating sequence
 
-1. Review [compatibility](../releases/compatibility.md), candidate limitations,
+1. Review [compatibility](../releases/compatibility.md), release limitations,
    the [threat model](../security/product-threat-model.md), and production secret
    requirements.
 2. Follow [install and upgrade](../runbooks/install-upgrade-uninstall.md). Record
