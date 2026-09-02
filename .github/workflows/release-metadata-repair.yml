@@ -69,7 +69,8 @@ jobs:
           gh release download "$ANVA_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir current
           python scripts/release_metadata_repair.py verify-current current
           cp --preserve=mode,timestamps current/* old/
-          gh release view "$ANVA_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body > old-release-body.md
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$ANVA_RELEASE_TAG" |
+            python scripts/release_metadata_repair.py snapshot-body old-release-body.md
           manifest_image="$(jq -r .image.reference current/release-manifest.json)"
           test "$manifest_image" = "${ANVA_IMAGE_REPOSITORY}@${ANVA_IMAGE_DIGEST}"
 
@@ -205,7 +206,9 @@ jobs:
             mkdir rollback-check
             gh release download "$ANVA_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir rollback-check
             python scripts/release_metadata_repair.py verify-current rollback-check
-            cmp old-release-body.md <(gh release view "$ANVA_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)
+            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$ANVA_RELEASE_TAG" |
+              python scripts/release_metadata_repair.py snapshot-body rollback-release-body.md
+            cmp old-release-body.md rollback-release-body.md
           }
           rollback() {
             status=$?
@@ -262,8 +265,8 @@ jobs:
           PY
           (cd anonymous && sha256sum --check SHA256SUMS)
           for artifact in anonymous/RELEASE_NOTES.md anonymous/release-manifest.json anonymous/SHA256SUMS; do
-            env -u GH_TOKEN -u GITHUB_TOKEN gh attestation verify "$artifact" --repo "$GITHUB_REPOSITORY"
-            verification="$(env -u GH_TOKEN -u GITHUB_TOKEN gh attestation verify "$artifact" \
+            gh attestation verify "$artifact" --repo "$GITHUB_REPOSITORY"
+            verification="$(gh attestation verify "$artifact" \
               --repo "$GITHUB_REPOSITORY" \
               --predicate-type "$ANVA_REPAIR_PREDICATE_TYPE" \
               --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-metadata-repair.yml" \

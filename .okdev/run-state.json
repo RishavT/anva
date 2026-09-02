@@ -1,9 +1,9 @@
 {
   "workflow": "bugfix",
-  "status": "in_progress",
-  "phase": "review",
-  "workspace": "/home/rishav/Documents/personal/brain/anva",
-  "issue": 71,
-  "branch": "fix/release-create-existing-tag",
-  "review_rounds": 2
+  "status": "complete",
+  "phase": "delivery",
+  "workspace": "/home/rishav/Documents/personal/brain/anva/.worktrees/issue77",
+  "issue": 77,
+  "branch": "fix/release-metadata-repair-auth-body",
+  "review_rounds": 1
 }

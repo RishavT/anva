@@ -16,6 +16,8 @@ import yaml
 ROOT = Path(__file__).parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "release-metadata-repair.yml"
 SCRIPT = ROOT / "scripts" / "release_metadata_repair.py"
+RELEASE_GUIDE = ROOT / "docs" / "releases" / "github-native-release.md"
+INSTALL_GUIDE = ROOT / "docs" / "runbooks" / "install-upgrade-uninstall.md"
 
 
 def _load_repair_module() -> ModuleType:
@@ -142,13 +144,16 @@ def test_apply_mode_has_verified_rollback_and_anonymous_post_checks() -> None:
     mutation = text[text.index("name: Replace only the metadata closure and verify or roll back") :]
     assert "rollback()" in mutation
     assert "old-release-body.md" in mutation
+    assert "snapshot-body old-release-body.md" in text
+    assert "--json body --jq .body > old-release-body.md" not in text
     assert "old/RELEASE_NOTES.md old/release-manifest.json old/SHA256SUMS" in mutation
     assert 'gh release edit "$ANVA_RELEASE_TAG" --notes-file old-release-body.md' in mutation
     assert "verify_old_snapshot" in mutation
     assert "trap rollback EXIT" in mutation
     assert "trap 'exit 143' TERM" in mutation
     assert 'assert_exact_inventory(Path("anonymous"))' in mutation
-    assert "env -u GH_TOKEN -u GITHUB_TOKEN" in mutation
+    assert "env -u GH_TOKEN -u GITHUB_TOKEN curl" in mutation
+    assert "env -u GH_TOKEN -u GITHUB_TOKEN gh attestation verify" not in mutation
     assert "sha256sum --check SHA256SUMS" in mutation
     assert "gh attestation verify" in mutation
     assert "up --no-build --wait" in mutation
@@ -156,10 +161,108 @@ def test_apply_mode_has_verified_rollback_and_anonymous_post_checks() -> None:
 
 
 @pytest.mark.parametrize(
-    ("failure", "expected_status"), [("normal", 41), ("TERM", 143), ("INT", 130)]
+    "body", [b"body without newline", b"body with one newline\n", b"body with two newlines\n\n"]
+)
+def test_release_body_snapshot_decodes_json_without_changing_bytes(
+    tmp_path: Path, body: bytes
+) -> None:
+    snapshot = tmp_path / "snapshot.md"
+    payload = ('{"body":' + __import__("json").dumps(body.decode()) + "}").encode()
+    result = subprocess.run(  # noqa: S603 - executes the trusted repository script.
+        [sys.executable, str(SCRIPT), "snapshot-body", str(snapshot)],
+        input=payload,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr.decode()
+    assert snapshot.read_bytes() == body
+
+
+def test_post_upload_attestation_verification_keeps_the_job_token(tmp_path: Path) -> None:
+    mutation = _mutation_script()
+    loop_start = (
+        "for artifact in anonymous/RELEASE_NOTES.md "
+        "anonymous/release-manifest.json anonymous/SHA256SUMS; do"
+    )
+    start = mutation.index(loop_start)
+    end = mutation.index('install_root="$(mktemp -d)"')
+    verification_script = mutation[start:end]
+    fake_bin = tmp_path / "bin"
+    anonymous = tmp_path / "anonymous"
+    fake_bin.mkdir()
+    anonymous.mkdir()
+    for name in ("RELEASE_NOTES.md", "release-manifest.json", "SHA256SUMS"):
+        (anonymous / name).touch()
+
+    gh = fake_bin / "gh"
+    gh.write_text(
+        """#!/bin/sh
+set -eu
+test -n "${GH_TOKEN:-}"
+case " $* " in
+  *" --format json "*)
+    printf '%s\n' '[{}]'
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    gh.chmod(0o755)
+    jq = fake_bin / "jq"
+    jq.write_text(
+        """#!/bin/sh
+set -eu
+payload="$(cat)"
+test -n "$payload"
+""",
+        encoding="utf-8",
+    )
+    jq.chmod(0o755)
+    environment = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "GH_TOKEN": "least-privilege-workflow-token",
+        "GITHUB_TOKEN": "least-privilege-workflow-token",
+        "GITHUB_REPOSITORY": "RishavT/anva",
+        "ANVA_PRODUCT_SOURCE": "d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac",
+        "ANVA_REPAIR_PREDICATE_TYPE": (
+            "https://github.com/RishavT/anva/attestations/release-metadata-repair/v1"
+        ),
+        "METADATA_COMMIT": "146f4ec44d5caaba8dfea893a9b087bd3b5f8083",
+        "ANVA_CORRECTION_REASON": "reason",
+        "REPAIR_RUN": "run",
+    }
+    result = subprocess.run(  # noqa: S603 - executes the trusted workflow contract.
+        ["/bin/bash", "-c", verification_script],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+
+
+def test_public_verification_docs_distinguish_anonymous_assets_from_attestation_auth() -> None:
+    for guide in (RELEASE_GUIDE, INSTALL_GUIDE):
+        normalized = " ".join(guide.read_text(encoding="utf-8").split())
+        assert "Public release asset download and checksum" in normalized
+        assert "do not require GitHub authentication" in normalized
+        assert "GitHub attestation lookup does" in normalized
+        assert "gh auth login" in normalized
+        assert "scoped `GH_TOKEN`" in normalized
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_status"),
+    [("normal", 41), ("HUP", 129), ("TERM", 143), ("INT", 130)],
+)
+@pytest.mark.parametrize(
+    "body", [b"old release body", b"old release body\n", b"old release body\n\n"]
 )
 def test_lifecycle_failure_restores_snapshot_from_workspace(
-    tmp_path: Path, failure: str, expected_status: int
+    tmp_path: Path, failure: str, expected_status: int, body: bytes
 ) -> None:
     mutation = _mutation_script()
     lifecycle = mutation[mutation.index('install_root="$(mktemp -d)"') :]
@@ -180,7 +283,7 @@ def test_lifecycle_failure_restores_snapshot_from_workspace(
     for name in assets:
         (old / name).write_text(f"old {name}\n", encoding="utf-8")
         (public / name).write_text(f"partial new {name}\n", encoding="utf-8")
-    (tmp_path / "old-release-body.md").write_text("old release body\n", encoding="utf-8")
+    (tmp_path / "old-release-body.md").write_bytes(body)
     (tmp_path / "public-body.md").write_text("partial new body\n", encoding="utf-8")
 
     gh = fake_bin / "gh"
@@ -223,6 +326,10 @@ case "$command" in
   "release view")
     cat "$FAKE_PUBLIC_BODY"
     ;;
+  api?*)
+    "$REAL_PYTHON" -c 'import json,os; p=os.environ["FAKE_PUBLIC_BODY"];'\
+'print(json.dumps({"body":open(p,encoding="utf-8").read()}))'
+    ;;
   *) exit 2 ;;
 esac
 """,
@@ -235,6 +342,9 @@ esac
 set -eu
 test "$PWD" = "$EXPECTED_WORKSPACE"
 test "$1" = "scripts/release_metadata_repair.py"
+if [ "$2" = "snapshot-body" ]; then
+  exec "$REAL_PYTHON" "$REAL_SCRIPT" "$2" "$3"
+fi
 test "$2" = "verify-current"
 test "$3" = "rollback-check"
 for name in RELEASE_NOTES.md release-manifest.json SHA256SUMS; do
@@ -267,6 +377,8 @@ touch "$VERIFICATION_MARKER"
         "EXPECTED_WORKSPACE": str(tmp_path),
         "OLD_SNAPSHOT": str(old),
         "VERIFICATION_MARKER": str(tmp_path / "verified"),
+        "REAL_PYTHON": sys.executable,
+        "REAL_SCRIPT": str(SCRIPT),
     }
     result = subprocess.run(  # noqa: S603 - controlled regression harness
         ["/bin/bash", "-c", harness], cwd=tmp_path, env=environment, check=False, timeout=10
