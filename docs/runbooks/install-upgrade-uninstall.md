@@ -10,13 +10,45 @@ and GHCR image; before publication, its download command fails closed.
 Install Docker Engine with the Compose v2 plugin, GitHub CLI, `jq`, and standard
 `sha256sum` and `tar` utilities. Authenticate GitHub CLI if GitHub requires it.
 Download the release into a new directory, verify its checksum inventory, and
-verify GitHub build-provenance attestations for every downloaded asset:
+verify GitHub standard build-provenance attestations for every downloaded asset:
 
 ```sh
 gh release download v0.1.0 --repo rishavt/anva --dir anva-v0.1.0
 (cd anva-v0.1.0 && sha256sum --check SHA256SUMS)
 for artifact in anva-v0.1.0/*; do
   gh attestation verify "$artifact" --repo rishavt/anva
+done
+```
+
+Standard SLSA provenance identifies the reviewed workflow-dispatch revision on
+`main`. Product source is independently authoritative only after the
+supplemental predicate's GitHub signature, signer workflow, subject digest, and
+exact tag, commit, and release-version fields all verify:
+
+```sh
+ANVA_SOURCE_COMMIT=d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac
+ANVA_SOURCE_TAG=v0.1.0
+ANVA_SOURCE_VERSION=0.1.0
+ANVA_SOURCE_PREDICATE_TYPE=https://github.com/RishavT/anva/attestations/source/v1
+verify_source_binding() {
+  gh attestation verify "$1" --repo rishavt/anva \
+    --predicate-type "$ANVA_SOURCE_PREDICATE_TYPE" \
+    --signer-workflow RishavT/anva/.github/workflows/release.yml \
+    --format json | jq -e \
+      --arg commit "$ANVA_SOURCE_COMMIT" \
+      --arg ref "refs/tags/$ANVA_SOURCE_TAG" \
+      --arg repository "https://github.com/RishavT/anva" \
+      --arg tag "$ANVA_SOURCE_TAG" \
+      --arg version "$ANVA_SOURCE_VERSION" \
+      'map(select(.verificationResult.statement.predicate["sourceCommit"] == $commit)
+        | select(.verificationResult.statement.predicate["sourceRef"] == $ref)
+        | select(.verificationResult.statement.predicate["sourceRepository"] == $repository)
+        | select(.verificationResult.statement.predicate["sourceTag"] == $tag)
+        | select(.verificationResult.statement.predicate["version"] == $version))
+        | length > 0'
+}
+for artifact in anva-v0.1.0/*; do
+  verify_source_binding "$artifact"
 done
 ```
 
@@ -31,6 +63,7 @@ ANVA_RELEASE_IMAGE="$(jq -er \
   anva-v0.1.0/release-manifest.json)"
 export ANVA_RELEASE_IMAGE
 gh attestation verify "oci://${ANVA_RELEASE_IMAGE}" --repo rishavt/anva
+verify_source_binding "oci://${ANVA_RELEASE_IMAGE}"
 docker pull "${ANVA_RELEASE_IMAGE}"
 docker tag "${ANVA_RELEASE_IMAGE}" ghcr.io/rishavt/anva:0.1.0
 ```

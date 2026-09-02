@@ -21,6 +21,9 @@ concurrency:
 env:
   ANVA_VERSION: 0.1.0
   ANVA_IMAGE_REPOSITORY: ghcr.io/rishavt/anva
+  ANVA_RELEASE_COMMIT: d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac
+  ANVA_SOURCE_PREDICATE_TYPE: https://github.com/RishavT/anva/attestations/source/v1
+  ANVA_TRIVY_IMAGE: aquasec/trivy:0.64.1@sha256:a8ca29078522f30393bdb34225e4c0994d38f37083be81a42da3a2a7e1488e9e
 
 jobs:
   build:
@@ -37,6 +40,7 @@ jobs:
       digest: ${{ steps.image.outputs.digest }}
       image: ${{ steps.image.outputs.reference }}
       tag: ${{ steps.identity.outputs.tag }}
+      source_commit: ${{ steps.source.outputs.commit }}
     env:
       COMPOSE_PROJECT: anva-release-build-${{ github.run_id }}
     steps:
@@ -50,18 +54,59 @@ jobs:
           set -euo pipefail
           if [[ "$EVENT_NAME" == "push" ]]; then
             tag="${EVENT_REF#refs/tags/}"
+            [[ "$EVENT_REF" == "refs/tags/${tag}" ]] || {
+              echo "Release pushes must use the exact release tag ref" >&2
+              exit 1
+            }
           else
             tag="$DISPATCH_TAG"
+            [[ "$EVENT_REF" == "refs/heads/main" ]] || {
+              echo "Recovery must load the reviewed workflow from main" >&2
+              exit 1
+            }
           fi
           [[ "$tag" == "v${ANVA_VERSION}" ]] || {
             echo "Only v${ANVA_VERSION} may be released by this workflow" >&2
             exit 1
           }
-          [[ "$EVENT_REF" == "refs/tags/${tag}" ]] || {
-            echo "Dispatch the workflow with --ref ${tag}; the run ref must be the release tag" >&2
-            exit 1
-          }
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare the run-owned scanner cache
+        run: |
+          set -euo pipefail
+          cache_volume="${COMPOSE_PROJECT}_release-trivy-cache"
+          if docker volume inspect "$cache_volume" >/dev/null 2>&1; then
+            echo "Refusing to reuse pre-existing release cache volume: $cache_volume" >&2
+            exit 1
+          fi
+          runner_uid="$(id -u)"
+          runner_gid="$(id -g)"
+          created_volume="$(docker volume create \
+            --label "com.docker.compose.project=$COMPOSE_PROJECT" \
+            --label "com.docker.compose.volume=release-trivy-cache" \
+            "$cache_volume")"
+          test "$created_volume" = "$cache_volume"
+          test "$(docker volume inspect --format '{{ index .Labels "com.docker.compose.project" }}' "$cache_volume")" = "$COMPOSE_PROJECT"
+          test "$(docker volume inspect --format '{{ index .Labels "com.docker.compose.volume" }}' "$cache_volume")" = "release-trivy-cache"
+          docker run --rm \
+            --user "$runner_uid:$runner_gid" \
+            --env "EXPECTED_UID=$runner_uid" \
+            --env "EXPECTED_GID=$runner_gid" \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --network none \
+            --mount "type=volume,src=${cache_volume},dst=/tmp" \
+            --entrypoint /bin/sh \
+            "$ANVA_TRIVY_IMAGE" -eu -c '
+              test "$(id -u)" = "$EXPECTED_UID"
+              test "$(id -g)" = "$EXPECTED_GID"
+              test "$(stat -c "%a" /tmp)" = "1777"
+              umask 077
+              mkdir /tmp/fanal
+              test -w /tmp/fanal
+              test "$(stat -c "%u:%g" /tmp/fanal)" = "$EXPECTED_UID:$EXPECTED_GID"
+            '
 
       - name: Check out the exact tag
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -71,17 +116,31 @@ jobs:
           ref: ${{ steps.identity.outputs.tag }}
 
       - name: Verify tag, version, commit, and clean source
+        id: source
         env:
           RELEASE_TAG: ${{ steps.identity.outputs.tag }}
         run: |
           set -euo pipefail
-          test "$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")" = "$GITHUB_SHA"
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          source_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          checkout_commit="$(git rev-parse HEAD)"
+          remote_refs="$(git ls-remote --exit-code origin \
+            "refs/tags/${RELEASE_TAG}" "refs/tags/${RELEASE_TAG}^{}")"
+          remote_commit="$(printf '%s\n' "$remote_refs" | awk '
+            $2 ~ /\^\{\}$/ { peeled=$1 }
+            $2 !~ /\^\{\}$/ { direct=$1 }
+            END { print peeled ? peeled : direct }
+          ')"
+          test -n "$remote_commit"
+          test "$checkout_commit" = "$source_commit"
+          test "$remote_commit" = "$source_commit"
+          test "$source_commit" = "$ANVA_RELEASE_COMMIT"
+          git merge-base --is-ancestor "$source_commit" origin/main
           test "$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')" = "$ANVA_VERSION"
           test "$(git status --porcelain=v1 --untracked-files=all)" = ""
+          echo "commit=$source_commit" >> "$GITHUB_OUTPUT"
           {
-            echo "ANVA_REVISION=$GITHUB_SHA"
-            echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct "$GITHUB_SHA")"
+            echo "ANVA_REVISION=$source_commit"
+            echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct "$source_commit")"
             echo "ANVA_HOST_UID=$(id -u)"
             echo "ANVA_HOST_GID=$(id -g)"
           } >> "$GITHUB_ENV"
@@ -126,7 +185,7 @@ jobs:
               --input /workspace/docs/security/vulnerability-exceptions.json \
               --report /release/anva-image-vulnerabilities.json \
               --output /release/vulnerability-risk-acceptance.json \
-              --source-commit "$GITHUB_SHA" \
+              --source-commit "$ANVA_REVISION" \
               --image-reference "$IMAGE_REFERENCE" \
               --image-digest "$IMAGE_DIGEST" \
               --release-version "$ANVA_VERSION"
@@ -146,6 +205,49 @@ jobs:
         with:
           subject-path: release/*
 
+      - name: Create the immutable product source binding
+        id: source-binding
+        env:
+          RELEASE_TAG: ${{ steps.identity.outputs.tag }}
+          SOURCE_COMMIT: ${{ steps.source.outputs.commit }}
+        run: |
+          set -euo pipefail
+          predicate="$RUNNER_TEMP/anva-source-binding.json"
+          PREDICATE_PATH="$predicate" python3 - <<'PY'
+          import json
+          import os
+
+          predicate = {
+              "schemaVersion": 1,
+              "sourceCommit": os.environ["SOURCE_COMMIT"],
+              "sourceRef": f"refs/tags/{os.environ['RELEASE_TAG']}",
+              "sourceRepository": f"https://github.com/{os.environ['GITHUB_REPOSITORY']}",
+              "sourceTag": os.environ["RELEASE_TAG"],
+              "version": os.environ["ANVA_VERSION"],
+          }
+          with open(os.environ["PREDICATE_PATH"], "w", encoding="utf-8") as output:
+              json.dump(predicate, output, sort_keys=True, separators=(",", ":"))
+              output.write("\n")
+          PY
+          echo "predicate=$predicate" >> "$GITHUB_OUTPUT"
+
+      - name: Attest the image digest to the immutable product source
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.ANVA_IMAGE_REPOSITORY }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          predicate-type: ${{ env.ANVA_SOURCE_PREDICATE_TYPE }}
+          predicate-path: ${{ steps.source-binding.outputs.predicate }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Attest artifact digests to the immutable product source
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: release/*
+          predicate-type: ${{ env.ANVA_SOURCE_PREDICATE_TYPE }}
+          predicate-path: ${{ steps.source-binding.outputs.predicate }}
+
       - name: Transfer only the attested release assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -157,9 +259,24 @@ jobs:
       - name: Remove only build-owned resources
         if: always()
         run: |
+          set -euo pipefail
           ANVA_DOCKER_GID="$(stat -c '%g' /var/run/docker.sock)"
           export ANVA_DOCKER_GID
+          cache_volume="${COMPOSE_PROJECT}_release-trivy-cache"
+          validate_cache_volume() {
+            project_label="$(docker volume inspect --format '{{ index .Labels "com.docker.compose.project" }}' "$cache_volume")"
+            volume_label="$(docker volume inspect --format '{{ index .Labels "com.docker.compose.volume" }}' "$cache_volume")"
+            test "$project_label" = "$COMPOSE_PROJECT"
+            test "$volume_label" = "release-trivy-cache"
+          }
+          if docker volume inspect "$cache_volume" >/dev/null 2>&1; then
+            validate_cache_volume
+          fi
           docker compose -f compose.yaml -f compose.release.yaml -p "$COMPOSE_PROJECT" --profile release down --volumes --remove-orphans || true
+          if docker volume inspect "$cache_volume" >/dev/null 2>&1; then
+            validate_cache_volume
+            docker volume rm "$cache_volume"
+          fi
           docker logout ghcr.io || true
 
   publish:
@@ -169,19 +286,34 @@ jobs:
     timeout-minutes: 15
     environment: release
     permissions:
+      attestations: read
       contents: write
+      packages: read
     steps:
-      - name: Check out the exact tag without credentials
+      - name: Check out the verified source commit without credentials
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ needs.build.outputs.tag }}
+          ref: ${{ needs.build.outputs.source_commit }}
 
       - name: Recheck immutable release identity
         env:
           RELEASE_TAG: ${{ needs.build.outputs.tag }}
-        run: test "$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")" = "$GITHUB_SHA"
+          SOURCE_COMMIT: ${{ needs.build.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          remote_refs="$(git ls-remote --exit-code origin \
+            "refs/tags/${RELEASE_TAG}" "refs/tags/${RELEASE_TAG}^{}")"
+          remote_commit="$(printf '%s\n' "$remote_refs" | awk '
+            $2 ~ /\^\{\}$/ { peeled=$1 }
+            $2 !~ /\^\{\}$/ { direct=$1 }
+            END { print peeled ? peeled : direct }
+          ')"
+          test -n "$remote_commit"
+          test "$SOURCE_COMMIT" = "$ANVA_RELEASE_COMMIT"
+          test "$remote_commit" = "$SOURCE_COMMIT"
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
 
       - name: Download attested release assets
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -192,10 +324,53 @@ jobs:
       - name: Verify transferred checksums
         run: (cd release && sha256sum --check SHA256SUMS)
 
+      - name: Authenticate to GHCR for source-binding verification
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Verify immutable product source bindings
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+          SOURCE_COMMIT: ${{ needs.build.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          published="$GITHUB_WORKSPACE/release"
+          verify_source_binding() {
+            subject="$1"
+            verification="$(gh attestation verify "$subject" \
+              --repo "$GITHUB_REPOSITORY" \
+              --predicate-type "$ANVA_SOURCE_PREDICATE_TYPE" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --format json)"
+            jq -e \
+              --arg type "$ANVA_SOURCE_PREDICATE_TYPE" \
+              --arg commit "$SOURCE_COMMIT" \
+              --arg ref "refs/tags/$RELEASE_TAG" \
+              --arg repository "https://github.com/$GITHUB_REPOSITORY" \
+              --arg tag "$RELEASE_TAG" \
+              --arg version "$ANVA_VERSION" \
+              'any(.[];
+                .verificationResult.statement.predicateType == $type and
+                .verificationResult.statement.predicate["sourceCommit"] == $commit and
+                .verificationResult.statement.predicate["sourceRef"] == $ref and
+                .verificationResult.statement.predicate["sourceRepository"] == $repository and
+                .verificationResult.statement.predicate["sourceTag"] == $tag and
+                .verificationResult.statement.predicate["version"] == $version
+              )' <<<"$verification" >/dev/null
+          }
+          for artifact in "$published"/*; do
+            verify_source_binding "$artifact"
+          done
+          verify_source_binding "oci://${ANVA_IMAGE_REPOSITORY}@${IMAGE_DIGEST}"
+
       - name: Create the GitHub Release after attestations
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.build.outputs.tag }}
+          SOURCE_COMMIT: ${{ needs.build.outputs.source_commit }}
         run: |
           set -euo pipefail
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
@@ -203,11 +378,15 @@ jobs:
           else
             gh release create "$RELEASE_TAG" release/* \
               --repo "$GITHUB_REPOSITORY" \
-              --target "$GITHUB_SHA" \
+              --target "$SOURCE_COMMIT" \
               --title "Anva ${ANVA_VERSION}" \
               --notes-file release/RELEASE_NOTES.md \
               --verify-tag
           fi
+
+      - name: Remove publish authentication
+        if: always()
+        run: docker logout ghcr.io || true
 
   verify:
     name: Verify published release
@@ -222,16 +401,75 @@ jobs:
     env:
       COMPOSE_PROJECT: anva-release-verify-${{ github.run_id }}
     steps:
-      - name: Check out the exact tag without credentials
+      - name: Check out the verified source commit without credentials
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          fetch-depth: 0
           persist-credentials: false
-          ref: ${{ needs.build.outputs.tag }}
+          ref: ${{ needs.build.outputs.source_commit }}
+
+      - name: Recheck immutable release identity
+        env:
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+          SOURCE_COMMIT: ${{ needs.build.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          remote_refs="$(git ls-remote --exit-code origin \
+            "refs/tags/${RELEASE_TAG}" "refs/tags/${RELEASE_TAG}^{}")"
+          remote_commit="$(printf '%s\n' "$remote_refs" | awk '
+            $2 ~ /\^\{\}$/ { peeled=$1 }
+            $2 !~ /\^\{\}$/ { direct=$1 }
+            END { print peeled ? peeled : direct }
+          ')"
+          test -n "$remote_commit"
+          test "$SOURCE_COMMIT" = "$ANVA_RELEASE_COMMIT"
+          test "$remote_commit" = "$SOURCE_COMMIT"
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
 
       - name: Authenticate to GHCR with the job token
         env:
           GHCR_TOKEN: ${{ github.token }}
         run: echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Verify immutable product source bindings
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+          SOURCE_COMMIT: ${{ needs.build.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          published="$(mktemp -d)"
+          echo "PUBLISHED_DIR=$published" >> "$GITHUB_ENV"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$published"
+          (cd "$published" && sha256sum --check SHA256SUMS)
+          verify_source_binding() {
+            subject="$1"
+            verification="$(gh attestation verify "$subject" \
+              --repo "$GITHUB_REPOSITORY" \
+              --predicate-type "$ANVA_SOURCE_PREDICATE_TYPE" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --format json)"
+            jq -e \
+              --arg type "$ANVA_SOURCE_PREDICATE_TYPE" \
+              --arg commit "$SOURCE_COMMIT" \
+              --arg ref "refs/tags/$RELEASE_TAG" \
+              --arg repository "https://github.com/$GITHUB_REPOSITORY" \
+              --arg tag "$RELEASE_TAG" \
+              --arg version "$ANVA_VERSION" \
+              'any(.[];
+                .verificationResult.statement.predicateType == $type and
+                .verificationResult.statement.predicate["sourceCommit"] == $commit and
+                .verificationResult.statement.predicate["sourceRef"] == $ref and
+                .verificationResult.statement.predicate["sourceRepository"] == $repository and
+                .verificationResult.statement.predicate["sourceTag"] == $tag and
+                .verificationResult.statement.predicate["version"] == $version
+              )' <<<"$verification" >/dev/null
+          }
+          for artifact in "$published"/*; do
+            verify_source_binding "$artifact"
+          done
+          verify_source_binding "oci://${ANVA_IMAGE_REPOSITORY}@${IMAGE_DIGEST}"
 
       - name: Verify published digest, attestations, and install lifecycle
         env:
@@ -240,9 +478,7 @@ jobs:
           RELEASE_TAG: ${{ needs.build.outputs.tag }}
         run: |
           set -euo pipefail
-          published="$(mktemp -d)"
-          echo "PUBLISHED_DIR=$published" >> "$GITHUB_ENV"
-          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$published"
+          published="$PUBLISHED_DIR"
           (cd "$published" && sha256sum --check SHA256SUMS)
           for artifact in "$published"/*; do
             gh attestation verify "$artifact" --repo "$GITHUB_REPOSITORY"

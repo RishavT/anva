@@ -7,8 +7,9 @@ reports, vulnerability dispositions, release notes, manifest, and checksums.
 
 The release workflow uses only the per-job `GITHUB_TOKEN` and GitHub Actions
 OIDC. It does not require a registry password or a persistent signing key.
-GitHub records keyless build-provenance attestations for every downloadable
-artifact and the pushed OCI digest. Actions are pinned to immutable commits.
+GitHub records keyless standard build-provenance attestations and supplemental
+product-source attestations for every downloadable artifact and the pushed OCI
+digest. Actions are pinned to immutable commits.
 
 ## Repository and environment setup
 
@@ -20,20 +21,39 @@ artifact and the pushed OCI digest. Actions are pinned to immutable commits.
 2. Create a protected GitHub Actions environment named `release`. Require Rishav
    Thakker (`RishavT`) as reviewer and prevent self-review if another authorized
    reviewer is available. Restrict deployment branches/tags to `v0.1.0`.
-3. Keep the repository's default workflow-token permission read-only. The
-   release job requests only `contents`, `packages`, `id-token`, and
-   `attestations` write permissions.
+3. Keep the repository's default workflow-token permission read-only. The build
+   job requests `contents: read`, `packages: write`, `id-token: write`, and
+   `attestations: write`. Publish requests `packages: read`, `attestations: read`,
+   and `contents: write`; verification requests those three permissions
+   read-only. No release job requests `artifact-metadata` access.
 4. Enable tag protection/rules for `v*` and require the release owner to create
    `v0.1.0` from the reviewed `main` commit. The workflow independently checks
    the tag, project version, exact commit, `main` ancestry, and clean checkout.
 
-The workflow never runs on pull requests. A manual dispatch accepts only an
-already-existing exact `v0.1.0` tag and must itself be dispatched with that tag
-as its Git ref; it is not an escape hatch for arbitrary refs or versions:
+The workflow never runs on pull requests. For the `v0.1.0` recovery, wait until
+the cache correction has been reviewed and merged to `main`, then load that
+corrected workflow definition from `main`:
 
 ```sh
-gh workflow run release.yml --repo rishavt/anva --ref v0.1.0 -f tag=v0.1.0
+gh workflow run release.yml --repo rishavt/anva --ref main -f tag=v0.1.0
 ```
+
+Workflow identity and product-source identity are deliberately separate. The
+dispatch ref selects the reviewed workflow on `main`; the workflow checks out
+the existing `v0.1.0` tag, independently resolves it, and requires its commit
+to remain `d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac`. Before checkout replaces
+the working tree with that immutable source, the reviewed workflow prepares the
+run-owned Trivy cache before checking out the tag. The standard SLSA provenance
+records the main dispatch identity, which identifies the reviewed workflow but
+is not the product-source identity. The separate, supplemental source-binding
+predicate is the authoritative product-source binding: its signed in-toto
+statement binds each file or OCI subject digest to the independently resolved
+`sourceTag`, `sourceRef`, `sourceCommit`, and release `version`. Publish and
+verification jobs cryptographically verify the GitHub signature and signer
+workflow, then inspect those predicate fields against the build outputs before
+accepting the subjects.
+Do not move, delete, or recreate the tag, and do not dispatch the recovery
+before the correction is reviewed and merged.
 
 ## Publish
 
@@ -70,11 +90,39 @@ for artifact in anva-v0.1.0/*; do
 done
 gh attestation verify 'oci://ghcr.io/rishavt/anva@sha256:<digest>' \
   --repo rishavt/anva
+
+ANVA_SOURCE_COMMIT=d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac
+ANVA_SOURCE_TAG=v0.1.0
+ANVA_SOURCE_VERSION=0.1.0
+ANVA_SOURCE_PREDICATE_TYPE=https://github.com/RishavT/anva/attestations/source/v1
+verify_source_binding() {
+  gh attestation verify "$1" --repo rishavt/anva \
+    --predicate-type "$ANVA_SOURCE_PREDICATE_TYPE" \
+    --signer-workflow RishavT/anva/.github/workflows/release.yml \
+    --format json | jq -e \
+      --arg commit "$ANVA_SOURCE_COMMIT" \
+      --arg ref "refs/tags/$ANVA_SOURCE_TAG" \
+      --arg repository "https://github.com/RishavT/anva" \
+      --arg tag "$ANVA_SOURCE_TAG" \
+      --arg version "$ANVA_SOURCE_VERSION" \
+      'map(select(.verificationResult.statement.predicate["sourceCommit"] == $commit)
+        | select(.verificationResult.statement.predicate["sourceRef"] == $ref)
+        | select(.verificationResult.statement.predicate["sourceRepository"] == $repository)
+        | select(.verificationResult.statement.predicate["sourceTag"] == $tag)
+        | select(.verificationResult.statement.predicate["version"] == $version))
+        | length > 0'
+}
+for artifact in anva-v0.1.0/*; do
+  verify_source_binding "$artifact"
+done
+verify_source_binding 'oci://ghcr.io/rishavt/anva@sha256:<digest>'
 docker pull 'ghcr.io/rishavt/anva@sha256:<digest>'
 ```
 
-Use the digest published by the successful workflow, never only the mutable
-version tag.
+The default `gh attestation verify` commands validate standard SLSA provenance.
+The `verify_source_binding` commands separately validate the authoritative
+immutable product-source predicate. Both must pass. Use the digest published by
+the successful workflow, never only the mutable version tag.
 
 ## Rerun, rollback, and failure handling
 
