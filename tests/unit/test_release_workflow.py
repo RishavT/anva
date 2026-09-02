@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import yaml
 
@@ -12,6 +13,10 @@ def _workflow() -> tuple[str, dict[object, object]]:
     parsed = yaml.safe_load(text)
     assert isinstance(parsed, dict)
     return text, parsed
+
+
+def _jobs(workflow: dict[object, object]) -> dict[str, dict[str, object]]:
+    return cast(dict[str, dict[str, object]], workflow["jobs"])
 
 
 def test_release_workflow_has_no_untrusted_trigger_or_long_lived_secret() -> None:
@@ -73,10 +78,12 @@ def test_release_order_is_fail_closed() -> None:
 
 def test_dispatch_uses_main_workflow_but_binds_products_to_the_tag_commit() -> None:
     text, workflow = _workflow()
-    build = workflow["jobs"]["build"]
+    build = _jobs(workflow)["build"]
+    environment = cast(dict[str, str], workflow["env"])
+    outputs = cast(dict[str, str], build["outputs"])
 
-    assert workflow["env"]["ANVA_RELEASE_COMMIT"] == ("d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac")
-    assert build["outputs"]["source_commit"] == "${{ steps.source.outputs.commit }}"
+    assert environment["ANVA_RELEASE_COMMIT"] == ("d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac")
+    assert outputs["source_commit"] == "${{ steps.source.outputs.commit }}"
     assert "git ls-remote --exit-code origin" in text
     assert '"refs/tags/${RELEASE_TAG}" "refs/tags/${RELEASE_TAG}^{}"' in text
     assert 'test "$source_commit" = "$ANVA_RELEASE_COMMIT"' in text
@@ -89,8 +96,9 @@ def test_dispatch_uses_main_workflow_but_binds_products_to_the_tag_commit() -> N
 
 def test_recovery_prepares_only_its_labeled_cache_before_tag_checkout() -> None:
     text, workflow = _workflow()
+    environment = cast(dict[str, str], workflow["env"])
 
-    assert workflow["env"]["ANVA_TRIVY_IMAGE"] == (
+    assert environment["ANVA_TRIVY_IMAGE"] == (
         "aquasec/trivy:0.64.1@sha256:"
         "a8ca29078522f30393bdb34225e4c0994d38f37083be81a42da3a2a7e1488e9e"
     )
@@ -123,29 +131,29 @@ def test_recovery_prepares_only_its_labeled_cache_before_tag_checkout() -> None:
 
 def test_publish_rechecks_remote_tag_before_any_release_side_effect() -> None:
     _, workflow = _workflow()
-    publish = workflow["jobs"]["publish"]
-    steps = publish["steps"]
+    publish = _jobs(workflow)["publish"]
+    steps = cast(list[dict[str, object]], publish["steps"])
     checkout = steps[0]
     identity = steps[1]
 
     assert checkout["name"] == "Check out the verified source commit without credentials"
-    assert checkout["with"] == {
+    assert cast(dict[str, object], checkout["with"]) == {
         "fetch-depth": 0,
         "persist-credentials": False,
         "ref": "${{ needs.build.outputs.source_commit }}",
     }
     assert identity["name"] == "Recheck immutable release identity"
-    assert identity["env"] == {
+    assert cast(dict[str, str], identity["env"]) == {
         "RELEASE_TAG": "${{ needs.build.outputs.tag }}",
         "SOURCE_COMMIT": "${{ needs.build.outputs.source_commit }}",
     }
-    identity_script = identity["run"]
+    identity_script = cast(str, identity["run"])
     assert "git ls-remote --exit-code origin" in identity_script
     assert '"refs/tags/${RELEASE_TAG}" "refs/tags/${RELEASE_TAG}^{}"' in identity_script
     assert 'test "$remote_commit" = "$SOURCE_COMMIT"' in identity_script
     assert 'test "$SOURCE_COMMIT" = "$ANVA_RELEASE_COMMIT"' in identity_script
     assert 'test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"' in identity_script
-    names = [step["name"] for step in steps]
+    names = [cast(str, step["name"]) for step in steps]
     assert names.index("Recheck immutable release identity") < names.index(
         "Download attested release assets"
     )
@@ -156,29 +164,29 @@ def test_publish_rechecks_remote_tag_before_any_release_side_effect() -> None:
 
 def test_verify_rechecks_remote_tag_before_authentication_or_download() -> None:
     _, workflow = _workflow()
-    verify = workflow["jobs"]["verify"]
-    steps = verify["steps"]
+    verify = _jobs(workflow)["verify"]
+    steps = cast(list[dict[str, object]], verify["steps"])
     checkout = steps[0]
     identity = steps[1]
 
     assert checkout["name"] == "Check out the verified source commit without credentials"
-    assert checkout["with"] == {
+    assert cast(dict[str, object], checkout["with"]) == {
         "fetch-depth": 0,
         "persist-credentials": False,
         "ref": "${{ needs.build.outputs.source_commit }}",
     }
     assert identity["name"] == "Recheck immutable release identity"
-    assert identity["env"] == {
+    assert cast(dict[str, str], identity["env"]) == {
         "RELEASE_TAG": "${{ needs.build.outputs.tag }}",
         "SOURCE_COMMIT": "${{ needs.build.outputs.source_commit }}",
     }
-    identity_script = identity["run"]
+    identity_script = cast(str, identity["run"])
     assert "git ls-remote --exit-code origin" in identity_script
     assert '"refs/tags/${RELEASE_TAG}" "refs/tags/${RELEASE_TAG}^{}"' in identity_script
     assert 'test "$remote_commit" = "$SOURCE_COMMIT"' in identity_script
     assert 'test "$SOURCE_COMMIT" = "$ANVA_RELEASE_COMMIT"' in identity_script
     assert 'test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"' in identity_script
-    names = [step["name"] for step in steps]
+    names = [cast(str, step["name"]) for step in steps]
     assert names.index("Recheck immutable release identity") < names.index(
         "Authenticate to GHCR with the job token"
     )
