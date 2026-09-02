@@ -22,6 +22,7 @@ env:
   ANVA_VERSION: 0.1.0
   ANVA_IMAGE_REPOSITORY: ghcr.io/rishavt/anva
   ANVA_RELEASE_COMMIT: d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac
+  ANVA_SOURCE_PREDICATE_TYPE: https://github.com/RishavT/anva/attestations/source/v1
   ANVA_TRIVY_IMAGE: aquasec/trivy:0.64.1@sha256:a8ca29078522f30393bdb34225e4c0994d38f37083be81a42da3a2a7e1488e9e
 
 jobs:
@@ -31,6 +32,7 @@ jobs:
     timeout-minutes: 90
     environment: release
     permissions:
+      artifact-metadata: write
       attestations: write
       contents: read
       id-token: write
@@ -204,6 +206,49 @@ jobs:
         with:
           subject-path: release/*
 
+      - name: Create the immutable product source binding
+        id: source-binding
+        env:
+          RELEASE_TAG: ${{ steps.identity.outputs.tag }}
+          SOURCE_COMMIT: ${{ steps.source.outputs.commit }}
+        run: |
+          set -euo pipefail
+          predicate="$RUNNER_TEMP/anva-source-binding.json"
+          PREDICATE_PATH="$predicate" python3 - <<'PY'
+          import json
+          import os
+
+          predicate = {
+              "schemaVersion": 1,
+              "sourceCommit": os.environ["SOURCE_COMMIT"],
+              "sourceRef": f"refs/tags/{os.environ['RELEASE_TAG']}",
+              "sourceRepository": f"https://github.com/{os.environ['GITHUB_REPOSITORY']}",
+              "sourceTag": os.environ["RELEASE_TAG"],
+              "version": os.environ["ANVA_VERSION"],
+          }
+          with open(os.environ["PREDICATE_PATH"], "w", encoding="utf-8") as output:
+              json.dump(predicate, output, sort_keys=True, separators=(",", ":"))
+              output.write("\n")
+          PY
+          echo "predicate=$predicate" >> "$GITHUB_OUTPUT"
+
+      - name: Attest the image digest to the immutable product source
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.ANVA_IMAGE_REPOSITORY }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          predicate-type: ${{ env.ANVA_SOURCE_PREDICATE_TYPE }}
+          predicate-path: ${{ steps.source-binding.outputs.predicate }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Attest artifact digests to the immutable product source
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: release/*
+          predicate-type: ${{ env.ANVA_SOURCE_PREDICATE_TYPE }}
+          predicate-path: ${{ steps.source-binding.outputs.predicate }}
+
       - name: Transfer only the attested release assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -242,7 +287,9 @@ jobs:
     timeout-minutes: 15
     environment: release
     permissions:
+      attestations: read
       contents: write
+      packages: read
     steps:
       - name: Check out the verified source commit without credentials
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -278,6 +325,46 @@ jobs:
       - name: Verify transferred checksums
         run: (cd release && sha256sum --check SHA256SUMS)
 
+      - name: Authenticate to GHCR for source-binding verification
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Verify immutable product source bindings
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+          SOURCE_COMMIT: ${{ needs.build.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          published="$GITHUB_WORKSPACE/release"
+          verify_source_binding() {
+            subject="$1"
+            verification="$(gh attestation verify "$subject" \
+              --repo "$GITHUB_REPOSITORY" \
+              --predicate-type "$ANVA_SOURCE_PREDICATE_TYPE" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --format json)"
+            jq -e \
+              --arg type "$ANVA_SOURCE_PREDICATE_TYPE" \
+              --arg commit "$SOURCE_COMMIT" \
+              --arg ref "refs/tags/$RELEASE_TAG" \
+              --arg repository "https://github.com/$GITHUB_REPOSITORY" \
+              --arg tag "$RELEASE_TAG" \
+              'any(.[];
+                .verificationResult.statement.predicateType == $type and
+                .verificationResult.statement.predicate["sourceCommit"] == $commit and
+                .verificationResult.statement.predicate["sourceRef"] == $ref and
+                .verificationResult.statement.predicate["sourceRepository"] == $repository and
+                .verificationResult.statement.predicate["sourceTag"] == $tag
+              )' <<<"$verification" >/dev/null
+          }
+          for artifact in "$published"/*; do
+            verify_source_binding "$artifact"
+          done
+          verify_source_binding "oci://${ANVA_IMAGE_REPOSITORY}@${IMAGE_DIGEST}"
+
       - name: Create the GitHub Release after attestations
         env:
           GH_TOKEN: ${{ github.token }}
@@ -295,6 +382,10 @@ jobs:
               --notes-file release/RELEASE_NOTES.md \
               --verify-tag
           fi
+
+      - name: Remove publish authentication
+        if: always()
+        run: docker logout ghcr.io || true
 
   verify:
     name: Verify published release
@@ -339,6 +430,44 @@ jobs:
           GHCR_TOKEN: ${{ github.token }}
         run: echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
 
+      - name: Verify immutable product source bindings
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+          SOURCE_COMMIT: ${{ needs.build.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          published="$(mktemp -d)"
+          echo "PUBLISHED_DIR=$published" >> "$GITHUB_ENV"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$published"
+          (cd "$published" && sha256sum --check SHA256SUMS)
+          verify_source_binding() {
+            subject="$1"
+            verification="$(gh attestation verify "$subject" \
+              --repo "$GITHUB_REPOSITORY" \
+              --predicate-type "$ANVA_SOURCE_PREDICATE_TYPE" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --format json)"
+            jq -e \
+              --arg type "$ANVA_SOURCE_PREDICATE_TYPE" \
+              --arg commit "$SOURCE_COMMIT" \
+              --arg ref "refs/tags/$RELEASE_TAG" \
+              --arg repository "https://github.com/$GITHUB_REPOSITORY" \
+              --arg tag "$RELEASE_TAG" \
+              'any(.[];
+                .verificationResult.statement.predicateType == $type and
+                .verificationResult.statement.predicate["sourceCommit"] == $commit and
+                .verificationResult.statement.predicate["sourceRef"] == $ref and
+                .verificationResult.statement.predicate["sourceRepository"] == $repository and
+                .verificationResult.statement.predicate["sourceTag"] == $tag
+              )' <<<"$verification" >/dev/null
+          }
+          for artifact in "$published"/*; do
+            verify_source_binding "$artifact"
+          done
+          verify_source_binding "oci://${ANVA_IMAGE_REPOSITORY}@${IMAGE_DIGEST}"
+
       - name: Verify published digest, attestations, and install lifecycle
         env:
           GH_TOKEN: ${{ github.token }}
@@ -346,9 +475,7 @@ jobs:
           RELEASE_TAG: ${{ needs.build.outputs.tag }}
         run: |
           set -euo pipefail
-          published="$(mktemp -d)"
-          echo "PUBLISHED_DIR=$published" >> "$GITHUB_ENV"
-          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$published"
+          published="$PUBLISHED_DIR"
           (cd "$published" && sha256sum --check SHA256SUMS)
           for artifact in "$published"/*; do
             gh attestation verify "$artifact" --repo "$GITHUB_REPOSITORY"

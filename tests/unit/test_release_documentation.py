@@ -63,6 +63,9 @@ def test_install_runbook_matches_github_release_assets_and_image() -> None:
         "gh release download v0.1.0 --repo rishavt/anva --dir anva-v0.1.0",
         "sha256sum --check SHA256SUMS",
         'gh attestation verify "$artifact" --repo rishavt/anva',
+        "ANVA_SOURCE_PREDICATE_TYPE=https://github.com/RishavT/anva/attestations/source/v1",
+        '--predicate-type "$ANVA_SOURCE_PREDICATE_TYPE"',
+        'select(.verificationResult.statement.predicate["sourceCommit"] == $commit)',
         "anva-install-0.1.0.tar.gz",
         'gh attestation verify "oci://${ANVA_RELEASE_IMAGE}" --repo rishavt/anva',
         'docker pull "${ANVA_RELEASE_IMAGE}"',
@@ -87,3 +90,5 @@ def test_release_recovery_documents_separate_workflow_and_source_identities() ->
     assert "Do not move, delete, or recreate the tag" in normalized
     assert "before the correction is reviewed and merged" in normalized
     assert "prepares the run-owned Trivy cache before checking out the tag" in normalized
+    assert "standard SLSA provenance records the main dispatch identity" in normalized
+    assert "supplemental source-binding predicate" in normalized
