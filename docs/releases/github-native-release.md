@@ -126,16 +126,47 @@ the successful workflow, never only the mutable version tag.
 
 ## Rerun, rollback, and failure handling
 
-The concurrency group allows one `v0.1.0` publisher at a time. A rerun must
-resolve the same tag and commit. Existing release assets are replaced only
-after fresh checks and attestations; a release targeting another commit is
-rejected. Consumers remain pinned to the recorded digest, so a failed or
-partial rerun cannot silently change an installed image.
+The concurrency group allows one `v0.1.0` publisher at a time. Release creation
+uses the already-existing tag with `--verify-tag`; it deliberately omits
+`--target`, because supplying a target is unnecessary for an existing tag and
+can make GitHub require workflow-file write permission. Immediately before any
+release create or upload, and again after it, the workflow resolves the live
+tag and requires its commit to equal the pinned, build-verified source commit.
+It never moves, deletes, or recreates the tag.
 
-If publication fails before GitHub Release creation, do not use the pushed tag;
-inspect and delete only the failed GHCR package version through GitHub's package
-UI, then rerun the same commit. If post-publication verification fails, mark the
-release as withdrawn, retain its evidence for audit, fix forward under a new
-version, and do not move or overwrite the original Git tag. Roll back a deployed
-instance only to a previously verified digest and follow the paired database and
-object-store procedure in the install/upgrade/uninstall runbook.
+If only publish or verify failed, prefer **Re-run failed jobs** on the original
+run only when that run's workflow `head_sha` is still the corrected protected
+`main` revision. This reuses the run identity and executes the failed job plus
+its dependent verification job; successful build outputs and artifacts remain
+the inputs. If the original run predates the correction, or its workflow source
+does not equal current protected `main`, dispatch `release.yml` from `main` with
+`tag=v0.1.0` instead. Before either recovery, require the tag to remain pinned,
+the GitHub Release to be absent (or already bound to that tag), and the existing
+canonical GHCR digest and standard/custom attestations to verify. Never rerun
+all jobs merely to repair Release creation, and never overwrite the canonical
+package or attestations as part of that repair.
+
+For failed run `33592278376`, a new dispatch is required after this correction
+merges. GitHub records that run's `head_sha` as `e56fd6137e5d401b13aedc521fe0d8c06095d499`,
+whose workflow still supplied `--target`. [GitHub re-runs retain the original
+event's `GITHUB_SHA` and `GITHUB_REF`](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs),
+so **Re-run failed jobs** would execute
+the same broken workflow definition rather than this correction. The retained
+`release-assets-33592278376` artifact is evidence from that run, not authority
+to mix its old workflow attempt with a new definition.
+
+Existing release assets are replaced only after fresh checks and attestations;
+a release whose tag resolves to another commit is rejected. Consumers remain
+pinned to the recorded digest, so a failed or partial rerun cannot silently
+change an installed image.
+
+If image publication or attestation itself fails, do not use the pushed tag;
+inspect and delete only a demonstrably incomplete GHCR package version through
+GitHub's package UI, then rerun the same commit. If those gates succeeded and
+only GitHub Release creation failed, retain and verify the canonical digest and
+attestations; do not delete or overwrite them. If post-publication verification
+fails, mark the release as withdrawn, retain its evidence for audit, fix forward
+under a new version, and do not move or overwrite the original Git tag. Roll
+back a deployed instance only to a previously verified digest and follow the
+paired database and object-store procedure in the install/upgrade/uninstall
+runbook.

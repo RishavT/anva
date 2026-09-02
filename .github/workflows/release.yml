@@ -440,16 +440,44 @@ jobs:
           SOURCE_COMMIT: ${{ needs.build.outputs.source_commit }}
         run: |
           set -euo pipefail
+          resolve_remote_tag() {
+            tag="$1"
+            remote_refs="$(git ls-remote --exit-code origin \
+              "refs/tags/${tag}" "refs/tags/${tag}^{}")" || return 1
+            direct_commit="$(printf '%s\n' "$remote_refs" | awk -v ref="refs/tags/${tag}" '$2 == ref { print $1 }')" || return 1
+            peeled_commit="$(printf '%s\n' "$remote_refs" | awk -v ref="refs/tags/${tag}^{}" '$2 == ref { print $1 }')" || return 1
+            direct_count="$(printf '%s\n' "$direct_commit" | sed '/^$/d' | wc -l)" || return 1
+            peeled_count="$(printf '%s\n' "$peeled_commit" | sed '/^$/d' | wc -l)" || return 1
+            test "$direct_count" -eq 1 || return 1
+            test "$peeled_count" -le 1 || return 1
+            remote_commit="${peeled_commit:-$direct_commit}"
+            [[ "$remote_commit" =~ ^[a-f0-9]{40}$ ]] || return 1
+            printf '%s\n' "$remote_commit" || return 1
+          }
+
+          # This check is intentionally adjacent to the release mutation. The
+          # earlier identity gate cannot protect against a tag race while the
+          # assets and attestations are being verified.
+          remote_commit="$(resolve_remote_tag "$RELEASE_TAG")"
+          test "$SOURCE_COMMIT" = "$ANVA_RELEASE_COMMIT"
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          test "$remote_commit" = "$SOURCE_COMMIT"
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" release/* --clobber --repo "$GITHUB_REPOSITORY"
           else
             gh release create "$RELEASE_TAG" release/* \
               --repo "$GITHUB_REPOSITORY" \
-              --target "$SOURCE_COMMIT" \
               --title "Anva ${ANVA_VERSION}" \
               --notes-file release/RELEASE_NOTES.md \
               --verify-tag
           fi
+
+          release_tag="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" \
+            --jq .tag_name)"
+          test "$release_tag" = "$RELEASE_TAG"
+          release_commit="$(resolve_remote_tag "$release_tag")"
+          test "$release_commit" = "$SOURCE_COMMIT"
 
       - name: Remove publish authentication
         if: always()

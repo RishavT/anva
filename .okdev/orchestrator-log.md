@@ -40,3 +40,31 @@
 - 2026-09-02 — PR CI: initial run failed only the Ruff format check for
   `tests/unit/test_release_workflow.py`. Applied the mechanical formatter;
   format check and the 18 focused tests passed in Compose before repush.
+- 2026-09-02 — issue #71 environment/specify: HAClean clear; clean protected
+  `main` at `e56fd613`; live tag still `d919a2c`; Docker, Compose, GitHub auth,
+  API, and repository reachability passed. Run `33592278376` proved all build,
+  publication, and attestation gates passed before `gh release create
+  --verify-tag --target d919...` returned 403; Release API remained 404.
+- 2026-09-02 — issue #71 implement: branch
+  `fix/release-create-existing-tag`; retain `--verify-tag`, omit unnecessary
+  `--target`, and add adjacent pre-mutation plus post-mutation remote-tag/source
+  equality guards. No release retry or tag/package/settings/release mutation.
+- 2026-09-02 — issue #71 testing: focused Docker release contracts 26/26;
+  full `make check` passed 1,074 tests, 85% coverage, and Chromium 2/2; pinned
+  real-Trivy regression passed. Generated browser evidence restored and all
+  task Docker resources removed.
+- 2026-09-02 — issue #71 recovery audit: canonical digest
+  `sha256:71a484754b92bf06c35c075eba7b86419f1da0980b7794f53d59f8cc0f6f2f20`
+  is live with two attestations; Release remains absent; tag rules block update
+  and deletion. Original run is bound to broken workflow SHA `e56fd613`, so the
+  post-merge recovery must be a new corrected-main dispatch, not a failed-job
+  rerun.
+- 2026-09-02 — issue #71 review round 1: CHANGES REQUESTED. Bash can clear
+  `errexit` inside command substitutions, so resolver-internal failures needed
+  explicit propagation. Added `|| return 1` throughout and an executable mock
+  regression covering nonzero partial, missing, malformed, duplicate direct,
+  duplicate peeled, and valid tag responses. Focused Docker gate: 27/27.
+- 2026-09-02 — issue #71 review round 2: APPROVED. Independent Docker review
+  confirmed the explicit resolver failure propagation, executable failure-path
+  regression, release side-effect ordering, recovery decision, Ruff, format,
+  and `git diff --check`; no remaining findings.

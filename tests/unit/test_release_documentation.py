@@ -119,3 +119,16 @@ def test_release_recovery_documents_separate_workflow_and_source_identities() ->
     assert "prepares the run-owned Trivy cache before checking out the tag" in normalized
     assert "standard SLSA provenance records the main dispatch identity" in normalized
     assert "supplemental source-binding predicate" in normalized
+
+
+def test_release_recovery_rejects_rerunning_the_stale_failed_workflow() -> None:
+    recovery = RELEASE_RUNBOOK.read_text(encoding="utf-8")
+    normalized = " ".join(recovery.split())
+
+    assert "Re-run failed jobs" in recovery
+    assert "33592278376" in recovery
+    assert "e56fd6137e5d401b13aedc521fe0d8c06095d499" in recovery
+    assert "a new dispatch is required after this correction merges" in normalized
+    assert "re-runs retain the original event's `GITHUB_SHA` and `GITHUB_REF`" in normalized
+    assert "retain and verify the canonical digest and attestations" in normalized
+    assert "do not delete or overwrite them" in normalized

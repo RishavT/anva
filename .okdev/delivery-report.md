@@ -1,149 +1,70 @@
-# Delivery report: issue #67
+# Delivery report: issue #71
 
 ## Status
 
-**Ready for review/merge. Hosted recovery is not yet executed.**
+Ready for review. The pull request is intentionally unmerged. No release retry,
+tag change, package change, repository-settings change, or Release mutation was
+performed while fixing this bug.
 
-The release-cache correction and immutable `v0.1.0` recovery controls are
-implemented and locally verified. Review round 3 approved the settled diff with
-no remaining MUST FIX findings. The GitHub-hosted recovery run, attestations,
-package publication, and GitHub Release verification remain deliberately
-deferred until this correction is reviewed and merged to `main`.
+## Root cause and correction
 
-Do not retry the release before merge. Do not move, delete, or recreate
-`refs/tags/v0.1.0`.
+Recovery run `33592278376` successfully built, scanned, risk-gated, manifested,
+published, and attested `v0.1.0`, then `gh release create` returned HTTP 403.
+The publish job had effective `contents: write`; the unnecessary
+`--target d919...` made GitHub apply the workflow-file write gate because that
+commit differs from default `main` in `.github/workflows/release.yml`.
+`GITHUB_TOKEN` cannot be granted that permission.
 
-## Executive summary
+The workflow now creates the Release for the already-existing immutable tag
+with `--verify-tag` and no `--target`. Immediately before create or upload it
+re-resolves the live tag, including annotated-tag peeling, and requires exact
+agreement among the remote commit, build output, pinned release commit, and
+checkout HEAD. After the mutation it queries the Release's tag, re-resolves it,
+and again requires the exact source commit.
 
-Issue [#67](https://github.com/rishavt/anva/issues/67) fixes the failed release
-scan without granting the scanner additional privilege. The failure occurred
-because Docker created a fresh named Trivy cache volume owned by root while the
-scanner ran as UID/GID `1001:1001`; Trivy could not create `/cache/fanal` and
-failed before image push, attestation, or publication.
+No PAT, workflow-write permission, default-permission change, tag movement, or
+tag-rule change was introduced.
 
-The current Compose definition now mounts its run-owned cache over the pinned
-Trivy image's sticky `/tmp` and uses `/tmp/trivy-cache`. For immutable
-`v0.1.0` recovery, the corrected workflow on `main` prepares the exact labeled
-cache volume before checking out the old tag, whose Compose file still mounts
-the volume at `/cache`. Docker's first mount preserves the pinned image's
-root-owned mode-`1777` `/tmp`; the unprivileged preparer creates `fanal` as the
-runner UID/GID, allowing the old tagged scanner definition to use it safely.
+## Regression and verification evidence
 
-## What changed and why
+- Focused Docker release workflow/documentation/hardening contracts: 27 passed,
+  including executable fail-closed tag-resolution error paths.
+- Full Docker `make check`: formatting, Ruff, mypy (195 files), migrations,
+  33 generated contracts, skill packages, 1,074 tests, 85% coverage, and real
+  Chromium 2/2 passed. Five expected profile/stage skips remained.
+- Pinned real-Trivy release regression passed old-cache failure, prepared-cache
+  first scan and reuse, security controls, foreign collision refusal, and exact
+  cleanup.
+- `git diff --check`: passed.
+- Browser emitted only the already-tracked deferred #49 Canvas performance
+  warning (258.3 ms p95 versus unchanged 250 ms); no UI changed in #71.
+- All issue-scoped containers, networks, volumes, and generated images were
+  removed. Browser-generated tracked evidence was restored to the clean base.
+- Independent review round 2: approved with no remaining findings after the
+  round-1 Bash command-substitution failure-propagation correction.
 
-- `compose.release.yaml` mounts `release-trivy-cache` at `/tmp` and sets
-  `TRIVY_CACHE_DIR=/tmp/trivy-cache`. This fixes clean-run behavior for the
-  corrected source without a root initializer, capability, or host permission
-  change.
-- `.github/workflows/release.yml` creates the exact
-  `${COMPOSE_PROJECT}_release-trivy-cache` volume before tag checkout, refuses
-  pre-existing collisions, applies and validates Compose project/volume labels,
-  and prepares it with the pinned Trivy image as the runner UID/GID. The
-  preparer has a read-only root filesystem, drops all capabilities, enables
-  no-new-privileges, uses no network, and receives no Docker socket.
-- Build cleanup validates the exact project and volume labels before removal.
-  It never performs engine-wide cleanup and refuses foreign same-name volumes.
-- Recovery documentation now instructs operators to dispatch the reviewed
-  workflow from `main` only after merge, while retaining the immutable tag as
-  the product source.
-- Static release-workflow, hardening, and documentation tests plus a real
-  pinned-Trivy Docker regression cover initialization, reuse, identity binding,
-  effective controls, foreign collisions, and cleanup.
+## Live immutable evidence
 
-## Immutable `v0.1.0` recovery semantics
+- `main`: `e56fd6137e5d401b13aedc521fe0d8c06095d499` before the fix.
+- `v0.1.0`: `d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac`.
+- Canonical GHCR digest:
+  `sha256:71a484754b92bf06c35c075eba7b86419f1da0980b7794f53d59f8cc0f6f2f20`.
+- GitHub attestation API returned two attestations for that digest, matching the
+  successful standard and custom source-binding steps.
+- GitHub Release lookup remained 404.
+- Active tag ruleset `22026475` covers `refs/tags/v*`, blocks update and
+  deletion, and has no bypass actor.
+- The retained `release-assets-33592278376` artifact was unexpired.
 
-Workflow-definition identity and product-source identity are intentionally
-separate:
+## Safe recovery decision
 
-1. Manual recovery loads `.github/workflows/release.yml` from reviewed `main`.
-2. It accepts only existing tag `v0.1.0`.
-3. The build independently resolves the lightweight or annotated remote tag and
-   requires it to equal
-   `d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac`.
-4. Checkout HEAD, build output `source_commit`, OCI revision, risk acceptance,
-   manifests, publication target, and provenance inputs are bound to that exact
-   commit rather than the branch-dispatch `GITHUB_SHA`.
-5. Publish and verify each check out the build-verified source SHA and
-   independently re-resolve the live remote tag before artifact download,
-   release mutation, registry authentication, or published verification.
-6. A missing, wrong, or moved tag; version mismatch; branch-source
-   substitution; checkout mismatch; or remote-tag race fails before the
-   corresponding publication or verification side effects.
+GitHub re-runs retain the original event's `GITHUB_SHA` and `GITHUB_REF`. Run
+`33592278376` is bound to `e56fd613`, whose workflow contains the broken
+`--target`; therefore re-running failed jobs cannot load this correction. After
+the PR is reviewed and merged, recovery must be a new dispatch from corrected
+protected `main` for `tag=v0.1.0`, after rechecking the immutable tag, canonical
+digest, attestations, and absence/source binding of the GitHub Release.
 
-The workflow does not move, delete, or recreate the tag.
-
-## Security invariants
-
-The release scanner remains non-root with:
-
-- `read_only: true`;
-- `cap_drop: [ALL]`;
-- `no-new-privileges:true`;
-- a read-only Docker socket mount;
-- no privileged mode or added capability;
-- no broad host permission change; and
-- cleanup restricted to the unique, correctly labeled Compose project volume.
-
-Scan contents, vulnerability exception matching, risk gates, checksums,
-attestation ordering, and fail-closed publication ordering are unchanged.
-
-## Requirement and verification summary
-
-| Requirement area | Implementation and observed evidence |
-| --- | --- |
-| Fresh cache initialization and reuse | Real pinned Trivy scan against a fresh old-style `/cache` mount failed with `mkdir /cache/fanal: permission denied`; workflow preparation then enabled two successful scans, with `fanal.db` and a marker reused. |
-| Scanner hardening | Compose inspection confirmed non-root UID/GID, read-only root filesystem, all capabilities dropped, no-new-privileges, and socket `RW=false`. Preparer inspection confirmed the same rootfs/capability controls plus `network=none` and only the cache mount. |
-| Fail-closed release behavior | Job-specific static tests verify build, publish, and verify identities and ensure checks occur before release or verification side effects. Existing scan, risk, checksum, and attestation ordering remains intact. |
-| Deterministic scoped cleanup | Exact project resources were removed after every Docker run. A foreign same-name volume was refused and preserved; only the test harness removed its own recognized fixture afterward. |
-| Immutable recovery | Local tag, live remote tag, and checkout HEAD were all observed at `d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac`. Publish and verify consume the build job's exact `source_commit` and independently resolve the remote tag. |
-| Tag immutability and retry gate | No tag or GitHub state was mutated. Documentation explicitly prohibits retry before merge and prohibits moving, deleting, or recreating `v0.1.0`. |
-
-## Test, review, and manual results
-
-- Adjacent release suite: **48/48 passed**.
-- Focused workflow/hardening/documentation suite after round-two changes:
-  **18/18 passed**.
-- Independent pre-round-three release pass: **46/46 passed**.
-- Real Docker regression: old unprepared definition failed as expected; prepared
-  definition passed first scan and cache reuse scan.
-- Ruff, shell syntax, Compose configuration, and `git diff --check`: passed.
-- Review round 3: **APPROVED**, with no MUST FIX findings.
-- Manual spot-check: **10/10 passed**, covering local/live remote identity,
-  Compose rendering, effective controls, exact failure reproduction,
-  preparation, first scan, reuse, foreign collision preservation, and cleanup.
-- Cleanup: all issue-scoped containers, networks, volumes, and temporary project
-  image tags were removed after testing.
-
-## Deployment and recovery instructions
-
-After the correction is reviewed and merged to `main`, an authorized operator
-may load the corrected workflow while naming the immutable product tag:
-
-```sh
-gh workflow run release.yml --repo rishavt/anva --ref main -f tag=v0.1.0
-```
-
-The hosted run must then be observed through all build, scan, risk, checksum,
-attestation, publication, download, and install-verification gates. A failure
-must remain failed closed and be investigated; it does not authorize moving or
-recreating the tag.
-
-This command has intentionally **not** been executed during implementation,
-review, testing, or delivery preparation.
-
-## Deferred validation and known limitations
-
-- The real GitHub-hosted recovery, environment approval, GHCR publication,
-  attestations, and GitHub Release lifecycle are deferred until after merge.
-- No release retry has occurred, and no GitHub settings, tag, package, release,
-  or repository state was changed by this work.
-- No UI, browser, E2E, screenshot, or load testing applies to this
-  release-infrastructure-only change. There are therefore no screenshots in
-  this delivery report.
-
-## Recommendation
-
-Merge the approved correction to `main`, confirm the protected `v0.1.0` tag
-still resolves to the pinned commit, then perform one authorized hosted recovery
-dispatch using the command above. Treat the hosted workflow result—not this
-local report—as the final publication outcome.
+Do not rerun the current failed run. Do not move, delete, or recreate the tag.
+Do not delete or overwrite the canonical GHCR package or attestations merely to
+repair GitHub Release creation.
