@@ -68,6 +68,16 @@ def test_release_workflow_pins_actions_and_uses_minimal_permissions() -> None:
     }
 
 
+def test_release_jobs_never_execute_repository_helpers_from_candidate_worktree() -> None:
+    _, workflow = _workflow()
+    for job in _jobs(workflow).values():
+        for step in cast(list[dict[str, object]], job["steps"]):
+            script = step.get("run")
+            if isinstance(script, str):
+                assert "python3 scripts/" not in script
+                assert "python scripts/" not in script
+
+
 def test_release_order_is_fail_closed() -> None:
     text, _ = _workflow()
     identity = text.index("Verify tag, version, commit, and clean source")
@@ -116,11 +126,20 @@ def test_risk_decision_requires_exact_proposal_and_actual_environment_approval()
 
     steps = cast(list[dict[str, object]], build["steps"])
     named = {cast(str, step["name"]): step for step in steps}
+    materialize = cast(
+        str, named["Materialize approval validator from reviewed workflow source"]["run"]
+    )
     approval = cast(
         str, named["Verify exact RishavT environment approval and proposal provenance"]["run"]
     )
+    assert "contents/scripts/validate_release_approvals.py" in materialize
+    assert '-f "ref=${GITHUB_SHA}"' in materialize
+    assert 'reviewed_dir="$RUNNER_TEMP/reviewed-workflow"' in materialize
+    assert 'git hash-object "$validator"' in materialize
+    assert "REVIEWED_APPROVAL_VALIDATOR=$validator" in materialize
     assert "actions/runs/${GITHUB_RUN_ID}/approvals" in approval
-    assert "scripts/validate_release_approvals.py" in approval
+    assert 'python3 "$REVIEWED_APPROVAL_VALIDATOR"' in approval
+    assert "python3 scripts/" not in approval
     assert "--require-single" in approval
     assert "gh attestation verify" in approval
     assert 'test "$actual_proposal_sha256" = "$EXPECTED_PROPOSAL_SHA256"' in approval
@@ -142,6 +161,12 @@ def test_risk_decision_requires_exact_proposal_and_actual_environment_approval()
     assert "docs/security/vulnerability-exceptions.json" not in text
 
     names = [cast(str, step["name"]) for step in steps]
+    assert names.index(
+        "Materialize approval validator from reviewed workflow source"
+    ) < names.index("Verify exact RishavT environment approval and proposal provenance")
+    assert names.index(
+        "Materialize approval validator from reviewed workflow source"
+    ) < names.index("Check out the exact tag")
     assert names.index("Verify exact RishavT environment approval and proposal provenance") < (
         names.index("Build and fail-closed verify release artifacts")
     )
@@ -525,8 +550,9 @@ def test_publish_rechecks_remote_tag_before_any_release_side_effect() -> None:
     _, workflow = _workflow()
     publish = _jobs(workflow)["publish"]
     steps = cast(list[dict[str, object]], publish["steps"])
-    checkout = steps[0]
-    identity = steps[1]
+    named = {cast(str, step["name"]): step for step in steps}
+    checkout = named["Check out the verified source commit without credentials"]
+    identity = named["Recheck immutable release identity"]
 
     assert checkout["name"] == "Check out the verified source commit without credentials"
     assert cast(dict[str, object], checkout["with"]) == {
@@ -563,9 +589,22 @@ def test_release_creation_uses_existing_verified_tag_without_target_and_rechecks
     )
     script = cast(str, release_step["run"])
 
+    named = {cast(str, step["name"]): step for step in steps}
+    materialize = cast(
+        str, named["Materialize approval validator from reviewed workflow source"]["run"]
+    )
+    names = [cast(str, step["name"]) for step in steps]
+    assert names.index(
+        "Materialize approval validator from reviewed workflow source"
+    ) < names.index("Check out the verified source commit without credentials")
+    assert "contents/scripts/validate_release_approvals.py" in materialize
+    assert '-f "ref=${GITHUB_SHA}"' in materialize
+    assert 'git hash-object "$validator"' in materialize
+
     assert 'gh attestation verify "$decision"' in script
     assert "actions/runs/${GITHUB_RUN_ID}/approvals" in script
-    assert "scripts/validate_release_approvals.py" in script
+    assert 'python3 "$REVIEWED_APPROVAL_VALIDATOR"' in script
+    assert "python3 scripts/" not in script
     assert '--expected-sha256 "$APPROVAL_RECORD_SHA256"' in script
     assert "][0]" not in script
     for binding in (
