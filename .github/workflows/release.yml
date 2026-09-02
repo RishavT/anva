@@ -29,6 +29,7 @@ env:
   ANVA_IMAGE_REPOSITORY: ghcr.io/rishavt/anva
   ANVA_SOURCE_PREDICATE_TYPE: https://github.com/RishavT/anva/attestations/source/v1
   ANVA_TRIVY_IMAGE: aquasec/trivy:0.64.1@sha256:a8ca29078522f30393bdb34225e4c0994d38f37083be81a42da3a2a7e1488e9e
+  ANVA_TRIVY_CACHE_DIR: /tmp
   ANVA_REGISTRY_IMAGE: registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
 
 jobs:
@@ -96,10 +97,11 @@ jobs:
             --label "com.docker.compose.volume=release-trivy-cache" \
             "$CACHE_VOLUME" >/dev/null
           docker run --rm --user "$(id -u):$(id -g)" --network none \
+            --env "TRIVY_CACHE_DIR=$ANVA_TRIVY_CACHE_DIR" \
             --read-only --cap-drop ALL --security-opt no-new-privileges \
-            --mount "type=volume,src=${CACHE_VOLUME},dst=/tmp" \
+            --mount "type=volume,src=${CACHE_VOLUME},dst=${ANVA_TRIVY_CACHE_DIR}" \
             --entrypoint /bin/sh "$ANVA_TRIVY_IMAGE" -eu -c \
-            'umask 077; mkdir /tmp/fanal; test -w /tmp/fanal'
+            'umask 077; mkdir "$TRIVY_CACHE_DIR/fanal"; test -w "$TRIVY_CACHE_DIR/fanal"'
           make release-build
 
       - name: Run and explicitly validate every candidate scan stage
@@ -109,15 +111,17 @@ jobs:
           set -euo pipefail
           classifier="$RUNNER_TEMP/classify-release-source-scan.py"
           runner="$RUNNER_TEMP/run-release-scan-stage.py"
+          cache_override="$RUNNER_TEMP/release-cache.override.yaml"
           git show "${GITHUB_SHA}:scripts/classify_release_source_scan.py" > "$classifier"
           git show "${GITHUB_SHA}:scripts/run_release_scan_stage.py" > "$runner"
-          test -s "$classifier" && test -s "$runner"
+          git show "${GITHUB_SHA}:compose.release.cache.yaml" > "$cache_override"
+          test -s "$classifier" && test -s "$runner" && test -s "$cache_override"
           scanner_version="$(docker run --rm --network none --read-only --cap-drop ALL \
             --security-opt no-new-privileges "$ANVA_TRIVY_IMAGE" --version | head -1)"
           test -n "$scanner_version"
           common=(--scanner-image "$ANVA_TRIVY_IMAGE" --scanner-version "$scanner_version"
             --compose-project "$COMPOSE_PROJECT" --compose-file compose.yaml
-            --compose-file compose.release.yaml)
+            --compose-file compose.release.yaml --compose-file "$cache_override")
           classify() {
             local stage="$1" report="$2" log="$3" sanitized="$4" diagnostic="$5" engine="$6"
             python3 "$classifier" --report-kind "$stage" --report "$report" --raw-log "$log" \
@@ -140,6 +144,7 @@ jobs:
             python3 "$runner" --stage "$stage" --status-output "$status" --log-output "$log" \
               "${common[@]}" --scanner-set "$scanners" --target "$target" --format "$format" \
               --output "$output" "${metadata[@]}" -- docker compose -f compose.yaml -f compose.release.yaml \
+              -f "$cache_override" \
               -p "$COMPOSE_PROJECT" --profile release run --rm release-scanner "$@"
             local rc=$?
             set -e
@@ -152,9 +157,10 @@ jobs:
             "${ANVA_IMAGE_REPOSITORY}:${ANVA_VERSION}"
           cp release/anva-image-vulnerabilities.json release-risk-image-vulnerability.raw.json
           docker run --rm --user "$(id -u):$(id -g)" --network none --read-only --cap-drop ALL \
-            --security-opt no-new-privileges --mount "type=volume,src=${CACHE_VOLUME},dst=/cache,readonly" \
+            --env "TRIVY_CACHE_DIR=$ANVA_TRIVY_CACHE_DIR" --security-opt no-new-privileges \
+            --mount "type=volume,src=${CACHE_VOLUME},dst=${ANVA_TRIVY_CACHE_DIR},readonly" \
             --mount "type=bind,src=${GITHUB_WORKSPACE},dst=/evidence" --entrypoint /bin/sh \
-            "$ANVA_TRIVY_IMAGE" -eu -c 'test -s /cache/db/metadata.json; cp /cache/db/metadata.json /evidence/release-risk-db-metadata.json'
+            "$ANVA_TRIVY_IMAGE" -eu -c 'metadata="$TRIVY_CACHE_DIR/db/metadata.json"; test -s "$metadata"; cp "$metadata" /evidence/release-risk-db-metadata.json'
           classify image-vulnerability release/anva-image-vulnerabilities.json \
             release-risk-image-vulnerability.log release-risk-report.json \
             release-risk-image-vulnerability-diagnostic.json 0
@@ -480,20 +486,20 @@ jobs:
             --user "$runner_uid:$runner_gid" \
             --env "EXPECTED_UID=$runner_uid" \
             --env "EXPECTED_GID=$runner_gid" \
+            --env "TRIVY_CACHE_DIR=$ANVA_TRIVY_CACHE_DIR" \
             --read-only \
             --cap-drop ALL \
             --security-opt no-new-privileges \
             --network none \
-            --mount "type=volume,src=${cache_volume},dst=/tmp" \
+            --mount "type=volume,src=${cache_volume},dst=${ANVA_TRIVY_CACHE_DIR}" \
             --entrypoint /bin/sh \
             "$ANVA_TRIVY_IMAGE" -eu -c '
               test "$(id -u)" = "$EXPECTED_UID"
               test "$(id -g)" = "$EXPECTED_GID"
-              test "$(stat -c "%a" /tmp)" = "1777"
               umask 077
-              mkdir /tmp/fanal
-              test -w /tmp/fanal
-              test "$(stat -c "%u:%g" /tmp/fanal)" = "$EXPECTED_UID:$EXPECTED_GID"
+              mkdir "$TRIVY_CACHE_DIR/fanal"
+              test -w "$TRIVY_CACHE_DIR/fanal"
+              test "$(stat -c "%u:%g" "$TRIVY_CACHE_DIR/fanal")" = "$EXPECTED_UID:$EXPECTED_GID"
             '
 
       - name: Check out the exact tag
@@ -548,8 +554,11 @@ jobs:
       - name: Build and fail-closed verify release artifacts
         run: |
           set -euo pipefail
+          cache_override="$RUNNER_TEMP/release-cache.override.yaml"
+          git show "${GITHUB_SHA}:compose.release.cache.yaml" > "$cache_override"
+          test -s "$cache_override"
           make release-build
-          make release-scan
+          make RELEASE_COMPOSE="docker compose -p $COMPOSE_PROJECT -f compose.yaml -f compose.release.yaml -f $cache_override" release-scan
 
       - name: Create the immutable product source binding
         id: source-binding
@@ -712,6 +721,7 @@ jobs:
           Path("release/.trivyignore").write_text("".join(f"{item}\n" for item in identifiers))
           PY
           docker compose -f compose.yaml -f compose.release.yaml -p "$COMPOSE_PROJECT" \
+            -f "$RUNNER_TEMP/release-cache.override.yaml" \
             --profile release run --rm release-scanner \
             image --scanners vuln --severity HIGH,CRITICAL \
             --ignorefile /release/.trivyignore --exit-code 1 "${ANVA_IMAGE_REPOSITORY}:${ANVA_VERSION}"

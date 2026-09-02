@@ -1,0 +1,4 @@
+services:
+  release-scanner:
+    environment:
+      TRIVY_CACHE_DIR: ${ANVA_TRIVY_CACHE_DIR:?set canonical Trivy cache directory}

@@ -167,7 +167,9 @@ def test_candidate_retains_and_attests_original_scan_and_database_metadata() -> 
     ]
     upload = cast(dict[str, object], named["Upload proposal for personal review"]["with"])
     assert "make release-build" in build
-    assert "/cache/db/metadata.json" in source_scan
+    assert 'metadata="$TRIVY_CACHE_DIR/db/metadata.json"' in source_scan
+    assert '--env "TRIVY_CACHE_DIR=$ANVA_TRIVY_CACHE_DIR"' in source_scan
+    assert "dst=${ANVA_TRIVY_CACHE_DIR},readonly" in source_scan
     assert '"report_sha256"' in proposal
     assert '"database_metadata_sha256"' in proposal
     assert '"source_security_report_sha256"' in proposal
@@ -221,6 +223,27 @@ def test_candidate_retains_and_attests_original_scan_and_database_metadata() -> 
     assert names.index("Retain all completed scan diagnostics before cleanup") < names.index(
         "Remove only candidate-owned resources"
     )
+
+
+def test_release_cache_contract_has_one_root_from_compose_through_evidence() -> None:
+    text, workflow = _workflow()
+    environment = cast(dict[str, str], workflow["env"])
+    cache_root = environment["ANVA_TRIVY_CACHE_DIR"]
+    compose_text = (WORKFLOW.parents[2] / "compose.release.yaml").read_text(encoding="utf-8")
+    override_text = (WORKFLOW.parents[2] / "compose.release.cache.yaml").read_text(encoding="utf-8")
+
+    assert cache_root == "/tmp"  # noqa: S108 - isolated container cache contract
+    assert "TRIVY_CACHE_DIR: ${ANVA_TRIVY_CACHE_DIR:-/tmp}" in compose_text
+    assert "release-trivy-cache:${ANVA_TRIVY_CACHE_DIR:-/tmp}" in compose_text
+    assert "TRIVY_CACHE_DIR: ${ANVA_TRIVY_CACHE_DIR:?set canonical Trivy cache directory}" in (
+        override_text
+    )
+    assert "dst=${ANVA_TRIVY_CACHE_DIR}" in text
+    assert 'metadata="$TRIVY_CACHE_DIR/db/metadata.json"' in text
+    assert "/cache/trivy-cache" not in text + compose_text
+    assert text.count('git show "${GITHUB_SHA}:compose.release.cache.yaml"') == 2
+    assert '-f "$cache_override"' in text
+    assert '-f "$RUNNER_TEMP/release-cache.override.yaml"' in text
 
 
 def test_source_scan_failure_cannot_reach_protected_or_proposal_jobs() -> None:
@@ -397,9 +420,10 @@ def test_recovery_prepares_only_its_labeled_cache_before_tag_checkout() -> None:
     assert "--cap-drop ALL" in preparation
     assert "--security-opt no-new-privileges" in preparation
     assert "--network none" in preparation
-    assert "src=${cache_volume},dst=/tmp" in preparation
+    assert "ANVA_TRIVY_CACHE_DIR: /tmp" in text
+    assert "src=${cache_volume},dst=${ANVA_TRIVY_CACHE_DIR}" in preparation
     assert "/var/run/docker.sock" not in preparation
-    assert "mkdir /tmp/fanal" in preparation
+    assert 'mkdir "$TRIVY_CACHE_DIR/fanal"' in preparation
 
     cleanup = text[text.index("name: Remove only build-owned resources") :]
     assert 'docker volume inspect "$cache_volume"' in cleanup

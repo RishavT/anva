@@ -27,11 +27,11 @@ services:
     group_add: ["${ANVA_DOCKER_GID:?set ANVA_DOCKER_GID to the Docker socket group ID}"]
     environment:
       HOME: /tmp
-      TRIVY_CACHE_DIR: /tmp/trivy-cache
+      TRIVY_CACHE_DIR: ${ANVA_TRIVY_CACHE_DIR:-/tmp}
     volumes:
       - .:/workspace:ro
       - ./release:/release
-      - release-trivy-cache:/tmp
+      - release-trivy-cache:${ANVA_TRIVY_CACHE_DIR:-/tmp}
       - /var/run/docker.sock:/var/run/docker.sock:ro
     read_only: true
     cap_drop: ["ALL"]
