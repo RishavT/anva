@@ -36,8 +36,11 @@ TEST_RUN := $(TEST_COMPOSE) --profile test run --rm --build test
 ACCEPTANCE_PROJECT ?= anva-acceptance
 ACCEPTANCE_CASE_COMPOSE = $(if $(strip $(ANVA_ACCEPTANCE_CASE_FILE)),-f compose.acceptance.case.yaml,)
 ACCEPTANCE_COMPOSE = docker compose -p $(ACCEPTANCE_PROJECT) -f compose.yaml -f compose.acceptance.yaml $(ACCEPTANCE_CASE_COMPOSE)
+DRILL_PROJECT ?= anva-issue44-drill
+DRILL_COMPOSE := docker compose -p $(DRILL_PROJECT) -f compose.yaml -f compose.drill.yaml
+DRILL_FAULT_COMPOSE := $(DRILL_COMPOSE) -f compose.drill.restore-fault.yaml
 
-.PHONY: help install-demo up up-exposed down uninstall uninstall-clean backup backup-verify restore migration-rehearsal rate-limit-cleanup decommission-cleanup-status release-build release-scan release-scan-gate release-manifest release-artifacts release-clean reset logs migrate migrations-check shell cli lock contracts contracts-check skills-render skills-package skills-check format format-check lint type unit integration acceptance-canonicalize acceptance-verify acceptance-start acceptance-review-request acceptance-review-submit acceptance-finalize acceptance-down contract smoke browser coverage test test-down check ci
+.PHONY: help install-demo up up-exposed down uninstall uninstall-clean backup backup-verify restore migration-rehearsal rate-limit-cleanup decommission-cleanup-status drill-network-preflight drill-up drill-probes drill-evidence-template drill-evidence-record drill-evidence-decision-proposal drill-evidence-cleanup drill-evidence-provisional-validate drill-evidence-finalize drill-evidence-final-validate drill-restore-fault drill-storage-interrupt drill-storage-resume drill-decommission-retry drill-down release-build release-scan release-scan-gate release-manifest release-artifacts release-clean reset logs migrate migrations-check shell cli lock contracts contracts-check skills-render skills-package skills-check format format-check lint type unit integration acceptance-canonicalize acceptance-verify acceptance-start acceptance-review-request acceptance-review-submit acceptance-finalize acceptance-down contract smoke browser coverage test test-down check ci
 
 help:
 	@echo "Anva development commands (all application tooling runs in Compose)"
@@ -48,6 +51,9 @@ help:
 	@echo "  make restore       Verify and restore a backup, then migrate"
 	@echo "  make rate-limit-cleanup Delete one bounded batch of expired pre-auth counters"
 	@echo "  make decommission-cleanup-status Inspect one exact failed cleanup (operator credential required)"
+	@echo "  make drill-network-preflight Validate the disposable #44 proxy subnet before startup"
+	@echo "  make drill-up      Start the synthetic #44 HTTPS drill harness (not the human drill)"
+	@echo "  make drill-down    Remove only the disposable #44 drill project and volumes"
 	@echo "  make release-artifacts  Build wheel, SBOMs, scans, manifest, and checksums"
 	@echo "  make release-scan-gate Fail on unwaived high/critical image vulnerabilities"
 	@echo "  make uninstall     Remove services while preserving named data volumes"
@@ -273,6 +279,113 @@ decommission-cleanup-status:
 	$(COMPOSE) --profile operations run --rm decommission-cleanup-operator \
 		python -m anva.entrypoints.cli maintenance retry-decommission-cleanup \
 		--organization-id "$(ORGANIZATION_ID)" --run-id "$(RUN_ID)" --status
+
+drill-network-preflight:
+	@set -eu; \
+		test "$(DRILL_PROJECT)" != "anva" || (echo "DRILL_PROJECT must be disposable" >&2; exit 2); \
+		task="$$(mktemp -d "$${TMPDIR:-/tmp}/anva-issue44-preflight.XXXXXXXX")"; \
+		trap 'find "$$task" -type f -delete; rmdir "$$task"' EXIT HUP INT TERM; \
+		docker network inspect $$(docker network ls -q) > "$$task/networks.json"; \
+		ANVA_DRILL_TOOL_USER="$$(id -u):$$(id -g)" ANVA_DRILL_INPUT_DIR="$$task" \
+		$(DRILL_COMPOSE) --profile drill-tools run --rm --no-deps drill-tool \
+			network-preflight --subnet "$${ANVA_DRILL_SUBNET:-172.31.44.0/24}" \
+			--proxy-ip "$${ANVA_DRILL_PROXY_IP:-172.31.44.10}" \
+			--owned-network "$(DRILL_PROJECT)_backend" \
+			--networks-json /drill-input/networks.json
+
+drill-up: drill-network-preflight
+	DRILL_PROJECT="$(DRILL_PROJECT)" sh deploy/drill/drill-up.sh
+
+drill-probes:
+	$(DRILL_COMPOSE) run --rm drill-scrape
+	$(DRILL_COMPOSE) run --rm drill-untrusted-probe
+
+drill-evidence-template:
+	@test -n "$(DRILL_ID)" || (echo "DRILL_ID is required" >&2; exit 2)
+	@mkdir -p "$${ANVA_DRILL_EVIDENCE_DIR:-evidence/issue-044}"
+	ANVA_DRILL_TOOL_USER="$$(id -u):$$(id -g)" $(DRILL_COMPOSE) --profile drill-tools run --rm --no-deps drill-tool create-evidence \
+		--drill-id "$(DRILL_ID)" \
+		--source-revision "$(ANVA_REVISION)" \
+		--image-digest "sha256:29af794b9fda21e75461866437dd4853db54b54072252d0df9aa2eed77807c2d" \
+		--output-dir /evidence
+
+drill-evidence-provisional-validate:
+	@test -n "$(EVIDENCE_FILE)" || (echo "EVIDENCE_FILE is required" >&2; exit 2)
+	ANVA_DRILL_TOOL_USER="$$(id -u):$$(id -g)" $(DRILL_COMPOSE) --profile drill-tools run --rm --no-deps drill-tool \
+		validate-provisional "/evidence/$$(basename "$(EVIDENCE_FILE)")"
+
+drill-evidence-record:
+	@$(MAKE) drill-evidence-event EVENT_COMMAND=record-check EVENT_JSON="$(CHECK_JSON)" EVIDENCE_FILE="$(EVIDENCE_FILE)"
+
+drill-evidence-decision-proposal:
+	@$(MAKE) drill-evidence-event EVENT_COMMAND=record-decision-proposal EVENT_JSON="$(DECISION_JSON)" EVIDENCE_FILE="$(EVIDENCE_FILE)"
+
+drill-evidence-cleanup:
+	@$(MAKE) drill-evidence-event EVENT_COMMAND=record-cleanup EVENT_JSON="$(CLEANUP_JSON)" EVIDENCE_FILE="$(EVIDENCE_FILE)"
+
+drill-evidence-finalize:
+	@set -eu; \
+		test -n "$(EVIDENCE_FILE)" && test -f "$(EVIDENCE_FILE)" && test -n "$(ANCHOR_JSON)" && test -f "$(ANCHOR_JSON)" || (echo "exact evidence and anchor files are required" >&2; exit 2); \
+		test -n "$(GH_CONFIG_DIR)" && test -d "$(GH_CONFIG_DIR)" || (echo "GH_CONFIG_DIR is required" >&2; exit 2); \
+		gh_bin="$$(command -v gh)"; test -x "$$gh_bin" || (echo "gh executable is required" >&2; exit 2); \
+		ANVA_DRILL_TOOL_USER="$$(id -u):$$(id -g)" ANVA_DRILL_INPUT_DIR="$$(dirname "$(ANCHOR_JSON)")" \
+		ANVA_DRILL_GH_CONFIG_DIR="$(GH_CONFIG_DIR)" ANVA_DRILL_GH_BIN="$$gh_bin" \
+		$(DRILL_COMPOSE) --profile drill-finalize run --rm --no-deps drill-finalizer \
+			finalize "/evidence/$$(basename "$(EVIDENCE_FILE)")" --anchor-json "/drill-input/$$(basename "$(ANCHOR_JSON)")"
+drill-evidence-final-validate:
+	@set -eu; \
+		test -n "$(EVIDENCE_FILE)" && test -f "$(EVIDENCE_FILE)" || (echo "exact evidence file is required" >&2; exit 2); \
+		test -n "$(GH_CONFIG_DIR)" && test -d "$(GH_CONFIG_DIR)" || (echo "GH_CONFIG_DIR is required" >&2; exit 2); \
+		gh_bin="$$(command -v gh)"; test -x "$$gh_bin" || (echo "gh executable is required" >&2; exit 2); \
+		task="$$(mktemp -d "$${TMPDIR:-/tmp}/anva-issue44-final.XXXXXXXX")"; \
+		trap 'rmdir "$$task"' EXIT HUP INT TERM; \
+		ANVA_DRILL_TOOL_USER="$$(id -u):$$(id -g)" ANVA_DRILL_INPUT_DIR="$$task" \
+		ANVA_DRILL_GH_CONFIG_DIR="$(GH_CONFIG_DIR)" ANVA_DRILL_GH_BIN="$$gh_bin" \
+		$(DRILL_COMPOSE) --profile drill-finalize run --rm --no-deps drill-finalizer \
+			validate-final "/evidence/$$(basename "$(EVIDENCE_FILE)")"
+
+.PHONY: drill-evidence-event
+drill-evidence-event:
+	@set -eu; \
+		test -n "$(EVIDENCE_FILE)" && test -n "$(EVENT_JSON)" && test -f "$(EVENT_JSON)" || (echo "evidence and event JSON are required" >&2; exit 2); \
+		task="$$(mktemp -d "$${TMPDIR:-/tmp}/anva-issue44-event.XXXXXXXX")"; \
+		trap 'find "$$task" -type f -delete; rmdir "$$task"' EXIT HUP INT TERM; \
+		cp "$(EVENT_JSON)" "$$task/event.json"; \
+		ANVA_DRILL_TOOL_USER="$$(id -u):$$(id -g)" ANVA_DRILL_INPUT_DIR="$$task" \
+		$(DRILL_COMPOSE) --profile drill-tools run --rm --no-deps drill-tool \
+			$(EVENT_COMMAND) "/evidence/$$(basename "$(EVIDENCE_FILE)")" $${EVENT_FLAG:---event-json} /drill-input/event.json
+
+drill-restore-fault:
+	@set -eu; \
+		generation="$$( $(DRILL_COMPOSE) --profile operations run --rm --entrypoint anva backup-manifest backup --directory /backup current )"; \
+		$(DRILL_COMPOSE) --profile operations run --rm --entrypoint anva backup-manifest backup --directory /backup --generation "$$generation" verify; \
+		writers="$$( $(DRILL_COMPOSE) ps --services --status running | sed -n '/^api$$\|^worker$$\|^github-worker$$\|^mcp$$\|^mcp-read-only$$/p' )"; \
+		test -n "$$writers" && $(DRILL_COMPOSE) stop $$writers || true; \
+		task="$$(mktemp -d "$${TMPDIR:-/tmp}/anva-issue44-restore.XXXXXXXX")"; \
+		trap 'find "$$task" -type f -delete; rmdir "$$task"' EXIT HUP INT TERM; \
+		set +e; ANVA_BACKUP_GENERATION="$$generation" $(DRILL_FAULT_COMPOSE) --profile operations run --rm restore-objects >"$$task/restore.log" 2>&1; status=$$?; set -e; \
+		resumed="$$( $(DRILL_COMPOSE) ps --services --status running | sed -n '/^api$$\|^worker$$\|^github-worker$$\|^mcp$$\|^mcp-read-only$$/p' )"; \
+		sh deploy/drill/verify-restore-fault.sh "$$status" "$$task/restore.log" "$$resumed"
+
+drill-storage-interrupt:
+	$(DRILL_COMPOSE) stop minio
+
+drill-storage-resume:
+	$(DRILL_COMPOSE) up -d --wait minio
+	$(DRILL_COMPOSE) run --rm --no-deps minio-init
+
+drill-decommission-retry:
+	@test -n "$(ORGANIZATION_ID)" && test -n "$(RUN_ID)" && test -n "$(EXPECTED_REQUEST_HASH)" && test -n "$(EXPECTED_ATTEMPT)" || \
+		(echo "exact retry selectors are required" >&2; exit 2)
+	$(DRILL_COMPOSE) --profile drill-tools run --rm drill-decommission-operator \
+		python -m anva.entrypoints.cli maintenance retry-decommission-cleanup \
+		--organization-id "$(ORGANIZATION_ID)" --run-id "$(RUN_ID)" \
+		--expected-request-hash "$(EXPECTED_REQUEST_HASH)" --expected-attempt "$(EXPECTED_ATTEMPT)" \
+		--request-id "$(REQUEST_ID)" --confirm "$(CONFIRMATION)"
+
+drill-down:
+	@test "$(DRILL_PROJECT)" != "anva" || (echo "refusing non-disposable project" >&2; exit 2)
+	$(DRILL_COMPOSE) --profile drill-tools --profile operations down --volumes --remove-orphans
 
 release-clean:
 	$(RELEASE_COMPOSE) --profile release run --rm --build release-builder \
