@@ -228,6 +228,13 @@ def test_release_builder_locks_build_backends_and_packages_offline() -> None:
     )
     assert "FROM base AS runtime" in runtime
     assert "release-builder" not in runtime
+    assert "UV_COMPILE_BYTECODE=false uv pip install --no-cache --no-deps" in runtime
+    assert 'rm "${dist_info}/uv_cache.json"' in runtime
+    assert "uv_cache\\.json,|d'" in runtime
+    assert "/var/cache/ldconfig/aux-cache" in dockerfile
+    assert "/var/log/apt/history.log" in dockerfile
+    assert "/var/log/apt/term.log" in dockerfile
+    assert "/var/log/dpkg.log" in dockerfile
 
     release_compose = cast(
         dict[str, object], yaml.safe_load(Path("compose.release.yaml").read_text())
@@ -239,9 +246,14 @@ def test_release_builder_locks_build_backends_and_packages_offline() -> None:
     assert service["network_mode"] == "none"
 
     makefile = Path("Makefile").read_text(encoding="utf-8")
-    release_build = makefile.split("\nrelease-build: release-clean\n", 1)[1].split(
-        "\nrelease-scan:\n", 1
-    )[0]
+    image_build = makefile.split("\nrelease-image-build:\n", 1)[1].split("\nrelease-build:", 1)[0]
+    assert "docker buildx bake -f compose.yaml api" in image_build
+    assert "api.output=type=docker,rewrite-timestamp=true" in image_build
+    assert "ANVA_BUILD_INPUT_SHA256=$(ANVA_IMAGE_BUILD_INPUT_SHA256)" in image_build
+    assert "release-build: release-clean release-image-build" in makefile
+    release_build = makefile.split("\nrelease-build: release-clean release-image-build\n", 1)[
+        1
+    ].split("\nrelease-scan:\n", 1)[0]
     assert "uv build --python /app/.venv/bin/python" in release_build
     assert "--no-build-isolation --offline --wheel --out-dir /release" in release_build
     cleanup = "python -m anva.release cleanup-uv-build --directory /release"

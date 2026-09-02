@@ -177,6 +177,8 @@ def test_risk_decision_requires_exact_proposal_and_actual_environment_approval()
 
 def test_candidate_retains_and_attests_original_scan_and_database_metadata() -> None:
     _, workflow = _workflow()
+    environment = cast(dict[str, str], workflow["env"])
+    assert environment["BUILDKIT_PROGRESS"] == "plain"
     candidate = _jobs(workflow)["candidate"]
     steps = cast(list[dict[str, object]], candidate["steps"])
     named = {cast(str, step["name"]): step for step in steps}

@@ -10,7 +10,11 @@ RUN apt-get update \
        libssl3t64=3.5.7-1~deb13u2 \
        openssl=3.5.7-1~deb13u2 \
        openssl-provider-legacy=3.5.7-1~deb13u2 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+       /var/cache/ldconfig/aux-cache \
+       /var/log/apt/history.log \
+       /var/log/apt/term.log \
+       /var/log/dpkg.log
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -48,7 +52,12 @@ ARG ANVA_REVISION=unknown
 ARG ANVA_BUILD_INPUT_SHA256=0000000000000000000000000000000000000000000000000000000000000000
 ARG ANVA_SOURCE=https://github.com/rishavt/anva
 COPY --from=wheel-builder /dist /dist
-RUN uv pip install --no-deps /dist/*.whl \
+RUN UV_COMPILE_BYTECODE=false uv pip install --no-cache --no-deps /dist/*.whl \
+    && dist_info="$(dirname "$(find /app/.venv/lib/python3.12/site-packages \
+       -path '*/anva-*.dist-info/uv_cache.json' -print -quit)")" \
+    && test -n "${dist_info}" \
+    && rm "${dist_info}/uv_cache.json" \
+    && sed -i '\|/uv_cache\.json,|d' "${dist_info}/RECORD" \
     && python -m anva.manage collectstatic --noinput \
     && ANVA_BUILD_REVISION="${ANVA_REVISION}" ANVA_BUILD_INPUT_SHA256="${ANVA_BUILD_INPUT_SHA256}" \
        python -c 'import json, os; from pathlib import Path; from anva.acceptance.provenance import package_sha256; root = Path(__import__("anva").__file__).resolve().parent; output = Path("/app/anva-build-provenance.json"); output.write_text(json.dumps({"schema_version": 1, "product_commit": os.environ["ANVA_BUILD_REVISION"], "build_input_sha256": os.environ["ANVA_BUILD_INPUT_SHA256"], "package_sha256": package_sha256(root)}, separators=(",", ":"), sort_keys=True) + "\n", encoding="utf-8"); output.chmod(0o444)' \

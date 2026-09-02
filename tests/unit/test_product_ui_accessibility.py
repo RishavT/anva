@@ -100,6 +100,6 @@ def test_runtime_image_installs_a_wheel_without_project_source() -> None:
     ):
         assert required_argument in wheel_builder
     assert "COPY --from=wheel-builder /dist /dist" in runtime
-    assert "uv pip install --no-deps /dist/*.whl" in runtime
+    assert "UV_COMPILE_BYTECODE=false uv pip install --no-cache --no-deps" in runtime
     assert "COPY src" not in runtime
     assert "uv sync" not in runtime

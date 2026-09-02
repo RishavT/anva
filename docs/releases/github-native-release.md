@@ -40,6 +40,9 @@ gh workflow run release.yml --repo rishavt/anva --ref main \
    malformed JSON schema, or source-policy finding fails before proposal/digest
    creation; an `always()` artifact safely retains every completed non-secret or
    sanitized output for that exact run attempt.
+   The image build uses the Compose `api` definition through BuildKit Bake with
+   timestamp rewriting anchored to the candidate commit's `SOURCE_DATE_EPOCH`;
+   transient apt and uv cache records are excluded from the runtime filesystem.
 5. The publishing job waits at the protected `release` environment. RishavT
    downloads the proposal artifact, verifies every GitHub attestation and
    SHA-256 value, inspects the exact image report, validated source report,
