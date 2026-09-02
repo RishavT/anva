@@ -75,16 +75,14 @@ def test_dispatch_uses_main_workflow_but_binds_products_to_the_tag_commit() -> N
     text, workflow = _workflow()
     build = workflow["jobs"]["build"]
 
-    assert workflow["env"]["ANVA_RELEASE_COMMIT"] == (
-        "d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac"
-    )
+    assert workflow["env"]["ANVA_RELEASE_COMMIT"] == ("d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac")
     assert build["outputs"]["source_commit"] == "${{ steps.source.outputs.commit }}"
     assert "git ls-remote --exit-code origin" in text
     assert '"refs/tags/${RELEASE_TAG}" "refs/tags/${RELEASE_TAG}^{}"' in text
     assert 'test "$source_commit" = "$ANVA_RELEASE_COMMIT"' in text
     assert 'echo "commit=$source_commit" >> "$GITHUB_OUTPUT"' in text
     assert '--source-commit "$ANVA_REVISION"' in text
-    assert 'needs.build.outputs.source_commit' in text
+    assert "needs.build.outputs.source_commit" in text
     assert '--target "$SOURCE_COMMIT"' in text
     assert "$GITHUB_SHA" not in text
 
@@ -104,7 +102,7 @@ def test_recovery_prepares_only_its_labeled_cache_before_tag_checkout() -> None:
     preparation = text[prepare:checkout]
     assert 'cache_volume="${COMPOSE_PROJECT}_release-trivy-cache"' in preparation
     assert 'docker volume inspect "$cache_volume"' in preparation
-    assert 'docker volume create \\' in preparation
+    assert "docker volume create \\" in preparation
     assert '--label "com.docker.compose.project=$COMPOSE_PROJECT"' in preparation
     assert '--label "com.docker.compose.volume=release-trivy-cache"' in preparation
     assert '--user "$runner_uid:$runner_gid"' in preparation
@@ -112,9 +110,9 @@ def test_recovery_prepares_only_its_labeled_cache_before_tag_checkout() -> None:
     assert "--cap-drop ALL" in preparation
     assert "--security-opt no-new-privileges" in preparation
     assert "--network none" in preparation
-    assert 'src=${cache_volume},dst=/tmp' in preparation
+    assert "src=${cache_volume},dst=/tmp" in preparation
     assert "/var/run/docker.sock" not in preparation
-    assert 'mkdir /tmp/fanal' in preparation
+    assert "mkdir /tmp/fanal" in preparation
 
     cleanup = text[text.index("name: Remove only build-owned resources") :]
     assert 'docker volume inspect "$cache_volume"' in cleanup

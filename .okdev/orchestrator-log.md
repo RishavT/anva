@@ -37,3 +37,6 @@
 - 2026-09-02 — delivery: `.okdev/delivery-report.md` records the approved fix,
   verification evidence, immutable recovery command, and hosted validation
   deferred until after merge. This task does not merge or retry the release.
+- 2026-09-02 — PR CI: initial run failed only the Ruff format check for
+  `tests/unit/test_release_workflow.py`. Applied the mechanical formatter;
+  format check and the 18 focused tests passed in Compose before repush.
