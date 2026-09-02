@@ -2,21 +2,51 @@
 
 from __future__ import annotations
 
+import json
+import os
+import shutil
+import subprocess
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-APP_DIGEST = "sha256:29af794b9fda21e75461866437dd4853db54b54072252d0df9aa2eed77807c2d"
+APP_IMAGE = "${ANVA_DRILL_IMAGE:?set the exact candidate ghcr.io/rishavt/anva@sha256 digest}"
+
+
+class _ComposeLoader(yaml.SafeLoader):
+    pass
+
+
+_ComposeLoader.add_constructor("!reset", lambda loader, node: None)
+
+
+def _drill_compose() -> dict[str, Any]:
+    loaded = yaml.load(
+        (ROOT / "compose.drill.yaml").read_text(encoding="utf-8"),
+        _ComposeLoader,  # noqa: S506 - loader subclasses SafeLoader and only adds !reset.
+    )
+    assert isinstance(loaded, dict)
+    return cast(dict[str, Any], loaded)
 
 
 @pytest.mark.unit
 def test_drill_overlay_pins_public_runtime_tls_and_scrape_images() -> None:
-    compose = yaml.safe_load((ROOT / "compose.drill.yaml").read_text(encoding="utf-8"))
+    compose = _drill_compose()
     services = compose["services"]
 
-    assert services["api"]["image"] == f"ghcr.io/rishavt/anva@{APP_DIGEST}"
+    for name in (
+        "api",
+        "worker",
+        "migrate",
+        "drill-decommission-operator",
+        "drill-tool",
+        "drill-finalizer",
+    ):
+        assert services[name]["image"] == APP_IMAGE
+        assert services[name]["build"] is None
     assert "ports" not in services["api"]
     assert services["drill-tls"]["image"].startswith("nginx@sha256:")
     assert services["drill-scrape"]["image"].startswith("curlimages/curl@sha256:")
@@ -42,6 +72,59 @@ def test_drill_overlay_pins_public_runtime_tls_and_scrape_images() -> None:
 
 
 @pytest.mark.unit
+def test_resolved_drill_compose_has_no_local_build_and_one_candidate_image() -> None:
+    docker = shutil.which("docker")
+    if docker is None:
+        pytest.skip("Docker CLI is unavailable for resolved Compose validation")
+    candidate = f"ghcr.io/rishavt/anva@sha256:{'a' * 64}"
+    environment = {
+        **os.environ,
+        "ANVA_DRILL_IMAGE": candidate,
+        "ANVA_DRILL_SOURCE_COMMIT": "3bea51afbfb0e3128cd600b107ff661cc85fa438",
+        "ANVA_DRILL_OBJECT_STORAGE_SECRET": "test-object-secret",
+        "ANVA_DRILL_BOOTSTRAP_SECRET": "test-bootstrap-secret",
+        "ANVA_DRILL_METRICS_TOKEN": "test-metrics-secret",
+        "ANVA_DRILL_SECRET_KEY": "test-app-secret",
+        "ANVA_DRILL_TOKEN_PEPPER": "test-token-pepper",
+        "ANVA_DRILL_INPUT_DIR": str((ROOT / "deploy/drill").resolve()),
+        "ANVA_DRILL_GH_CONFIG_DIR": str((ROOT / "deploy/drill").resolve()),
+        "ANVA_DRILL_GH_BIN": shutil.which("gh") or "/usr/bin/gh",
+    }
+    completed = subprocess.run(  # noqa: S603 - executable resolved by shutil.which
+        [
+            docker,
+            "compose",
+            "-f",
+            "compose.yaml",
+            "-f",
+            "compose.drill.yaml",
+            "--profile",
+            "drill-tools",
+            "--profile",
+            "drill-finalize",
+            "config",
+            "--format",
+            "json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    services = cast(dict[str, dict[str, object]], json.loads(completed.stdout)["services"])
+    for name in (
+        "api",
+        "migrate",
+        "worker",
+        "drill-decommission-operator",
+        "drill-tool",
+        "drill-finalizer",
+    ):
+        assert services[name]["image"] == candidate
+        assert "build" not in services[name]
+
+
+@pytest.mark.unit
 def test_drill_overlay_has_exact_proxy_and_https_security_contract() -> None:
     raw = (ROOT / "compose.drill.yaml").read_text(encoding="utf-8")
     nginx = (ROOT / "deploy/drill/nginx.conf").read_text(encoding="utf-8")
@@ -57,7 +140,7 @@ def test_drill_overlay_has_exact_proxy_and_https_security_contract() -> None:
 
 @pytest.mark.unit
 def test_all_pinned_app_services_and_object_store_share_production_secrets() -> None:
-    compose = yaml.safe_load((ROOT / "compose.drill.yaml").read_text(encoding="utf-8"))
+    compose = _drill_compose()
     services = compose["services"]
 
     for name in ("api", "worker", "migrate"):
@@ -102,15 +185,15 @@ def test_make_targets_bind_restore_failure_storage_interruption_and_retry() -> N
     assert "--profile drill-finalize run --rm --no-deps drill-finalizer" in makefile
     assert "PYTHONPATH=src python3 -m anva.operator_drill finalize" not in makefile
     assert "GH_CONFIG_DIR is required" in makefile
+    assert "ANVA_DRILL_IMAGE" in makefile
+    assert "ANVA_DRILL_SOURCE_COMMIT" in makefile
+    assert '--product-version "$(ANVA_VERSION)"' in makefile
+    assert "--operator-cli-in-product" in makefile
 
 
 @pytest.mark.unit
 def test_spoof_probe_requires_exact_redirect_and_rejects_transport_or_server_errors() -> None:
-    command = " ".join(
-        (yaml.safe_load((ROOT / "compose.drill.yaml").read_text(encoding="utf-8")))["services"][
-            "drill-untrusted-probe"
-        ]["command"]
-    )
+    command = " ".join((_drill_compose())["services"]["drill-untrusted-probe"]["command"])
 
     assert 'test "$$code" = 301' in command
     assert 'test "$$code" != 200' not in command

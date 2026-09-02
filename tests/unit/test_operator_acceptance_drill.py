@@ -26,6 +26,7 @@ from anva.operator_drill import (
     finalize_with_github_anchor,
     main,
     preflight_network,
+    record_release_boundary,
     validate_evidence,
     validate_final_evidence,
 )
@@ -98,6 +99,10 @@ def _create(tmp_path: Path) -> Path:
                 COMMIT,
                 "--image-digest",
                 IMAGE,
+                "--product-version",
+                "0.1.0",
+                "--product-source-commit",
+                PRODUCT_SOURCE_COMMIT,
                 "--output-dir",
                 str(tmp_path),
             ]
@@ -116,6 +121,25 @@ def test_header_is_closed_and_v010_remains_not_accepted(tmp_path: Path) -> None:
     assert header["payload"]["release_boundary"]["status"] == "NOT_ACCEPTED"
     with pytest.raises(EvidenceRejectedError):
         validate_evidence([header], require_anchor=True)
+
+
+@pytest.mark.unit
+def test_release_boundary_accepts_only_exact_v011_same_source_product_cli() -> None:
+    eligible = record_release_boundary(
+        product_version="0.1.1",
+        product_source_commit=COMMIT,
+        operator_source_commit=COMMIT,
+        operator_cli_in_product=True,
+    )
+    assert eligible["status"] == "ELIGIBLE_FOR_HUMAN_ACCEPTANCE"
+    for version in ("0.1.0", "0.1.2", "1.0.0"):
+        rejected = record_release_boundary(
+            product_version=version,
+            product_source_commit=COMMIT,
+            operator_source_commit=COMMIT,
+            operator_cli_in_product=True,
+        )
+        assert rejected["status"] == "NOT_ACCEPTED"
 
 
 @pytest.mark.unit

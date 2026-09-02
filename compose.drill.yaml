@@ -13,7 +13,8 @@ services:
     networks: [backend]
 
   migrate:
-    image: ghcr.io/rishavt/anva@sha256:29af794b9fda21e75461866437dd4853db54b54072252d0df9aa2eed77807c2d
+    build: !reset null
+    image: ${ANVA_DRILL_IMAGE:?set the exact candidate ghcr.io/rishavt/anva@sha256 digest}
     pull_policy: always
     environment:
       ANVA_BOOTSTRAP_SECRET: ${ANVA_DRILL_BOOTSTRAP_SECRET:?set a unique drill bootstrap secret}
@@ -26,7 +27,8 @@ services:
     networks: [backend]
 
   api:
-    image: ghcr.io/rishavt/anva@sha256:29af794b9fda21e75461866437dd4853db54b54072252d0df9aa2eed77807c2d
+    build: !reset null
+    image: ${ANVA_DRILL_IMAGE:?set the exact candidate ghcr.io/rishavt/anva@sha256 digest}
     pull_policy: always
     environment:
       ANVA_ALLOWED_HOSTS: localhost,api,drill-tls,${ANVA_DRILL_HOSTNAME:-drill.localhost}
@@ -43,7 +45,8 @@ services:
     networks: [backend]
 
   worker:
-    image: ghcr.io/rishavt/anva@sha256:29af794b9fda21e75461866437dd4853db54b54072252d0df9aa2eed77807c2d
+    build: !reset null
+    image: ${ANVA_DRILL_IMAGE:?set the exact candidate ghcr.io/rishavt/anva@sha256 digest}
     pull_policy: always
     environment:
       ANVA_BOOTSTRAP_SECRET: ${ANVA_DRILL_BOOTSTRAP_SECRET:?set a unique drill bootstrap secret}
@@ -126,9 +129,8 @@ services:
     restart: "no"
 
   drill-tool:
-    build:
-      context: .
-      target: test
+    build: !reset null
+    image: ${ANVA_DRILL_IMAGE:?set the exact candidate ghcr.io/rishavt/anva@sha256 digest}
     entrypoint: ["python", "-m", "anva.operator_drill"]
     user: ${ANVA_DRILL_TOOL_USER:-65532:65532}
     cap_drop: ["ALL"]
@@ -143,9 +145,8 @@ services:
     restart: "no"
 
   drill-finalizer:
-    build:
-      context: .
-      target: test
+    build: !reset null
+    image: ${ANVA_DRILL_IMAGE:?set the exact candidate ghcr.io/rishavt/anva@sha256 digest}
     entrypoint: ["python", "-m", "anva.operator_drill"]
     user: ${ANVA_DRILL_TOOL_USER:-65532:65532}
     cap_drop: ["ALL"]
@@ -164,9 +165,9 @@ services:
     restart: "no"
 
   drill-decommission-operator:
-    build:
-      context: .
-      target: runtime
+    build: !reset null
+    image: ${ANVA_DRILL_IMAGE:?set the exact candidate ghcr.io/rishavt/anva@sha256 digest}
+    pull_policy: always
     command: ["python", "-m", "anva.entrypoints.cli", "maintenance", "retry-decommission-cleanup"]
     environment:
       ANVA_DATABASE_URL: ${ANVA_DATABASE_URL:-postgresql://anva:anva@postgres:5432/anva}

@@ -1,41 +1,33 @@
-# Current v0.1.0 release readiness
+# Current v0.1.1 release readiness
 
-Anva `v0.1.0` is technically published and verified. This audit distinguishes
-that completed publication from the still-open human-owned acceptance gates.
+Anva `v0.1.1` is in release preparation. No tag, candidate image, risk
+approval, protected-environment approval, or GitHub Release is claimed here.
 
-## Authoritative public identities
+The preparation baseline is `3bea51afbfb0e3128cd600b107ff661cc85fa438`.
+It contains the supported decommission retry from #73/PR #76 and the synthetic
+operator drill harness from #80/PR #81. The final candidate identity is the
+full reviewed `main` commit supplied to the release dispatch and must equal the
+commit resolved from the existing `v0.1.1` tag.
 
-| Identity | Value |
-| --- | --- |
-| Tag and product source | `v0.1.0` -> `d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac` |
-| Immutable image | `ghcr.io/rishavt/anva@sha256:29af794b9fda21e75461866437dd4853db54b54072252d0df9aa2eed77807c2d` |
-| Release workflow | [successful run 33596661334](https://github.com/RishavT/anva/actions/runs/33596661334) |
-| GitHub Release | [Anva 0.1.0](https://github.com/RishavT/anva/releases/tag/v0.1.0), 13 public assets |
-
-Run `33596661334` completed build, scan/risk binding, GHCR publication,
-standard and custom attestations, GitHub Release creation, download/checksum
-verification, digest pull, fresh install, migrations, readiness, and demo
-lifecycle. The exact 13-CVE/16-package-tuple no-fix decision is bound to this
-source and digest through 2026-09-25; drift, a recorded fix, or expiry invalidates it.
-
-## Remaining gates
+## Blocking gates
 
 | Gate | Current disposition |
 | --- | --- |
-| [#43](https://github.com/RishavT/anva/issues/43) | Open. Aggregate the exact-current broad, browser, 31-case, prompt-injection, and independent-review evidence. Publication does not close it. |
-| [#44](https://github.com/RishavT/anva/issues/44) | Open. Named ownership exists, but the timestamped human operator exercise and deployment TLS/proxy evidence do not. Workflow lifecycle automation is not a substitute. |
-| [#13](https://github.com/RishavT/anva/issues/13) | Open pending honest reconciliation of applicable gates, including #43/#44. |
+| Candidate identity | Pending reviewed merge and exact tag-to-commit binding. |
+| Candidate build and scan | Pending two clean builds and a fresh run-owned Trivy database against the exact image. |
+| Residual risk | Pending an attested proposal followed by an explicit RishavT decision through personal protected-environment approval for the exact source, digest, report, tuple set, runtime controls, and expiry. GitHub's exact-run approval record and proposal SHA must bind the generated decision. The v0.1.0 decision is invalid here. |
+| Publication | Pending separate tag creation and protected `release` environment approval. |
+| Human acceptance #44 | Still separate. Harness success cannot approve or finalize it. |
 
-Publication issue #42 and its technical descendants are complete. Historical
-local seal identities remain evidence history, not the current public release
-identity. Post-MVP deferrals #37-#40 and #49 remain unchanged.
+The workflow remains fail closed until these gates are satisfied. Publication
+must produce checksums, SPDX/CycloneDX SBOMs, standard GitHub provenance,
+supplemental source predicates, immutable GHCR identity, and a clean install and
+demo verification from the downloaded assets.
 
-## Metadata correction
+## Historical v0.1.0 identity
 
-The initial public release body and metadata assets retained obsolete candidate
-claims that publication had not happened. [#74](https://github.com/RishavT/anva/issues/74)
-repairs only the Release body and the closed three-file metadata set
-(`RELEASE_NOTES.md`, `release-manifest.json`, and `SHA256SUMS`) through the
-reviewed, protected `release` environment. It leaves the other ten assets,
-product tag/source, image/runtime, risk decision, and old attestations unchanged.
-The repair must not execute until its pull request is reviewed and merged.
+The published v0.1.0 tag remains bound to
+`d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac` and image digest
+`sha256:29af794b9fda21e75461866437dd4853db54b54072252d0df9aa2eed77807c2d`.
+Its metadata-repair workflow and risk decision are immutable historical
+evidence and are not retargeted to v0.1.1.
