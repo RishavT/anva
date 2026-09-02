@@ -5,10 +5,14 @@ repository_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 project="anva-release-cache-test-$$"
 cache_volume="${project}_release-trivy-cache"
 trivy_image="aquasec/trivy:0.64.1@sha256:a8ca29078522f30393bdb34225e4c0994d38f37083be81a42da3a2a7e1488e9e"
+ANVA_TRIVY_CACHE_DIR=/tmp
+export ANVA_TRIVY_CACHE_DIR
 runner_uid=$(id -u)
 runner_gid=$(id -g)
 docker_gid=$(stat -c '%g' /var/run/docker.sock)
-compose="docker compose -f compose.yaml -f compose.release.yaml -p $project"
+ANVA_DOCKER_GID=$docker_gid
+export ANVA_DOCKER_GID
+compose="docker compose -f compose.yaml -f compose.release.yaml -f compose.release.cache.yaml -p $project"
 foreign_project="${project}-foreign"
 foreign_volume_label="foreign-cache"
 
@@ -60,20 +64,20 @@ prepare_cache_volume() {
     --user "$runner_uid:$runner_gid" \
     --env "EXPECTED_UID=$runner_uid" \
     --env "EXPECTED_GID=$runner_gid" \
+    --env "TRIVY_CACHE_DIR=$ANVA_TRIVY_CACHE_DIR" \
     --read-only \
     --cap-drop ALL \
     --security-opt no-new-privileges \
     --network none \
-    --mount "type=volume,src=${cache_volume},dst=/tmp" \
+    --mount "type=volume,src=${cache_volume},dst=${ANVA_TRIVY_CACHE_DIR}" \
     --entrypoint /bin/sh \
     "$trivy_image" -eu -c '
       test "$(id -u)" = "$EXPECTED_UID"
       test "$(id -g)" = "$EXPECTED_GID"
-      test "$(stat -c "%a" /tmp)" = "1777"
       umask 077
-      mkdir /tmp/fanal
-      test -w /tmp/fanal
-      test "$(stat -c "%u:%g" /tmp/fanal)" = "$EXPECTED_UID:$EXPECTED_GID"
+      mkdir "$TRIVY_CACHE_DIR/fanal"
+      test -w "$TRIVY_CACHE_DIR/fanal"
+      test "$(stat -c "%u:%g" "$TRIVY_CACHE_DIR/fanal")" = "$EXPECTED_UID:$EXPECTED_GID"
     '
 }
 
@@ -82,18 +86,25 @@ run_tagged_scanner() {
     --user "$runner_uid:$runner_gid" \
     --group-add "$docker_gid" \
     --env HOME=/tmp \
-    --env TRIVY_CACHE_DIR=/cache \
+    --env "TRIVY_CACHE_DIR=$ANVA_TRIVY_CACHE_DIR" \
     --read-only \
     --cap-drop ALL \
     --security-opt no-new-privileges \
-    --tmpfs /tmp:size=1g,mode=1777 \
-    --mount "type=volume,src=${cache_volume},dst=/cache" \
+    --mount "type=volume,src=${cache_volume},dst=${ANVA_TRIVY_CACHE_DIR}" \
     --mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock,readonly \
-    "$trivy_image" image --scanners secret --skip-version-check --skip-db-update \
+    "$trivy_image" image --scanners vuln --skip-version-check \
       --skip-java-db-update --format json "$trivy_image"
 }
 
 cd "$repository_root"
+$compose --profile release config --format json | python3 -c '
+import json, sys
+scanner = json.load(sys.stdin)["services"]["release-scanner"]
+assert scanner["environment"]["TRIVY_CACHE_DIR"] == "/tmp"
+mounts = [item for item in scanner["volumes"] if item["type"] == "volume"]
+assert len(mounts) == 1
+assert mounts[0]["target"] == scanner["environment"]["TRIVY_CACHE_DIR"]
+'
 test -z "$(docker ps -aq --filter "label=com.docker.compose.project=$project")"
 test -z "$(docker volume ls -q --filter "label=com.docker.compose.project=$project")"
 test -z "$(docker network ls -q --filter "label=com.docker.compose.project=$project")"
@@ -112,18 +123,7 @@ test "$(docker volume inspect --format '{{ index .Labels "com.docker.compose.pro
 test "$(docker volume inspect --format '{{ index .Labels "com.docker.compose.volume" }}' "$cache_volume")" = "$foreign_volume_label"
 docker volume rm "$cache_volume" >/dev/null
 
-# The immutable tag's /cache mount fails when Docker first creates it root-owned.
-docker volume create \
-  --label "com.docker.compose.project=$project" \
-  --label "com.docker.compose.volume=release-trivy-cache" \
-  "$cache_volume" >/dev/null
-if run_tagged_scanner >/dev/null 2>&1; then
-  echo "unprepared tag-style cache unexpectedly accepted a real scan" >&2
-  exit 1
-fi
-docker volume rm "$cache_volume" >/dev/null
-
-# The workflow-owned first mount at /tmp safely prepares that same named volume.
+# The workflow-owned first mount at the canonical mode-1777 root prepares the volume.
 prepare_cache_volume
 test "$(docker volume inspect --format '{{ index .Labels "com.docker.compose.project" }}' "$cache_volume")" = "$project"
 test "$(docker volume inspect --format '{{ index .Labels "com.docker.compose.volume" }}' "$cache_volume")" = "release-trivy-cache"
@@ -135,18 +135,25 @@ fi
 run_tagged_scanner >/dev/null
 docker run --rm --user "$runner_uid:$runner_gid" --read-only --cap-drop ALL \
   --security-opt no-new-privileges --network none \
-  --mount "type=volume,src=${cache_volume},dst=/cache" \
+  --env "TRIVY_CACHE_DIR=$ANVA_TRIVY_CACHE_DIR" \
+  --mount "type=volume,src=${cache_volume},dst=${ANVA_TRIVY_CACHE_DIR}" \
   --entrypoint /bin/sh "$trivy_image" -eu -c '
-    test -s /cache/fanal/fanal.db
-    printf "%s\n" cache-reuse-boundary > /cache/fanal/anva-test
+    test -s "$TRIVY_CACHE_DIR/db/metadata.json"
+    cp "$TRIVY_CACHE_DIR/db/metadata.json" "$TRIVY_CACHE_DIR/copied-metadata.json"
+    test -s "$TRIVY_CACHE_DIR/copied-metadata.json"
+    test -s "$TRIVY_CACHE_DIR/fanal/fanal.db"
+    printf "%s\n" cache-reuse-boundary > "$TRIVY_CACHE_DIR/fanal/anva-test"
   '
 run_tagged_scanner >/dev/null
 docker run --rm --user "$runner_uid:$runner_gid" --read-only --cap-drop ALL \
   --security-opt no-new-privileges --network none \
-  --mount "type=volume,src=${cache_volume},dst=/cache" \
+  --env "TRIVY_CACHE_DIR=$ANVA_TRIVY_CACHE_DIR" \
+  --mount "type=volume,src=${cache_volume},dst=${ANVA_TRIVY_CACHE_DIR}" \
   --entrypoint /bin/sh "$trivy_image" -eu -c '
-    test "$(cat /cache/fanal/anva-test)" = cache-reuse-boundary
-    test -s /cache/fanal/fanal.db
+    test -s "$TRIVY_CACHE_DIR/db/metadata.json"
+    test -s "$TRIVY_CACHE_DIR/copied-metadata.json"
+    test "$(cat "$TRIVY_CACHE_DIR/fanal/anva-test")" = cache-reuse-boundary
+    test -s "$TRIVY_CACHE_DIR/fanal/fanal.db"
   '
 
 cleanup
