@@ -64,10 +64,28 @@ def test_closed_event_commands_round_trip(tmp_path: Path) -> None:
     ("status", "marker", "writers", "accepted"),
     [
         (44, "DRILL_OBJECT_RESTORE_FAULT\n", "", True),
+        (
+            44,
+            " Image ghcr.io/rishavt/anva@sha256:test Pulling \n"
+            " Image ghcr.io/rishavt/anva@sha256:test Pulled \n"
+            " Container drill-test-restore-objects-run-a1b2c3d4e5f6 Creating \n"
+            " Container drill-test-restore-objects-run-a1b2c3d4e5f6 Created \n"
+            "DRILL_OBJECT_RESTORE_FAULT\n",
+            "",
+            True,
+        ),
         (0, "DRILL_OBJECT_RESTORE_FAULT\n", "", False),
         (43, "DRILL_OBJECT_RESTORE_FAULT\n", "", False),
         (44, "daemon error\n", "", False),
         (44, "DRILL_OBJECT_RESTORE_FAULT\ndaemon error\n", "", False),
+        (
+            44,
+            "Container arbitrary-app-run-a1b2c3d4e5f6 Created\n"
+            "DRILL_OBJECT_RESTORE_FAULT\n",
+            "",
+            False,
+        ),
+        (44, "DRILL_OBJECT_RESTORE_FAULT\nDRILL_OBJECT_RESTORE_FAULT\n", "", False),
         (44, "DRILL_OBJECT_RESTORE_FAULT\n", "api", False),
     ],
 )
@@ -83,6 +101,8 @@ def test_restore_fault_requires_exact_44_marker_and_stopped_writers(
             str(status),
             str(log),
             writers,
+            "drill-test",
+            "ghcr.io/rishavt/anva@sha256:test",
         ],
         capture_output=True,
         text=True,
