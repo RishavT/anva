@@ -27,4 +27,3 @@ docs/**
 !docs/releases/
 !docs/releases/mvp-013.md
 !docs/security/
-!docs/security/vulnerability-exceptions.json

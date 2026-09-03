@@ -1,4 +1,4 @@
-"""Contracts for v0.1.1 release and installation guidance."""
+"""Contracts for v0.1.2 release and installation guidance."""
 
 from __future__ import annotations
 
@@ -9,33 +9,33 @@ ROOT = Path(__file__).parents[2]
 INSTALL = ROOT / "docs" / "runbooks" / "install-upgrade-uninstall.md"
 RELEASE = ROOT / "docs" / "releases" / "github-native-release.md"
 READINESS = ROOT / "docs" / "releases" / "current-release-readiness.md"
-NOTES = ROOT / "docs" / "releases" / "v0.1.1.md"
+NOTES = ROOT / "docs" / "releases" / "v0.1.2.md"
 WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 HISTORICAL_REPAIR = ROOT / ".github" / "workflows" / "release-metadata-repair.yml"
 
 
-def test_active_release_guidance_agrees_on_exact_v011_identity() -> None:
+def test_active_release_guidance_agrees_on_exact_v012_identity() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     for document in (INSTALL, RELEASE, READINESS, NOTES):
         text = document.read_text(encoding="utf-8")
-        assert "v0.1.1" in text
-    assert "ANVA_VERSION: 0.1.1" in workflow
-    assert "default: v0.1.1" in workflow
-    assert "group: release-v0.1.1" in workflow
-    assert "ANVA_SOURCE_VERSION=0.1.1" in INSTALL.read_text(encoding="utf-8")
-    assert "anva-install-0.1.1.tar.gz" in INSTALL.read_text(encoding="utf-8")
+        assert "v0.1.2" in text
+    assert "ANVA_VERSION: 0.1.2" in workflow
+    assert "default: v0.1.2" in workflow
+    assert "group: release-v0.1.2" in workflow
+    assert "ANVA_SOURCE_VERSION=0.1.2" in INSTALL.read_text(encoding="utf-8")
+    assert "anva-install-0.1.2.tar.gz" in INSTALL.read_text(encoding="utf-8")
 
 
-def test_runtime_build_and_compose_defaults_agree_on_v011() -> None:
+def test_runtime_build_and_compose_defaults_agree_on_v012() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert project["project"]["version"] == "0.1.1"
-    assert '__version__ = "0.1.1"' in (ROOT / "src/anva/__init__.py").read_text()
-    assert "ANVA_VERSION ?= 0.1.1" in (ROOT / "Makefile").read_text()
-    assert "ARG ANVA_VERSION=0.1.1" in (ROOT / "Dockerfile").read_text()
+    assert project["project"]["version"] == "0.1.2"
+    assert '__version__ = "0.1.2"' in (ROOT / "src/anva/__init__.py").read_text()
+    assert "ANVA_VERSION ?= 0.1.2" in (ROOT / "Makefile").read_text()
+    assert "ARG ANVA_VERSION=0.1.2" in (ROOT / "Dockerfile").read_text()
     for name in ("compose.yaml", "compose.acceptance.yaml", "compose.acceptance.case.yaml"):
         text = (ROOT / name).read_text(encoding="utf-8")
         assert "ANVA_VERSION:-0.1.0" not in text
-        assert "ANVA_VERSION:-0.1.1" in text
+        assert "ANVA_VERSION:-0.1.2" in text
 
 
 def test_release_docs_require_separate_exact_source_and_human_risk_approval() -> None:
@@ -43,7 +43,7 @@ def test_release_docs_require_separate_exact_source_and_human_risk_approval() ->
     readiness = " ".join(READINESS.read_text(encoding="utf-8").split())
     notes = " ".join(NOTES.read_text(encoding="utf-8").split())
     assert "requires the full lowercase candidate commit" in release
-    assert '-f tag=v0.1.1 -f source_commit="$ANVA_SOURCE_COMMIT"' in release
+    assert '-f tag=v0.1.2 -f source_commit="$ANVA_SOURCE_COMMIT"' in release
     assert "v0.1.0 approval cannot be replayed" in release
     assert "explicit RishavT decision" in readiness
     assert "v0.1.0 vulnerability exception is historical evidence" in notes
@@ -53,14 +53,14 @@ def test_release_docs_require_separate_exact_source_and_human_risk_approval() ->
 def test_install_guidance_verifies_download_attestation_digest_and_no_build() -> None:
     install = INSTALL.read_text(encoding="utf-8")
     for contract in (
-        "gh release download v0.1.1",
+        "gh release download v0.1.2",
         "sha256sum --check SHA256SUMS",
         'gh attestation verify "$artifact"',
         "ANVA_SOURCE_PREDICATE_TYPE=https://github.com/RishavT/anva/attestations/source/v1",
         'gh attestation verify "oci://${ANVA_RELEASE_IMAGE}"',
         'docker pull "${ANVA_RELEASE_IMAGE}"',
         "docker compose up --no-build --wait",
-        "export ANVA_VERSION=0.1.1",
+        "export ANVA_VERSION=0.1.2",
     ):
         assert contract in install
 
@@ -70,4 +70,4 @@ def test_v010_metadata_repair_remains_historically_pinned() -> None:
     assert "Repair v0.1.0 release metadata" in repair
     assert "ANVA_RELEASE_TAG: v0.1.0" in repair
     assert "group: release-v0.1.0" in repair
-    assert "v0.1.1" not in repair
+    assert "v0.1.2" not in repair

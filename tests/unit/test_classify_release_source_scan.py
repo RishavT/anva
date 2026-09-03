@@ -81,7 +81,7 @@ def _classify(
             "--source-commit",
             "d" * 40,
             "--tag",
-            "v0.1.1",
+            "v0.1.2",
         ],
         text=True,
         capture_output=True,
@@ -103,7 +103,7 @@ def test_engine_failure_is_distinct_and_never_passes(tmp_path: Path) -> None:
     assert diagnostic["github_run_id"] == "12345"
     assert diagnostic["github_run_attempt"] == 2
     assert diagnostic["source_commit"] == "d" * 40
-    assert diagnostic["tag"] == "v0.1.1"
+    assert diagnostic["tag"] == "v0.1.2"
 
 
 def test_high_or_critical_finding_fails_policy(tmp_path: Path) -> None:

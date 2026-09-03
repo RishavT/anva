@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import date
 from pathlib import Path
@@ -11,6 +12,7 @@ import pytest
 from anva.release import (
     build_release_manifest,
     build_trivy_ignorefile,
+    build_trivy_ignorefile_from_decision,
     build_vulnerability_risk_acceptance,
     remove_uv_build_gitignore,
     verify_release_manifest,
@@ -18,6 +20,45 @@ from anva.release import (
 )
 
 APPROVED_DIGEST = f"sha256:{'d' * 64}"
+
+
+def _write_protected_decision(path: Path, report: Path) -> Path:
+    finding: dict[str, object] = {
+        "VulnerabilityID": "CVE-2099-0001",
+        "PkgName": "example",
+        "InstalledVersion": "1.0",
+        "FixedVersion": "",
+        "Severity": "HIGH",
+        "Status": "affected",
+    }
+    _write_trivy_report(report, [finding])
+    decision = {
+        "schema_version": 1,
+        "kind": "anva.release-risk-decision",
+        "decision": "accepted_for_exact_candidate",
+        "approved_by": "RishavT",
+        "github_environment": "release",
+        "github_run_id": "123",
+        "workflow_repository": "RishavT/anva",
+        "workflow_ref": "RishavT/anva/.github/workflows/release.yml@refs/tags/v0.1.2",
+        "environment_approval_record_sha256": "a" * 64,
+        "proposal_sha256": "b" * 64,
+        "proposal_report_sha256": hashlib.sha256(report.read_bytes()).hexdigest(),
+        "proposal_database_metadata_sha256": "d" * 64,
+        "proposal_source_security_report_sha256": "e" * 64,
+        "proposal_source_scan_diagnostic_sha256": "f" * 64,
+        "proposal_scan_evidence_manifest_sha256": "1" * 64,
+        "verification_report_sha256": hashlib.sha256(report.read_bytes()).hexdigest(),
+        "runtime_controls_sha256": "2" * 64,
+        "version": "0.1.2",
+        "source_commit": "c" * 40,
+        "image_reference": f"ghcr.io/rishavt/anva@{APPROVED_DIGEST}",
+        "image_digest": APPROVED_DIGEST,
+        "high_critical_tuples": [finding],
+        "expires_on": "2026-09-25",
+    }
+    path.write_text(json.dumps(decision), encoding="utf-8")
+    return path
 
 
 @pytest.mark.unit
@@ -64,8 +105,8 @@ def test_uv_build_gitignore_cleanup_rejects_missing_or_unsafe_directory(
 
 def _write_release_artifacts(directory: Path) -> None:
     for name in (
-        "anva-0.1.1-py3-none-any.whl",
-        "anva-install-0.1.1.tar.gz",
+        "anva-0.1.2-py3-none-any.whl",
+        "anva-install-0.1.2.tar.gz",
         "anva-codex-skills-1.0.0.tar.gz",
         "anva-claude-skills-1.0.0.tar.gz",
         "anva-image.spdx.json",
@@ -84,11 +125,11 @@ def _write_trivy_report(path: Path, vulnerabilities: list[dict[str, object]]) ->
     )
 
 
-def _write_v011_approval_fixture(path: Path) -> Path:
+def _write_v012_approval_fixture(path: Path) -> Path:
     payload = json.loads(
         Path("docs/security/vulnerability-exceptions.json").read_text(encoding="utf-8")
     )
-    payload["release_version"] = "0.1.1"
+    payload["release_version"] = "0.1.2"
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
 
@@ -113,14 +154,14 @@ def test_uv_build_cleanup_to_verified_manifest_boundary_is_fail_closed(tmp_path:
     manifest = build_release_manifest(
         directory=release,
         source_commit=commit,
-        image_reference="anva:0.1.1",
+        image_reference="anva:0.1.2",
         image_id=image_id,
         source_date_epoch=1_756_684_800,
     )
     verified = verify_release_manifest(
         directory=release,
         source_commit=commit,
-        image_reference="anva:0.1.1",
+        image_reference="anva:0.1.2",
         image_id=image_id,
     )
     status = (
@@ -150,7 +191,7 @@ def test_release_manifest_covers_required_artifacts_and_is_reproducible(tmp_path
     first = build_release_manifest(
         directory=tmp_path,
         source_commit="a" * 40,
-        image_reference="anva:0.1.1",
+        image_reference="anva:0.1.2",
         image_id=f"sha256:{'b' * 64}",
         source_date_epoch=1_756_684_800,
     )
@@ -159,7 +200,7 @@ def test_release_manifest_covers_required_artifacts_and_is_reproducible(tmp_path
     second = build_release_manifest(
         directory=tmp_path,
         source_commit="a" * 40,
-        image_reference="anva:0.1.1",
+        image_reference="anva:0.1.2",
         image_id=f"sha256:{'b' * 64}",
         source_date_epoch=1_756_684_800,
     )
@@ -195,14 +236,14 @@ def test_release_verifier_rejects_stale_candidate_and_tampering(tmp_path: Path) 
     build_release_manifest(
         directory=tmp_path,
         source_commit=commit,
-        image_reference="anva:0.1.1",
+        image_reference="anva:0.1.2",
         image_id=image_id,
         source_date_epoch=1_756_684_800,
     )
     verified = verify_release_manifest(
         directory=tmp_path,
         source_commit=commit,
-        image_reference="anva:0.1.1",
+        image_reference="anva:0.1.2",
         image_id=image_id,
     )
     assert verified["source_commit"] == commit
@@ -211,15 +252,15 @@ def test_release_verifier_rejects_stale_candidate_and_tampering(tmp_path: Path) 
         verify_release_manifest(
             directory=tmp_path,
             source_commit="c" * 40,
-            image_reference="anva:0.1.1",
+            image_reference="anva:0.1.2",
             image_id=image_id,
         )
-    (tmp_path / "anva-0.1.1-py3-none-any.whl").write_bytes(b"tampered")
+    (tmp_path / "anva-0.1.2-py3-none-any.whl").write_bytes(b"tampered")
     with pytest.raises(ValueError, match="has changed|checksum mismatch"):
         verify_release_manifest(
             directory=tmp_path,
             source_commit=commit,
-            image_reference="anva:0.1.1",
+            image_reference="anva:0.1.2",
             image_id=image_id,
         )
 
@@ -232,7 +273,7 @@ def test_release_verifier_rejects_duplicate_manifest_keys(tmp_path: Path) -> Non
     build_release_manifest(
         directory=tmp_path,
         source_commit=commit,
-        image_reference="anva:0.1.1",
+        image_reference="anva:0.1.2",
         image_id=image_id,
         source_date_epoch=1_756_684_800,
     )
@@ -246,7 +287,7 @@ def test_release_verifier_rejects_duplicate_manifest_keys(tmp_path: Path) -> Non
         verify_release_manifest(
             directory=tmp_path,
             source_commit=commit,
-            image_reference="anva:0.1.1",
+            image_reference="anva:0.1.2",
             image_id=image_id,
         )
 
@@ -261,7 +302,7 @@ def test_release_verifier_rejects_traversal_symlink_and_unrecorded_artifact(
     build_release_manifest(
         directory=tmp_path,
         source_commit=commit,
-        image_reference="anva:0.1.1",
+        image_reference="anva:0.1.2",
         image_id=image_id,
         source_date_epoch=1_756_684_800,
     )
@@ -273,14 +314,14 @@ def test_release_verifier_rejects_traversal_symlink_and_unrecorded_artifact(
         verify_release_manifest(
             directory=tmp_path,
             source_commit=commit,
-            image_reference="anva:0.1.1",
+            image_reference="anva:0.1.2",
             image_id=image_id,
         )
 
     build_release_manifest(
         directory=tmp_path,
         source_commit=commit,
-        image_reference="anva:0.1.1",
+        image_reference="anva:0.1.2",
         image_id=image_id,
         source_date_epoch=1_756_684_800,
     )
@@ -289,18 +330,18 @@ def test_release_verifier_rejects_traversal_symlink_and_unrecorded_artifact(
         verify_release_manifest(
             directory=tmp_path,
             source_commit=commit,
-            image_reference="anva:0.1.1",
+            image_reference="anva:0.1.2",
             image_id=image_id,
         )
     (tmp_path / "unexpected.txt").unlink()
-    artifact = tmp_path / "anva-0.1.1-py3-none-any.whl"
+    artifact = tmp_path / "anva-0.1.2-py3-none-any.whl"
     artifact.unlink()
     artifact.symlink_to(tmp_path / "anva-image.spdx.json")
     with pytest.raises(ValueError, match="unsafe"):
         verify_release_manifest(
             directory=tmp_path,
             source_commit=commit,
-            image_reference="anva:0.1.1",
+            image_reference="anva:0.1.2",
             image_id=image_id,
         )
 
@@ -315,7 +356,7 @@ def test_release_manifest_rejects_every_extra_dotfile(tmp_path: Path, name: str)
         build_release_manifest(
             directory=tmp_path,
             source_commit="a" * 40,
-            image_reference="anva:0.1.1",
+            image_reference="anva:0.1.2",
             image_id=f"sha256:{'b' * 64}",
             source_date_epoch=1_756_684_800,
         )
@@ -334,14 +375,14 @@ def test_release_worktree_allows_only_verified_ignored_bundle(
     manifest = build_release_manifest(
         directory=release,
         source_commit=commit,
-        image_reference="anva:0.1.1",
+        image_reference="anva:0.1.2",
         image_id=image_id,
         source_date_epoch=1_756_684_800,
     )
     verified = verify_release_manifest(
         directory=release,
         source_commit=commit,
-        image_reference="anva:0.1.1",
+        image_reference="anva:0.1.2",
         image_id=image_id,
     )
     assert verified == manifest
@@ -378,7 +419,7 @@ def test_release_worktree_rejects_unrelated_ignored_dirt(
     manifest = build_release_manifest(
         directory=release,
         source_commit="a" * 40,
-        image_reference="anva:0.1.1",
+        image_reference="anva:0.1.2",
         image_id=f"sha256:{'b' * 64}",
         source_date_epoch=1_756_684_800,
     )
@@ -392,13 +433,13 @@ def test_release_worktree_rejects_unrelated_ignored_dirt(
 
 @pytest.mark.unit
 def test_release_manifest_rejects_missing_scan_artifact(tmp_path: Path) -> None:
-    (tmp_path / "anva-0.1.1-py3-none-any.whl").write_bytes(b"wheel")
+    (tmp_path / "anva-0.1.2-py3-none-any.whl").write_bytes(b"wheel")
 
     with pytest.raises(ValueError, match="missing required artifact"):
         build_release_manifest(
             directory=tmp_path,
             source_commit="a" * 40,
-            image_reference="anva:0.1.1",
+            image_reference="anva:0.1.2",
             image_id=f"sha256:{'b' * 64}",
             source_date_epoch=1_756_684_800,
         )
@@ -415,7 +456,7 @@ def test_vulnerability_exceptions_are_bounded_expiring_and_reproducible(
         json.dumps(
             {
                 "schema_version": 2,
-                "release_version": "0.1.1",
+                "release_version": "0.1.2",
                 "approved_by": {
                     "name": "Rishav Thakker",
                     "organization": "AI Soft Work",
@@ -477,7 +518,7 @@ def test_vulnerability_exceptions_fail_closed_after_expiry(tmp_path: Path) -> No
         json.dumps(
             {
                 "schema_version": 2,
-                "release_version": "0.1.1",
+                "release_version": "0.1.2",
                 "approved_by": {
                     "name": "Rishav Thakker",
                     "organization": "AI Soft Work",
@@ -537,7 +578,7 @@ def test_vulnerability_exceptions_reject_invalid_approval_metadata(
     payload = json.loads(
         Path("docs/security/vulnerability-exceptions.json").read_text(encoding="utf-8")
     )
-    payload["release_version"] = "0.1.1"
+    payload["release_version"] = "0.1.2"
     payload.update(mutation)
     source = tmp_path / "exceptions.json"
     source.write_text(json.dumps(payload), encoding="utf-8")
@@ -554,7 +595,7 @@ def test_vulnerability_exceptions_reject_invalid_approval_metadata(
 
 
 @pytest.mark.unit
-def test_checked_in_v010_approval_is_rejected_for_v011(tmp_path: Path) -> None:
+def test_checked_in_v010_approval_is_rejected_for_v012(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="release version"):
         build_trivy_ignorefile(
             input_path=Path("docs/security/vulnerability-exceptions.json"),
@@ -563,6 +604,87 @@ def test_checked_in_v010_approval_is_rejected_for_v011(tmp_path: Path) -> None:
             ),
             output_path=tmp_path / ".trivyignore",
             current_date=date(2026, 8, 26),
+        )
+
+
+@pytest.mark.unit
+def test_no_checked_in_v012_risk_approval_exists() -> None:
+    assert not Path("docs/security/vulnerability-exceptions-v0.1.2.json").exists()
+    assert not Path("release/vulnerability-risk-acceptance.json").exists()
+
+
+@pytest.mark.unit
+def test_protected_decision_gate_binds_exact_candidate_and_report(tmp_path: Path) -> None:
+    report = tmp_path / "report.json"
+    decision = _write_protected_decision(tmp_path / "decision.json", report)
+    output = tmp_path / ".trivyignore"
+    assert build_trivy_ignorefile_from_decision(
+        decision_path=decision,
+        vulnerability_report_path=report,
+        output_path=output,
+        source_commit="c" * 40,
+        image_reference=f"ghcr.io/rishavt/anva@{APPROVED_DIGEST}",
+        image_digest=APPROVED_DIGEST,
+        github_run_id="123",
+        proposal_sha256="b" * 64,
+        approval_record_sha256="a" * 64,
+        workflow_repository="RishavT/anva",
+        workflow_ref="RishavT/anva/.github/workflows/release.yml@refs/tags/v0.1.2",
+        current_date=date(2026, 9, 3),
+    ) == ("CVE-2099-0001",)
+    assert output.read_text(encoding="utf-8") == "CVE-2099-0001\n"
+
+    with pytest.raises(ValueError, match="identity"):
+        build_trivy_ignorefile_from_decision(
+            decision_path=decision,
+            vulnerability_report_path=report,
+            output_path=output,
+            source_commit="e" * 40,
+            image_reference=f"ghcr.io/rishavt/anva@{APPROVED_DIGEST}",
+            image_digest=APPROVED_DIGEST,
+            github_run_id="123",
+            proposal_sha256="b" * 64,
+            approval_record_sha256="a" * 64,
+            workflow_repository="RishavT/anva",
+            workflow_ref="RishavT/anva/.github/workflows/release.yml@refs/tags/v0.1.2",
+            current_date=date(2026, 9, 3),
+        )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("override", "value"),
+    [
+        ("github_run_id", "124"),
+        ("proposal_sha256", "3" * 64),
+        ("approval_record_sha256", "4" * 64),
+        ("workflow_ref", "RishavT/anva/.github/workflows/release.yml@refs/tags/stale"),
+        ("image_reference", f"ghcr.io/rishavt/anva@sha256:{'5' * 64}"),
+    ],
+)
+def test_protected_decision_rejects_stale_expected_identity(
+    tmp_path: Path, override: str, value: str
+) -> None:
+    report = tmp_path / "report.json"
+    decision = _write_protected_decision(tmp_path / "decision.json", report)
+    expected = {
+        "source_commit": "c" * 40,
+        "image_reference": f"ghcr.io/rishavt/anva@{APPROVED_DIGEST}",
+        "image_digest": APPROVED_DIGEST,
+        "github_run_id": "123",
+        "proposal_sha256": "b" * 64,
+        "approval_record_sha256": "a" * 64,
+        "workflow_repository": "RishavT/anva",
+        "workflow_ref": "RishavT/anva/.github/workflows/release.yml@refs/tags/v0.1.2",
+    }
+    expected[override] = value
+    with pytest.raises(ValueError, match="identity"):
+        build_trivy_ignorefile_from_decision(
+            decision_path=decision,
+            vulnerability_report_path=report,
+            output_path=tmp_path / ".trivyignore",
+            current_date=date(2026, 9, 3),
+            **expected,
         )
 
 
@@ -625,7 +747,7 @@ def test_risk_acceptance_binds_exact_candidate_and_preserves_tuple_evidence(
 ) -> None:
     report = Path("tests/fixtures/release/vulnerability-exceptions-sanitized-trivy.json")
     output = tmp_path / "vulnerability-risk-acceptance.json"
-    approval = _write_v011_approval_fixture(tmp_path / "approval.json")
+    approval = _write_v012_approval_fixture(tmp_path / "approval.json")
     artifact = build_vulnerability_risk_acceptance(
         input_path=approval,
         vulnerability_report_path=report,
@@ -633,7 +755,7 @@ def test_risk_acceptance_binds_exact_candidate_and_preserves_tuple_evidence(
         source_commit="a" * 40,
         image_reference=f"ghcr.io/rishavt/anva@{APPROVED_DIGEST}",
         image_digest=APPROVED_DIGEST,
-        release_version="0.1.1",
+        release_version="0.1.2",
         current_date=date(2026, 8, 26),
     )
 
@@ -662,8 +784,8 @@ def test_risk_acceptance_binds_exact_candidate_and_preserves_tuple_evidence(
 @pytest.mark.parametrize(
     ("reference", "digest", "version", "message"),
     [
-        (f"ghcr.io/rishavt/anva@sha256:{'e' * 64}", APPROVED_DIGEST, "0.1.1", "reference"),
-        (f"ghcr.io/rishavt/anva@{APPROVED_DIGEST}", "sha256:short", "0.1.1", "digest"),
+        (f"ghcr.io/rishavt/anva@sha256:{'e' * 64}", APPROVED_DIGEST, "0.1.2", "reference"),
+        (f"ghcr.io/rishavt/anva@{APPROVED_DIGEST}", "sha256:short", "0.1.2", "digest"),
         (f"ghcr.io/rishavt/anva@{APPROVED_DIGEST}", APPROVED_DIGEST, "0.2.0", "version"),
     ],
 )
@@ -672,7 +794,7 @@ def test_risk_acceptance_rejects_candidate_identity_replay(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         build_vulnerability_risk_acceptance(
-            input_path=Path("docs/security/vulnerability-exceptions.json"),
+            input_path=_write_v012_approval_fixture(tmp_path / "approval.json"),
             vulnerability_report_path=Path(
                 "tests/fixtures/release/vulnerability-exceptions-sanitized-trivy.json"
             ),
@@ -738,7 +860,7 @@ def test_vulnerability_exceptions_match_current_unfixed_image_tuple(
         json.dumps(
             {
                 "schema_version": 2,
-                "release_version": "0.1.1",
+                "release_version": "0.1.2",
                 "approved_by": {
                     "name": "Rishav Thakker",
                     "organization": "AI Soft Work",

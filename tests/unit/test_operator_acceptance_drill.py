@@ -124,15 +124,15 @@ def test_header_is_closed_and_v010_remains_not_accepted(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
-def test_release_boundary_accepts_only_exact_v011_same_source_product_cli() -> None:
+def test_release_boundary_accepts_only_exact_v012_same_source_product_cli() -> None:
     eligible = record_release_boundary(
-        product_version="0.1.1",
+        product_version="0.1.2",
         product_source_commit=COMMIT,
         operator_source_commit=COMMIT,
         operator_cli_in_product=True,
     )
     assert eligible["status"] == "ELIGIBLE_FOR_HUMAN_ACCEPTANCE"
-    for version in ("0.1.0", "0.1.2", "1.0.0"):
+    for version in ("0.1.0", "0.1.1", "1.0.0"):
         rejected = record_release_boundary(
             product_version=version,
             product_source_commit=COMMIT,
@@ -274,7 +274,7 @@ def _eligible_ledger_and_anchor(tmp_path: Path) -> tuple[Path, Path]:
         "operator_cli_in_product": True,
         "operator_source_commit": COMMIT,
         "product_source_commit": COMMIT,
-        "product_version": "0.1.1",
+        "product_version": "0.1.2",
         "status": "ELIGIBLE_FOR_HUMAN_ACCEPTANCE",
     }
     path = tmp_path / "ledger.jsonl"

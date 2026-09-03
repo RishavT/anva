@@ -1,20 +1,21 @@
-# Current v0.1.1 release readiness
+# Current v0.1.2 release readiness
 
-Anva `v0.1.1` is in release preparation. No tag, candidate image, risk
+Anva `v0.1.2` is in release preparation. No tag, candidate image, risk
 approval, protected-environment approval, or GitHub Release is claimed here.
 
-The preparation baseline is `3bea51afbfb0e3128cd600b107ff661cc85fa438`.
-It contains the supported decommission retry from #73/PR #76 and the synthetic
-operator drill harness from #80/PR #81. The final candidate identity is the
-full reviewed `main` commit supplied to the release dispatch and must equal the
-commit resolved from the existing `v0.1.1` tag.
+The preparation baseline is `0302bda3e3bfb57383c2d554ba87a71aef4824d5`.
+It contains the supported decommission retry, the synthetic operator drill
+harness, hardened release evidence, and the deterministic container build
+machinery from #91. The final candidate identity will be the full reviewed
+`main` commit supplied to the release dispatch and must equal the commit
+resolved from a newly created immutable `v0.1.2` tag.
 
 ## Blocking gates
 
 | Gate | Current disposition |
 | --- | --- |
 | Candidate identity | Pending reviewed merge and exact tag-to-commit binding. |
-| Candidate build and scan | The first exact-source run `33674993082` failed opaquely in Trivy source scanning and published nothing. A retry is blocked until #85 is reviewed and merged. The hardened candidate records engine status and canonical command identity for image vulnerability, SPDX, CycloneDX, and source stages; validates every JSON schema; distinguishes engine/schema/source-policy failures; retains safe diagnostics on failure; and binds successful evidence plus a fresh run-owned Trivy database into one manifest. |
+| Candidate build and scan | Pending a fresh deterministic double-build and scan from the reviewed v0.1.2 source. The v0.1.1 runs `33691370693` and `33698109859` exposed differing digests from the same source and were cancelled with zero approvals and no publication. #91 corrected the build machinery after the immutable v0.1.1 tag, so it is included only through this fix-forward candidate. |
 | Residual risk | Pending an attested proposal followed by an explicit RishavT decision through personal protected-environment approval for the exact source, digest, report, tuple set, runtime controls, and expiry. GitHub's exact-run approval record and proposal SHA must bind the generated decision. The v0.1.0 decision is invalid here. |
 | Publication | Pending separate tag creation and protected `release` environment approval. |
 | Human acceptance #44 | Still separate. Harness success cannot approve or finalize it. |
@@ -30,4 +31,11 @@ The published v0.1.0 tag remains bound to
 `d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac` and image digest
 `sha256:29af794b9fda21e75461866437dd4853db54b54072252d0df9aa2eed77807c2d`.
 Its metadata-repair workflow and risk decision are immutable historical
-evidence and are not retargeted to v0.1.1.
+evidence and are not retargeted to v0.1.2.
+
+## Historical v0.1.1 identity
+
+The immutable v0.1.1 tag remains bound to
+`d813c9b75923285761cfc3ec1105e63ca98aea0e`. It is an aborted, unpublished
+record: no GHCR image or GitHub Release exists for v0.1.1, and its cancelled
+proposals cannot authorize or supply v0.1.2.

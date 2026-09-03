@@ -270,7 +270,7 @@ def test_release_cache_contract_has_one_root_from_compose_through_evidence() -> 
     assert "/cache/trivy-cache" not in text + compose_text
     assert text.count('git show "${GITHUB_SHA}:compose.release.cache.yaml"') == 2
     assert '-f "$cache_override"' in text
-    assert '-f "$RUNNER_TEMP/release-cache.override.yaml"' in text
+    assert "-f $RUNNER_TEMP/release-cache.override.yaml" in text
 
 
 def test_source_scan_failure_cannot_reach_protected_or_proposal_jobs() -> None:
@@ -349,11 +349,11 @@ def test_dispatch_uses_main_workflow_but_binds_products_to_the_tag_commit() -> N
     environment = cast(dict[str, str], workflow["env"])
     outputs = cast(dict[str, str], build["outputs"])
 
-    assert environment["ANVA_VERSION"] == "0.1.1"
+    assert environment["ANVA_VERSION"] == "0.1.2"
     triggers = cast(dict[str, object], workflow.get("on", workflow.get(True)))
     dispatch = cast(dict[str, object], triggers["workflow_dispatch"])
     inputs = cast(dict[str, dict[str, object]], dispatch["inputs"])
-    assert inputs["tag"]["default"] == "v0.1.1"
+    assert inputs["tag"]["default"] == "v0.1.2"
     assert inputs["source_commit"]["required"] is True
     assert outputs["source_commit"] == "${{ steps.source.outputs.commit }}"
     assert "git ls-remote --exit-code origin" in text
@@ -678,21 +678,21 @@ set -eu
 if [ "$1" = ls-remote ]; then
   case "$TAG_RESPONSE" in
     nonzero_partial)
-      printf '%s\\trefs/tags/v0.1.1\\n' "$SOURCE_COMMIT"
+      printf '%s\\trefs/tags/v0.1.2\\n' "$SOURCE_COMMIT"
       exit 2
       ;;
     missing) exit 2 ;;
-    malformed) printf '%s\\trefs/tags/v0.1.1\\n' not-a-commit ;;
+    malformed) printf '%s\\trefs/tags/v0.1.2\\n' not-a-commit ;;
     duplicate_direct)
-      printf '%s\\trefs/tags/v0.1.1\\n' "$SOURCE_COMMIT"
-      printf '%s\\trefs/tags/v0.1.1\\n' "$SOURCE_COMMIT"
+      printf '%s\\trefs/tags/v0.1.2\\n' "$SOURCE_COMMIT"
+      printf '%s\\trefs/tags/v0.1.2\\n' "$SOURCE_COMMIT"
       ;;
     duplicate_peeled)
-      printf '%s\\trefs/tags/v0.1.1\\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-      printf '%s\\trefs/tags/v0.1.1^{}\\n' "$SOURCE_COMMIT"
-      printf '%s\\trefs/tags/v0.1.1^{}\\n' "$SOURCE_COMMIT"
+      printf '%s\\trefs/tags/v0.1.2\\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      printf '%s\\trefs/tags/v0.1.2^{}\\n' "$SOURCE_COMMIT"
+      printf '%s\\trefs/tags/v0.1.2^{}\\n' "$SOURCE_COMMIT"
       ;;
-    valid) printf '%s\\trefs/tags/v0.1.1\\n' "$SOURCE_COMMIT" ;;
+    valid) printf '%s\\trefs/tags/v0.1.2\\n' "$SOURCE_COMMIT" ;;
   esac
 elif [ "$1" = rev-parse ]; then
   printf '%s\\n' "$SOURCE_COMMIT"
@@ -716,7 +716,7 @@ if [ "$1" = release ] && { [ "$2" = create ] || [ "$2" = upload ]; }; then
   exit 0
 fi
 if [ "$1" = api ]; then
-  printf '%s\\n' v0.1.1
+  printf '%s\\n' v0.1.2
   exit 0
 fi
 exit 64
@@ -729,8 +729,8 @@ exit 64
         **os.environ,
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "SOURCE_COMMIT": source_commit,
-        "RELEASE_TAG": "v0.1.1",
-        "ANVA_VERSION": "0.1.1",
+        "RELEASE_TAG": "v0.1.2",
+        "ANVA_VERSION": "0.1.2",
         "GITHUB_REPOSITORY": "RishavT/anva",
         "SIDE_EFFECT_LOG": str(side_effect_log),
     }

@@ -6,7 +6,7 @@ on:
       tag:
         description: Existing exact release tag to publish
         required: true
-        default: v0.1.1
+        default: v0.1.2
         type: string
       source_commit:
         description: Full immutable commit expected at the existing release tag
@@ -21,11 +21,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-v0.1.1
+  group: release-v0.1.2
   cancel-in-progress: false
 
 env:
-  ANVA_VERSION: 0.1.1
+  ANVA_VERSION: 0.1.2
   BUILDKIT_PROGRESS: plain
   ANVA_IMAGE_REPOSITORY: ghcr.io/rishavt/anva
   ANVA_SOURCE_PREDICATE_TYPE: https://github.com/RishavT/anva/attestations/source/v1
@@ -668,7 +668,7 @@ jobs:
           set -euo pipefail
           PROPOSAL="$RUNNER_TEMP/risk-proposal/release-risk-proposal.json" \
           REPORT=release/anva-image-vulnerabilities.json \
-          DECISION=release/vulnerability-risk-acceptance.json \
+          DECISION="$RUNNER_TEMP/vulnerability-risk-acceptance.json" \
           python3 - <<'PY'
           import hashlib, json, os
           from datetime import UTC, date, datetime
@@ -719,6 +719,8 @@ jobs:
               "approved_by": "RishavT",
               "github_run_id": os.environ["GITHUB_RUN_ID"],
               "github_environment": "release",
+              "workflow_repository": os.environ["GITHUB_REPOSITORY"],
+              "workflow_ref": os.environ["GITHUB_WORKFLOW_REF"],
               "environment_approval_record_sha256": os.environ["APPROVAL_RECORD_SHA256"],
               "proposal_sha256": proposal_sha,
               "proposal_report_sha256": proposal["report_sha256"],
@@ -730,19 +732,23 @@ jobs:
               "proposal_scan_evidence_manifest_sha256": proposal[
                   "scan_evidence_manifest_sha256"],
               "verification_report_sha256": hashlib.sha256(report_path.read_bytes()).hexdigest(),
+              "image_reference": os.environ["IMAGE_REFERENCE"],
               **expected,
               "expires_on": proposal["decision_expires_on"],
           }
           Path(os.environ["DECISION"]).write_text(
               json.dumps(decision, sort_keys=True, separators=(",", ":")) + "\n")
-          identifiers = sorted({item["VulnerabilityID"] for item in tuples})
-          Path("release/.trivyignore").write_text("".join(f"{item}\n" for item in identifiers))
           PY
-          docker compose -f compose.yaml -f compose.release.yaml -p "$COMPOSE_PROJECT" \
-            -f "$RUNNER_TEMP/release-cache.override.yaml" \
-            --profile release run --rm release-scanner \
-            image --scanners vuln --severity HIGH,CRITICAL \
-            --ignorefile /release/.trivyignore --exit-code 1 "${ANVA_IMAGE_REPOSITORY}:${ANVA_VERSION}"
+          ANVA_RELEASE_IMAGE_REFERENCE="$IMAGE_REFERENCE" \
+          ANVA_RELEASE_IMAGE_ID="$IMAGE_DIGEST" \
+          ANVA_GITHUB_RUN_ID="$GITHUB_RUN_ID" \
+          ANVA_PROPOSAL_SHA256="$APPROVED_PROPOSAL_SHA256" \
+          ANVA_APPROVAL_RECORD_SHA256="$APPROVAL_RECORD_SHA256" \
+          ANVA_WORKFLOW_REPOSITORY="$GITHUB_REPOSITORY" \
+          ANVA_WORKFLOW_REF="$GITHUB_WORKFLOW_REF" \
+          ANVA_RELEASE_RISK_DECISION_INPUT="$RUNNER_TEMP/vulnerability-risk-acceptance.json" \
+          RELEASE_COMPOSE="docker compose -f compose.yaml -f compose.release.yaml -p $COMPOSE_PROJECT -f $RUNNER_TEMP/release-cache.override.yaml" \
+            make release-scan-gate
           rm -f release/.trivyignore
           ANVA_RELEASE_IMAGE_REFERENCE="$IMAGE_REFERENCE" \
             ANVA_RELEASE_IMAGE_ID="$IMAGE_DIGEST" make release-manifest
@@ -767,6 +773,7 @@ jobs:
             .approved_by == "RishavT" and
             .github_run_id == env.GITHUB_RUN_ID and
             .github_environment == "release" and
+            .image_reference == (env.ANVA_IMAGE_REPOSITORY + "@" + env.IMAGE_DIGEST) and
             .proposal_sha256 == $proposal
           ' release/vulnerability-risk-acceptance.json >/dev/null
 
@@ -1042,6 +1049,9 @@ jobs:
               "version": os.environ["ANVA_VERSION"],
               "source_commit": os.environ["SOURCE_COMMIT"],
               "image_digest": os.environ["IMAGE_DIGEST"],
+              "image_reference": f"{os.environ['ANVA_IMAGE_REPOSITORY']}@{os.environ['IMAGE_DIGEST']}",
+              "workflow_repository": os.environ["GITHUB_REPOSITORY"],
+              "workflow_ref": os.environ["GITHUB_WORKFLOW_REF"],
               "runtime_controls_sha256": controls,
               "high_critical_tuples": proposal["high_critical_tuples"],
           }
