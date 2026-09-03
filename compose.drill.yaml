@@ -223,10 +223,26 @@ services:
     image: ${ANVA_DRILL_IMAGE:?set the exact candidate ghcr.io/rishavt/anva@sha256 digest}
     pull_policy: always
     command: ["python", "-m", "anva.entrypoints.cli", "maintenance", "retry-decommission-cleanup"]
+    user: ${ANVA_DRILL_TOOL_USER:-65532:65532}
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: ["/tmp"]
     environment:
-      ANVA_DATABASE_URL: ${ANVA_DATABASE_URL:-postgresql://anva:anva@postgres:5432/anva}
+      ANVA_BOOTSTRAP_SECRET: ${ANVA_DRILL_BOOTSTRAP_SECRET:?set a unique drill bootstrap secret}
+      ANVA_DATABASE_URL: ${ANVA_DATABASE_URL:-postgresql://anva:anva-local-only@postgres:5432/anva}
+      ANVA_DEBUG: "false"
       ANVA_DECOMMISSION_OPERATOR_CREDENTIAL_FILE: /run/secrets/decommission_operator_credential
       ANVA_DECOMMISSION_OPERATOR_CREDENTIAL_SHA256: ${ANVA_DECOMMISSION_OPERATOR_CREDENTIAL_SHA256:-}
+      ANVA_ENV: production
+      ANVA_METRICS_TOKEN: ${ANVA_DRILL_METRICS_TOKEN:?set a unique drill metrics token}
+      ANVA_OBJECT_STORAGE_ACCESS_KEY: ${ANVA_OBJECT_STORAGE_ACCESS_KEY:-anva-local}
+      ANVA_OBJECT_STORAGE_BUCKET: ${ANVA_OBJECT_STORAGE_BUCKET:-anva}
+      ANVA_OBJECT_STORAGE_ENDPOINT: ${ANVA_OBJECT_STORAGE_ENDPOINT:-http://minio:9000}
+      ANVA_OBJECT_STORAGE_REGION: ${ANVA_OBJECT_STORAGE_REGION:-us-east-1}
+      ANVA_OBJECT_STORAGE_SECRET_KEY: ${ANVA_DRILL_OBJECT_STORAGE_SECRET:?set a unique drill object storage secret}
+      ANVA_SECRET_KEY: ${ANVA_DRILL_SECRET_KEY:?set a unique drill application secret}
+      ANVA_TOKEN_PEPPER: ${ANVA_DRILL_TOKEN_PEPPER:?set a unique drill token pepper}
     profiles: ["drill-tools"]
     networks: [backend]
     secrets: [decommission_operator_credential]
