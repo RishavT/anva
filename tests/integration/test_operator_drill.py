@@ -28,7 +28,7 @@ def test_closed_event_commands_round_trip(tmp_path: Path) -> None:
                 "--source-revision",
                 "d" * 40,
                 "--product-version",
-                "0.1.2",
+                "0.1.3",
                 "--product-source-commit",
                 "d" * 40,
                 "--operator-cli-in-product",

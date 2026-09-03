@@ -47,7 +47,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --wheel --out-dir /dist
 
 FROM base AS runtime
-ARG ANVA_VERSION=0.1.2
+ARG ANVA_VERSION=0.1.3
 ARG ANVA_REVISION=unknown
 ARG ANVA_BUILD_INPUT_SHA256=0000000000000000000000000000000000000000000000000000000000000000
 ARG ANVA_SOURCE=https://github.com/rishavt/anva

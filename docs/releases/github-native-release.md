@@ -1,6 +1,6 @@
-# GitHub-native v0.1.2 release
+# GitHub-native v0.1.3 release
 
-The release workflow publishes only an existing exact `v0.1.2` tag. It is a
+The release workflow publishes only an existing exact `v0.1.3` tag. It is a
 manual `workflow_dispatch` loaded from reviewed `main`, requires the full
 lowercase candidate commit. Its first job is non-publishing and creates an
 attested exact-candidate risk proposal. Every job capable of publishing remains
@@ -14,7 +14,7 @@ write`; verify uses those permissions read-only.
 ## Immutable identity and approval order
 
 1. Merge the reviewed preparation to protected `main` and record its full commit.
-2. Separately create the protected `v0.1.2` tag at that exact commit. Never move,
+2. Separately create the protected `v0.1.3` tag at that exact commit. Never move,
    delete, or recreate it.
 3. RishavT personally dispatches the reviewed workflow from `main`, supplying
    both identities and an expiry no more than 30 days away:
@@ -22,7 +22,7 @@ write`; verify uses those permissions read-only.
 ```sh
 ANVA_SOURCE_COMMIT=<reviewed-full-40-character-commit>
 gh workflow run release.yml --repo rishavt/anva --ref main \
-  -f tag=v0.1.2 -f source_commit="$ANVA_SOURCE_COMMIT" \
+  -f tag=v0.1.3 -f source_commit="$ANVA_SOURCE_COMMIT" \
   -f risk_expires_on=YYYY-MM-DD
 ```
 
@@ -109,13 +109,13 @@ and representative CLI/API behavior, and seed the demo twice.
 ## Consumer verification
 
 ```sh
-gh release download v0.1.2 --repo rishavt/anva --dir anva-v0.1.2
-(cd anva-v0.1.2 && sha256sum --check SHA256SUMS)
-ANVA_SOURCE_COMMIT="$(jq -er '.source_commit' anva-v0.1.2/release-manifest.json)"
-ANVA_SOURCE_TAG=v0.1.2
-ANVA_SOURCE_VERSION=0.1.2
+gh release download v0.1.3 --repo rishavt/anva --dir anva-v0.1.3
+(cd anva-v0.1.3 && sha256sum --check SHA256SUMS)
+ANVA_SOURCE_COMMIT="$(jq -er '.source_commit' anva-v0.1.3/release-manifest.json)"
+ANVA_SOURCE_TAG=v0.1.3
+ANVA_SOURCE_VERSION=0.1.3
 ANVA_SOURCE_PREDICATE_TYPE=https://github.com/RishavT/anva/attestations/source/v1
-for artifact in anva-v0.1.2/*; do
+for artifact in anva-v0.1.3/*; do
   gh attestation verify "$artifact" --repo rishavt/anva
 done
 ```
@@ -138,4 +138,4 @@ Compose project, local registry, scanner cache, and test volumes; global Docker
 pruning is forbidden.
 
 The one-time `.github/workflows/release-metadata-repair.yml` remains exclusively
-for the published v0.1.0 history and must not be used for v0.1.2.
+for the published v0.1.0 history and must not be used for v0.1.3.
