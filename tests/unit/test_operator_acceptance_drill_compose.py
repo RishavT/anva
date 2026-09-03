@@ -14,6 +14,22 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 APP_IMAGE = "${ANVA_DRILL_IMAGE:?set the exact candidate ghcr.io/rishavt/anva@sha256 digest}"
+APP_SERVICES = (
+    "api",
+    "worker",
+    "migrate",
+    "github-worker",
+    "mcp",
+    "mcp-read-only",
+    "cli",
+    "decommission-cleanup-operator",
+    "demo",
+    "operations-guard",
+    "backup-manifest",
+    "drill-decommission-operator",
+    "drill-tool",
+    "drill-finalizer",
+)
 
 
 class _ComposeLoader(yaml.SafeLoader):
@@ -37,16 +53,10 @@ def test_drill_overlay_pins_public_runtime_tls_and_scrape_images() -> None:
     compose = _drill_compose()
     services = compose["services"]
 
-    for name in (
-        "api",
-        "worker",
-        "migrate",
-        "drill-decommission-operator",
-        "drill-tool",
-        "drill-finalizer",
-    ):
+    for name in APP_SERVICES:
         assert services[name]["image"] == APP_IMAGE
         assert services[name]["build"] is None
+        assert services[name]["pull_policy"] == "always"
     assert "ports" not in services["api"]
     assert services["drill-tls"]["image"].startswith("nginx@sha256:")
     assert services["drill-scrape"]["image"].startswith("curlimages/curl@sha256:")
@@ -108,6 +118,14 @@ def test_resolved_drill_compose_has_no_local_build_and_one_candidate_image() -> 
             "--profile",
             "operations",
             "--profile",
+            "tools",
+            "--profile",
+            "demo",
+            "--profile",
+            "mcp-test",
+            "--profile",
+            "github",
+            "--profile",
             "drill-tools",
             "--profile",
             "drill-finalize",
@@ -131,16 +149,10 @@ def test_resolved_drill_compose_has_no_local_build_and_one_candidate_image() -> 
         assert set(networks) == {"backend"}
     guard_networks = cast(dict[str, object], services["operations-guard"]["networks"])
     assert set(guard_networks) == {"default"}
-    for name in (
-        "api",
-        "migrate",
-        "worker",
-        "drill-decommission-operator",
-        "drill-tool",
-        "drill-finalizer",
-    ):
+    for name in APP_SERVICES:
         assert services[name]["image"] == candidate
         assert "build" not in services[name]
+        assert services[name]["pull_policy"] == "always"
 
 
 @pytest.mark.unit

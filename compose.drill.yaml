@@ -24,6 +24,16 @@ services:
   restore-objects:
     networks: [backend]
 
+  operations-guard:
+    build: !reset null
+    image: ${ANVA_DRILL_IMAGE:?set the exact candidate ghcr.io/rishavt/anva@sha256 digest}
+    pull_policy: always
+
+  backup-manifest:
+    build: !reset null
+    image: ${ANVA_DRILL_IMAGE:?set the exact candidate ghcr.io/rishavt/anva@sha256 digest}
+    pull_policy: always
+
   migrate:
     build: !reset null
     image: ${ANVA_DRILL_IMAGE:?set the exact candidate ghcr.io/rishavt/anva@sha256 digest}
@@ -69,6 +79,36 @@ services:
       ANVA_SECRET_KEY: ${ANVA_DRILL_SECRET_KEY:?set a unique drill application secret}
       ANVA_TOKEN_PEPPER: ${ANVA_DRILL_TOKEN_PEPPER:?set a unique drill token pepper}
     networks: [backend]
+
+  github-worker:
+    build: !reset null
+    image: ${ANVA_DRILL_IMAGE:?set the exact candidate ghcr.io/rishavt/anva@sha256 digest}
+    pull_policy: always
+
+  mcp:
+    build: !reset null
+    image: ${ANVA_DRILL_IMAGE:?set the exact candidate ghcr.io/rishavt/anva@sha256 digest}
+    pull_policy: always
+
+  mcp-read-only:
+    build: !reset null
+    image: ${ANVA_DRILL_IMAGE:?set the exact candidate ghcr.io/rishavt/anva@sha256 digest}
+    pull_policy: always
+
+  cli:
+    build: !reset null
+    image: ${ANVA_DRILL_IMAGE:?set the exact candidate ghcr.io/rishavt/anva@sha256 digest}
+    pull_policy: always
+
+  decommission-cleanup-operator:
+    build: !reset null
+    image: ${ANVA_DRILL_IMAGE:?set the exact candidate ghcr.io/rishavt/anva@sha256 digest}
+    pull_policy: always
+
+  demo:
+    build: !reset null
+    image: ${ANVA_DRILL_IMAGE:?set the exact candidate ghcr.io/rishavt/anva@sha256 digest}
+    pull_policy: always
 
   drill-certgen:
     image: alpine/openssl@sha256:0cb8b9948f86d73f196cef2f828ca0b60e40c7c74d8edf9e60d9990cbb7b8b76
@@ -143,6 +183,7 @@ services:
   drill-tool:
     build: !reset null
     image: ${ANVA_DRILL_IMAGE:?set the exact candidate ghcr.io/rishavt/anva@sha256 digest}
+    pull_policy: always
     entrypoint: ["python", "-m", "anva.operator_drill"]
     user: ${ANVA_DRILL_TOOL_USER:-65532:65532}
     cap_drop: ["ALL"]
@@ -159,6 +200,7 @@ services:
   drill-finalizer:
     build: !reset null
     image: ${ANVA_DRILL_IMAGE:?set the exact candidate ghcr.io/rishavt/anva@sha256 digest}
+    pull_policy: always
     entrypoint: ["python", "-m", "anva.operator_drill"]
     user: ${ANVA_DRILL_TOOL_USER:-65532:65532}
     cap_drop: ["ALL"]
