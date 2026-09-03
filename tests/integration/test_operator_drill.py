@@ -31,6 +31,8 @@ def test_closed_event_commands_round_trip(tmp_path: Path) -> None:
                 "0.1.5",
                 "--product-source-commit",
                 "d" * 40,
+                "--operator-source-commit",
+                "d" * 40,
                 "--operator-cli-in-product",
                 "--image-digest",
                 "sha256:" + "2" * 64,
