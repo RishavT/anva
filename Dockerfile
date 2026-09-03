@@ -47,7 +47,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --wheel --out-dir /dist
 
 FROM base AS runtime
-ARG ANVA_VERSION=0.1.1
+ARG ANVA_VERSION=0.1.2
 ARG ANVA_REVISION=unknown
 ARG ANVA_BUILD_INPUT_SHA256=0000000000000000000000000000000000000000000000000000000000000000
 ARG ANVA_SOURCE=https://github.com/rishavt/anva
@@ -73,6 +73,15 @@ LABEL org.opencontainers.image.title="Anva" \
 CMD ["gunicorn", "anva.config.wsgi:application", "--bind=0.0.0.0:8000", "--access-logfile=/dev/null", "--error-logfile=-"]
 
 FROM base AS test
+USER root
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+       make=4.4.1-2 \
+    && rm -rf /var/lib/apt/lists/* \
+       /var/cache/ldconfig/aux-cache \
+       /var/log/apt/history.log \
+       /var/log/apt/term.log \
+       /var/log/dpkg.log
 COPY src ./src
 COPY contracts ./contracts
 COPY packages/anva-skills ./packages/anva-skills

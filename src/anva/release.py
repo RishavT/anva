@@ -489,6 +489,126 @@ def build_vulnerability_risk_acceptance(
     return artifact
 
 
+def build_trivy_ignorefile_from_decision(
+    *,
+    decision_path: Path,
+    vulnerability_report_path: Path,
+    output_path: Path,
+    source_commit: str,
+    image_reference: str,
+    image_digest: str,
+    github_run_id: str,
+    proposal_sha256: str,
+    approval_record_sha256: str,
+    workflow_repository: str,
+    workflow_ref: str,
+    current_date: date | None = None,
+) -> tuple[str, ...]:
+    """Validate a protected, exact-candidate decision and render its ignore list."""
+    if decision_path.is_symlink() or not decision_path.is_file():
+        raise ValueError("Candidate risk decision must be a regular file")
+    if decision_path.stat().st_size > 1_000_000:
+        raise ValueError("Candidate risk decision exceeds 1 MB")
+    decision = json.loads(decision_path.read_bytes())
+    if not isinstance(decision, dict):
+        raise ValueError("Candidate risk decision is invalid")
+    if (
+        decision.get("schema_version") != 1
+        or decision.get("kind") != "anva.release-risk-decision"
+        or decision.get("decision") != "accepted_for_exact_candidate"
+        or decision.get("approved_by") != "RishavT"
+        or decision.get("github_environment") != "release"
+        or decision.get("version") != __version__
+        or decision.get("source_commit") != source_commit
+        or decision.get("image_reference") != image_reference
+        or decision.get("image_digest") != image_digest
+        or decision.get("github_run_id") != github_run_id
+        or decision.get("proposal_sha256") != proposal_sha256
+        or decision.get("environment_approval_record_sha256") != approval_record_sha256
+        or decision.get("workflow_repository") != workflow_repository
+        or decision.get("workflow_ref") != workflow_ref
+    ):
+        raise ValueError("Candidate risk decision identity is invalid")
+    if COMMIT_PATTERN.fullmatch(source_commit) is None:
+        raise ValueError("Candidate risk decision source commit is invalid")
+    if IMAGE_ID_PATTERN.fullmatch(image_digest) is None:
+        raise ValueError("Candidate risk decision image digest is invalid")
+    if image_reference != f"ghcr.io/rishavt/anva@{image_digest}":
+        raise ValueError("Candidate risk decision image reference is invalid")
+    for field in (
+        "environment_approval_record_sha256",
+        "proposal_sha256",
+        "proposal_report_sha256",
+        "proposal_database_metadata_sha256",
+        "proposal_source_security_report_sha256",
+        "proposal_source_scan_diagnostic_sha256",
+        "proposal_scan_evidence_manifest_sha256",
+        "verification_report_sha256",
+        "runtime_controls_sha256",
+    ):
+        value = decision.get(field)
+        if not isinstance(value, str) or re.fullmatch(r"[a-f0-9]{64}", value) is None:
+            raise ValueError("Candidate risk decision evidence binding is invalid")
+    if re.fullmatch(r"[1-9][0-9]*", github_run_id) is None:
+        raise ValueError("Candidate risk decision run identity is invalid")
+    if workflow_repository != "RishavT/anva" or not workflow_ref.startswith(
+        "RishavT/anva/.github/workflows/release.yml@refs/"
+    ):
+        raise ValueError("Candidate risk decision workflow identity is invalid")
+    try:
+        expires_on = date.fromisoformat(str(decision["expires_on"]))
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("Candidate risk decision expiry is invalid") from error
+    today = current_date or datetime.now(UTC).date()
+    if expires_on < today or (expires_on - today).days > 30:
+        raise ValueError("Candidate risk decision is expired or exceeds 30 days")
+    if decision["verification_report_sha256"] != _sha256(vulnerability_report_path):
+        raise ValueError("Candidate risk decision report binding is invalid")
+
+    observed: list[dict[str, str | None]] = []
+    identifiers: set[str] = set()
+    for identifier, records in _trivy_report_entries(vulnerability_report_path).items():
+        for package, severity, status, fixed_version, installed_version in records:
+            if severity not in {"HIGH", "CRITICAL"}:
+                continue
+            if fixed_version not in {None, ""} or status not in {
+                "affected",
+                "fix_deferred",
+                "will_not_fix",
+            }:
+                raise ValueError("Candidate report contains an unapprovable finding")
+            identifiers.add(identifier)
+            observed.append(
+                {
+                    "VulnerabilityID": identifier,
+                    "PkgName": package,
+                    "InstalledVersion": installed_version,
+                    "FixedVersion": fixed_version,
+                    "Severity": severity,
+                    "Status": status,
+                }
+            )
+    approved = decision.get("high_critical_tuples")
+
+    def tuple_key(item: dict[str, str | None]) -> tuple[str, ...]:
+        return tuple(str(item.get(name) or "") for name in sorted(item))
+
+    if (
+        not isinstance(approved, list)
+        or not all(isinstance(item, dict) for item in approved)
+        or sorted(approved, key=tuple_key) != sorted(observed, key=tuple_key)
+    ):
+        raise ValueError("Candidate risk decision tuple binding is invalid")
+    if output_path.exists() and (output_path.is_symlink() or not output_path.is_file()):
+        raise ValueError("Trivy ignore output must be a regular file")
+    if output_path.parent.is_symlink() or not output_path.parent.is_dir():
+        raise ValueError("Trivy ignore output directory must be a regular directory")
+    temporary = output_path.with_name(f"{output_path.name}.tmp")
+    temporary.write_text("".join(f"{identifier}\n" for identifier in sorted(identifiers)))
+    temporary.replace(output_path)
+    return tuple(sorted(identifiers))
+
+
 def _trivy_report_entries(
     report_path: Path,
 ) -> dict[str, tuple[tuple[str, str, str, str | None, str], ...]]:
@@ -562,6 +682,18 @@ def main() -> int:
     exception_parser.add_argument("--input", required=True, type=Path)
     exception_parser.add_argument("--report", required=True, type=Path)
     exception_parser.add_argument("--output", required=True, type=Path)
+    decision_parser = commands.add_parser("decision-ignore")
+    decision_parser.add_argument("--decision", required=True, type=Path)
+    decision_parser.add_argument("--report", required=True, type=Path)
+    decision_parser.add_argument("--output", required=True, type=Path)
+    decision_parser.add_argument("--source-commit", required=True)
+    decision_parser.add_argument("--image-reference", required=True)
+    decision_parser.add_argument("--image-digest", required=True)
+    decision_parser.add_argument("--github-run-id", required=True)
+    decision_parser.add_argument("--proposal-sha256", required=True)
+    decision_parser.add_argument("--approval-record-sha256", required=True)
+    decision_parser.add_argument("--workflow-repository", required=True)
+    decision_parser.add_argument("--workflow-ref", required=True)
     approval_parser = commands.add_parser("risk-acceptance")
     approval_parser.add_argument("--input", required=True, type=Path)
     approval_parser.add_argument("--report", required=True, type=Path)
@@ -582,6 +714,22 @@ def main() -> int:
             input_path=arguments.input,
             vulnerability_report_path=arguments.report,
             output_path=arguments.output,
+        )
+        print(json.dumps({"status": "validated", "exceptions": len(identifiers)}))
+        return 0
+    if arguments.command == "decision-ignore":
+        identifiers = build_trivy_ignorefile_from_decision(
+            decision_path=arguments.decision,
+            vulnerability_report_path=arguments.report,
+            output_path=arguments.output,
+            source_commit=str(arguments.source_commit),
+            image_reference=str(arguments.image_reference),
+            image_digest=str(arguments.image_digest),
+            github_run_id=str(arguments.github_run_id),
+            proposal_sha256=str(arguments.proposal_sha256),
+            approval_record_sha256=str(arguments.approval_record_sha256),
+            workflow_repository=str(arguments.workflow_repository),
+            workflow_ref=str(arguments.workflow_ref),
         )
         print(json.dumps({"status": "validated", "exceptions": len(identifiers)}))
         return 0

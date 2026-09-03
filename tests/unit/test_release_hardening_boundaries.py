@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import tomllib
 from pathlib import Path
 from typing import cast
@@ -113,24 +114,104 @@ def test_operations_are_serialized_and_rehearsal_forces_clone_local_stores() -> 
 @pytest.mark.unit
 def test_release_gate_validates_current_report_before_using_waivers() -> None:
     makefile = Path("Makefile").read_text(encoding="utf-8")
-    gate = makefile.split("\nrelease-scan-gate: release-scan\n", 1)[1].split(
-        "\nrelease-manifest:\n", 1
-    )[0]
+    gate = makefile.split("\nrelease-scan-gate:\n", 1)[1].split("\nrelease-manifest:\n", 1)[0]
 
     assert "--report /release/anva-image-vulnerabilities.json" in gate
-    assert gate.index("python -m anva.release exceptions") < gate.index("--ignorefile")
+    assert 'test -f "$(ANVA_RELEASE_RISK_DECISION_INPUT)"' in gate
+    assert 'cp "$(ANVA_RELEASE_RISK_DECISION_INPUT)" "$$staged"' in gate
+    assert 'mv "$$staged" "$$canonical"' in gate
+    assert "python -m anva.release decision-ignore" in gate
+    assert "docs/security/vulnerability-exceptions" not in gate
+    assert gate.index("python -m anva.release decision-ignore") < gate.index("--ignorefile")
+
+
+@pytest.mark.unit
+def test_local_release_gate_fails_closed_without_external_decision(tmp_path: Path) -> None:
+    makefile = Path("Makefile").read_text(encoding="utf-8")
+    gate = makefile.split("\nrelease-scan-gate:\n", 1)[1].split("\nrelease-manifest:\n", 1)[0]
+    guard = gate.splitlines()[0].strip().removeprefix("@")
+    result = subprocess.run(  # noqa: S603 - fixed executable and arguments under test.
+        ["/bin/sh", "-eu", "-c", guard],
+        check=False,
+        capture_output=True,
+        cwd=tmp_path,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "ANVA_RELEASE_RISK_DECISION_INPUT is required" in result.stderr
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "failing_stage", [None, "release-build", "release-scan", "release-scan-gate"]
+)
+def test_release_artifacts_is_sequential_under_parallel_make(
+    tmp_path: Path, failing_stage: str | None
+) -> None:
+    log = tmp_path / "order.log"
+    stub = tmp_path / "Makefile"
+    stages = (
+        ("release-build", "build"),
+        ("release-scan", "scan"),
+        ("release-scan-gate", "gate"),
+        ("release-manifest", "manifest"),
+    )
+    recipes = []
+    for target, label in stages:
+        recipes.append(f"{target}:\n\t@echo {label} >> $(LOG)")
+        if target == failing_stage:
+            recipes.append("\t@false")
+    recipes.append(
+        "release-artifacts:\n"
+        "\t+$(MAKE) release-build\n"
+        "\t+$(MAKE) release-scan\n"
+        "\t+$(MAKE) release-scan-gate\n"
+        "\t+$(MAKE) release-manifest"
+    )
+    stub.write_text("\n".join(recipes) + "\n", encoding="utf-8")
+    result = subprocess.run(  # noqa: S603 - resolved Make executable with fixed arguments.
+        ["/usr/bin/make", "-f", str(stub), "-j8", "release-artifacts", f"LOG={log}"],
+        check=False,
+        capture_output=True,
+        cwd=tmp_path,
+        text=True,
+    )
+    labels = [label for _target, label in stages]
+    if failing_stage is None:
+        assert result.returncode == 0, result.stderr
+        assert log.read_text(encoding="utf-8").splitlines() == labels
+    else:
+        assert result.returncode != 0
+        failure_index = [target for target, _label in stages].index(failing_stage)
+        assert log.read_text(encoding="utf-8").splitlines() == labels[: failure_index + 1]
+
+
+@pytest.mark.unit
+def test_release_artifacts_orchestrates_without_parallel_prerequisites() -> None:
+    makefile = Path("Makefile").read_text(encoding="utf-8")
+    recipe = makefile.split("\nrelease-artifacts:\n", 1)[1].split("\nreset:\n", 1)[0]
+    assert recipe.splitlines()[:4] == [
+        "\t+$(MAKE) release-build",
+        "\t+$(MAKE) release-scan",
+        "\t+$(MAKE) release-scan-gate",
+        "\t+$(MAKE) release-manifest",
+    ]
+    clean = makefile.split("\nrelease-clean:\n", 1)[1].split("\nrelease-image-build:\n", 1)[0]
+    assert "ANVA_RELEASE_RISK_DECISION_INPUT" not in clean
 
 
 @pytest.mark.unit
 def test_github_release_binds_risk_after_digest_before_manifest_and_attestation() -> None:
     workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+    proposal = workflow.index("name: Create canonical exact-candidate risk proposal")
+    protected_environment = workflow.index("environment: release")
     digest = workflow.index("name: Resolve the exact image digest without remote publication")
     approval = workflow.index("name: Bind approved residual risk")
     manifest = workflow.index("make release-manifest", approval)
     publish = workflow.index("name: Publish the exact version image")
     attestation = workflow.index("name: Attest the GHCR image")
 
-    assert digest < approval < manifest < publish < attestation
+    assert proposal < protected_environment < digest < approval < manifest < publish < attestation
     assert "IMAGE_REFERENCE: ${{ steps.image.outputs.reference }}" in workflow
     assert "IMAGE_DIGEST: ${{ steps.image.outputs.digest }}" in workflow
     assert 'ANVA_RELEASE_IMAGE_REFERENCE="$IMAGE_REFERENCE"' in workflow
@@ -177,7 +258,19 @@ def test_docker_context_excludes_runtime_artifacts_but_keeps_release_inputs() ->
     assert {".pytest_cache", ".mypy_cache", ".ruff_cache", ".venv", "build/", "dist/"} <= entries
     assert "docs/**" in entries
     assert "!docs/releases/mvp-013.md" in entries
-    assert "!docs/security/vulnerability-exceptions.json" in entries
+    assert not any(entry.startswith("!docs/security/vulnerability-exceptions") for entry in entries)
+
+
+@pytest.mark.unit
+def test_gnu_make_is_pinned_to_test_stage_only() -> None:
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+    runtime = dockerfile.split("FROM base AS runtime\n", 1)[1].split("FROM base AS test\n", 1)[0]
+    test_stage = dockerfile.split("FROM base AS test\n", 1)[1].split(
+        "FROM test AS browser-test\n", 1
+    )[0]
+    assert "make=" not in runtime
+    assert "make=4.4.1-2" in test_stage
+    assert "/var/log/dpkg.log" in test_stage
 
 
 @pytest.mark.unit

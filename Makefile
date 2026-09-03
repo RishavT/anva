@@ -1,7 +1,7 @@
 COMPOSE_PROJECT ?= anva
 TEST_PROJECT ?= anva-tests
 ANVA_IMAGE_REPOSITORY ?= anva
-ANVA_VERSION ?= 0.1.1
+ANVA_VERSION ?= 0.1.2
 ANVA_REVISION ?= $(shell git rev-parse --verify HEAD 2>/dev/null)
 ANVA_SOURCE ?= https://github.com/rishavt/anva
 SOURCE_DATE_EPOCH ?= $(shell git show -s --format=%ct HEAD 2>/dev/null)
@@ -415,7 +415,7 @@ release-build: release-clean release-image-build
 		python -m anva.entrypoints.cli skills verify --output /tmp/anva-skills-dist && \
 		cp /tmp/anva-skills-dist/anva-codex-skills-1.0.0.tar.gz /release/ && \
 		cp /tmp/anva-skills-dist/anva-claude-skills-1.0.0.tar.gz /release/ && \
-		cp docs/releases/v0.1.1.md /release/RELEASE_NOTES.md'
+		cp docs/releases/v0.1.2.md /release/RELEASE_NOTES.md'
 	@set -eu; \
 	temporary_archive="release/.anva-install-$(ANVA_VERSION).tar"; \
 	trap 'rm -f "$$temporary_archive"' 0 1 2 15; \
@@ -439,21 +439,47 @@ release-scan:
 		filesystem --scanners vuln,secret,misconfig --format json \
 		$(TRIVY_SOURCE_SKIPS) --output /release/anva-source-security.json /workspace
 
-release-scan-gate: release-scan
+release-scan-gate:
+	@test -n "$(ANVA_RELEASE_RISK_DECISION_INPUT)" || { echo "ANVA_RELEASE_RISK_DECISION_INPUT is required" >&2; exit 2; }
+	@test -f "$(ANVA_RELEASE_RISK_DECISION_INPUT)" || { echo "Exact candidate risk decision input is required" >&2; exit 2; }
+	@test "$(ANVA_RELEASE_RISK_DECISION_INPUT)" != "release/vulnerability-risk-acceptance.json" || { echo "Risk decision input must be external to release outputs" >&2; exit 2; }
+	@test -n "$(ANVA_RELEASE_IMAGE_REFERENCE)" || { echo "ANVA_RELEASE_IMAGE_REFERENCE is required" >&2; exit 2; }
+	@test -n "$(ANVA_RELEASE_IMAGE_ID)" || { echo "ANVA_RELEASE_IMAGE_ID is required" >&2; exit 2; }
+	@test -n "$(ANVA_GITHUB_RUN_ID)" || { echo "ANVA_GITHUB_RUN_ID is required" >&2; exit 2; }
+	@test -n "$(ANVA_PROPOSAL_SHA256)" || { echo "ANVA_PROPOSAL_SHA256 is required" >&2; exit 2; }
+	@test -n "$(ANVA_APPROVAL_RECORD_SHA256)" || { echo "ANVA_APPROVAL_RECORD_SHA256 is required" >&2; exit 2; }
+	@test -n "$(ANVA_WORKFLOW_REPOSITORY)" || { echo "ANVA_WORKFLOW_REPOSITORY is required" >&2; exit 2; }
+	@test -n "$(ANVA_WORKFLOW_REF)" || { echo "ANVA_WORKFLOW_REF is required" >&2; exit 2; }
+	@set -eu; \
+	staged=release/.vulnerability-risk-acceptance.input.json; \
+	canonical=release/vulnerability-risk-acceptance.json; \
+	rm -f "$$staged" "$$canonical"; \
+	trap 'rm -f "$$staged"' EXIT; \
+	cp "$(ANVA_RELEASE_RISK_DECISION_INPUT)" "$$staged"; \
 	$(RELEASE_COMPOSE) --profile release run --rm release-builder \
-		python -m anva.release exceptions \
-		--input /workspace/docs/security/vulnerability-exceptions.json \
+		python -m anva.release decision-ignore \
+		--decision /release/.vulnerability-risk-acceptance.input.json \
 		--report /release/anva-image-vulnerabilities.json \
-		--output /release/.trivyignore
+		--source-commit "$(ANVA_REVISION)" \
+		--image-reference "$(ANVA_RELEASE_IMAGE_REFERENCE)" \
+		--image-digest "$(ANVA_RELEASE_IMAGE_ID)" \
+		--github-run-id "$(ANVA_GITHUB_RUN_ID)" \
+		--proposal-sha256 "$(ANVA_PROPOSAL_SHA256)" \
+		--approval-record-sha256 "$(ANVA_APPROVAL_RECORD_SHA256)" \
+		--workflow-repository "$(ANVA_WORKFLOW_REPOSITORY)" \
+		--workflow-ref "$(ANVA_WORKFLOW_REF)" \
+		--output /release/.trivyignore; \
 	$(RELEASE_COMPOSE) --profile release run --rm release-scanner \
 		image --scanners vuln --severity HIGH,CRITICAL \
 		--ignorefile /release/.trivyignore --exit-code 1 \
-		$(ANVA_IMAGE_REF)
+		$(ANVA_IMAGE_REF); \
 	$(RELEASE_COMPOSE) --profile release run --rm release-scanner \
 		filesystem --scanners vuln,secret,misconfig --severity HIGH,CRITICAL \
-		$(TRIVY_SOURCE_SKIPS) --exit-code 1 /workspace
+		$(TRIVY_SOURCE_SKIPS) --exit-code 1 /workspace; \
 	$(RELEASE_COMPOSE) --profile release run --rm release-builder \
-		rm -f /release/.trivyignore
+		rm -f /release/.trivyignore; \
+	mv "$$staged" "$$canonical"; \
+	trap - EXIT
 
 release-manifest:
 	@set -eu; \
@@ -481,7 +507,11 @@ release-manifest:
 		--image-reference "$$image_reference" \
 		--image-id "$$image_id" < "$$status_file"
 
-release-artifacts: release-build release-scan release-scan-gate release-manifest
+release-artifacts:
+	+$(MAKE) release-build
+	+$(MAKE) release-scan
+	+$(MAKE) release-scan-gate
+	+$(MAKE) release-manifest
 
 reset:
 	$(COMPOSE) down --volumes --remove-orphans

@@ -166,11 +166,19 @@ revision is the exact source commit. Skill archives are rebuilt and verified in
 the release builder. The source gate excludes operator-owned secrets, backups,
 release outputs, `.git`, and local tool caches from the distributable scan, then
 gates vulnerability, secret, and misconfiguration findings. The checked-in
-[`vulnerability-exceptions.json`](docs/security/vulnerability-exceptions.json)
-is the historical v0.1.0 decision and is deliberately rejected for v0.1.1. A
-fresh exact-candidate scan and explicit RishavT approval are required before the
-v0.1.1 gate can pass; no approval claims that the image has no high/critical
-findings. On Linux, set
+v0.1.0 vulnerability exception is historical evidence only and is deliberately
+rejected for v0.1.2. The local gate requires an explicit
+an external decision supplied with `ANVA_RELEASE_RISK_DECISION_INPUT`, generated
+after protected approval and bound to the exact candidate source, digest,
+report, and findings. Only after the gate succeeds is the canonical decision
+copied into `release/vulnerability-risk-acceptance.json`; `release-clean` never
+deletes the external input. The gate fails
+closed when that decision or the expected GitHub run, proposal, approval-record,
+workflow repository/ref, image reference, or digest variables are absent. A
+manual invocation is valid only after independently verifying the decision's
+GitHub attestation and protected-environment approval; the local validator does
+not itself establish cryptographic provenance. No approval claims that the image has no
+high/critical findings. On Linux, set
 `ANVA_DOCKER_GID` to the group ID of `/var/run/docker.sock` so the non-root
 scanner can inspect the local image. This creates local, ignored artifacts; it
 does not publish, sign, or tag them.
@@ -208,11 +216,11 @@ and [backup/restore](docs/runbooks/backup-and-restore.md) runbooks before using
 these beyond local evaluation. Use the GitHub-native release assets and
 digest-addressed GHCR image only after completing the verification steps in the
 install runbook; source-checkout installation remains available as a fallback.
-See the [v0.1.1 release notes](docs/releases/v0.1.1.md), [compatibility
+See the [v0.1.2 release notes](docs/releases/v0.1.2.md), [compatibility
 matrix](docs/releases/compatibility.md), and [current readiness
 audit](docs/releases/current-release-readiness.md) for the pending same-source
 patch identity and its still-open human gates. The published `v0.1.0` identity
-remains historical until the protected v0.1.1 release completes.
+remains historical until the protected v0.1.2 release completes.
 
 After a test or drill, remove only the named task project with `make test-down`
 or `COMPOSE_PROJECT=<exact-project> make uninstall-clean`; inspect the resolved
