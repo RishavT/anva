@@ -80,8 +80,7 @@ def test_closed_event_commands_round_trip(tmp_path: Path) -> None:
         (44, "DRILL_OBJECT_RESTORE_FAULT\ndaemon error\n", "", False),
         (
             44,
-            "Container arbitrary-app-run-a1b2c3d4e5f6 Created\n"
-            "DRILL_OBJECT_RESTORE_FAULT\n",
+            "Container arbitrary-app-run-a1b2c3d4e5f6 Created\nDRILL_OBJECT_RESTORE_FAULT\n",
             "",
             False,
         ),
