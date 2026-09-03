@@ -13,7 +13,7 @@ That image predates the supported #73 retry CLI. The current-source
 `drill-decommission-operator` is therefore a source-bound development helper,
 not evidence that v0.1.0 contains the recovery surface. The collector records
 `NOT_ACCEPTED` for this combination. Final #44 acceptance must refuse to proceed
-until a future product image (the exact v0.1.2 candidate) is bound to the same
+until a future product image (the exact v0.1.3 candidate) is bound to the same
 source commit as the operator CLI and proves that CLI is in the product image.
 This constraint does not narrow any other #44 exercise requirement.
 
