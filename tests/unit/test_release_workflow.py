@@ -160,6 +160,12 @@ def test_risk_decision_requires_exact_proposal_and_actual_environment_approval()
         assert exact_binding in decision
     assert "docs/security/vulnerability-exceptions.json" not in text
 
+    decision_verification = named["Verify the human decision attestation before publication"]
+    verification_env = cast(dict[str, str], decision_verification["env"])
+    assert verification_env["IMAGE_DIGEST"] == "${{ steps.image.outputs.digest }}"
+    verification_script = cast(str, decision_verification["run"])
+    assert 'env.ANVA_IMAGE_REPOSITORY + "@" + env.IMAGE_DIGEST' in verification_script
+
     names = [cast(str, step["name"]) for step in steps]
     assert names.index(
         "Materialize approval validator from reviewed workflow source"
