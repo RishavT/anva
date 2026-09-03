@@ -1,6 +1,6 @@
-# GitHub-native v0.1.5 release
+# GitHub-native v0.1.6 release
 
-The release workflow publishes only an existing exact `v0.1.5` tag. It is a
+The release workflow publishes only an existing exact `v0.1.6` tag. It is a
 manual `workflow_dispatch` loaded from reviewed `main`, requires the full
 lowercase candidate commit. Its first job is non-publishing and creates an
 attested exact-candidate risk proposal. Every job capable of publishing remains
@@ -14,7 +14,7 @@ write`; verify uses those permissions read-only.
 ## Immutable identity and approval order
 
 1. Merge the reviewed preparation to protected `main` and record its full commit.
-2. Separately create the protected `v0.1.5` tag at that exact commit. Never move,
+2. Separately create the protected `v0.1.6` tag at that exact commit. Never move,
    delete, or recreate it.
 3. RishavT personally dispatches the reviewed workflow from `main`, supplying
    both identities and an expiry no more than 30 days away:
@@ -22,7 +22,7 @@ write`; verify uses those permissions read-only.
 ```sh
 ANVA_SOURCE_COMMIT=<reviewed-full-40-character-commit>
 gh workflow run release.yml --repo rishavt/anva --ref main \
-  -f tag=v0.1.5 -f source_commit="$ANVA_SOURCE_COMMIT" \
+  -f tag=v0.1.6 -f source_commit="$ANVA_SOURCE_COMMIT" \
   -f risk_expires_on=YYYY-MM-DD
 ```
 
@@ -75,8 +75,11 @@ gh workflow run release.yml --repo rishavt/anva --ref main \
    and attests a decision binding the
    proposal SHA-256, GitHub approval-record SHA-256, both report checksums,
    source, digest, tuples, controls, run, reviewer, and expiry. The decision and
-   its attestation verify before any publication mutation. The v0.1.0 approval
-   cannot be replayed or used to create this decision.
+   its attestation verify before any publication mutation. The successful
+   v0.1.5 approval and its associated evidence authorize only the immutable
+   v0.1.5 release; they cannot be replayed or used to authorize v0.1.6. The
+   v0.1.0 approval remains older historical evidence and likewise cannot
+   authorize v0.1.6.
 
 The workflow resolves the direct or peeled remote tag, checks out that tag, and
 requires the tag, checkout, supplied commit, and `main` ancestry to agree. It
@@ -109,13 +112,13 @@ and representative CLI/API behavior, and seed the demo twice.
 ## Consumer verification
 
 ```sh
-gh release download v0.1.5 --repo rishavt/anva --dir anva-v0.1.5
-(cd anva-v0.1.5 && sha256sum --check SHA256SUMS)
-ANVA_SOURCE_COMMIT="$(jq -er '.source_commit' anva-v0.1.5/release-manifest.json)"
-ANVA_SOURCE_TAG=v0.1.5
-ANVA_SOURCE_VERSION=0.1.5
+gh release download v0.1.6 --repo rishavt/anva --dir anva-v0.1.6
+(cd anva-v0.1.6 && sha256sum --check SHA256SUMS)
+ANVA_SOURCE_COMMIT="$(jq -er '.source_commit' anva-v0.1.6/release-manifest.json)"
+ANVA_SOURCE_TAG=v0.1.6
+ANVA_SOURCE_VERSION=0.1.6
 ANVA_SOURCE_PREDICATE_TYPE=https://github.com/RishavT/anva/attestations/source/v1
-for artifact in anva-v0.1.5/*; do
+for artifact in anva-v0.1.6/*; do
   gh attestation verify "$artifact" --repo rishavt/anva
 done
 ```
@@ -130,12 +133,14 @@ never an unverified mutable version tag.
 Never overwrite a tag, release, release asset, attestation, or digest. If the
 release already exists, the workflow fails; `--clobber` and ordinary release
 asset repair are forbidden. Abandon a failed
-candidate and fix forward from a newly reviewed commit. Rollback uses the
-previous verified v0.1.0 digest only when schema compatibility is established;
-otherwise stop writers and restore the paired database/object backup. Retain
+candidate and fix forward from a newly reviewed commit. The rollback predecessor
+is the verified v0.1.5 image
+`ghcr.io/rishavt/anva@sha256:19488230c6f7900cda33bd11adc7f1ad824d23b77ee87fd65ac883cd0dacc725`;
+use that exact digest only when schema compatibility is established. Otherwise,
+stop writers and restore the paired database/object backup. Retain
 failure and provenance evidence. Cleanup may remove only the exact run-labelled
 Compose project, local registry, scanner cache, and test volumes; global Docker
 pruning is forbidden.
 
 The one-time `.github/workflows/release-metadata-repair.yml` remains exclusively
-for the published v0.1.0 history and must not be used for v0.1.5.
+for the published v0.1.0 history and must not be used for v0.1.6.
