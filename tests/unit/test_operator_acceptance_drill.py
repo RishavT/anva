@@ -33,6 +33,7 @@ from anva.operator_drill import (
 
 DRILL_ID = "11111111-1111-4111-8111-111111111111"
 COMMIT = "d" * 40
+PUBLISHED_PRODUCT_SOURCE = "491cdd7830a7f4d6af7140f6a4744f95c80c46a9"
 IMAGE = "sha256:" + "2" * 64
 CORRELATION = "22222222-2222-4222-8222-222222222222"
 
@@ -100,9 +101,12 @@ def _create(tmp_path: Path) -> Path:
                 "--image-digest",
                 IMAGE,
                 "--product-version",
-                "0.1.0",
+                "0.1.5",
                 "--product-source-commit",
-                PRODUCT_SOURCE_COMMIT,
+                PUBLISHED_PRODUCT_SOURCE,
+                "--operator-source-commit",
+                PUBLISHED_PRODUCT_SOURCE,
+                "--operator-cli-in-product",
                 "--output-dir",
                 str(tmp_path),
             ]
@@ -113,18 +117,26 @@ def _create(tmp_path: Path) -> Path:
 
 
 @pytest.mark.unit
-def test_header_is_closed_and_v010_remains_not_accepted(tmp_path: Path) -> None:
+def test_next_image_contract_distinguishes_harness_from_operator_source(
+    tmp_path: Path,
+) -> None:
     path = _create(tmp_path)
     header = json.loads(path.read_text().splitlines()[0])
     assert set(header["payload"]) == {"drill_id", "release_boundary", "runtime", "schema_version"}
-    assert header["payload"]["release_boundary"]["product_source_commit"] == PRODUCT_SOURCE_COMMIT
-    assert header["payload"]["release_boundary"]["status"] == "NOT_ACCEPTED"
+    assert (
+        header["payload"]["release_boundary"]["product_source_commit"] == PUBLISHED_PRODUCT_SOURCE
+    )
+    assert (
+        header["payload"]["release_boundary"]["operator_source_commit"] == PUBLISHED_PRODUCT_SOURCE
+    )
+    assert header["payload"]["runtime"]["source_revision"] == COMMIT
+    assert header["payload"]["release_boundary"]["status"] == "ELIGIBLE_FOR_HUMAN_ACCEPTANCE"
     with pytest.raises(EvidenceRejectedError):
         validate_evidence([header], require_anchor=True)
 
 
 @pytest.mark.unit
-def test_release_boundary_accepts_only_exact_v015_same_source_product_cli() -> None:
+def test_generic_release_boundary_requires_product_and_operator_source_identity() -> None:
     eligible = record_release_boundary(
         product_version="0.1.5",
         product_source_commit=COMMIT,
@@ -132,6 +144,7 @@ def test_release_boundary_accepts_only_exact_v015_same_source_product_cli() -> N
         operator_cli_in_product=True,
     )
     assert eligible["status"] == "ELIGIBLE_FOR_HUMAN_ACCEPTANCE"
+    assert eligible["product_source_commit"] == eligible["operator_source_commit"]
     for version in ("0.1.0", "0.1.1", "1.0.0"):
         rejected = record_release_boundary(
             product_version=version,
@@ -140,6 +153,35 @@ def test_release_boundary_accepts_only_exact_v015_same_source_product_cli() -> N
             operator_cli_in_product=True,
         )
         assert rejected["status"] == "NOT_ACCEPTED"
+    stale_source = record_release_boundary(
+        product_version="0.1.5",
+        product_source_commit=PUBLISHED_PRODUCT_SOURCE,
+        operator_source_commit=COMMIT,
+        operator_cli_in_product=True,
+    )
+    assert stale_source["status"] == "NOT_ACCEPTED"
+    old_v015_contract = record_release_boundary(
+        product_version="0.1.5",
+        product_source_commit=PUBLISHED_PRODUCT_SOURCE,
+        operator_source_commit=COMMIT,
+        operator_cli_in_product=True,
+    )
+    assert old_v015_contract["status"] == "NOT_ACCEPTED"
+
+
+@pytest.mark.unit
+def test_tracked_template_records_published_identity_but_requires_next_image() -> None:
+    root = Path(__file__).resolve().parents[2]
+    template = json.loads((root / "deploy/drill/evidence-template.json").read_text())
+    assert template["product_version"] == "0.1.5"
+    assert template["product_source_commit"] == PUBLISHED_PRODUCT_SOURCE
+    assert template["product_image_digest"] == (
+        "sha256:19488230c6f7900cda33bd11adc7f1ad824d23b77ee87fd65ac883cd0dacc725"
+    )
+    assert template["release_status"] == "NOT_ACCEPTED_OPERATOR_TOOL_PREDATES_SOURCE_ROLE_CONTRACT"
+    makefile = (root / "Makefile").read_text()
+    assert '--product-source-commit "$(ANVA_DRILL_PRODUCT_SOURCE_COMMIT)"' in makefile
+    assert '--operator-source-commit "$(ANVA_DRILL_PRODUCT_SOURCE_COMMIT)"' in makefile
 
 
 @pytest.mark.unit
@@ -230,8 +272,22 @@ def test_rehashing_fabricated_signoff_and_truncation_fail(tmp_path: Path) -> Non
 
 
 @pytest.mark.unit
-def test_current_v010_refuses_anchor_before_any_gh_call(tmp_path: Path) -> None:
+def test_not_accepted_boundary_refuses_anchor_before_any_gh_call(tmp_path: Path) -> None:
     path = _create(tmp_path)
+    ledger = [json.loads(line) for line in path.read_text().splitlines()]
+    ledger[0]["payload"]["release_boundary"] = record_release_boundary(
+        product_version="0.1.0",
+        product_source_commit=PRODUCT_SOURCE_COMMIT,
+        operator_source_commit=COMMIT,
+        operator_cli_in_product=True,
+    )
+    path.write_text(
+        json.dumps(
+            _seal({key: value for key, value in ledger[0].items() if key != "event_hash"}),
+            sort_keys=True,
+        )
+        + "\n"
+    )
     anchor = tmp_path / "anchor.json"
     anchor.write_text(
         json.dumps(
@@ -484,7 +540,7 @@ def test_cleanup_and_anchor_numeric_fields_reject_json_boole(tmp_path: Path) -> 
                 "drill_id": DRILL_ID,
                 "ledger_sha256": "b" * 64,
                 "operator_source_commit": COMMIT,
-                "product_source_commit": COMMIT,
+                "product_source_commit": PRODUCT_SOURCE_COMMIT,
                 "run_id": True,
                 "tail_hash": "c" * 64,
             },

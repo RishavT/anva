@@ -18,14 +18,17 @@ descendant of `dce714a`: its diff changes only three assertions in
 `tests/unit/test_assurance_review_fixes.py`. It is not a new runtime identity.
 Later documentation-only descendants likewise do not create a new runtime
 identity.
-Technical publication, signature, and digest-bound risk evidence exist for
-`v0.1.0`; no status below implies completed #43/#44 human gates. Ownership is recorded in
+Technical publication, signature, immutable installation, and digest-bound risk
+evidence exist for `v0.1.5` at product source `491cdd7830a7f4d6af7140f6a4744f95c80c46a9`,
+image digest `sha256:19488230c6f7900cda33bd11adc7f1ad824d23b77ee87fd65ac883cd0dacc725`,
+and successful release run `33727525411`; no status below implies completed
+#43/#44 human gates. Ownership is recorded in
 [`release-ownership.md`](release-ownership.md).
 
 | Authority | Requirement | Status | Authoritative current evidence | Remaining closure |
 | --- | --- | --- | --- | --- |
-| Issue 13 | Compose fresh install/bootstrap/demo | exact-runtime-verified | Run `33596661334` pulled and installed the immutable published digest, migrated, checked readiness, and seeded the demo | Human operator exercise remains #44 |
-| Issue 13 | Versioned image/packages/checksums | exact-runtime-verified | Public `v0.1.0`, source `d919...`, image `sha256:29af...`, 13 assets, checksums, and standard/custom attestations | #74 changes only the closed metadata triplet/body; ten assets remain byte-identical |
+| Issue 13 | Compose fresh install/bootstrap/demo | exact-runtime-verified | Run `33727525411` pulled and installed the immutable published v0.1.5 digest, migrated, checked readiness, and seeded the demo | Human operator exercise remains #44 |
+| Issue 13 | Versioned image/packages/checksums | exact-runtime-verified | Public `v0.1.5`, source `491cdd7...`, image `sha256:1948823...`, 12 assets, checksums, and standard/custom attestations | Human operator exercise remains distinct under #44 |
 | Issue 13; OPS-002 | Backup/restore/migration/rollback | exact-runtime-verified | Prior exact local lifecycle evidence plus final-seal preserve/reinstall prove the Compose-managed path and identity preservation | External-store and deployment-sized recovery are explicit post-MVP #38; do not overclaim them |
 | Issue 13/29; SEC-006–008 | Retention/deletion | partial | Server-owned time, tenant cleanup, governed evidence deletion, and decommission safety have focused and matrix coverage | Supported post-expiry human entry is #37; external erasure/regulatory claims are not made |
 | Issue 13; V3 20.2 | Rate limits/abuse protection | exact-runtime-verified | Exact full matrix includes fixed-window, actor/channel, retry, proxy-attribution, and bounded pre-auth tests | Deployment-specific capacity exercise belongs with real operator ownership (#44) |
@@ -51,7 +54,7 @@ Technical publication, signature, and digest-bound risk evidence exist for
 | OPS-001/005–011 | Terraform, cost, quotas, flags, support, billing, pilot | deferred | Compose is the self-hosted MVP unit; no paid inference/billing boundary is shipped | Re-enter scope for managed/pilot/commercial deployment (#40) |
 | OPS-013 | Processing/retention documentation | exact-runtime-verified | Current runbooks describe retention/decommission behavior and limitations | Deployment policy choices remain operator-owned; no regulatory-erasure claim |
 | V3 Appendix E | Production readiness checklist | partial | Local product, lifecycle, security, replay, representative-review evidence, and named ownership are indexed | External publication/signing, operator exercise, and residual-risk approval remain open; performance follow-up is deferred #49 |
-| Issue 13 | Signed/checksummed release commit/tag | exact-runtime-verified | Verified `v0.1.0` -> `d919...`; public checksum closure, GHCR digest, and attestations passed in run `33596661334` | Human gates #43/#44 remain distinct |
+| Issue 13 | Signed/checksummed release commit/tag | exact-runtime-verified | Verified `v0.1.5` -> `491cdd7...`; public checksum closure, GHCR digest, and attestations passed in run `33727525411` | Human gates #43/#44 remain distinct |
 
 ## Exact evidence indexes
 
@@ -67,8 +70,8 @@ Technical publication, signature, and digest-bound risk evidence exist for
 
 The final-seal 35-file manifest and its manifest checksum, the exact-current
 gate manifest, and the prompt-gate manifest have been revalidated during this
-documentation audit. Evidence paths are repository-relative; external
-publication occurred in run `33596661334`; local archives remain historical evidence.
+documentation audit. Evidence paths are repository-relative; v0.1.5 external
+publication occurred in run `33727525411`; local archives remain historical evidence.
 
 ## Deferred-boundary statement
 
