@@ -375,7 +375,8 @@ drill-restore-fault:
 		trap 'find "$$task" -type f -delete; rmdir "$$task"' EXIT HUP INT TERM; \
 		set +e; ANVA_BACKUP_GENERATION="$$generation" $(DRILL_FAULT_COMPOSE) --profile operations run --rm restore-objects >"$$task/restore.log" 2>&1; status=$$?; set -e; \
 		resumed="$$( $(DRILL_COMPOSE) ps --services --status running | sed -n '/^api$$\|^worker$$\|^github-worker$$\|^mcp$$\|^mcp-read-only$$/p' )"; \
-		sh deploy/drill/verify-restore-fault.sh "$$status" "$$task/restore.log" "$$resumed"
+		sh deploy/drill/verify-restore-fault.sh "$$status" "$$task/restore.log" "$$resumed" \
+			"$(DRILL_PROJECT)" "$(ANVA_DRILL_IMAGE)"
 
 drill-storage-interrupt:
 	$(DRILL_COMPOSE) stop minio
