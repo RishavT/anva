@@ -39,8 +39,10 @@
     "RESUME_STORAGE": "STORAGE_OPERATOR",
     "ESCALATE_METRICS_PROXY": "PLATFORM_OPERATOR"
   },
-  "product_source_commit": "d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac",
-  "product_version": "0.1.0",
-  "release_status": "NOT_ACCEPTED",
+  "product_image_digest": "sha256:19488230c6f7900cda33bd11adc7f1ad824d23b77ee87fd65ac883cd0dacc725",
+  "product_source_commit": "491cdd7830a7f4d6af7140f6a4744f95c80c46a9",
+  "product_version": "0.1.5",
+  "release_run_id": 33727525411,
+  "release_status": "NOT_ACCEPTED_OPERATOR_TOOL_PREDATES_SOURCE_ROLE_CONTRACT",
   "schema_version": 3
 }

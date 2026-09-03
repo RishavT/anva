@@ -32,6 +32,7 @@ override REHEARSAL_COMPOSE := \
 TRIVY_SOURCE_SKIPS := --skip-dirs /workspace/.git --skip-dirs /workspace/.secrets --skip-dirs /workspace/secrets --skip-dirs /workspace/backups --skip-dirs /workspace/release --skip-dirs /workspace/.venv --skip-dirs /workspace/.pytest_cache --skip-dirs /workspace/.mypy_cache --skip-dirs /workspace/.ruff_cache --skip-dirs /workspace/htmlcov --skip-files /workspace/.env
 export ANVA_IMAGE_REPOSITORY ANVA_VERSION ANVA_REVISION ANVA_SOURCE SOURCE_DATE_EPOCH ANVA_IMAGE_SHA256 ANVA_BUILD_INPUT_SHA256
 export ANVA_DRILL_IMAGE ANVA_DRILL_SOURCE_COMMIT
+export ANVA_DRILL_PRODUCT_SOURCE_COMMIT
 COMPOSE := docker compose -p $(COMPOSE_PROJECT)
 EXPOSED_COMPOSE := $(COMPOSE) -f compose.yaml -f compose.expose.yaml
 RELEASE_COMPOSE := $(COMPOSE) -f compose.yaml -f compose.release.yaml
@@ -43,6 +44,7 @@ ACCEPTANCE_COMPOSE = docker compose -p $(ACCEPTANCE_PROJECT) -f compose.yaml -f 
 DRILL_PROJECT ?= anva-issue44-drill
 ANVA_DRILL_IMAGE ?=
 ANVA_DRILL_SOURCE_COMMIT ?=
+ANVA_DRILL_PRODUCT_SOURCE_COMMIT ?=
 DRILL_COMPOSE := docker compose -p $(DRILL_PROJECT) -f compose.yaml -f compose.drill.yaml
 DRILL_FAULT_COMPOSE := $(DRILL_COMPOSE) -f compose.drill.restore-fault.yaml
 
@@ -308,13 +310,16 @@ drill-probes:
 
 drill-evidence-template:
 	@test -n "$(DRILL_ID)" || (echo "DRILL_ID is required" >&2; exit 2)
-	@test -n "$(ANVA_DRILL_IMAGE)" && test -n "$(ANVA_DRILL_SOURCE_COMMIT)" || (echo "exact candidate image and source commit are required" >&2; exit 2)
+	@test -n "$(ANVA_DRILL_IMAGE)" && test -n "$(ANVA_DRILL_SOURCE_COMMIT)" && test -n "$(ANVA_DRILL_PRODUCT_SOURCE_COMMIT)" || (echo "exact image, harness source, and product source are required" >&2; exit 2)
 	@mkdir -p "$${ANVA_DRILL_EVIDENCE_DIR:-evidence/issue-044}"
-	ANVA_DRILL_TOOL_USER="$$(id -u):$$(id -g)" $(DRILL_COMPOSE) --profile drill-tools run --rm --no-deps drill-tool create-evidence \
+	@image_revision="$$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$(ANVA_DRILL_IMAGE)")"; \
+		test "$$image_revision" = "$(ANVA_DRILL_PRODUCT_SOURCE_COMMIT)" || { echo "product source does not match immutable image revision" >&2; exit 2; }; \
+		ANVA_DRILL_TOOL_USER="$$(id -u):$$(id -g)" $(DRILL_COMPOSE) --profile drill-tools run --rm --no-deps drill-tool create-evidence \
 		--drill-id "$(DRILL_ID)" \
 		--source-revision "$(ANVA_DRILL_SOURCE_COMMIT)" \
 		--product-version "$(ANVA_VERSION)" \
-		--product-source-commit "$(ANVA_DRILL_SOURCE_COMMIT)" \
+		--product-source-commit "$(ANVA_DRILL_PRODUCT_SOURCE_COMMIT)" \
+		--operator-source-commit "$(ANVA_DRILL_PRODUCT_SOURCE_COMMIT)" \
 		--operator-cli-in-product \
 		--image-digest "$${ANVA_DRILL_IMAGE#*@}" \
 		--output-dir /evidence

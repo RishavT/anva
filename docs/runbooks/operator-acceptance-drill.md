@@ -2,20 +2,24 @@
 
 This harness prepares safe, synthetic evidence for issue #44. It does not close #44,
 execute the genuine human exercise, or authorize a release. Every generated
-record starts `PENDING_RISHAV_EXECUTION`; command success must not be inferred as
-human review, an operator decision, or signoff.
+record for an eligible future image starts `PENDING_RISHAV_EXECUTION`; an
+ineligible image remains in its exact `NOT_ACCEPTED` state. Command success must
+not be inferred as human review, an operator decision, or signoff.
 
 ## Release boundary
 
-The product services run the canonical public v0.1.0 image at
-`sha256:29af794b9fda21e75461866437dd4853db54b54072252d0df9aa2eed77807c2d`.
-That image predates the supported #73 retry CLI. The current-source
-`drill-decommission-operator` is therefore a source-bound development helper,
-not evidence that v0.1.0 contains the recovery surface. The collector records
-`NOT_ACCEPTED` for this combination. Final #44 acceptance must refuse to proceed
-until a future product image (the exact v0.1.5 candidate) is bound to the same
-source commit as the operator CLI and proves that CLI is in the product image.
-This constraint does not narrow any other #44 exercise requirement.
+The product services run the canonical public v0.1.5 image at
+`sha256:19488230c6f7900cda33bd11adc7f1ad824d23b77ee87fd65ac883cd0dacc725`,
+whose product source is `491cdd7830a7f4d6af7140f6a4744f95c80c46a9`. Publication and immutable
+install verification completed in release workflow `33727525411`.
+
+That immutable image predates the corrected product/operator source-role
+contract. Running its `drill-tool` with the published product source and a later
+operator harness source correctly yields `NOT_ACCEPTED`; current-source code
+must not be substituted for the pinned image. A future immutable release must
+contain the generic same-image source binding before final #44 evidence can be
+eligible. The tracked guide records the v0.1.5 publication facts and this
+explicitly ineligible boundary without claiming an operator exercise.
 
 ## Automated preparation
 
@@ -65,9 +69,9 @@ make drill-storage-resume
 ```
 
 The #73 helper requires exact organization/run/hash/attempt selectors, a fresh
-correlation UUID, and the full confirmation string. On v0.1.0 it may demonstrate
-the current-source helper only and must remain `NOT_ACCEPTED` for final release
-evidence.
+correlation UUID, and the full confirmation string. It runs from the same exact
+immutable image as the other drill services, but v0.1.5 cannot produce final
+eligible evidence for the source-role reason above.
 
 ## Evidence and redaction
 
@@ -98,8 +102,9 @@ restore recovery, retention/decommission interruption, metrics/proxy triage,
 escalation decisions, and final cleanup/signoff. These actions must be observed
 against an eligible release candidate, timestamped by the human participant,
 and entered honestly. They must not be inferred from command success or filled
-by automation. Until then signoff remains null and status remains
-`PENDING_RISHAV_EXECUTION` or `NOT_ACCEPTED`.
+by automation. Until then signoff remains null. An eligible future-image record
+remains `PENDING_RISHAV_EXECUTION`; the published v0.1.5 boundary remains
+`NOT_ACCEPTED_OPERATOR_TOOL_PREDATES_SOURCE_ROLE_CONTRACT`.
 
 Local records are closed-schema machine facts: enumerated check/decision/cleanup
 codes, UUIDs, integers, and exact SHA-256 values. Free text and local human
@@ -145,8 +150,8 @@ Finalization verifies both the standard/custom GitHub attestations with the
 exact signer workflow and predicate, then uses GitHub's review-history API to
 require a successful `main` workflow-dispatch run and exact `release` approval
 by `RishavT`. It refuses truncation, prefixes, stale ledger hashes/tails,
-identity mismatches, fabricated anchors, or the current v0.1.0 `NOT_ACCEPTED`
-boundary. Automation never pre-populates completion or approval.
+identity mismatches or fabricated anchors. Automation never pre-populates
+completion or approval.
 After the genuine drill, validate the scrubbed record, review it manually, and
 run `make drill-down`. Confirm no containers, networks, or volumes remain for
 the exact drill project. Never run the final human drill as part of CI or this

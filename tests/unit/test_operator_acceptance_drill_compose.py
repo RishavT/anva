@@ -218,6 +218,10 @@ def test_make_targets_bind_restore_failure_storage_interruption_and_retry() -> N
     assert "GH_CONFIG_DIR is required" in makefile
     assert "ANVA_DRILL_IMAGE" in makefile
     assert "ANVA_DRILL_SOURCE_COMMIT" in makefile
+    assert "ANVA_DRILL_PRODUCT_SOURCE_COMMIT" in makefile
+    assert '--operator-source-commit "$(ANVA_DRILL_PRODUCT_SOURCE_COMMIT)"' in makefile
+    assert "org.opencontainers.image.revision" in makefile
+    assert "product source does not match immutable image revision" in makefile
     assert '--product-version "$(ANVA_VERSION)"' in makefile
     assert "--operator-cli-in-product" in makefile
 
@@ -232,13 +236,18 @@ def test_spoof_probe_requires_exact_redirect_and_rejects_transport_or_server_err
 
 
 @pytest.mark.unit
-def test_tracked_evidence_guide_records_exact_not_accepted_release_boundary() -> None:
+def test_tracked_evidence_guide_records_published_pending_release_boundary() -> None:
     guide = yaml.safe_load(
         (ROOT / "deploy/drill/evidence-template.json").read_text(encoding="utf-8")
     )
 
-    assert guide["product_source_commit"] == "d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac"
-    assert guide["release_status"] == "NOT_ACCEPTED"
+    assert guide["product_version"] == "0.1.5"
+    assert guide["product_source_commit"] == "491cdd7830a7f4d6af7140f6a4744f95c80c46a9"
+    assert guide["product_image_digest"] == (
+        "sha256:19488230c6f7900cda33bd11adc7f1ad824d23b77ee87fd65ac883cd0dacc725"
+    )
+    assert guide["release_run_id"] == 33727525411
+    assert guide["release_status"] == ("NOT_ACCEPTED_OPERATOR_TOOL_PREDATES_SOURCE_ROLE_CONTRACT")
     assert guide["completion_event"] == "github_anchor"
     assert guide["approval_actor"] == "RishavT"
 
@@ -269,6 +278,7 @@ def test_runbook_never_claims_the_human_drill_is_automated() -> None:
     runbook = (ROOT / "docs/runbooks/operator-acceptance-drill.md").read_text(encoding="utf-8")
 
     assert "PENDING_RISHAV_EXECUTION" in runbook
+    assert "NOT_ACCEPTED_OPERATOR_TOOL_PREDATES_SOURCE_ROLE_CONTRACT" in runbook
     assert "Only Rishav" in runbook
     assert "must not be inferred from command success" in runbook
     assert "does not close #44" in runbook

@@ -248,13 +248,16 @@ def build_evidence(
     image_digest: str,
     product_version: str = "0.1.0",
     product_source_commit: str | None = None,
+    operator_source_commit: str | None = None,
     operator_cli_in_product: bool = False,
 ) -> dict[str, Any]:
     product_source = product_source_commit or source_revision
+    operator_source = operator_source_commit or source_revision
     if (
         not UUID.fullmatch(drill_id)
         or not COMMIT.fullmatch(source_revision)
         or not COMMIT.fullmatch(product_source)
+        or not COMMIT.fullmatch(operator_source)
         or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", product_version)
         or not SHA256.fullmatch(image_digest)
     ):
@@ -267,7 +270,7 @@ def build_evidence(
             "release_boundary": record_release_boundary(
                 product_version=product_version,
                 product_source_commit=product_source,
-                operator_source_commit=source_revision,
+                operator_source_commit=operator_source,
                 operator_cli_in_product=operator_cli_in_product,
             ),
             "runtime": {"image_digest": image_digest, "source_revision": source_revision},
@@ -413,7 +416,6 @@ def validate_evidence(
                 }
                 or not COMMIT.fullmatch(str(boundary.get("operator_source_commit")))
                 or not COMMIT.fullmatch(str(boundary.get("product_source_commit")))
-                or boundary.get("operator_source_commit") != runtime.get("source_revision")
                 or not isinstance(boundary.get("operator_cli_in_product"), bool)
                 or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", str(boundary.get("product_version")))
             ):
@@ -666,6 +668,7 @@ def _write_evidence(arguments: argparse.Namespace) -> int:
             image_digest=arguments.image_digest,
             product_version=arguments.product_version,
             product_source_commit=arguments.product_source_commit,
+            operator_source_commit=arguments.operator_source_commit,
             operator_cli_in_product=arguments.operator_cli_in_product,
         )
     )
@@ -705,6 +708,7 @@ def main(argv: list[str] | None = None) -> int:
     create.add_argument("--source-revision", required=True)
     create.add_argument("--product-version", required=True)
     create.add_argument("--product-source-commit", required=True)
+    create.add_argument("--operator-source-commit", required=True)
     create.add_argument("--operator-cli-in-product", action="store_true")
     create.add_argument("--image-digest", required=True)
     create.add_argument("--output-dir", required=True)
