@@ -22,7 +22,9 @@ This constraint does not narrow any other #44 exercise requirement.
 Use a unique metrics token and operator credential supplied outside the
 repository. Keep `DRILL_PROJECT` disposable. The preflight compares the exact
 configured IPv4 subnet with every existing Docker subnet and refuses any
-overlap; it also requires one usable exact proxy address.
+overlap; it also requires one usable exact proxy address. Every Anva-derived
+runtime and operations helper uses the exact immutable `ANVA_DRILL_IMAGE`; none
+build from the drill worktree or fall back to a local tag.
 
 ```sh
 export ANVA_DRILL_METRICS_TOKEN='<unique out-of-band value>'
