@@ -393,7 +393,7 @@ drill-storage-resume:
 drill-decommission-retry:
 	@test -n "$(ORGANIZATION_ID)" && test -n "$(RUN_ID)" && test -n "$(EXPECTED_REQUEST_HASH)" && test -n "$(EXPECTED_ATTEMPT)" || \
 		(echo "exact retry selectors are required" >&2; exit 2)
-	$(DRILL_COMPOSE) --profile drill-tools run --rm drill-decommission-operator \
+	ANVA_DRILL_TOOL_USER="$$(id -u):$$(id -g)" $(DRILL_COMPOSE) --profile drill-tools run --rm drill-decommission-operator \
 		python -m anva.entrypoints.cli maintenance retry-decommission-cleanup \
 		--organization-id "$(ORGANIZATION_ID)" --run-id "$(RUN_ID)" \
 		--expected-request-hash "$(EXPECTED_REQUEST_HASH)" --expected-attempt "$(EXPECTED_ATTEMPT)" \

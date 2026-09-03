@@ -80,6 +80,22 @@ def test_drill_overlay_pins_public_runtime_tls_and_scrape_images() -> None:
     assert any("/gh-config:ro" in volume for volume in finalizer["volumes"])
     assert any("/usr/local/bin/gh:ro" in volume for volume in finalizer["volumes"])
     assert services["drill-tool"]["user"] == "${ANVA_DRILL_TOOL_USER:-65532:65532}"
+    operator = services["drill-decommission-operator"]
+    assert operator["user"] == "${ANVA_DRILL_TOOL_USER:-65532:65532}"
+    assert operator["cap_drop"] == ["ALL"]
+    assert operator["read_only"] is True
+    assert operator["security_opt"] == ["no-new-privileges:true"]
+    assert operator["tmpfs"] == services["drill-tool"]["tmpfs"]
+    assert operator["networks"] == ["backend"]
+    assert "ports" not in operator
+    assert "volumes" not in operator
+    assert operator["secrets"] == ["decommission_operator_credential"]
+    operator_environment = operator["environment"]
+    assert operator_environment["ANVA_ENV"] == "production"
+    assert operator_environment["ANVA_DEBUG"] == "false"
+    assert (
+        "ANVA_DRILL_OBJECT_STORAGE_SECRET" in operator_environment["ANVA_OBJECT_STORAGE_SECRET_KEY"]
+    )
     broad_temporary_mount = "/" + "tmp:"
     assert all(broad_temporary_mount not in volume for volume in services["drill-tool"]["volumes"])
     assert (
@@ -103,6 +119,7 @@ def test_resolved_drill_compose_has_no_local_build_and_one_candidate_image() -> 
         "ANVA_DRILL_METRICS_TOKEN": "test-metrics-secret",
         "ANVA_DRILL_SECRET_KEY": "test-app-secret",
         "ANVA_DRILL_TOKEN_PEPPER": "test-token-pepper",
+        "ANVA_DRILL_TOOL_USER": "12345:23456",
         "ANVA_DRILL_INPUT_DIR": str((ROOT / "deploy/drill").resolve()),
         "ANVA_DRILL_GH_CONFIG_DIR": str((ROOT / "deploy/drill").resolve()),
         "ANVA_DRILL_GH_BIN": shutil.which("gh") or "/usr/bin/gh",
@@ -149,6 +166,32 @@ def test_resolved_drill_compose_has_no_local_build_and_one_candidate_image() -> 
         assert set(networks) == {"backend"}
     guard_networks = cast(dict[str, object], services["operations-guard"]["networks"])
     assert set(guard_networks) == {"default"}
+    operator = services["drill-decommission-operator"]
+    assert operator["user"] == "12345:23456"
+    assert operator["cap_drop"] == ["ALL"]
+    assert operator["read_only"] is True
+    assert operator["security_opt"] == ["no-new-privileges:true"]
+    assert set(cast(dict[str, object], operator["networks"])) == {"backend"}
+    assert "ports" not in operator
+    assert "volumes" not in operator
+    assert operator["secrets"] == [
+        {
+            "source": "decommission_operator_credential",
+            "target": "/run/secrets/decommission_operator_credential",
+        }
+    ]
+    operator_environment = cast(dict[str, str], operator["environment"])
+    assert operator_environment["ANVA_ENV"] == "production"
+    assert operator_environment["ANVA_DATABASE_URL"] == (
+        "postgresql://anva:anva-local-only@postgres:5432/anva"
+    )
+    assert operator_environment["ANVA_OBJECT_STORAGE_ENDPOINT"] == "http://minio:9000"
+    assert operator_environment["ANVA_OBJECT_STORAGE_BUCKET"] == "anva"
+    assert operator_environment["ANVA_OBJECT_STORAGE_ACCESS_KEY"] == "anva-local"
+    assert (
+        operator_environment["ANVA_OBJECT_STORAGE_SECRET_KEY"]
+        == environment["ANVA_DRILL_OBJECT_STORAGE_SECRET"]
+    )
     for name in APP_SERVICES:
         assert services[name]["image"] == candidate
         assert "build" not in services[name]
@@ -204,6 +247,7 @@ def test_make_targets_bind_restore_failure_storage_interruption_and_retry() -> N
     assert "drill-restore-fault:" in makefile
     assert "verify-restore-fault.sh" in makefile
     assert "status=$$?" in makefile
+    assert 'ANVA_DRILL_TOOL_USER="$$(id -u):$$(id -g)" $(DRILL_COMPOSE)' in makefile
     assert "drill-storage-interrupt:" in makefile
     assert "drill-storage-resume:" in makefile
     assert "drill-decommission-retry:" in makefile
