@@ -343,10 +343,10 @@ def test_release_builder_locks_build_backends_and_packages_offline() -> None:
     assert "docker buildx bake -f compose.yaml api" in image_build
     assert "api.output=type=docker,rewrite-timestamp=true" in image_build
     assert "ANVA_BUILD_INPUT_SHA256=$(ANVA_IMAGE_BUILD_INPUT_SHA256)" in image_build
-    assert "release-build: release-clean release-image-build" in makefile
-    release_build = makefile.split("\nrelease-build: release-clean release-image-build\n", 1)[
-        1
-    ].split("\nrelease-scan:\n", 1)[0]
+    assert "release-build: release-image-build release-package-files" in makefile
+    release_build = makefile.split("\nrelease-package-files: release-clean\n", 1)[1].split(
+        "\nrelease-build:", 1
+    )[0]
     assert "uv build --python /app/.venv/bin/python" in release_build
     assert "--no-build-isolation --offline --wheel --out-dir /release" in release_build
     cleanup = "python -m anva.release cleanup-uv-build --directory /release"

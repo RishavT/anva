@@ -32,6 +32,8 @@ env:
   ANVA_TRIVY_IMAGE: aquasec/trivy:0.64.1@sha256:a8ca29078522f30393bdb34225e4c0994d38f37083be81a42da3a2a7e1488e9e
   ANVA_TRIVY_CACHE_DIR: /tmp
   ANVA_REGISTRY_IMAGE: registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+  ANVA_BUILDKIT_IMAGE: moby/buildkit@sha256:040d34121c27906c4ff9ac152a30d52bf2c5d328d3bb748916bb3d2743c02528
+  ANVA_SKOPEO_IMAGE: quay.io/skopeo/stable@sha256:9c68e585103448f7e4abb835132ffe9759d7a962a0fa426035775956e7a1e021
 
 jobs:
   candidate:
@@ -82,6 +84,7 @@ jobs:
           {
             echo "ANVA_REVISION=$EXPECTED_SOURCE_COMMIT"
             echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct "$EXPECTED_SOURCE_COMMIT")"
+            echo "ANVA_BUILD_INPUT_SHA256=$(git archive --format=tar "$EXPECTED_SOURCE_COMMIT" | sha256sum | cut -d' ' -f1)"
             echo "ANVA_HOST_UID=$(id -u)"
             echo "ANVA_HOST_GID=$(id -g)"
             echo "ANVA_DOCKER_GID=$docker_gid"
@@ -104,6 +107,52 @@ jobs:
             --entrypoint /bin/sh "$ANVA_TRIVY_IMAGE" -eu -c \
             'umask 077; mkdir "$TRIVY_CACHE_DIR/fanal"; test -w "$TRIVY_CACHE_DIR/fanal"'
           make release-build
+
+      - name: Require two fresh byte-identical OCI builds
+        id: oci
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = x86_64
+          verifier="$RUNNER_TEMP/verify-release-oci.py"
+          git show "${GITHUB_SHA}:scripts/verify_release_oci.py" > "$verifier"
+          test -s "$verifier"
+          first="$RUNNER_TEMP/anva-first.oci.tar"
+          canonical="$RUNNER_TEMP/anva-canonical.oci.tar"
+          for pass in first canonical; do
+            builder="anva-oci-${GITHUB_RUN_ID}-${pass}"
+            output="$RUNNER_TEMP/anva-${pass}.oci.tar"
+            docker buildx create --name "$builder" --driver docker-container \
+              --driver-opt "image=$ANVA_BUILDKIT_IMAGE" --use
+            docker buildx inspect --bootstrap
+            ANVA_OCI_OUTPUT="$output" ANVA_OCI_BUILD_FLAGS=--no-cache \
+              make release-image-oci
+            docker buildx rm "$builder"
+          done
+          python3 "$verifier" "$first" --output anva-first.oci.json
+          python3 "$verifier" "$canonical" --output anva-canonical.oci.json
+          cmp "$first" "$canonical"
+          cmp anva-first.oci.json anva-canonical.oci.json
+          test "$(stat -c %s "$canonical")" -lt 5368709120
+          rm "$first"
+          rm anva-first.oci.json
+          cp "$canonical" anva-canonical.oci.tar
+          registry="${COMPOSE_PROJECT}-oci-registry"
+          docker run -d --name "$registry" --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --tmpfs /var/lib/registry:rw,nosuid,nodev,noexec,size=1g \
+            --publish 127.0.0.1::5000 "$ANVA_REGISTRY_IMAGE"
+          address="$(docker port "$registry" 5000/tcp)"
+          [[ "$address" =~ ^127\.0\.0\.1:[0-9]+$ ]]
+          for _ in {1..20}; do curl -fsS "http://${address}/v2/" >/dev/null && break; sleep 1; done
+          docker run --rm --network host --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --tmpfs /var/tmp:rw,nosuid,nodev,noexec,size=256m \
+            --mount "type=bind,src=$canonical,dst=/work/image.oci.tar,readonly" \
+            "$ANVA_SKOPEO_IMAGE" copy --preserve-digests --dest-tls-verify=false \
+            oci-archive:/work/image.oci.tar "docker://${address}/anva:${ANVA_VERSION}"
+          docker pull "${address}/anva:${ANVA_VERSION}"
+          docker tag "${address}/anva:${ANVA_VERSION}" \
+            "${ANVA_IMAGE_REPOSITORY}:${ANVA_VERSION}"
+          echo "archive_sha256=$(jq -r .archive_sha256 anva-canonical.oci.json)" >> "$GITHUB_OUTPUT"
+          echo "manifest_digest=$(jq -r .manifest_digest anva-canonical.oci.json)" >> "$GITHUB_OUTPUT"
 
       - name: Run and explicitly validate every candidate scan stage
         env:
@@ -233,6 +282,7 @@ jobs:
           path: |
             release-risk-*.json
             release-risk-*.log
+            anva-*.oci.json
           if-no-files-found: warn
           retention-days: 14
 
@@ -240,16 +290,7 @@ jobs:
         id: digest
         run: |
           set -euo pipefail
-          registry="${COMPOSE_PROJECT}-registry"
-          docker run -d --name "$registry" --label "com.anva.release.owner=$COMPOSE_PROJECT" \
-            --read-only --cap-drop ALL --security-opt no-new-privileges \
-            --tmpfs /var/lib/registry:rw,nosuid,nodev,noexec,size=1g \
-            --publish 127.0.0.1::5000 "$ANVA_REGISTRY_IMAGE"
-          address="$(docker port "$registry" 5000/tcp)"
-          for _ in {1..20}; do curl -fsS "http://${address}/v2/" >/dev/null && break; sleep 1; done
-          docker tag "${ANVA_IMAGE_REPOSITORY}:${ANVA_VERSION}" "${address}/anva:${ANVA_VERSION}"
-          docker push "${address}/anva:${ANVA_VERSION}" | tee /tmp/candidate-push.log
-          digest="$(sed -n 's/^.*digest: \(sha256:[a-f0-9]\{64\}\).*$/\1/p' /tmp/candidate-push.log | tail -1)"
+          digest="${{ steps.oci.outputs.manifest_digest }}"
           [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
           echo "value=$digest" >> "$GITHUB_OUTPUT"
 
@@ -257,6 +298,8 @@ jobs:
         id: proposal
         env:
           IMAGE_DIGEST: ${{ steps.digest.outputs.value }}
+          OCI_ARCHIVE_SHA256: ${{ steps.oci.outputs.archive_sha256 }}
+          OCI_MANIFEST_DIGEST: ${{ steps.oci.outputs.manifest_digest }}
           RISK_EXPIRES_ON: ${{ inputs.risk_expires_on }}
           SOURCE_COMMIT: ${{ inputs.source_commit }}
           RELEASE_TAG: ${{ inputs.tag }}
@@ -320,7 +363,9 @@ jobs:
               "version": os.environ["ANVA_VERSION"],
               "tag": os.environ["RELEASE_TAG"],
               "source_commit": os.environ["SOURCE_COMMIT"],
-              "image_digest": os.environ["IMAGE_DIGEST"],
+              "image_digest": os.environ["OCI_MANIFEST_DIGEST"],
+              "oci_archive_sha256": os.environ["OCI_ARCHIVE_SHA256"],
+              "build_input_sha256": os.environ["ANVA_BUILD_INPUT_SHA256"],
               "report_sha256": hashlib.sha256(report_path.read_bytes()).hexdigest(),
               "database_metadata_sha256": hashlib.sha256(
                   database_metadata_path.read_bytes()).hexdigest(),
@@ -352,6 +397,8 @@ jobs:
             release-risk-scan-evidence-manifest.json
             release-risk-image.spdx.json
             release-risk-image.cyclonedx.json
+            anva-canonical.oci.tar
+            anva-canonical.oci.json
 
       - name: Upload proposal for personal review
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -367,6 +414,8 @@ jobs:
             release-risk-scan-evidence-manifest.json
             release-risk-image.spdx.json
             release-risk-image.cyclonedx.json
+            anva-canonical.oci.tar
+            anva-canonical.oci.json
           if-no-files-found: error
           retention-days: 90
 
@@ -374,10 +423,19 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
+          docker buildx rm "anva-oci-${GITHUB_RUN_ID}-first" \
+            "anva-oci-${GITHUB_RUN_ID}-canonical" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/anva-first.oci.tar" "$RUNNER_TEMP/anva-canonical.oci.tar" \
+            anva-canonical.oci.tar anva-canonical.oci.json
+          rm -f anva-first.oci.json
           registry="${COMPOSE_PROJECT}-registry"
           if docker container inspect "$registry" >/dev/null 2>&1; then
             test "$(docker inspect --format '{{ index .Config.Labels "com.anva.release.owner" }}' "$registry")" = "$COMPOSE_PROJECT"
             docker rm -f "$registry"
+          fi
+          oci_registry="${COMPOSE_PROJECT}-oci-registry"
+          if docker container inspect "$oci_registry" >/dev/null 2>&1; then
+            docker rm -f "$oci_registry"
           fi
           docker compose -f compose.yaml -f compose.release.yaml -p "$COMPOSE_PROJECT" --profile release down --volumes --remove-orphans || true
 
@@ -437,6 +495,7 @@ jobs:
           set -euo pipefail
           reviewed_dir="$RUNNER_TEMP/reviewed-workflow"
           validator="$reviewed_dir/validate_release_approvals.py"
+          oci_verifier="$reviewed_dir/verify_release_oci.py"
           mkdir -p "$reviewed_dir"
           response="$(gh api --method GET \
             "repos/${GITHUB_REPOSITORY}/contents/scripts/validate_release_approvals.py" \
@@ -445,7 +504,15 @@ jobs:
           jq -er .content <<<"$response" | tr -d '\n' | base64 --decode > "$validator"
           test -s "$validator"
           test "$(git hash-object "$validator")" = "$expected_blob"
+          response="$(gh api --method GET \
+            "repos/${GITHUB_REPOSITORY}/contents/scripts/verify_release_oci.py" \
+            -f "ref=${GITHUB_SHA}")"
+          expected_blob="$(jq -er .sha <<<"$response")"
+          jq -er .content <<<"$response" | tr -d '\n' | base64 --decode > "$oci_verifier"
+          test -s "$oci_verifier"
+          test "$(git hash-object "$oci_verifier")" = "$expected_blob"
           echo "REVIEWED_APPROVAL_VALIDATOR=$validator" >> "$GITHUB_ENV"
+          echo "REVIEWED_OCI_VERIFIER=$oci_verifier" >> "$GITHUB_ENV"
 
       - name: Verify exact RishavT environment approval and proposal provenance
         id: human-approval
@@ -461,7 +528,8 @@ jobs:
           for evidence in release-risk-proposal.json release-risk-report.json release-risk-db-metadata.json \
             release-risk-source-security.json release-risk-source-scan-diagnostic.json \
             release-risk-scan-evidence-manifest.json release-risk-image.spdx.json \
-            release-risk-image.cyclonedx.json; do
+            release-risk-image.cyclonedx.json anva-canonical.oci.tar \
+            anva-canonical.oci.json; do
             gh attestation verify "$RUNNER_TEMP/risk-proposal/$evidence" \
               --repo "$GITHUB_REPOSITORY" \
               --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml"
@@ -477,6 +545,15 @@ jobs:
           test "$(sha256sum "$RUNNER_TEMP/risk-proposal/release-risk-scan-evidence-manifest.json" | cut -d' ' -f1)" = \
             "$(jq -r .scan_evidence_manifest_sha256 "$RUNNER_TEMP/risk-proposal/release-risk-proposal.json")"
           test "$(jq -r .classification "$RUNNER_TEMP/risk-proposal/release-risk-source-scan-diagnostic.json")" = passed
+          python3 "$REVIEWED_OCI_VERIFIER" \
+            "$RUNNER_TEMP/risk-proposal/anva-canonical.oci.tar" \
+            --output "$RUNNER_TEMP/protected-oci.json"
+          test "$(jq -r .archive_sha256 "$RUNNER_TEMP/protected-oci.json")" = \
+            "$(jq -r .oci_archive_sha256 "$RUNNER_TEMP/risk-proposal/release-risk-proposal.json")"
+          test "$(jq -r .manifest_digest "$RUNNER_TEMP/protected-oci.json")" = \
+            "$(jq -r .image_digest "$RUNNER_TEMP/risk-proposal/release-risk-proposal.json")"
+          cmp "$RUNNER_TEMP/protected-oci.json" \
+            "$RUNNER_TEMP/risk-proposal/anva-canonical.oci.json"
           approvals="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/approvals")"
           approval_sha256="$(python3 "$REVIEWED_APPROVAL_VALIDATOR" \
             --require-single <<<"$approvals")"
@@ -559,6 +636,7 @@ jobs:
           {
             echo "ANVA_REVISION=$source_commit"
             echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct "$source_commit")"
+            echo "ANVA_BUILD_INPUT_SHA256=$(git archive --format=tar "$source_commit" | sha256sum | cut -d' ' -f1)"
             echo "ANVA_HOST_UID=$(id -u)"
             echo "ANVA_HOST_GID=$(id -g)"
             echo "ANVA_DOCKER_GID=$docker_gid"
@@ -575,8 +653,31 @@ jobs:
           cache_override="$RUNNER_TEMP/release-cache.override.yaml"
           git show "${GITHUB_SHA}:compose.release.cache.yaml" > "$cache_override"
           test -s "$cache_override"
-          make release-build
+          test "$(jq -r .build_input_sha256 "$RUNNER_TEMP/risk-proposal/release-risk-proposal.json")" = \
+            "$ANVA_BUILD_INPUT_SHA256"
+          make release-package-files
+          registry="${COMPOSE_PROJECT}-scan-registry"
+          docker run -d --name "$registry" --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --tmpfs /var/lib/registry:rw,nosuid,nodev,noexec,size=1g \
+            --publish 127.0.0.1::5000 "$ANVA_REGISTRY_IMAGE"
+          address="$(docker port "$registry" 5000/tcp)"
+          [[ "$address" =~ ^127\.0\.0\.1:[0-9]+$ ]]
+          for _ in {1..20}; do curl -fsS "http://${address}/v2/" >/dev/null && break; sleep 1; done
+          docker run --rm --network host --read-only --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --tmpfs /var/tmp:rw,nosuid,nodev,noexec,size=256m \
+            --mount "type=bind,src=$RUNNER_TEMP/risk-proposal/anva-canonical.oci.tar,dst=/work/image.oci.tar,readonly" \
+            "$ANVA_SKOPEO_IMAGE" copy --preserve-digests --dest-tls-verify=false \
+            oci-archive:/work/image.oci.tar "docker://${address}/anva:${ANVA_VERSION}"
+          expected="$(jq -r .image_digest "$RUNNER_TEMP/risk-proposal/release-risk-proposal.json")"
+          actual="$(curl -fsSI -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
+            "http://${address}/v2/anva/manifests/${ANVA_VERSION}" | \
+            sed -n 's/^[Dd]ocker-[Cc]ontent-[Dd]igest: \([^[:space:]\r]*\).*/\1/p')"
+          test "$actual" = "$expected"
+          docker pull "${address}/anva:${ANVA_VERSION}"
+          docker tag "${address}/anva:${ANVA_VERSION}" "${ANVA_IMAGE_REPOSITORY}:${ANVA_VERSION}"
           make RELEASE_COMPOSE="docker compose -p $COMPOSE_PROJECT -f compose.yaml -f compose.release.yaml -f $cache_override" release-scan
+          docker rm -f "$registry"
 
       - name: Create the immutable product source binding
         id: source-binding
@@ -645,12 +746,15 @@ jobs:
           LOCAL_REGISTRY: ${{ steps.local-registry.outputs.endpoint }}
         run: |
           set -euo pipefail
-          image="${ANVA_IMAGE_REPOSITORY}:${ANVA_VERSION}"
           [[ "$LOCAL_REGISTRY" =~ ^127\.0\.0\.1:[0-9]+$ ]]
-          local_image="${LOCAL_REGISTRY}/anva:${ANVA_VERSION}"
-          docker tag "$image" "$local_image"
-          docker push "$local_image" | tee /tmp/docker-push.log
-          digest="$(sed -n 's/^.*digest: \(sha256:[a-f0-9]\{64\}\).*$/\1/p' /tmp/docker-push.log | tail -1)"
+          docker run --rm --network host --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --tmpfs /var/tmp:rw,nosuid,nodev,noexec,size=256m \
+            --mount "type=bind,src=$RUNNER_TEMP/risk-proposal/anva-canonical.oci.tar,dst=/work/image.oci.tar,readonly" \
+            "$ANVA_SKOPEO_IMAGE" copy --preserve-digests --dest-tls-verify=false \
+            oci-archive:/work/image.oci.tar "docker://${LOCAL_REGISTRY}/anva:${ANVA_VERSION}"
+          digest="$(curl -fsSI -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
+            "http://${LOCAL_REGISTRY}/v2/anva/manifests/${ANVA_VERSION}" | \
+            sed -n 's/^[Dd]ocker-[Cc]ontent-[Dd]igest: \([^[:space:]\r]*\).*/\1/p')"
           [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || {
             echo "Local digest registry did not return an immutable digest" >&2
             exit 1
@@ -700,6 +804,7 @@ jobs:
               "version": os.environ["ANVA_VERSION"],
               "source_commit": os.environ["ANVA_REVISION"],
               "image_digest": os.environ["IMAGE_DIGEST"],
+              "build_input_sha256": os.environ["ANVA_BUILD_INPUT_SHA256"],
               "runtime_controls_sha256": controls,
               "high_critical_tuples": tuples,
           }
@@ -782,6 +887,7 @@ jobs:
           IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
           RELEASE_TAG: ${{ steps.identity.outputs.tag }}
           SOURCE_COMMIT: ${{ steps.source.outputs.commit }}
+          GHCR_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           remote_refs="$(git ls-remote --exit-code origin \
@@ -794,14 +900,38 @@ jobs:
           [[ "$remote_commit" =~ ^[a-f0-9]{40}$ ]]
           test "$remote_commit" = "$SOURCE_COMMIT"
           test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
-          image="${ANVA_IMAGE_REPOSITORY}:${ANVA_VERSION}"
-          docker push "$image" | tee /tmp/docker-version-push.log
-          published_digest="$(sed -n 's/^.*digest: \(sha256:[a-f0-9]\{64\}\).*$/\1/p' /tmp/docker-version-push.log | tail -1)"
+          auth_dir="$RUNNER_TEMP/skopeo-auth"
+          trap 'rm -f "$auth_dir/auth.json"; rmdir "$auth_dir" 2>/dev/null || true' EXIT
+          mkdir -m 700 "$auth_dir"
+          AUTH_FILE="$auth_dir/auth.json" python3 - <<'PY'
+          import base64, json, os
+          auth = base64.b64encode(
+              f"{os.environ['GITHUB_ACTOR']}:{os.environ['GHCR_TOKEN']}".encode()
+          ).decode()
+          with open(os.environ["AUTH_FILE"], "w", encoding="utf-8") as output:
+              json.dump({"auths": {"ghcr.io": {"auth": auth}}}, output)
+          os.chmod(os.environ["AUTH_FILE"], 0o600)
+          PY
+          docker run --rm --network bridge --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --tmpfs /var/tmp:rw,nosuid,nodev,noexec,size=256m \
+            --mount "type=bind,src=$RUNNER_TEMP/risk-proposal/anva-canonical.oci.tar,dst=/work/image.oci.tar,readonly" \
+            --mount "type=bind,src=$auth_dir/auth.json,dst=/run/containers/auth.json,readonly" \
+            "$ANVA_SKOPEO_IMAGE" copy --preserve-digests \
+            --authfile /run/containers/auth.json oci-archive:/work/image.oci.tar \
+            "docker://${ANVA_IMAGE_REPOSITORY}:${ANVA_VERSION}"
+          published_digest="$(docker run --rm --network bridge --read-only --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --mount "type=bind,src=$auth_dir/auth.json,dst=/run/containers/auth.json,readonly" \
+            "$ANVA_SKOPEO_IMAGE" inspect --authfile /run/containers/auth.json --format '{{.Digest}}' \
+            "docker://${ANVA_IMAGE_REPOSITORY}:${ANVA_VERSION}")"
           [[ "$published_digest" =~ ^sha256:[a-f0-9]{64}$ ]] || {
             echo "Registry did not return an immutable version digest" >&2
             exit 1
           }
           test "$published_digest" = "$IMAGE_DIGEST"
+          rm -f "$auth_dir/auth.json"
+          rmdir "$auth_dir"
+          trap - EXIT
 
       - name: Attest the GHCR image
         uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
@@ -844,6 +974,10 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
+          scan_registry="${COMPOSE_PROJECT}-scan-registry"
+          if docker container inspect "$scan_registry" >/dev/null 2>&1; then
+            docker rm --force "$scan_registry"
+          fi
           registry_container="${COMPOSE_PROJECT}-digest-registry"
           if docker container inspect "$registry_container" >/dev/null 2>&1; then
             test "$(docker inspect --format '{{ index .Config.Labels "com.anva.release.owner" }}' "$registry_container")" = "$COMPOSE_PROJECT"

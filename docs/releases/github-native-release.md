@@ -26,9 +26,13 @@ gh workflow run release.yml --repo rishavt/anva --ref main \
   -f risk_expires_on=YYYY-MM-DD
 ```
 
-4. The unprotected proposal job builds and scans without publishing or applying
+4. The unprotected proposal job performs two independent, cache-empty builds in
+   separately created pinned BuildKit daemons. Both must produce the same OCI
+   archive bytes, manifest, config, uncompressed rootfs identities, and layer
+   blobs. It scans that canonical archive after an exact copy into a loopback-only
+   registry, without publishing or applying
    an exception. It uploads a GitHub-attested canonical proposal containing the
-   exact tag/source, locally resolved registry digest, fresh report checksum,
+   exact tag/source, OCI archive SHA-256 and size, OCI manifest digest, fresh report checksum,
    complete HIGH/CRITICAL tuples, runtime-controls fingerprint, and expiry. The
    canonical image vulnerability report, SPDX/CycloneDX SBOMs, and database
    metadata are retained beside the proposal. Every Trivy invocation records an
@@ -43,6 +47,15 @@ gh workflow run release.yml --repo rishavt/anva --ref main \
    The image build uses the Compose `api` definition through BuildKit Bake with
    timestamp rewriting anchored to the candidate commit's `SOURCE_DATE_EPOCH`;
    transient apt and uv cache records are excluded from the runtime filesystem.
+   Maintainers can exercise the same-input and changed-input invariants locally or
+   in a Docker-capable CI runner with
+   `scripts/test_release_oci_reproducibility.sh`; it requires the exact revision,
+   source epoch, build-input hash, and reviewed digest-pinned BuildKit image in
+   the corresponding `ANVA_*` environment variables.
+   OCI verification never extracts a layer. It requires normalized relative
+   member paths and safe relative hardlink targets. Symlink targets are retained
+   as inert archive metadata and may contain relative `..` components used by
+   the pinned base image; their encoding and length remain bounded.
 5. The publishing job waits at the protected `release` environment. RishavT
    downloads the proposal artifact, verifies every GitHub attestation and
    SHA-256 value, inspects the exact image report, validated source report,
@@ -55,8 +68,10 @@ gh workflow run release.yml --repo rishavt/anva --ref main \
    record into the decision. Later protected jobs may add approval records, but
    publication requires every approved record to be unambiguously for `release`
    by exact `RishavT`, and requires the original bound hash to match exactly one
-   record. It rebuilds and rescans from the same source and requires digest,
-   tuples, and runtime controls to equal the reviewed proposal. It then creates
+   record. It verifies the attested OCI archive and proposal binding, copies
+   those exact bytes with a digest-pinned tool into a loopback-only registry,
+   and rescans that image; it does not rebuild the approved image. It requires
+   digest, tuples, and runtime controls to equal the reviewed proposal. It then creates
    and attests a decision binding the
    proposal SHA-256, GitHub approval-record SHA-256, both report checksums,
    source, digest, tuples, controls, run, reviewer, and expiry. The decision and

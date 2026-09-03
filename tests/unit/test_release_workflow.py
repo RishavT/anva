@@ -337,7 +337,7 @@ def test_remote_tag_is_rechecked_immediately_before_first_ghcr_push() -> None:
         if step["name"] == "Publish the exact version image after local release gates"
     )
     script = cast(str, publish["run"])
-    push = script.index('docker push "$image"')
+    push = script.index('"$ANVA_SKOPEO_IMAGE" copy --preserve-digests')
     assert script.rfind('test "$remote_commit" = "$SOURCE_COMMIT"', 0, push) >= 0
     assert script.rfind('test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"', 0, push) >= 0
     assert script.rfind('"refs/tags/${RELEASE_TAG}"', 0, push) >= 0
@@ -529,14 +529,14 @@ def test_release_resolves_digest_locally_and_withholds_remote_push_until_gates()
 
     digest = cast(str, steps[names.index(digest_name)]["run"])
     assert '[[ "$LOCAL_REGISTRY" =~ ^127\\.0\\.0\\.1:[0-9]+$ ]]' in digest
-    assert 'local_image="${LOCAL_REGISTRY}/anva:${ANVA_VERSION}"' in digest
-    assert 'docker push "$local_image"' in digest
+    assert "oci-archive:/work/image.oci.tar" in digest
+    assert '"$ANVA_SKOPEO_IMAGE" copy --preserve-digests' in digest
     assert "ANVA_IMAGE_REPOSITORY}:release-candidate" not in digest
     assert 'docker push "$image"' not in digest
 
     publish = cast(str, steps[names.index(publish_name)]["run"])
-    assert 'image="${ANVA_IMAGE_REPOSITORY}:${ANVA_VERSION}"' in publish
-    assert 'docker push "$image"' in publish
+    assert "oci-archive:/work/image.oci.tar" in publish
+    assert '"$ANVA_SKOPEO_IMAGE" copy --preserve-digests' in publish
     assert 'test "$published_digest" = "$IMAGE_DIGEST"' in publish
     assert "docker build" not in publish
     assert "make release" not in publish
@@ -546,6 +546,46 @@ def test_release_resolves_digest_locally_and_withholds_remote_push_until_gates()
     assert 'registry_container="${COMPOSE_PROJECT}-digest-registry"' in cleanup
     assert 'test "$(docker inspect --format' in cleanup
     assert 'docker rm --force "$registry_container"' in cleanup
+
+
+def test_release_uses_one_attested_oci_byte_lineage() -> None:
+    _, workflow = _workflow()
+    jobs = _jobs(workflow)
+    candidate_steps = cast(list[dict[str, object]], jobs["candidate"]["steps"])
+    candidate = {cast(str, step["name"]): step for step in candidate_steps}
+    build_steps = cast(list[dict[str, object]], jobs["build"]["steps"])
+    build = {cast(str, step["name"]): step for step in build_steps}
+
+    fresh = cast(str, candidate["Require two fresh byte-identical OCI builds"]["run"])
+    assert fresh.count("docker buildx create") == 1  # one loop, two isolated names
+    assert "for pass in first canonical" in fresh
+    assert "image=$ANVA_BUILDKIT_IMAGE" in fresh
+    assert 'cmp "$first" "$canonical"' in fresh
+    assert "cmp anva-first.oci.json anva-canonical.oci.json" in fresh
+    assert 'rm "$first"' in fresh
+    candidate_identity = cast(str, candidate["Verify exact candidate identity"]["run"])
+    assert "ANVA_BUILD_INPUT_SHA256=$(git archive --format=tar" in candidate_identity
+
+    approval = cast(
+        str, build["Verify exact RishavT environment approval and proposal provenance"]["run"]
+    )
+    assert "anva-canonical.oci.tar" in approval
+    assert ".oci_archive_sha256" in approval
+    assert ".image_digest" in approval
+
+    scan = cast(str, build["Build and fail-closed verify release artifacts"]["run"])
+    assert "make release-package-files" in scan
+    assert "make release-build" not in scan
+    assert "oci-archive:/work/image.oci.tar" in scan
+    assert "--preserve-digests" in scan
+    assert 'test "$actual" = "$expected"' in scan
+    assert ".build_input_sha256" in scan
+
+    publish = cast(str, build["Publish the exact version image after local release gates"]["run"])
+    assert "oci-archive:/work/image.oci.tar" in publish
+    assert "--preserve-digests" in publish
+    assert "--dest-creds" not in publish
+    assert 'test "$published_digest" = "$IMAGE_DIGEST"' in publish
 
 
 def test_publish_rechecks_remote_tag_before_any_release_side_effect() -> None:
