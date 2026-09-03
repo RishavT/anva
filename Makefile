@@ -1,7 +1,7 @@
 COMPOSE_PROJECT ?= anva
 TEST_PROJECT ?= anva-tests
 ANVA_IMAGE_REPOSITORY ?= anva
-ANVA_VERSION ?= 0.1.4
+ANVA_VERSION ?= 0.1.5
 ANVA_REVISION ?= $(shell git rev-parse --verify HEAD 2>/dev/null)
 ANVA_SOURCE ?= https://github.com/rishavt/anva
 SOURCE_DATE_EPOCH ?= $(shell git show -s --format=%ct HEAD 2>/dev/null)
@@ -423,7 +423,7 @@ release-package-files: release-clean
 		python -m anva.entrypoints.cli skills verify --output /tmp/anva-skills-dist && \
 		cp /tmp/anva-skills-dist/anva-codex-skills-1.0.0.tar.gz /release/ && \
 		cp /tmp/anva-skills-dist/anva-claude-skills-1.0.0.tar.gz /release/ && \
-		cp docs/releases/v0.1.4.md /release/RELEASE_NOTES.md'
+		cp docs/releases/v0.1.5.md /release/RELEASE_NOTES.md'
 	@set -eu; \
 	temporary_archive="release/.anva-install-$(ANVA_VERSION).tar"; \
 	trap 'rm -f "$$temporary_archive"' 0 1 2 15; \

@@ -6,7 +6,7 @@ on:
       tag:
         description: Existing exact release tag to publish
         required: true
-        default: v0.1.4
+        default: v0.1.5
         type: string
       source_commit:
         description: Full immutable commit expected at the existing release tag
@@ -21,11 +21,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-v0.1.4
+  group: release-v0.1.5
   cancel-in-progress: false
 
 env:
-  ANVA_VERSION: 0.1.4
+  ANVA_VERSION: 0.1.5
   BUILDKIT_PROGRESS: plain
   ANVA_IMAGE_REPOSITORY: ghcr.io/rishavt/anva
   ANVA_SOURCE_PREDICATE_TYPE: https://github.com/RishavT/anva/attestations/source/v1

@@ -1,6 +1,6 @@
 # Support
 
-Anva `v0.1.4` is an MVP patch release in preparation. Public GitHub issues are appropriate for reproducible
+Anva `v0.1.5` is an MVP patch release in preparation. Public GitHub issues are appropriate for reproducible
 product defects and documentation problems that contain no sensitive data.
 
 Security issues must follow `SECURITY.md`. Licensing and commercial support
