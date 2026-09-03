@@ -23,6 +23,8 @@ jobs:
           persist-credentials: false
       - name: Validate Compose configuration
         run: docker compose config --quiet
+      - name: Verify pinned Skopeo auth mount identity
+        run: tests/release/test_skopeo_auth_mount.sh
       - name: Run the same checks as local development
         run: |
           test ! -e .ci-artifacts

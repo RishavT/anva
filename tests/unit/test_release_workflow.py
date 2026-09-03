@@ -543,6 +543,9 @@ def test_release_resolves_digest_locally_and_withholds_remote_push_until_gates()
     publish = cast(str, steps[names.index(publish_name)]["run"])
     assert "oci-archive:/work/image.oci.tar" in publish
     assert '"$ANVA_SKOPEO_IMAGE" copy --preserve-digests' in publish
+    assert publish.count('--user "$(id -u):$(id -g)"') == 2
+    assert publish.count("--read-only --cap-drop ALL") == 2
+    assert publish.count("dst=/run/containers/auth.json,readonly") == 2
     assert 'test "$published_digest" = "$IMAGE_DIGEST"' in publish
     assert "docker build" not in publish
     assert "make release" not in publish
