@@ -867,6 +867,7 @@ jobs:
       - name: Verify the human decision attestation before publication
         env:
           GH_TOKEN: ${{ github.token }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
         run: |
           set -euo pipefail
           gh attestation verify release/vulnerability-risk-acceptance.json \
