@@ -913,14 +913,14 @@ jobs:
               json.dump({"auths": {"ghcr.io": {"auth": auth}}}, output)
           os.chmod(os.environ["AUTH_FILE"], 0o600)
           PY
-          docker run --rm --network bridge --read-only --cap-drop ALL \
+          docker run --rm --user "$(id -u):$(id -g)" --network bridge --read-only --cap-drop ALL \
             --security-opt no-new-privileges --tmpfs /var/tmp:rw,nosuid,nodev,noexec,size=256m \
             --mount "type=bind,src=$RUNNER_TEMP/risk-proposal/anva-canonical.oci.tar,dst=/work/image.oci.tar,readonly" \
             --mount "type=bind,src=$auth_dir/auth.json,dst=/run/containers/auth.json,readonly" \
             "$ANVA_SKOPEO_IMAGE" copy --preserve-digests \
             --authfile /run/containers/auth.json oci-archive:/work/image.oci.tar \
             "docker://${ANVA_IMAGE_REPOSITORY}:${ANVA_VERSION}"
-          published_digest="$(docker run --rm --network bridge --read-only --cap-drop ALL \
+          published_digest="$(docker run --rm --user "$(id -u):$(id -g)" --network bridge --read-only --cap-drop ALL \
             --security-opt no-new-privileges \
             --mount "type=bind,src=$auth_dir/auth.json,dst=/run/containers/auth.json,readonly" \
             "$ANVA_SKOPEO_IMAGE" inspect --authfile /run/containers/auth.json --format '{{.Digest}}' \

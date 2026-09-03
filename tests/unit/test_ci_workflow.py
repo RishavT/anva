@@ -26,6 +26,17 @@ def test_ci_runs_compose_with_the_checkout_owner_identity() -> None:
 
 
 @pytest.mark.unit
+def test_ci_exercises_pinned_skopeo_auth_mount_identity() -> None:
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["compose-checks"]["steps"]
+    check_step = next(
+        step for step in steps if step.get("name") == "Verify pinned Skopeo auth mount identity"
+    )
+
+    assert check_step["run"] == "tests/release/test_skopeo_auth_mount.sh"
+
+
+@pytest.mark.unit
 def test_browser_compose_forwards_current_run_canvas_evidence_roots() -> None:
     compose = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
     environment = compose["services"]["browser-test"]["environment"]
