@@ -46,7 +46,7 @@ ANVA_DRILL_SOURCE_COMMIT ?=
 DRILL_COMPOSE := docker compose -p $(DRILL_PROJECT) -f compose.yaml -f compose.drill.yaml
 DRILL_FAULT_COMPOSE := $(DRILL_COMPOSE) -f compose.drill.restore-fault.yaml
 
-.PHONY: help install-demo up up-exposed down uninstall uninstall-clean backup backup-verify restore migration-rehearsal rate-limit-cleanup decommission-cleanup-status drill-network-preflight drill-up drill-probes drill-evidence-template drill-evidence-record drill-evidence-decision-proposal drill-evidence-cleanup drill-evidence-provisional-validate drill-evidence-finalize drill-evidence-final-validate drill-restore-fault drill-storage-interrupt drill-storage-resume drill-decommission-retry drill-down release-image-build release-build release-scan release-scan-gate release-manifest release-artifacts release-clean reset logs migrate migrations-check shell cli lock contracts contracts-check skills-render skills-package skills-check format format-check lint type unit integration acceptance-canonicalize acceptance-verify acceptance-start acceptance-review-request acceptance-review-submit acceptance-finalize acceptance-down contract smoke browser coverage test test-down check ci
+.PHONY: help install-demo up up-exposed down uninstall uninstall-clean backup backup-verify restore migration-rehearsal rate-limit-cleanup decommission-cleanup-status drill-network-preflight drill-up drill-probes drill-evidence-template drill-evidence-record drill-evidence-decision-proposal drill-evidence-cleanup drill-evidence-provisional-validate drill-evidence-finalize drill-evidence-final-validate drill-restore-fault drill-storage-interrupt drill-storage-resume drill-decommission-retry drill-down release-image-build release-image-oci release-package-files release-build release-scan release-scan-gate release-manifest release-artifacts release-clean reset logs migrate migrations-check shell cli lock contracts contracts-check skills-render skills-package skills-check format format-check lint type unit integration acceptance-canonicalize acceptance-verify acceptance-start acceptance-review-request acceptance-review-submit acceptance-finalize acceptance-down contract smoke browser coverage test test-down check ci
 
 help:
 	@echo "Anva development commands (all application tooling runs in Compose)"
@@ -406,7 +406,15 @@ release-image-build:
 		docker buildx bake -f compose.yaml api \
 		--set api.output=type=docker,rewrite-timestamp=true
 
-release-build: release-clean release-image-build
+release-image-oci:
+	@test -n "$(ANVA_OCI_OUTPUT)"
+	ANVA_BUILD_INPUT_SHA256=$(ANVA_IMAGE_BUILD_INPUT_SHA256) \
+		docker buildx bake --allow=fs.write=$(dir $(ANVA_OCI_OUTPUT)) -f compose.yaml api \
+		$(ANVA_OCI_BUILD_FLAGS) \
+		--set api.platform=linux/amd64 \
+		--set api.output=type=oci,dest=$(ANVA_OCI_OUTPUT),rewrite-timestamp=true
+
+release-package-files: release-clean
 	$(RELEASE_COMPOSE) --profile release run --rm --build release-builder \
 		sh -eu -c 'uv build --python /app/.venv/bin/python \
 		--no-build-isolation --offline --wheel --out-dir /release && \
@@ -423,6 +431,8 @@ release-build: release-clean release-image-build
 		--output "$$temporary_archive" HEAD; \
 	gzip -n -c "$$temporary_archive" > \
 		"release/anva-install-$(ANVA_VERSION).tar.gz"
+
+release-build: release-image-build release-package-files
 
 release-scan:
 	$(RELEASE_COMPOSE) --profile release run --rm release-scanner \
