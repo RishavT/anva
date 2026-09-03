@@ -46,7 +46,9 @@ forwarded headers and must receive the exact production HTTP-to-HTTPS redirect
 
 The restore fault target first verifies the active manifest, stops only running
 writers, injects deterministic object-restore exit `44`, and fails if any writer
-resumes. Run it only after creating a synthetic backup in this project:
+resumes. The database and object backup/restore helpers join only the internal
+backend network so they can reach Postgres and MinIO without publishing either
+store. Run it only after creating a synthetic backup in this project:
 
 ```sh
 make drill-restore-fault
