@@ -12,6 +12,18 @@ services:
       MINIO_ROOT_PASSWORD: ${ANVA_DRILL_OBJECT_STORAGE_SECRET:?set a unique drill object storage secret}
     networks: [backend]
 
+  backup-database:
+    networks: [backend]
+
+  backup-objects:
+    networks: [backend]
+
+  restore-database:
+    networks: [backend]
+
+  restore-objects:
+    networks: [backend]
+
   migrate:
     build: !reset null
     image: ${ANVA_DRILL_IMAGE:?set the exact candidate ghcr.io/rishavt/anva@sha256 digest}

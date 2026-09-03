@@ -52,6 +52,13 @@ def test_drill_overlay_pins_public_runtime_tls_and_scrape_images() -> None:
     assert services["drill-scrape"]["image"].startswith("curlimages/curl@sha256:")
     assert services["drill-tls"]["ports"] == ["127.0.0.1:${ANVA_DRILL_HTTPS_PORT:-8443}:8443"]
     assert services["drill-untrusted-probe"]["networks"] == ["backend"]
+    for name in (
+        "backup-database",
+        "backup-objects",
+        "restore-database",
+        "restore-objects",
+    ):
+        assert services[name]["networks"] == ["backend"]
     assert services["drill-tool"]["network_mode"] == "none"
     finalizer = services["drill-finalizer"]
     assert finalizer["user"] == "${ANVA_DRILL_TOOL_USER:-65532:65532}"
@@ -99,6 +106,8 @@ def test_resolved_drill_compose_has_no_local_build_and_one_candidate_image() -> 
             "-f",
             "compose.drill.yaml",
             "--profile",
+            "operations",
+            "--profile",
             "drill-tools",
             "--profile",
             "drill-finalize",
@@ -112,6 +121,16 @@ def test_resolved_drill_compose_has_no_local_build_and_one_candidate_image() -> 
         env=environment,
     )
     services = cast(dict[str, dict[str, object]], json.loads(completed.stdout)["services"])
+    for name in (
+        "backup-database",
+        "backup-objects",
+        "restore-database",
+        "restore-objects",
+    ):
+        networks = cast(dict[str, object], services[name]["networks"])
+        assert set(networks) == {"backend"}
+    guard_networks = cast(dict[str, object], services["operations-guard"]["networks"])
+    assert set(guard_networks) == {"default"}
     for name in (
         "api",
         "migrate",
