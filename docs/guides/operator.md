@@ -1,6 +1,6 @@
 # Operator guide
 
-This guide is for operators preparing to evaluate Anva `v0.1.4` after its
+This guide is for operators preparing to evaluate Anva `v0.1.5` after its
 protected release completes. It does not
 replace the release checklist or the still-open human exercise in #44. Use the
 verified digest-addressed image and public release assets; source checkout is a

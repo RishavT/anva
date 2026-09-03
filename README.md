@@ -167,7 +167,7 @@ the release builder. The source gate excludes operator-owned secrets, backups,
 release outputs, `.git`, and local tool caches from the distributable scan, then
 gates vulnerability, secret, and misconfiguration findings. The checked-in
 v0.1.0 vulnerability exception is historical evidence only and is deliberately
-rejected for v0.1.4. The local gate requires an explicit external decision
+rejected for v0.1.5. The local gate requires an explicit external decision
 supplied with `ANVA_RELEASE_RISK_DECISION_INPUT`, generated
 after protected approval and bound to the exact candidate source, digest,
 report, and findings. Only after the gate succeeds is the canonical decision
@@ -216,11 +216,11 @@ and [backup/restore](docs/runbooks/backup-and-restore.md) runbooks before using
 these beyond local evaluation. Use the GitHub-native release assets and
 digest-addressed GHCR image only after completing the verification steps in the
 install runbook; source-checkout installation remains available as a fallback.
-See the [v0.1.4 release notes](docs/releases/v0.1.4.md), [compatibility
+See the [v0.1.5 release notes](docs/releases/v0.1.5.md), [compatibility
 matrix](docs/releases/compatibility.md), and [current readiness
 audit](docs/releases/current-release-readiness.md) for the pending same-source
 patch identity and its still-open human gates. The published `v0.1.0` identity
-remains historical until the protected v0.1.4 release completes.
+remains historical until the protected v0.1.5 release completes.
 
 After a test or drill, remove only the named task project with `make test-down`
 or `COMPOSE_PROJECT=<exact-project> make uninstall-clean`; inspect the resolved
