@@ -1,11 +1,11 @@
 # Install, upgrade, rollback, and uninstall
 
-This runbook covers the GitHub-native `v0.1.5` installation path and the
+This runbook covers the GitHub-native `v0.1.6` installation path and the
 source-checkout fallback. The commands become usable only after the protected
 release workflow publishes and verifies the exact tag, assets, attestations,
 immutable GHCR image, and install lifecycle. Human gate #44 remains separate.
 
-## GitHub-native v0.1.5 installation
+## GitHub-native v0.1.6 installation
 
 Install Docker Engine with the Compose v2 plugin, GitHub CLI, `jq`, and standard
 `sha256sum` and `tar` utilities. Public release asset download and checksum
@@ -14,9 +14,9 @@ so authenticate `gh` (for example, with `gh auth login` or a scoped `GH_TOKEN`)
 before verifying standard build-provenance for every downloaded asset:
 
 ```sh
-gh release download v0.1.5 --repo rishavt/anva --dir anva-v0.1.5
-(cd anva-v0.1.5 && sha256sum --check SHA256SUMS)
-for artifact in anva-v0.1.5/*; do
+gh release download v0.1.6 --repo rishavt/anva --dir anva-v0.1.6
+(cd anva-v0.1.6 && sha256sum --check SHA256SUMS)
+for artifact in anva-v0.1.6/*; do
   gh attestation verify "$artifact" --repo rishavt/anva
 done
 ```
@@ -27,9 +27,9 @@ supplemental predicate's GitHub signature, signer workflow, subject digest, and
 exact tag, commit, and release-version fields all verify:
 
 ```sh
-ANVA_SOURCE_COMMIT="$(jq -er '.source_commit' anva-v0.1.5/release-manifest.json)"
-ANVA_SOURCE_TAG=v0.1.5
-ANVA_SOURCE_VERSION=0.1.5
+ANVA_SOURCE_COMMIT="$(jq -er '.source_commit' anva-v0.1.6/release-manifest.json)"
+ANVA_SOURCE_TAG=v0.1.6
+ANVA_SOURCE_VERSION=0.1.6
 ANVA_SOURCE_PREDICATE_TYPE=https://github.com/RishavT/anva/attestations/source/v1
 verify_source_binding() {
   gh attestation verify "$1" --repo rishavt/anva \
@@ -48,7 +48,7 @@ verify_source_binding() {
         | select(.verificationResult.statement.predicate["version"] == $version))
         | length > 0'
 }
-for artifact in anva-v0.1.5/*; do
+for artifact in anva-v0.1.6/*; do
   verify_source_binding "$artifact"
 done
 ```
@@ -61,12 +61,12 @@ Compose file:
 ```sh
 ANVA_RELEASE_IMAGE="$(jq -er \
   '.image.reference | select(test("^ghcr\\.io/rishavt/anva@sha256:[0-9a-f]{64}$"))' \
-  anva-v0.1.5/release-manifest.json)"
+  anva-v0.1.6/release-manifest.json)"
 export ANVA_RELEASE_IMAGE
 gh attestation verify "oci://${ANVA_RELEASE_IMAGE}" --repo rishavt/anva
 verify_source_binding "oci://${ANVA_RELEASE_IMAGE}"
 docker pull "${ANVA_RELEASE_IMAGE}"
-docker tag "${ANVA_RELEASE_IMAGE}" ghcr.io/rishavt/anva:0.1.5
+docker tag "${ANVA_RELEASE_IMAGE}" ghcr.io/rishavt/anva:0.1.6
 ```
 
 Extract the already verified install bundle, make local configuration explicit,
@@ -74,12 +74,12 @@ and start without allowing a source rebuild to replace the verified image:
 
 ```sh
 mkdir anva-install
-tar -xzf anva-v0.1.5/anva-install-0.1.5.tar.gz -C anva-install
-cd anva-install/anva-0.1.5
+tar -xzf anva-v0.1.6/anva-install-0.1.6.tar.gz -C anva-install
+cd anva-install/anva-0.1.6
 cp .env.example .env
 # Replace local-only credentials before any non-development deployment.
 export ANVA_IMAGE_REPOSITORY=ghcr.io/rishavt/anva
-export ANVA_VERSION=0.1.5
+export ANVA_VERSION=0.1.6
 docker compose config --quiet
 docker compose up --no-build --wait
 ```

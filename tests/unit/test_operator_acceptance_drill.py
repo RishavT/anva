@@ -101,7 +101,7 @@ def _create(tmp_path: Path) -> Path:
                 "--image-digest",
                 IMAGE,
                 "--product-version",
-                "0.1.5",
+                "0.1.6",
                 "--product-source-commit",
                 PUBLISHED_PRODUCT_SOURCE,
                 "--operator-source-commit",
@@ -138,7 +138,7 @@ def test_next_image_contract_distinguishes_harness_from_operator_source(
 @pytest.mark.unit
 def test_generic_release_boundary_requires_product_and_operator_source_identity() -> None:
     eligible = record_release_boundary(
-        product_version="0.1.5",
+        product_version="0.1.6",
         product_source_commit=COMMIT,
         operator_source_commit=COMMIT,
         operator_cli_in_product=True,
@@ -154,7 +154,7 @@ def test_generic_release_boundary_requires_product_and_operator_source_identity(
         )
         assert rejected["status"] == "NOT_ACCEPTED"
     stale_source = record_release_boundary(
-        product_version="0.1.5",
+        product_version="0.1.6",
         product_source_commit=PUBLISHED_PRODUCT_SOURCE,
         operator_source_commit=COMMIT,
         operator_cli_in_product=True,
@@ -170,15 +170,14 @@ def test_generic_release_boundary_requires_product_and_operator_source_identity(
 
 
 @pytest.mark.unit
-def test_tracked_template_records_published_identity_but_requires_next_image() -> None:
+def test_tracked_template_requires_runtime_v016_identity() -> None:
     root = Path(__file__).resolve().parents[2]
     template = json.loads((root / "deploy/drill/evidence-template.json").read_text())
-    assert template["product_version"] == "0.1.5"
-    assert template["product_source_commit"] == PUBLISHED_PRODUCT_SOURCE
-    assert template["product_image_digest"] == (
-        "sha256:19488230c6f7900cda33bd11adc7f1ad824d23b77ee87fd65ac883cd0dacc725"
-    )
-    assert template["release_status"] == "NOT_ACCEPTED_OPERATOR_TOOL_PREDATES_SOURCE_ROLE_CONTRACT"
+    assert template["product_version"] == "0.1.6"
+    assert template["product_source_commit"] == "RUNTIME_REQUIRED_COMMIT"
+    assert template["product_image_digest"] == "RUNTIME_REQUIRED_SHA256"
+    assert template["release_run_id"] == "RUNTIME_REQUIRED_POSITIVE_INTEGER"
+    assert template["release_status"] == "CANDIDATE_NOT_PUBLISHED_OPERATOR_ACCEPTANCE_FORBIDDEN"
     makefile = (root / "Makefile").read_text()
     assert '--product-source-commit "$(ANVA_DRILL_PRODUCT_SOURCE_COMMIT)"' in makefile
     assert '--operator-source-commit "$(ANVA_DRILL_PRODUCT_SOURCE_COMMIT)"' in makefile
@@ -330,7 +329,7 @@ def _eligible_ledger_and_anchor(tmp_path: Path) -> tuple[Path, Path]:
         "operator_cli_in_product": True,
         "operator_source_commit": COMMIT,
         "product_source_commit": COMMIT,
-        "product_version": "0.1.5",
+        "product_version": "0.1.6",
         "status": "ELIGIBLE_FOR_HUMAN_ACCEPTANCE",
     }
     path = tmp_path / "ledger.jsonl"

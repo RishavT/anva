@@ -1,4 +1,4 @@
-"""Contracts for v0.1.5 release and installation guidance."""
+"""Contracts for v0.1.6 release and installation guidance."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ ROOT = Path(__file__).parents[2]
 INSTALL = ROOT / "docs" / "runbooks" / "install-upgrade-uninstall.md"
 RELEASE = ROOT / "docs" / "releases" / "github-native-release.md"
 READINESS = ROOT / "docs" / "releases" / "current-release-readiness.md"
-NOTES = ROOT / "docs" / "releases" / "v0.1.5.md"
+NOTES = ROOT / "docs" / "releases" / "v0.1.6.md"
 WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 HISTORICAL_REPAIR = ROOT / ".github" / "workflows" / "release-metadata-repair.yml"
 V012_NOTES = ROOT / "docs" / "releases" / "v0.1.2.md"
@@ -17,28 +17,28 @@ V013_NOTES = ROOT / "docs" / "releases" / "v0.1.3.md"
 V014_NOTES = ROOT / "docs" / "releases" / "v0.1.4.md"
 
 
-def test_active_release_guidance_agrees_on_exact_v015_identity() -> None:
+def test_active_release_guidance_agrees_on_exact_v016_identity() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     for document in (INSTALL, RELEASE, READINESS, NOTES):
         text = document.read_text(encoding="utf-8")
-        assert "v0.1.5" in text
-    assert "ANVA_VERSION: 0.1.5" in workflow
-    assert "default: v0.1.5" in workflow
-    assert "group: release-v0.1.5" in workflow
-    assert "ANVA_SOURCE_VERSION=0.1.5" in INSTALL.read_text(encoding="utf-8")
-    assert "anva-install-0.1.5.tar.gz" in INSTALL.read_text(encoding="utf-8")
+        assert "v0.1.6" in text
+    assert "ANVA_VERSION: 0.1.6" in workflow
+    assert "default: v0.1.6" in workflow
+    assert "group: release-v0.1.6" in workflow
+    assert "ANVA_SOURCE_VERSION=0.1.6" in INSTALL.read_text(encoding="utf-8")
+    assert "anva-install-0.1.6.tar.gz" in INSTALL.read_text(encoding="utf-8")
 
 
-def test_runtime_build_and_compose_defaults_agree_on_v015() -> None:
+def test_runtime_build_and_compose_defaults_agree_on_v016() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert project["project"]["version"] == "0.1.5"
-    assert '__version__ = "0.1.5"' in (ROOT / "src/anva/__init__.py").read_text()
-    assert "ANVA_VERSION ?= 0.1.5" in (ROOT / "Makefile").read_text()
-    assert "ARG ANVA_VERSION=0.1.5" in (ROOT / "Dockerfile").read_text()
+    assert project["project"]["version"] == "0.1.6"
+    assert '__version__ = "0.1.6"' in (ROOT / "src/anva/__init__.py").read_text()
+    assert "ANVA_VERSION ?= 0.1.6" in (ROOT / "Makefile").read_text()
+    assert "ARG ANVA_VERSION=0.1.6" in (ROOT / "Dockerfile").read_text()
     for name in ("compose.yaml", "compose.acceptance.yaml", "compose.acceptance.case.yaml"):
         text = (ROOT / name).read_text(encoding="utf-8")
         assert "ANVA_VERSION:-0.1.0" not in text
-        assert "ANVA_VERSION:-0.1.5" in text
+        assert "ANVA_VERSION:-0.1.6" in text
 
 
 def test_release_docs_require_separate_exact_source_and_human_risk_approval() -> None:
@@ -46,24 +46,41 @@ def test_release_docs_require_separate_exact_source_and_human_risk_approval() ->
     readiness = " ".join(READINESS.read_text(encoding="utf-8").split())
     notes = " ".join(NOTES.read_text(encoding="utf-8").split())
     assert "requires the full lowercase candidate commit" in release
-    assert '-f tag=v0.1.5 -f source_commit="$ANVA_SOURCE_COMMIT"' in release
-    assert "v0.1.0 approval cannot be replayed" in release
+    assert '-f tag=v0.1.6 -f source_commit="$ANVA_SOURCE_COMMIT"' in release
+    assert (
+        "successful v0.1.5 approval and its associated evidence authorize only the "
+        "immutable v0.1.5 release; they cannot be replayed or used to authorize v0.1.6" in release
+    )
+    assert (
+        "v0.1.0 approval remains older historical evidence and likewise cannot "
+        "authorize v0.1.6" in release
+    )
     assert "explicit RishavT decision" in readiness
     assert "v0.1.0 vulnerability exception is historical evidence" in notes
     assert "protected `release` environment" in release
 
 
+def test_release_rollback_uses_exact_verified_v015_predecessor() -> None:
+    release = " ".join(RELEASE.read_text(encoding="utf-8").split())
+    assert "rollback predecessor is the verified v0.1.5 image" in release
+    assert (
+        "ghcr.io/rishavt/anva@sha256:"
+        "19488230c6f7900cda33bd11adc7f1ad824d23b77ee87fd65ac883cd0dacc725" in release
+    )
+    assert "previous verified v0.1.0 digest" not in release
+
+
 def test_install_guidance_verifies_download_attestation_digest_and_no_build() -> None:
     install = INSTALL.read_text(encoding="utf-8")
     for contract in (
-        "gh release download v0.1.5",
+        "gh release download v0.1.6",
         "sha256sum --check SHA256SUMS",
         'gh attestation verify "$artifact"',
         "ANVA_SOURCE_PREDICATE_TYPE=https://github.com/RishavT/anva/attestations/source/v1",
         'gh attestation verify "oci://${ANVA_RELEASE_IMAGE}"',
         'docker pull "${ANVA_RELEASE_IMAGE}"',
         "docker compose up --no-build --wait",
-        "export ANVA_VERSION=0.1.5",
+        "export ANVA_VERSION=0.1.6",
     ):
         assert contract in install
 
@@ -73,7 +90,7 @@ def test_v010_metadata_repair_remains_historically_pinned() -> None:
     assert "Repair v0.1.0 release metadata" in repair
     assert "ANVA_RELEASE_TAG: v0.1.0" in repair
     assert "group: release-v0.1.0" in repair
-    assert "v0.1.5" not in repair
+    assert "v0.1.6" not in repair
 
 
 def test_v012_history_distinguishes_build_approval_from_release_approval() -> None:

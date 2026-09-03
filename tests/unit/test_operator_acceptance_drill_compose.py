@@ -241,13 +241,11 @@ def test_tracked_evidence_guide_records_published_pending_release_boundary() -> 
         (ROOT / "deploy/drill/evidence-template.json").read_text(encoding="utf-8")
     )
 
-    assert guide["product_version"] == "0.1.5"
-    assert guide["product_source_commit"] == "491cdd7830a7f4d6af7140f6a4744f95c80c46a9"
-    assert guide["product_image_digest"] == (
-        "sha256:19488230c6f7900cda33bd11adc7f1ad824d23b77ee87fd65ac883cd0dacc725"
-    )
-    assert guide["release_run_id"] == 33727525411
-    assert guide["release_status"] == ("NOT_ACCEPTED_OPERATOR_TOOL_PREDATES_SOURCE_ROLE_CONTRACT")
+    assert guide["product_version"] == "0.1.6"
+    assert guide["product_source_commit"] == "RUNTIME_REQUIRED_COMMIT"
+    assert guide["product_image_digest"] == "RUNTIME_REQUIRED_SHA256"
+    assert guide["release_run_id"] == "RUNTIME_REQUIRED_POSITIVE_INTEGER"
+    assert guide["release_status"] == "CANDIDATE_NOT_PUBLISHED_OPERATOR_ACCEPTANCE_FORBIDDEN"
     assert guide["completion_event"] == "github_anchor"
     assert guide["approval_actor"] == "RishavT"
 

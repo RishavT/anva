@@ -1,21 +1,20 @@
-# Current v0.1.5 release readiness
+# Current v0.1.6 release readiness
 
-Anva `v0.1.5` is in release preparation. No tag, candidate image, risk
+Anva `v0.1.6` is in release preparation. No tag, candidate image, risk
 approval, protected-environment approval, or GitHub Release is claimed here.
 
-The preparation baseline is `72b4af7318eb27797e8d957fa0b9de803206fed1`.
-It contains deterministic construction from #91, single-byte OCI lineage from
-#96, protected decision verification from #101, and the least-privilege Skopeo
-auth-file identity fix from #106. The final candidate identity will be the full
+The preparation baseline is `76dfd4026c59efa41cdddf906e59d0a3f457117c`.
+It contains the generic operator-evidence source-role contract from #117/#118
+in addition to the previously published release controls. The final candidate identity will be the full
 reviewed `main` commit supplied to release dispatch and must equal the commit
-resolved from a newly created immutable `v0.1.5` tag.
+resolved from a newly created immutable `v0.1.6` tag.
 
 ## Blocking gates
 
 | Gate | Current disposition |
 | --- | --- |
 | Candidate identity | Pending reviewed merge and exact tag-to-commit binding. |
-| Candidate build and scan | Pending a fresh deterministic double-build and scan from reviewed v0.1.5 source. The aborted v0.1.1 through v0.1.4 runs are historical only; #91, #96, #101, and #106 are included only through fix-forward candidates. |
+| Candidate build and scan | Pending a fresh deterministic double-build and scan from reviewed v0.1.6 source. The successful v0.1.5 publication is historical and cannot supply the new image contract. |
 | Residual risk | Pending a fresh attested proposal followed by an explicit RishavT decision through personal protected-environment approval for the exact source, digest, report, tuple set, runtime controls, and expiry. GitHub's exact-run approval record and proposal SHA must bind the generated decision. No prior decision or approval can be replayed. |
 | Publication | Pending a separate protected `release` environment approval after the build and attest job succeeds. |
 | Human acceptance #44 | Still separate. Harness success cannot approve or finalize it. |
@@ -25,13 +24,22 @@ must produce checksums, SPDX/CycloneDX SBOMs, standard GitHub provenance,
 supplemental source predicates, immutable GHCR identity, and clean install and
 demo verification from downloaded assets.
 
+## Historical v0.1.5 identity
+
+The successful v0.1.5 release remains bound to product source
+`491cdd7830a7f4d6af7140f6a4744f95c80c46a9`, immutable image
+`sha256:19488230c6f7900cda33bd11adc7f1ad824d23b77ee87fd65ac883cd0dacc725`,
+and release run `33727525411`. Its operator drill is `NOT_ACCEPTED` because that
+image predates the source-role contract. Its publication approval must not be
+replayed for v0.1.6.
+
 ## Historical v0.1.0 identity
 
 The published v0.1.0 tag remains bound to
 `d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac` and image digest
 `sha256:29af794b9fda21e75461866437dd4853db54b54072252d0df9aa2eed77807c2d`.
 Its metadata-repair workflow and risk decision are immutable historical
-evidence and are not retargeted to v0.1.5.
+evidence and are not retargeted to v0.1.6.
 
 ## Historical v0.1.1 identity
 
@@ -70,4 +78,4 @@ readback. Its first Skopeo registry copy then failed because the dropped-
 capability container could not read the runner-owned mode-0600 auth bind. It
 received zero Publish or Verify approvals. No v0.1.4 GHCR image or GitHub
 Release exists. #106 landed after the immutable tag and is included only by
-fixing forward to v0.1.5; no v0.1.4 approval or decision authorizes v0.1.5.
+fixing forward to v0.1.6; no v0.1.4 approval or decision authorizes v0.1.6.

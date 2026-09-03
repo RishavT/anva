@@ -8,7 +8,13 @@ not be inferred as human review, an operator decision, or signoff.
 
 ## Release boundary
 
-The product services run the canonical public v0.1.5 image at
+The next eligible target is v0.1.6, which is not yet published. Its exact
+product source and digest must be supplied at runtime after publication. The
+harness compares that source with the pinned image's OCI revision and records
+the harness source separately; the tracked guide deliberately contains runtime
+placeholders instead of a fabricated future commit, digest, or run ID.
+
+The predecessor product services run the canonical public v0.1.5 image at
 `sha256:19488230c6f7900cda33bd11adc7f1ad824d23b77ee87fd65ac883cd0dacc725`,
 whose product source is `491cdd7830a7f4d6af7140f6a4744f95c80c46a9`. Publication and immutable
 install verification completed in release workflow `33727525411`.
@@ -16,10 +22,9 @@ install verification completed in release workflow `33727525411`.
 That immutable image predates the corrected product/operator source-role
 contract. Running its `drill-tool` with the published product source and a later
 operator harness source correctly yields `NOT_ACCEPTED`; current-source code
-must not be substituted for the pinned image. A future immutable release must
-contain the generic same-image source binding before final #44 evidence can be
-eligible. The tracked guide records the v0.1.5 publication facts and this
-explicitly ineligible boundary without claiming an operator exercise.
+must not be substituted for the pinned image. The v0.1.6 release must contain
+the generic same-image source binding before final #44 evidence can be eligible.
+No operator exercise may begin during release preparation.
 
 ## Automated preparation
 
