@@ -209,6 +209,8 @@ services:
     tmpfs: ["/tmp"]
     environment:
       GH_CONFIG_DIR: /gh-config
+      HOME: /tmp/gh-home
+      XDG_CACHE_HOME: /tmp/gh-cache
     profiles: ["drill-finalize"]
     networks: [finalizer-egress]
     volumes:

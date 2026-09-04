@@ -14,6 +14,8 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 APP_IMAGE = "${ANVA_DRILL_IMAGE:?set the exact candidate ghcr.io/rishavt/anva@sha256 digest}"
+FINALIZER_HOME = "/" + "tmp/gh-home"
+FINALIZER_CACHE = "/" + "tmp/gh-cache"
 APP_SERVICES = (
     "api",
     "worker",
@@ -76,6 +78,8 @@ def test_drill_overlay_pins_public_runtime_tls_and_scrape_images() -> None:
     assert finalizer["read_only"] is True
     assert finalizer["networks"] == ["finalizer-egress"]
     assert finalizer["security_opt"] == ["no-new-privileges:true"]
+    assert finalizer["environment"]["HOME"] == FINALIZER_HOME
+    assert finalizer["environment"]["XDG_CACHE_HOME"] == FINALIZER_CACHE
     assert all("docker.sock" not in volume for volume in finalizer["volumes"])
     assert any("/gh-config:ro" in volume for volume in finalizer["volumes"])
     assert any("/usr/local/bin/gh:ro" in volume for volume in finalizer["volumes"])
@@ -166,6 +170,13 @@ def test_resolved_drill_compose_has_no_local_build_and_one_candidate_image() -> 
         assert set(networks) == {"backend"}
     guard_networks = cast(dict[str, object], services["operations-guard"]["networks"])
     assert set(guard_networks) == {"default"}
+    finalizer = services["drill-finalizer"]
+    finalizer_environment = cast(dict[str, str], finalizer["environment"])
+    assert finalizer_environment["HOME"] == FINALIZER_HOME
+    assert finalizer_environment["XDG_CACHE_HOME"] == FINALIZER_CACHE
+    assert finalizer["read_only"] is True
+    assert set(cast(dict[str, object], finalizer["networks"])) == {"finalizer-egress"}
+    assert "ports" not in finalizer
     operator = services["drill-decommission-operator"]
     assert operator["user"] == "12345:23456"
     assert operator["cap_drop"] == ["ALL"]
