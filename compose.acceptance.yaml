@@ -10,7 +10,7 @@ x-acceptance-product: &acceptance-product
       ANVA_SOURCE: ${ANVA_SOURCE:-https://github.com/rishavt/anva}
       SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH:-1756684800}
   profiles: ["acceptance"]
-  user: "10001:10001"
+  user: "${ANVA_ACCEPTANCE_UID:-10001}:${ANVA_ACCEPTANCE_GID:-10001}"
   networks: [acceptance-edge]
   read_only: true
   privileged: false
@@ -21,7 +21,7 @@ x-acceptance-product: &acceptance-product
   pids_limit: 96
   tmpfs:
     - /tmp:size=32m,mode=1777,noexec,nosuid,nodev
-    - /app/run:size=8m,mode=0700,uid=10001,gid=10001,noexec,nosuid,nodev
+    - /app/run:size=8m,mode=0700,uid=${ANVA_ACCEPTANCE_UID:-10001},gid=${ANVA_ACCEPTANCE_GID:-10001},noexec,nosuid,nodev
   logging:
     driver: json-file
     options:
@@ -86,7 +86,7 @@ services:
     pids_limit: 64
     tmpfs:
       - /tmp:size=16m,mode=1777
-      - /app/run:size=4m,mode=0700,uid=10001,gid=10001
+      - /app/run:size=4m,mode=0700,uid=${ANVA_ACCEPTANCE_UID:-10001},gid=${ANVA_ACCEPTANCE_GID:-10001}
     volumes:
       - type: bind
         source: ${ANVA_ACCEPTANCE_INPUT_DIR:-/nonexistent-anva-public-input}
@@ -106,6 +106,9 @@ services:
 
   api:
     user: "${ANVA_ACCEPTANCE_UID:-10001}:${ANVA_ACCEPTANCE_GID:-10001}"
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /app/run:size=16m,mode=0700,uid=${ANVA_ACCEPTANCE_UID:-10001},gid=${ANVA_ACCEPTANCE_GID:-10001}
     environment:
       ANVA_FILESYSTEM_ALLOWED_ROOTS: /app/acceptance/canonical/payload
       ANVA_BOOTSTRAP_SECRET: ""

@@ -41,7 +41,7 @@ def test_only_adapter_mounts_raw_acceptance_input() -> None:
     tmp_mount = f"{Path('/').joinpath('tmp')}:size=16m,mode=1777"
     assert adapter["tmpfs"] == [
         tmp_mount,
-        "/app/run:size=4m,mode=0700,uid=10001,gid=10001",
+        "/app/run:size=4m,mode=0700,uid=${ANVA_ACCEPTANCE_UID:-10001},gid=${ANVA_ACCEPTANCE_GID:-10001}",
     ]
     mounts = cast(list[dict[str, object]], adapter["volumes"])
     assert len(mounts) == 2
@@ -70,6 +70,14 @@ def test_product_and_runner_receive_only_read_only_canonical_volume() -> None:
         yaml.safe_load(Path("compose.acceptance.yaml").read_text(encoding="utf-8")),
     )
     services = cast(dict[str, dict[str, object]], document["services"])
+
+    api = services["api"]
+    assert api["user"] == "${ANVA_ACCEPTANCE_UID:-10001}:${ANVA_ACCEPTANCE_GID:-10001}"
+    assert api["tmpfs"] == [
+        "/tmp:size=64m,mode=1777",  # noqa: S108
+        "/app/run:size=16m,mode=0700,"
+        "uid=${ANVA_ACCEPTANCE_UID:-10001},gid=${ANVA_ACCEPTANCE_GID:-10001}",
+    ]
 
     for service_name in ("api", "worker", "mcp", "cli"):
         service = services[service_name]
@@ -110,7 +118,7 @@ def test_acceptance_make_targets_are_scoped_and_cleanup_ephemeral_volume() -> No
     cleanup = makefile.split("\nacceptance-down:\n", 1)[1].split("\ncontract:\n", 1)[0]
     assert "$(ACCEPTANCE_COMPOSE) --profile acceptance down --volumes --remove-orphans" in cleanup
     assert "prune" not in cleanup
-    verify = makefile.split("\nacceptance-verify:\n", 1)[1].split("\nacceptance-down:\n", 1)[0]
+    verify = makefile.split("\nacceptance-verify:", 1)[1].split("\nacceptance-down:", 1)[0]
     for pin in (
         "ANVA_ACCEPTANCE_MANIFEST_SHA256",
         "ANVA_ACCEPTANCE_SOURCE_FINGERPRINT",
@@ -161,7 +169,13 @@ def test_product_acceptance_phases_have_disjoint_hardened_mounts() -> None:
         assert service["mem_limit"] == "512m"
         assert service["memswap_limit"] == "512m"
         assert service["pids_limit"] == 96
-        assert service["user"] == "10001:10001"
+        assert service["user"] == ("${ANVA_ACCEPTANCE_UID:-10001}:${ANVA_ACCEPTANCE_GID:-10001}")
+        assert service["tmpfs"] == [
+            "/tmp:size=32m,mode=1777,noexec,nosuid,nodev",  # noqa: S108
+            "/app/run:size=8m,mode=0700,"
+            "uid=${ANVA_ACCEPTANCE_UID:-10001},"
+            "gid=${ANVA_ACCEPTANCE_GID:-10001},noexec,nosuid,nodev",
+        ]
         assert service["networks"] == ["acceptance-edge"]
         rendered = str(service).casefold()
         assert "/acceptance/raw" not in rendered
@@ -305,13 +319,53 @@ def test_product_acceptance_make_targets_use_scoped_compose_services() -> None:
         ("acceptance-review-submit", "acceptance-review-submit"),
         ("acceptance-finalize", "acceptance-product-finalize"),
     ):
-        body = makefile.split(f"\n{target}:\n", 1)[1].split("\n\n", 1)[0]
+        assert f"{target}: acceptance-identity-preflight" in makefile
+        body = makefile.split(f"\n{target}:", 1)[1].split("\n\n", 1)[0]
         assert f"run --rm --no-deps {service}" in body
         assert "prune" not in body
         assert 'test -n "$(ANVA_REVISION)"' in body
         assert 'test -n "$(ANVA_IMAGE_SHA256)"' in body
         assert 'test -n "$(ANVA_BUILD_INPUT_SHA256)"' in body
         assert 'test -n "$(ANVA_ACCEPTANCE_LAUNCH_MANIFEST)"' in body
+
+
+@pytest.mark.unit
+def test_acceptance_identity_preflight_rejects_unpaired_or_unsafe_ids() -> None:
+    make = shutil.which("make")
+    if make is None:
+        pytest.skip("make is unavailable for acceptance preflight validation")
+
+    base_environment = os.environ.copy()
+    base_environment.pop("ANVA_ACCEPTANCE_UID", None)
+    base_environment.pop("ANVA_ACCEPTANCE_GID", None)
+
+    for overrides in (
+        {"ANVA_ACCEPTANCE_UID": "1000"},
+        {"ANVA_ACCEPTANCE_GID": "1000"},
+        {"ANVA_ACCEPTANCE_UID": "0", "ANVA_ACCEPTANCE_GID": "1000"},
+        {"ANVA_ACCEPTANCE_UID": "00", "ANVA_ACCEPTANCE_GID": "1000"},
+        {"ANVA_ACCEPTANCE_UID": "1000:1000", "ANVA_ACCEPTANCE_GID": "1000"},
+        {"ANVA_ACCEPTANCE_UID": "1000", "ANVA_ACCEPTANCE_GID": "not-a-gid"},
+    ):
+        environment = base_environment | overrides
+        completed = subprocess.run(  # noqa: S603 - executable resolved by shutil.which
+            [make, "acceptance-identity-preflight"],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        assert completed.returncode == 2
+
+    for overrides in ({}, {"ANVA_ACCEPTANCE_UID": "1000", "ANVA_ACCEPTANCE_GID": "1000"}):
+        completed = subprocess.run(  # noqa: S603 - executable resolved by shutil.which
+            [make, "acceptance-identity-preflight"],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=base_environment | overrides,
+        )
+        assert completed.returncode == 0, completed.stderr
 
 
 @pytest.mark.unit
@@ -354,3 +408,56 @@ def test_resolved_acceptance_compose_enforces_edge_backend_separation() -> None:
             "acceptance-backend",
             "acceptance-edge",
         }
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("identity_environment", "expected_id"),
+    [({}, "10001"), ({"ANVA_ACCEPTANCE_UID": "1000", "ANVA_ACCEPTANCE_GID": "1000"}, "1000")],
+)
+def test_resolved_acceptance_identity_is_consistent_across_protected_services(
+    identity_environment: dict[str, str], expected_id: str
+) -> None:
+    docker = shutil.which("docker")
+    if docker is None:
+        pytest.skip("Docker CLI is unavailable for resolved Compose validation")
+    environment = os.environ.copy()
+    environment.pop("ANVA_ACCEPTANCE_UID", None)
+    environment.pop("ANVA_ACCEPTANCE_GID", None)
+    environment.update(identity_environment)
+    completed = subprocess.run(  # noqa: S603 - executable resolved by shutil.which
+        [
+            docker,
+            "compose",
+            "-f",
+            "compose.yaml",
+            "-f",
+            "compose.acceptance.yaml",
+            "--profile",
+            "acceptance",
+            "config",
+            "--format",
+            "json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    services = cast(dict[str, dict[str, object]], json.loads(completed.stdout)["services"])
+    protected_services = (
+        "acceptance-adapter",
+        "api",
+        "acceptance-product-start",
+        "acceptance-review-request",
+        "acceptance-review-submit",
+        "acceptance-product-finalize",
+    )
+    for name in protected_services:
+        service = services[name]
+        assert service["user"] == f"{expected_id}:{expected_id}"
+        run_tmpfs = next(
+            entry for entry in cast(list[str], service["tmpfs"]) if entry.startswith("/app/run:")
+        )
+        assert f"uid={expected_id}" in run_tmpfs
+        assert f"gid={expected_id}" in run_tmpfs

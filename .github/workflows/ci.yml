@@ -34,6 +34,27 @@ jobs:
           ANVA_CANVAS_PERFORMANCE_ROOT=/workspace/.ci-artifacts/performance \
           ANVA_CANVAS_SCREENSHOT_ROOT=/workspace/.ci-artifacts/screenshots \
           make ci
+      - name: Verify acceptance UID permissions on protected binds
+        run: |
+          docker compose -f compose.yaml -f compose.acceptance.yaml build acceptance-product-start
+          compose_plugin="$(docker info --format '{{range .ClientInfo.Plugins}}{{if eq .Name "compose"}}{{.Path}}{{end}}{{end}}')"
+          socket_gid="$(stat -c %g /var/run/docker.sock)"
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --group-add "$socket_gid" \
+            --memory 2g \
+            --cpus 2 \
+            --env ANVA_IMAGE_REPOSITORY=anva \
+            --env ANVA_VERSION=0.1.6 \
+            --volume /var/run/docker.sock:/var/run/docker.sock \
+            --volume /usr/bin/docker:/usr/bin/docker:ro \
+            --volume "$compose_plugin":/usr/lib/docker/cli-plugins/docker-compose:ro \
+            --volume "$GITHUB_WORKSPACE":"$GITHUB_WORKSPACE" \
+            --workdir "$GITHUB_WORKSPACE" \
+            anva-tests-test:latest \
+            pytest \
+              --basetemp "$GITHUB_WORKSPACE/.ci-artifacts/acceptance-permissions-${GITHUB_RUN_ID}" \
+              -q tests/integration/test_acceptance_uid_permissions.py
       - name: Retain Canvas performance evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
