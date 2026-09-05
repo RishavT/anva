@@ -51,7 +51,8 @@ identities, decisions, approvals, artifacts, or attestations.
   mutation or leakage.
 - [x] Logs, traces, metrics, reports, packages, images, and release evidence
   pass bounded secret/canary checks.
-- [x] Source/image scans, exact 13-CVE/16-tuple time-bounded risk decision,
+- [x] Source/image scans, exact 14-unique-CVE/18-high-or-critical-tuple
+  time-bounded risk decision,
   SBOMs, licenses, and repository checks passed for the published digest.
 - [x] Retention/decommission behavior, access revocation, retained data, and
   unsupported legal-erasure claims are documented and tested.

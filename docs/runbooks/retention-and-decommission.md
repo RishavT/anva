@@ -1,13 +1,11 @@
 # Retention and organization decommissioning
 
-MVP-013 implements organization-scoped retention and decommission operations.
+Published v0.1.6 implements organization-scoped retention and decommission
+operations at exact source `e89b06aed8207cc32eee0eeebde4a2731f0c0203`.
 Authorization, idempotency, retained-data, caller-time rejection, tenant-bucket
-isolation, and fail-closed access tests pass in the exact source candidate
-`94231d7e...`. Manual interruption/recovery and human acceptance remain open.
-The post-MVP-013 issue 29 candidate additionally deletes exact owned accepted
-evidence bytes with a retryable storage lifecycle; this is local candidate
-evidence and does not change the identity of the historical MVP-013 release
-record.
+isolation, fail-closed access, retryable owned-evidence deletion, and the
+synthetic interruption/recovery exercise passed. The external object-store and
+deployment-sized recovery boundary remains explicitly deferred to issue #38.
 
 ## Authorization and audit expectations
 
@@ -203,7 +201,8 @@ retry with a new correlation UUID and the newly reported attempt revision.
   complete tenant erasure.
 - The operations are transaction-bounded and have deterministic replay
   identities, and object deletion has retryable `DELETE_FAILED` state through
-  the deployment-local command above. Large-tenant timing and the release
-  recovery exercise remain open.
+  the deployment-local command above. Large-tenant timing, external
+  object-store recovery, and deployment-sized recovery remain open under issue
+  #38; the v0.1.6 synthetic interruption/recovery exercise is complete.
 - A successful HTTP status is not sufficient acceptance evidence; verify state,
   isolation, audit records, and retained/deleted data explicitly.

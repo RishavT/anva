@@ -1,30 +1,33 @@
 # Disposable operator acceptance drill harness
 
-This harness prepares safe, synthetic evidence for issue #44. It does not close #44,
-execute the genuine human exercise, or authorize a release. Every generated
-record for an eligible future image starts `PENDING_RISHAV_EXECUTION`; an
-ineligible image remains in its exact `NOT_ACCEPTED` state. Command success must
-not be inferred as human review, an operator decision, or signoff.
+This harness prepared safe, synthetic evidence for the now-complete issue #44
+exercise and remains the procedure for future release drills. It does not by
+itself execute a genuine human exercise or authorize a release. Every new
+eligible record starts `PENDING_RISHAV_EXECUTION`; an ineligible image remains
+in its exact `NOT_ACCEPTED` state. Command success must not be inferred as human
+review, an operator decision, or signoff.
 
 ## Release boundary
 
-The next eligible target is v0.1.6, which is not yet published. Its exact
-product source and digest must be supplied at runtime after publication. The
-harness compares that source with the pinned image's OCI revision and records
-the harness source separately; the tracked guide deliberately contains runtime
-placeholders instead of a fabricated future commit, digest, or run ID.
+The completed target was published v0.1.6 at product source
+`e89b06aed8207cc32eee0eeebde4a2731f0c0203` and image digest
+`sha256:916ea866ac290af35b5e97a6bd875fb365b832cb171284cf701a128b5ea524fb`.
+Operator-signoff run `33910747236` anchored the completed ledger. A future
+release must supply its own exact source and digest at runtime; the harness
+compares that source with the pinned image's OCI revision and records the
+harness source separately.
 
 The predecessor product services run the canonical public v0.1.5 image at
 `sha256:19488230c6f7900cda33bd11adc7f1ad824d23b77ee87fd65ac883cd0dacc725`,
 whose product source is `491cdd7830a7f4d6af7140f6a4744f95c80c46a9`. Publication and immutable
 install verification completed in release workflow `33727525411`.
 
-That immutable image predates the corrected product/operator source-role
-contract. Running its `drill-tool` with the published product source and a later
-operator harness source correctly yields `NOT_ACCEPTED`; current-source code
-must not be substituted for the pinned image. The v0.1.6 release must contain
-the generic same-image source binding before final #44 evidence can be eligible.
-No operator exercise may begin during release preparation.
+That predecessor image predates the corrected product/operator source-role
+contract. Running its `drill-tool` with a later product or operator source
+correctly yields `NOT_ACCEPTED`; current-source code must not be substituted for
+a pinned image. v0.1.6 supplied the generic same-image source binding used by
+the completed exercise. No future operator exercise may begin during release
+preparation.
 
 ## Automated preparation
 
@@ -101,15 +104,17 @@ raw metrics, request bodies, customer content, logs, credentials, or addresses.
 
 ## Genuine Rishav actions
 
-Only Rishav may perform and attest the release-owner decisions required by #44:
+Only Rishav may perform and attest the release-owner decisions required by a
+genuine drill:
 credential rotation/revocation, suspected permission-leak response, failed
 restore recovery, retention/decommission interruption, metrics/proxy triage,
 escalation decisions, and final cleanup/signoff. These actions must be observed
 against an eligible release candidate, timestamped by the human participant,
 and entered honestly. They must not be inferred from command success or filled
-by automation. Until then signoff remains null. An eligible future-image record
-remains `PENDING_RISHAV_EXECUTION`; the published v0.1.5 boundary remains
-`NOT_ACCEPTED_OPERATOR_TOOL_PREDATES_SOURCE_ROLE_CONTRACT`.
+by automation. Until then signoff remains null. New eligible records remain
+`PENDING_RISHAV_EXECUTION`; the historical v0.1.5 boundary remains
+`NOT_ACCEPTED_OPERATOR_TOOL_PREDATES_SOURCE_ROLE_CONTRACT`. The completed
+v0.1.6 record is externally anchored and final rather than pending.
 
 Local records are closed-schema machine facts: enumerated check/decision/cleanup
 codes, UUIDs, integers, and exact SHA-256 values. Free text and local human

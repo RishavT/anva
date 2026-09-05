@@ -1,9 +1,12 @@
 # MVP release ownership and escalation
 
 This record names the accountable human for the self-hosted Anva MVP release.
-The separately enforced vulnerability-risk decision is recorded in
-`docs/security/vulnerability-exceptions.json`. The published v0.1.6 operator
-exercise is recorded separately below.
+The separately enforced v0.1.6 vulnerability-risk decision is the immutable
+[`vulnerability-risk-acceptance.json`](https://github.com/RishavT/anva/releases/download/v0.1.6/vulnerability-risk-acceptance.json)
+asset attached to the public v0.1.6 release. The tracked
+`docs/security/vulnerability-exceptions.json` decision
+belongs to v0.1.0 and is retained only as historical evidence. The published
+v0.1.6 operator exercise is recorded separately below.
 
 ## Organization and owner
 
@@ -42,8 +45,11 @@ Protected signoff run `33910747236` records exact `release` approval by
 cleanup. Issue #44 is complete.
 
 Rishav Thakker separately approved the v0.1.6 digest-bound residual risk in
-protected release run `33781714974`. Drift, a recorded fix, control change, or
-expiry still fails closed; older release approvals are historical only.
+protected release run `33781714974`. Its immutable release asset records 14
+unique CVEs across 18 HIGH-or-CRITICAL package tuples for the exact source and
+image digest. Drift, a recorded fix, control change, or expiry still fails
+closed; the tracked v0.1.0 exception and all older release approvals are
+historical only.
 
 This ownership was supplied directly by Rishav Thakker on 2026-08-26 together
 with authorization to release the product. GitHub Releases, GHCR, and

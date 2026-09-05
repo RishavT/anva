@@ -24,6 +24,11 @@ operator-signoff run `33910747236` completed the separate human gate.
 | Codex | Historically tested with Codex CLI `0.145.0` | Historical host evidence; the portable archive is published |
 | Claude Code | Historically tested with Claude Code `2.1.220` | Historical host evidence; the portable archive is published |
 | Browser | Headless Chromium/ChromeDriver `151.0.7922.71` in the project browser-test image | Two exact-source browser journeys passed; decommission requires a setup-authenticated session no older than 15 minutes and has no post-setup reauthentication flow |
+
+The immutable source-security asset also records three MEDIUM and eight LOW
+Django vulnerability findings. They are lower-severity compatibility evidence,
+not part of the separately approved 14-unique-CVE/18-high-or-critical-tuple
+image-risk decision.
 | Other browsers | No support claim | Deferred |
 
 ## Version compatibility rules
