@@ -47,9 +47,20 @@ when it does not match those preserved identities.
 `no-new-privileges`, bounded tmpfs, and `network_mode: none`. It alone receives the raw bind mount.
 Its container is additionally limited to 256 MiB memory, no swap above that limit, and 64 PIDs.
 It defaults to the image's unprivileged UID/GID `10001:10001`, which owns Docker's image-seeded
-named-volume root. A closed external run may set `ANVA_ACCEPTANCE_UID` and
-`ANVA_ACCEPTANCE_GID` to the protected input owner's numeric identity; both values must be supplied
-together. The image seeds the otherwise-empty task-owned canonical volume root with sticky
+named-volume root. For a closed external run, create every protected bind directory with mode
+`0700` and its secret file with mode `0600`, then export both IDs of that owner before running any
+acceptance target:
+
+```console
+export ANVA_ACCEPTANCE_UID="$(id -u protected-owner)"
+export ANVA_ACCEPTANCE_GID="$(id -g protected-owner)"
+```
+
+Both variables must be supplied together and must be positive numeric IDs. The preflight rejects a
+partial, zero, or malformed identity before Compose starts a container. The adapter, API, and all
+four product phases run with this identity, including ownership of their private `/app/run` tmpfs;
+do not weaken the protected directories or secret to accommodate a mismatched container identity.
+The image seeds the otherwise-empty task-owned canonical volume root with sticky
 world-write permissions so that the selected non-root identity can publish into a fresh volume
 without gaining access to any host path or another user's entries. The adapter then
 seals copied files and directories read-only for the product services.

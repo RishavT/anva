@@ -31,6 +31,7 @@ override REHEARSAL_COMPOSE := \
 	docker compose -f compose.yaml -p $(REHEARSAL_PROJECT)
 TRIVY_SOURCE_SKIPS := --skip-dirs /workspace/.git --skip-dirs /workspace/.secrets --skip-dirs /workspace/secrets --skip-dirs /workspace/backups --skip-dirs /workspace/release --skip-dirs /workspace/.venv --skip-dirs /workspace/.pytest_cache --skip-dirs /workspace/.mypy_cache --skip-dirs /workspace/.ruff_cache --skip-dirs /workspace/htmlcov --skip-files /workspace/.env
 export ANVA_IMAGE_REPOSITORY ANVA_VERSION ANVA_REVISION ANVA_SOURCE SOURCE_DATE_EPOCH ANVA_IMAGE_SHA256 ANVA_BUILD_INPUT_SHA256
+export ANVA_ACCEPTANCE_UID ANVA_ACCEPTANCE_GID
 export ANVA_DRILL_IMAGE ANVA_DRILL_SOURCE_COMMIT
 export ANVA_DRILL_PRODUCT_SOURCE_COMMIT
 COMPOSE := docker compose -p $(COMPOSE_PROJECT)
@@ -48,7 +49,7 @@ ANVA_DRILL_PRODUCT_SOURCE_COMMIT ?=
 DRILL_COMPOSE := docker compose -p $(DRILL_PROJECT) -f compose.yaml -f compose.drill.yaml
 DRILL_FAULT_COMPOSE := $(DRILL_COMPOSE) -f compose.drill.restore-fault.yaml
 
-.PHONY: help install-demo up up-exposed down uninstall uninstall-clean backup backup-verify restore migration-rehearsal rate-limit-cleanup decommission-cleanup-status drill-network-preflight drill-up drill-probes drill-evidence-template drill-evidence-record drill-evidence-decision-proposal drill-evidence-cleanup drill-evidence-provisional-validate drill-evidence-finalize drill-evidence-final-validate drill-restore-fault drill-storage-interrupt drill-storage-resume drill-decommission-retry drill-down release-image-build release-image-oci release-package-files release-build release-scan release-scan-gate release-manifest release-artifacts release-clean reset logs migrate migrations-check shell cli lock contracts contracts-check skills-render skills-package skills-check format format-check lint type unit integration acceptance-canonicalize acceptance-verify acceptance-start acceptance-review-request acceptance-review-submit acceptance-finalize acceptance-down contract smoke browser coverage test test-down check ci
+.PHONY: help install-demo up up-exposed down uninstall uninstall-clean backup backup-verify restore migration-rehearsal rate-limit-cleanup decommission-cleanup-status drill-network-preflight drill-up drill-probes drill-evidence-template drill-evidence-record drill-evidence-decision-proposal drill-evidence-cleanup drill-evidence-provisional-validate drill-evidence-finalize drill-evidence-final-validate drill-restore-fault drill-storage-interrupt drill-storage-resume drill-decommission-retry drill-down release-image-build release-image-oci release-package-files release-build release-scan release-scan-gate release-manifest release-artifacts release-clean reset logs migrate migrations-check shell cli lock contracts contracts-check skills-render skills-package skills-check format format-check lint type unit integration acceptance-identity-preflight acceptance-canonicalize acceptance-verify acceptance-start acceptance-review-request acceptance-review-submit acceptance-finalize acceptance-down contract smoke browser coverage test test-down check ci
 
 help:
 	@echo "Anva development commands (all application tooling runs in Compose)"
@@ -583,16 +584,30 @@ unit:
 integration:
 	$(TEST_RUN) pytest -m integration
 
-acceptance-canonicalize:
+acceptance-identity-preflight:
+	@uid="$${ANVA_ACCEPTANCE_UID:-}"; gid="$${ANVA_ACCEPTANCE_GID:-}"; \
+	if { test -n "$$uid" && test -z "$$gid"; } || { test -z "$$uid" && test -n "$$gid"; }; then \
+		echo "ANVA_ACCEPTANCE_UID and ANVA_ACCEPTANCE_GID must be supplied together" >&2; exit 2; \
+	fi; \
+	if test -n "$$uid"; then \
+		case "$$uid" in *[!0-9]*|0*) \
+			echo "ANVA_ACCEPTANCE_UID and ANVA_ACCEPTANCE_GID must be positive numeric IDs" >&2; exit 2 ;; \
+		esac; \
+		case "$$gid" in *[!0-9]*|0*) \
+			echo "ANVA_ACCEPTANCE_UID and ANVA_ACCEPTANCE_GID must be positive numeric IDs" >&2; exit 2 ;; \
+		esac; \
+	fi
+
+acceptance-canonicalize: acceptance-identity-preflight
 	$(ACCEPTANCE_COMPOSE) --profile acceptance run --rm --build acceptance-adapter
 
-acceptance-verify:
+acceptance-verify: acceptance-identity-preflight
 	@test -n "$(ANVA_ACCEPTANCE_MANIFEST_SHA256)" || { echo "ANVA_ACCEPTANCE_MANIFEST_SHA256 is required"; exit 2; }
 	@test -n "$(ANVA_ACCEPTANCE_SOURCE_FINGERPRINT)" || { echo "ANVA_ACCEPTANCE_SOURCE_FINGERPRINT is required"; exit 2; }
 	@test -n "$(ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256)" || { echo "ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256 is required"; exit 2; }
 	$(ACCEPTANCE_COMPOSE) --profile acceptance run --rm acceptance-runner
 
-acceptance-start:
+acceptance-start: acceptance-identity-preflight
 	@test -n "$(ANVA_REVISION)" || { echo "ANVA_REVISION is required"; exit 2; }
 	@test -n "$(ANVA_IMAGE_SHA256)" || { echo "ANVA_IMAGE_SHA256 is required"; exit 2; }
 	@test -n "$(ANVA_BUILD_INPUT_SHA256)" || { echo "ANVA_BUILD_INPUT_SHA256 is required"; exit 2; }
@@ -605,7 +620,7 @@ acceptance-start:
 	$(ACCEPTANCE_COMPOSE) up -d --wait api worker mcp
 	$(ACCEPTANCE_COMPOSE) --profile acceptance run --rm --no-deps acceptance-product-start
 
-acceptance-review-request:
+acceptance-review-request: acceptance-identity-preflight
 	@test -n "$(ANVA_REVISION)" || { echo "ANVA_REVISION is required"; exit 2; }
 	@test -n "$(ANVA_IMAGE_SHA256)" || { echo "ANVA_IMAGE_SHA256 is required"; exit 2; }
 	@test -n "$(ANVA_BUILD_INPUT_SHA256)" || { echo "ANVA_BUILD_INPUT_SHA256 is required"; exit 2; }
@@ -614,7 +629,7 @@ acceptance-review-request:
 	@test -n "$(ANVA_ACCEPTANCE_HANDOFF_DIR)" || { echo "ANVA_ACCEPTANCE_HANDOFF_DIR is required"; exit 2; }
 	$(ACCEPTANCE_COMPOSE) --profile acceptance run --rm --no-deps acceptance-review-request
 
-acceptance-review-submit:
+acceptance-review-submit: acceptance-identity-preflight
 	@test -n "$(ANVA_REVISION)" || { echo "ANVA_REVISION is required"; exit 2; }
 	@test -n "$(ANVA_IMAGE_SHA256)" || { echo "ANVA_IMAGE_SHA256 is required"; exit 2; }
 	@test -n "$(ANVA_BUILD_INPUT_SHA256)" || { echo "ANVA_BUILD_INPUT_SHA256 is required"; exit 2; }
@@ -623,7 +638,7 @@ acceptance-review-submit:
 	@test -n "$(ANVA_ACCEPTANCE_REVIEW_RESULT_DIR)" || { echo "ANVA_ACCEPTANCE_REVIEW_RESULT_DIR is required"; exit 2; }
 	$(ACCEPTANCE_COMPOSE) --profile acceptance run --rm --no-deps acceptance-review-submit
 
-acceptance-finalize:
+acceptance-finalize: acceptance-identity-preflight
 	@test -n "$(ANVA_REVISION)" || { echo "ANVA_REVISION is required"; exit 2; }
 	@test -n "$(ANVA_IMAGE_SHA256)" || { echo "ANVA_IMAGE_SHA256 is required"; exit 2; }
 	@test -n "$(ANVA_BUILD_INPUT_SHA256)" || { echo "ANVA_BUILD_INPUT_SHA256 is required"; exit 2; }
