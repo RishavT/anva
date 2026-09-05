@@ -42,6 +42,8 @@ from anva.core.services.mcp_gateway import (
     _encode_cursor,
     dispatch_tool,
 )
+from anva.core.services.ranking import RankingExplanation
+from anva.core.services.search import SearchResponse, SearchResult
 from anva.core.services.tokens import (
     authenticate_bearer,
     issue_bootstrap_repository_token,
@@ -876,6 +878,55 @@ def test_persisted_private_entity_output_fails_closed_before_success_audit() -> 
         sort_keys=True,
     )
     assert canary not in persisted_audit
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_search_preserves_public_bearer_prose_at_canonical_mcp_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    organization, repository, scope, plaintext = _gateway_tenant("mcp-public-bearer-prose")
+    actor = authenticate_bearer(f"Bearer {plaintext}")
+    public_text = (
+        "The first operator sample used a long-lived shared bearer token in a shell script."
+    )
+    content_hash = "b4fe2b839d8b2be96656b319a6cf8512c332ded3fa07d18c2ad48a6c26a9ef64"
+    result = SearchResult(
+        chunk_id=uuid.uuid4(),
+        text=public_text,
+        content_hash=content_hash,
+        pointer="archive/archive-shared-token-sample/r001.md#L1-L8",
+        canonical_url="https://github.com/RishavT/anva-test/blob/main/archive/r001.md",
+        access_scope_id=scope.id,
+        source_location_id=uuid.uuid4(),
+        source_observation_id=uuid.uuid4(),
+        access_snapshot_id=uuid.uuid4(),
+        observed_at=timezone.now(),
+        explanation=RankingExplanation(1, 1, 1.0, "PREPARE", ("policy",)),
+    )
+    monkeypatch.setattr(
+        mcp_gateway,
+        "search_chunks",
+        lambda **_kwargs: SearchResponse("governance", "a" * 64, (result,)),
+    )
+
+    response = dispatch_tool(
+        actor=actor,
+        tool_name="anva.search",
+        arguments={
+            "contract_version": "1",
+            "repository_id": str(repository.id),
+            "query": "operator bridge authentication shared token workload identity",
+            "phase": "PREPARE",
+        },
+        transport="streamable-http",
+    )
+
+    validate_tool_output("anva.search", response)
+    returned = response["data"]["results"][0]  # type: ignore[index]
+    assert returned["text"] == public_text
+    assert returned["content_hash"] == content_hash
+    assert MCPToolInvocation.objects.get(request_id=actor.request_id).outcome == "SUCCEEDED"
 
 
 @pytest.mark.integration

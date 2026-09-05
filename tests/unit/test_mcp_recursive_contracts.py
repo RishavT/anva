@@ -9,8 +9,10 @@ import pytest
 from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import ValidationError
 
+from anva.core.services.hostile_inputs import reject_secrets
 from anva.core.services.mcp_gateway import (
     MCPGatewayError,
+    _mask_public_credential_terminology,
     _normalize_public_output,
     _reject_private_output_material,
 )
@@ -748,3 +750,89 @@ def test_runtime_guard_rejects_nested_credentials_but_allows_public_auth_metadat
         _reject_private_output_material({"data": {"attributes": {secret_key: "owner"}}})
     assert rejected_key.value.reason == "secret_material"
     assert secret_key not in str(rejected_key.value)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The first operator sample used a long-lived shared bearer token in a shell script.",
+        "The policy replaces shared bearer tokens with workload identity.",
+        "Bearer token authentication is prohibited by this public standard.",
+        "The bearer token became obsolete.",
+        "Bearer credentials remain unsupported.",
+        "Bearer token in a production-ready service was never approved.",
+        "The shared bearer token in the one-hour demonstration remained unsupported.",
+        "Bearer token with workload identity is documented.",
+        "Bearer token for public authentication is prohibited.",
+        "Bearer token from approved policy examples is obsolete.",
+        "Bearer token to workload identity migration is required.",
+        "Bearer token during the migration was never approved.",
+        "Bearer token or an approved standard must be documented.",
+        "Bearer token and audience validation are separate controls.",
+        "Bearer token authentication is prohibited. This control is documented.",
+        "The shared bearer token in a shell script. This account is public.",
+        "Use a short lived bearer credential only during migration.",
+        "The bearer scheme requires audience validation.",
+    ],
+)
+def test_runtime_guard_allows_public_bearer_terminology(text: str) -> None:
+    output = {"data": {"results": [{"text": text}]}}
+    expected = deepcopy(output)
+    _reject_private_output_material(output)
+    assert output == expected
+    reject_secrets(_mask_public_credential_terminology(text))
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Authorization: Bearer token",
+        "Authorization=Bearer credential",
+        "Authorization: shared bearer token=actual-secret-value",
+        "Bearer secret-value",
+        "Bearer token actual-secret-value",
+        "shared bearer token=actual-secret-value",
+        "Bearer token is actual-secret-value",
+        "The shared bearer token was actual-secret-value",
+        "bearer token in env is actual-secret-value",
+        "Bearer token, actual-secret-value",
+        "Bearer token with actual-secret-value",
+        "Bearer token and actual-secret-value",
+        "Bearer token\u200bactual-secret-value",
+        "Bearer token\u00adactual-secret-value",
+        "Bearer token with\u200bhunter2",
+        "Bearer to\u200bken hunter2",
+        "Bea\u00adrer token hunter2",
+        "Bearer\u200b hunter2",
+        "Bearer token\uff1ahunter2",
+        "Bearer token for ABCDEFGHIJKLMNOP",
+        "Bearer token to abcdefghijklmnop",
+        "Bearer token from actual-secret-value",
+        *[
+            f"Bearer token {connector} {value}"
+            for connector, value in zip(
+                ("with", "for", "from", "to", "in", "during", "or", "and"),
+                (
+                    "hunter2",
+                    "abc123",
+                    "letmein",
+                    "secret123",
+                    "passcode",
+                    "qwerty",
+                    "abc123",
+                    "hunter2",
+                ),
+                strict=True,
+            )
+        ],
+        "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signaturevalue",
+        f"actual canary ghp_{'C' * 36}",
+        "access_token=actual-secret-value",
+    ],
+)
+def test_runtime_guard_still_rejects_credential_syntax_and_values(text: str) -> None:
+    with pytest.raises(MCPGatewayError) as rejected:
+        _reject_private_output_material({"data": {"results": [{"text": text}]}})
+    assert rejected.value.reason == "secret_material"

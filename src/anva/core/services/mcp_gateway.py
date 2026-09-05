@@ -8,6 +8,7 @@ import hmac
 import json
 import logging
 import re
+import unicodedata
 import uuid
 from collections.abc import Callable, Iterable
 from copy import deepcopy
@@ -1409,7 +1410,7 @@ def _reject_private_output_material(
         return
     if isinstance(value, str):
         try:
-            reject_secrets(value)
+            reject_secrets(_mask_public_credential_terminology(value))
         except ValueError:
             raise MCPGatewayError(
                 "invalid_tool_output",
@@ -1417,6 +1418,99 @@ def _reject_private_output_material(
                 path=path,
                 reason="secret_material",
             ) from None
+
+
+_PUBLIC_BEARER_TERMINOLOGY = re.compile(
+    r"(?i)\b(?:(?:long|short)[ -]lived\s+)?(?:shared\s+)?"
+    r"bearer\s+(?:token|tokens|authentication|credential|credentials|scheme)\b"
+)
+_AUTHORIZATION_VALUE_PREFIX = re.compile(r"(?i)authorization\s*[:=]\s*$")
+_ZERO_WIDTH = re.compile("[\u00ad\u200b\u200c\u200d\u2060\ufeff]")
+_DISCLOSURE_ASSIGNMENT = re.compile(
+    r"(?i)\b(?:is|was|equals?)\s+"
+    r"(?!(?:approved|documented|prohibited|deprecated|forbidden|not|never|required|unsupported|obsolete)\b)\S+"
+)
+_PUBLIC_PROSE_FOLLOWERS = frozenset(
+    {
+        "and",
+        "are",
+        "authentication",
+        "became",
+        "by",
+        "during",
+        "for",
+        "from",
+        "in",
+        "is",
+        "must",
+        "only",
+        "or",
+        "requires",
+        "remain",
+        "remains",
+        "should",
+        "to",
+        "was",
+        "were",
+        "with",
+        "without",
+    }
+)
+_VALUE_CONNECTORS = frozenset({"and", "during", "for", "from", "in", "or", "to", "with"})
+_SAFE_CONNECTOR_OBJECTS = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "approved",
+        "authentication",
+        "authorization",
+        "audience",
+        "control",
+        "controls",
+        "documented",
+        "identity",
+        "migration",
+        "operator",
+        "policy",
+        "production",
+        "public",
+        "rotation",
+        "service",
+        "services",
+        "shell",
+        "standard",
+        "validation",
+        "workload",
+    }
+)
+
+
+def _mask_public_credential_terminology(value: str) -> str:
+    """Mask bearer terminology, but never credential syntax, before output scanning."""
+
+    classified = unicodedata.normalize("NFKC", _ZERO_WIDTH.sub("", value))
+
+    def replacement(match: re.Match[str]) -> str:
+        # An Authorization field is credential syntax even when its value is a weak word.
+        if _AUTHORIZATION_VALUE_PREFIX.search(classified[: match.start()]):
+            return match.group(0)
+        tail = classified[match.end() :]
+        sentence_tail = re.split(r"[.!?\n]", tail, maxsplit=1)[0]
+        if re.match(r"\s*[,;:=]\s*(?!(?:which|and|or|but)\b)\S+", sentence_tail, re.I):
+            return match.group(0)
+        if _DISCLOSURE_ASSIGNMENT.search(sentence_tail):
+            return match.group(0)
+        following = re.match(r"\s+([^\s,.;:]+)", sentence_tail)
+        if following is not None and following.group(1).casefold() not in _PUBLIC_PROSE_FOLLOWERS:
+            return match.group(0)
+        if following is not None and following.group(1).casefold() in _VALUE_CONNECTORS:
+            adjacent = re.match(r"\s+([^\s,.;:]+)", sentence_tail[following.end() :])
+            if adjacent is not None and adjacent.group(1).casefold() not in _SAFE_CONNECTOR_OBJECTS:
+                return match.group(0)
+        return "public authentication terminology"
+
+    return _PUBLIC_BEARER_TERMINOLOGY.sub(replacement, classified)
 
 
 def _normalize_public_output(

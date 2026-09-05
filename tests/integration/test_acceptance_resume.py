@@ -53,7 +53,9 @@ from anva.core.services.tokens import authenticate_bearer
 SOURCE_TEXT = (
     "# Checkout ownership exact-head evidence policy\n\n"
     "The Payments Platform team owns checkout. Review the Ember change against authorized "
-    "organization context.\n"
+    "organization context. The first operator sample used a long-lived shared bearer token "
+    "in a shell script. The one-hour demonstration sample was never approved as an "
+    "authentication standard.\n"
 )
 
 
