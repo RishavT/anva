@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from collections.abc import Callable
 from copy import deepcopy
 from pathlib import Path
@@ -25,6 +26,7 @@ from anva.contract_limits import (
     ACCEPTANCE_CASE_SERIALIZATION,
     MAX_ACCEPTANCE_UNIFIED_DIFF_CHARACTERS,
 )
+from anva.contracts.bootstrap_scope import ACCEPTANCE_INITIATOR_ACTIONS
 from anva.contracts.catalog import EXAMPLES, SCHEMAS
 from anva.contracts.validation import ContractValidationError, contract_input_byte_limit
 
@@ -62,6 +64,18 @@ def test_case_declares_exact_acceptance_principal_actions() -> None:
         "work.manage",
     ]
     assert cast(list[str], reviewer_grants[0]["actions"]) == ["assurance.review"]
+
+
+@pytest.mark.unit
+def test_runbook_declares_exact_acceptance_initiator_actions() -> None:
+    runbook = (Path(__file__).parents[2] / "docs/runbooks/acceptance-corpus.md").read_text()
+    paragraph = runbook.split("initiator has only the actions needed", 1)[1].split(
+        ") on that repository",
+        1,
+    )[0]
+    documented_actions = {value for value in re.findall(r"`([^`]+)`", paragraph) if "." in value}
+
+    assert documented_actions == set(ACCEPTANCE_INITIATOR_ACTIONS)
 
 
 @pytest.mark.unit
