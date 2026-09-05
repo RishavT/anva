@@ -47,6 +47,7 @@ def test_case_declares_exact_acceptance_principal_actions() -> None:
 
     assert cast(list[str], initiator_grants[0]["actions"]) == [
         "artifact.create",
+        "artifact.view",
         "assurance.execute",
         "canvas.view",
         "evidence.submit",

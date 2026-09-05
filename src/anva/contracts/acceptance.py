@@ -23,6 +23,13 @@ from anva.contracts.catalog import (
     EXAMPLES,
     RETRIEVAL_CITATION,
 )
+from anva.mcp.contracts import (
+    ASSERTION_PACKET_PAYLOAD,
+    CONFLICT_PACKET_PAYLOAD,
+    DECISION_REFERENCE_PACKET_PAYLOAD,
+    RELATIONSHIP_PACKET_PAYLOAD,
+    SOURCE_PACKET_PAYLOAD,
+)
 
 UUID: Final[dict[str, str]] = {"type": "string", "format": "uuid"}
 SHA256: Final[dict[str, str]] = {"type": "string", "pattern": "^[a-f0-9]{64}$"}
@@ -1169,6 +1176,36 @@ EVALUATOR_AUTHORIZED_CONTEXT: Final[dict[str, object]] = _closed(
         "summary": {"type": "string", "minLength": 1, "maxLength": 10_000},
         "freshness": {"type": "string", "enum": ["CURRENT", "STALE", "UNKNOWN"]},
         "is_inferred": {"type": "boolean"},
+        "selection_reason": {"type": "string", "minLength": 1, "maxLength": 2_000},
+        "claim": {
+            "oneOf": [
+                deepcopy(ASSERTION_PACKET_PAYLOAD),
+                deepcopy(DECISION_REFERENCE_PACKET_PAYLOAD),
+                deepcopy(RELATIONSHIP_PACKET_PAYLOAD),
+                deepcopy(SOURCE_PACKET_PAYLOAD),
+                deepcopy(CONFLICT_PACKET_PAYLOAD),
+            ]
+        },
+        "citations": {
+            "type": "array",
+            "items": _closed(
+                {
+                    "citation_id": UUID,
+                    "canonical_url": {"type": "string", "minLength": 1, "maxLength": 4_000},
+                    "locator": {"type": "string", "maxLength": 2_000},
+                    "source_content_hash": SHA256,
+                    "observed_at": DATE_TIME,
+                },
+                (
+                    "citation_id",
+                    "canonical_url",
+                    "locator",
+                    "source_content_hash",
+                    "observed_at",
+                ),
+            ),
+            "maxItems": 1_000,
+        },
         "citation_ids": {
             "type": "array",
             "items": UUID,
@@ -1176,7 +1213,17 @@ EVALUATOR_AUTHORIZED_CONTEXT: Final[dict[str, object]] = _closed(
             "uniqueItems": True,
         },
     },
-    ("item_id", "kind", "summary", "freshness", "is_inferred", "citation_ids"),
+    (
+        "item_id",
+        "kind",
+        "summary",
+        "freshness",
+        "is_inferred",
+        "selection_reason",
+        "claim",
+        "citations",
+        "citation_ids",
+    ),
 )
 EVALUATOR_REQUEST: Final[dict[str, object]] = _closed(
     {
