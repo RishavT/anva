@@ -1430,6 +1430,10 @@ _DISCLOSURE_ASSIGNMENT = re.compile(
     r"(?i)\b(?:is|was|equals?)\s+"
     r"(?!(?:approved|documented|prohibited|deprecated|forbidden|not|never|required|unsupported|obsolete)\b)\S+"
 )
+_SAFE_RELATIVE_CLAUSE = re.compile(
+    r"(?i)\s*,\s*which\s+(?:is\s+prohibited,\s+was\s+replaced|"
+    r"were\s+deprecated,\s+are\s+documented\s+controls)\s*"
+)
 _PUBLIC_PROSE_FOLLOWERS = frozenset(
     {
         "and",
@@ -1520,9 +1524,12 @@ def _mask_public_credential_terminology(value: str) -> str:
             return match.group(0)
         tail = classified[match.end() :]
         sentence_tail = re.split(r"[.!?\n]", tail, maxsplit=1)[0]
-        if re.match(r"\s*[,;:=]\s*(?!(?:which|and|or|but)\b)\S+", sentence_tail, re.I):
+        if (
+            re.match(r"\s*[,;:=]", sentence_tail)
+            and _SAFE_RELATIVE_CLAUSE.fullmatch(sentence_tail) is None
+        ):
             return match.group(0)
-        if _DISCLOSURE_ASSIGNMENT.search(sentence_tail):
+        if _DISCLOSURE_ASSIGNMENT.match(sentence_tail.lstrip()):
             return match.group(0)
         following = re.match(r"\s+([^\s,.;:]+)", sentence_tail)
         if following is not None and following.group(1).casefold() not in _PUBLIC_PROSE_FOLLOWERS:
