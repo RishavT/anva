@@ -1426,64 +1426,43 @@ _PUBLIC_BEARER_TERMINOLOGY = re.compile(
 )
 _AUTHORIZATION_VALUE_PREFIX = re.compile(r"(?i)authorization\s*[:=]\s*$")
 _ZERO_WIDTH = re.compile("[\u00ad\u200b\u200c\u200d\u2060\ufeff]")
-_DISCLOSURE_ASSIGNMENT = re.compile(
-    r"(?i)\b(?:is|was|equals?)\s+"
-    r"(?!(?:approved|documented|prohibited|deprecated|forbidden|not|never|required|unsupported|obsolete)\b)\S+"
-)
-_SAFE_RELATIVE_CLAUSE = re.compile(
-    r"(?i)\s*,\s*which\s+(?:is\s+prohibited,\s+was\s+replaced|"
-    r"were\s+deprecated,\s+are\s+documented\s+controls)\s*"
-)
-_PUBLIC_PROSE_FOLLOWERS = frozenset(
-    {
-        "and",
-        "are",
-        "authentication",
-        "became",
-        "by",
-        "during",
-        "for",
-        "from",
-        "in",
-        "is",
-        "must",
-        "only",
-        "or",
-        "requires",
-        "remain",
-        "remains",
-        "should",
-        "to",
-        "was",
-        "were",
-        "with",
-        "without",
-    }
-)
-_VALUE_CONNECTORS = frozenset({"and", "during", "for", "from", "in", "or", "to", "with"})
-_SAFE_CONNECTOR_CLAUSE_WORDS = frozenset(
+_SAFE_BEARER_PROSE_WORDS = frozenset(
     {
         "a",
         "an",
-        "the",
+        "and",
         "approved",
+        "are",
+        "as",
         "authentication",
         "authorization",
         "audience",
+        "became",
+        "be",
+        "by",
         "control",
         "controls",
-        "documented",
         "demonstration",
+        "deprecated",
+        "documented",
+        "during",
         "examples",
+        "forbidden",
+        "for",
+        "from",
         "hour",
         "identity",
+        "in",
         "is",
         "migration",
         "must",
         "never",
+        "not",
         "obsolete",
         "one",
+        "only",
         "operator",
+        "or",
         "policy",
         "production",
         "prohibited",
@@ -1492,7 +1471,9 @@ _SAFE_CONNECTOR_CLAUSE_WORDS = frozenset(
         "remain",
         "remained",
         "remains",
+        "replaced",
         "required",
+        "requires",
         "rotation",
         "sample",
         "script",
@@ -1500,17 +1481,23 @@ _SAFE_CONNECTOR_CLAUSE_WORDS = frozenset(
         "service",
         "services",
         "shell",
+        "should",
         "standard",
         "standards",
+        "the",
+        "this",
+        "to",
         "unsupported",
-        "was",
         "validation",
+        "was",
+        "were",
+        "which",
+        "with",
+        "without",
         "workload",
-        "are",
-        "as",
-        "be",
     }
 )
+_INCOMPLETE_PROSE_WORDS = frozenset({"and", "during", "for", "from", "in", "or", "to", "with"})
 
 
 def _mask_public_credential_terminology(value: str) -> str:
@@ -1524,25 +1511,18 @@ def _mask_public_credential_terminology(value: str) -> str:
             return match.group(0)
         tail = classified[match.end() :]
         sentence_tail = re.split(r"[.!?\n]", tail, maxsplit=1)[0]
+        clause = sentence_tail.strip()
+        if not clause:
+            return "public authentication terminology"
+        if re.fullmatch(r"[A-Za-z0-9\s(),'-]+", clause) is None:
+            return match.group(0)
+        clause_words = re.findall(r"[a-z0-9]+", clause.casefold())
         if (
-            re.match(r"\s*[,;:=]", sentence_tail)
-            and _SAFE_RELATIVE_CLAUSE.fullmatch(sentence_tail) is None
+            not clause_words
+            or clause_words[-1] in _INCOMPLETE_PROSE_WORDS
+            or any(word not in _SAFE_BEARER_PROSE_WORDS for word in clause_words)
         ):
             return match.group(0)
-        if _DISCLOSURE_ASSIGNMENT.match(sentence_tail.lstrip()):
-            return match.group(0)
-        following = re.match(r"\s+([^\s,.;:]+)", sentence_tail)
-        if following is not None and following.group(1).casefold() not in _PUBLIC_PROSE_FOLLOWERS:
-            return match.group(0)
-        if following is not None and following.group(1).casefold() in _VALUE_CONNECTORS:
-            clause = sentence_tail[following.end() :].strip()
-            if re.fullmatch(r"[A-Za-z0-9\s()'-]+", clause) is None:
-                return match.group(0)
-            clause_words = re.findall(r"[a-z0-9]+", clause.casefold())
-            if not clause_words or any(
-                word not in _SAFE_CONNECTOR_CLAUSE_WORDS for word in clause_words
-            ):
-                return match.group(0)
         return "public authentication terminology"
 
     return _PUBLIC_BEARER_TERMINOLOGY.sub(replacement, classified)
