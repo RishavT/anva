@@ -440,11 +440,17 @@ def test_packet_omission_accounting_is_server_owned_in_assurance_output() -> Non
             "retrieval left out 2,056 records",
             "The packet did not leave any records out",
             "CANDIDATE-records were EXCLUDED\tby budget",
+            "Packet candidates did-not-fit the authorized budget.",
+            "Packet candidates did—not—fit the authorized budget.",
+            "Retrieval candidates were unable-to-fit within the packet.",
+            "Retrieval candidates could-not-fit the packet.",
+            "Packet candidates did / not fit.",
             "Independent evaluator observed bounded coverage.",
             "We omitted 2 budget considerations from the narrative.",
             "Retrieval quality was low for this review.",
             "Candidate interviews informed this review.",
             "Candidateinterviews informed retrieval quality review.",
+            "Candidate fitness, outfit, and benefit analysis informed this review.",
         ]
     ) == [
         "Independent evaluator observed bounded coverage.",
@@ -452,7 +458,11 @@ def test_packet_omission_accounting_is_server_owned_in_assurance_output() -> Non
         "Retrieval quality was low for this review.",
         "Candidate interviews informed this review.",
         "Candidateinterviews informed retrieval quality review.",
+        "Candidate fitness, outfit, and benefit analysis informed this review.",
     ]
+
+    adversarial = "Packet did" + ("-" * 10_000) + "not-fit its candidate context"
+    assert _external_limitations([adversarial]) == []
 
 
 @pytest.mark.unit

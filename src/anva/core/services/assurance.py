@@ -507,7 +507,7 @@ def _looks_like_packet_accounting(limitation: str) -> bool:
             r"\b(?:omit\w*|omission\w*|exclud\w*|drop\w*|truncat\w*|crowd\w*|"
             r"withhold\w*|withheld)\b|"
             r"\b(?:left|leave|leaves|leaving)\b(?:\s+\w+){0,4}\s+\bout\b|"
-            r"\b(?:could|did|does|do|unable)\b(?:\s+\w+){0,3}\s+\bfit\b",
+            r"\b(?:could|did|does|do|unable)\b(?:[\W_]+\w+){0,3}[\W_]+\bfit\b",
             normalized,
         )
         is not None
