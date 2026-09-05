@@ -90,6 +90,7 @@ DEFAULT_PROMPT_VERSION = "assurance-prompt-v1"
 RENDERER_VERSION = "assurance-report-v1"
 MAX_CHECKS = 200
 MAX_LIMITATIONS = 100
+MAX_PROJECTED_LIMITATION_CHARS = 2_000
 MAX_PROPOSALS = 50
 REQUIREMENT_TRACEABILITY_LIMITATION = (
     "Requirement-level traceability could not be established because no work item "
@@ -102,6 +103,8 @@ _PACKET_OMISSION_LIMITATION = re.compile(
     r"^\s*[1-9][0-9]*\s+lower-priority\s+candidates\s+omitted\s+by\s+budget\s*$",
     re.IGNORECASE,
 )
+REVISION_LIMITATION_PREFIX = "Revision-reported limitation (not packet accounting): "
+EVALUATOR_LIMITATION_PREFIX = "Evaluator-reported limitation (not packet accounting): "
 _RETRIEVAL_IDENTIFIER = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
 _RETRIEVAL_STOP_WORDS = frozenset(
     {
@@ -490,29 +493,12 @@ def _required_context_limitations(limitations: list[str]) -> tuple[str, ...]:
     )
 
 
-def _external_limitations(limitations: list[str]) -> list[str]:
-    """Exclude packet accounting claims not sourced from the sealed packet."""
-    return [
-        limitation for limitation in limitations if not _looks_like_packet_accounting(limitation)
-    ]
-
-
-def _looks_like_packet_accounting(limitation: str) -> bool:
-    normalized = " ".join(limitation.casefold().split())
-    has_accounting_subject = (
-        re.search(r"\b(?:candidate|candidates|retrieval|packet)\b", normalized) is not None
-    )
-    has_exclusion = (
-        re.search(
-            r"\b(?:omit\w*|omission\w*|exclud\w*|drop\w*|truncat\w*|crowd\w*|"
-            r"withhold\w*|withheld)\b|"
-            r"\b(?:left|leave|leaves|leaving)\b(?:\s+\w+){0,4}\s+\bout\b|"
-            r"\b(?:could|did|does|do|unable)\b(?:[\W_]+\w+){0,3}[\W_]+\bfit\b",
-            normalized,
-        )
-        is not None
-    )
-    return has_accounting_subject and has_exclusion
+def _project_external_limitations(limitations: list[str], *, prefix: str) -> list[str]:
+    """Retain external text while keeping it outside server-owned packet accounting."""
+    if prefix not in {REVISION_LIMITATION_PREFIX, EVALUATOR_LIMITATION_PREFIX}:
+        raise ValueError("External limitation prefix is invalid")
+    payload_limit = MAX_PROJECTED_LIMITATION_CHARS - len(prefix)
+    return [f"{prefix}{limitation[:payload_limit]}" for limitation in limitations]
 
 
 def _packet_accounting_limitations(limitations: list[str]) -> tuple[str, ...]:
@@ -1544,7 +1530,10 @@ def start_assurance(
         evaluator_version=evaluator_version,
         prompt_version=prompt_version,
         limitations=_bounded_limitations(
-            _external_limitations(cast(list[str], revision.limitations)),
+            _project_external_limitations(
+                cast(list[str], revision.limitations),
+                prefix=REVISION_LIMITATION_PREFIX,
+            ),
             packet_limitations,
             required=required_run_limitations,
         ),
@@ -3051,7 +3040,10 @@ def submit_evaluator_result(
     )
     all_limitations = _bounded_limitations(
         cast(list[str], run.limitations),
-        _external_limitations(cast(list[str], result["limitations"])),
+        _project_external_limitations(
+            cast(list[str], result["limitations"]),
+            prefix=EVALUATOR_LIMITATION_PREFIX,
+        ),
         ["No repository code was fetched or executed by this assurance engine."],
         required=(
             *((REQUIREMENT_TRACEABILITY_LIMITATION,) if run.work_item_revision_id is None else ()),

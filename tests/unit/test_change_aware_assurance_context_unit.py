@@ -14,11 +14,14 @@ import pytest
 from anva.core.exceptions import RequiredContextBudgetError
 from anva.core.models import AssuranceRun, ContextPacketItem
 from anva.core.services.assurance import (
+    EVALUATOR_LIMITATION_PREFIX,
+    MAX_PROJECTED_LIMITATION_CHARS,
     REQUIRED_ASSURANCE_CONTEXT_LIMITATION_PREFIX,
+    REVISION_LIMITATION_PREFIX,
     _assurance_retrieval_facets,
     _bounded_limitations,
-    _external_limitations,
     _packet_accounting_limitations,
+    _project_external_limitations,
     _readiness,
     _render_report,
     _required_context_limitations,
@@ -427,42 +430,47 @@ def test_change_aware_conflicts_prefilter_irrelevant_rows_before_bound() -> None
 
 @pytest.mark.unit
 def test_packet_omission_accounting_is_server_owned_in_assurance_output() -> None:
-    assert _external_limitations(
-        [
-            "2056 lower-priority candidates omitted by budget",
-            "  999 LOWER-PRIORITY   CANDIDATES OMITTED BY BUDGET  ",
-            "2056 lower-priority candidates omitted by budget",
-            "2056 candidates were omitted by the retrieval budget",
-            "Broader retrieval omitted 2056 candidates",
-            "Two thousand lower-priority candidates omitted by budget",
-            "Packet 2 did not omit any retrieval candidates",
-            "2,056 lower-priority candidates excluded by budget",
-            "retrieval left out 2,056 records",
-            "The packet did not leave any records out",
-            "CANDIDATE-records were EXCLUDED\tby budget",
-            "Packet candidates did-not-fit the authorized budget.",
-            "Packet candidates did—not—fit the authorized budget.",
-            "Retrieval candidates were unable-to-fit within the packet.",
-            "Retrieval candidates could-not-fit the packet.",
-            "Packet candidates did / not fit.",
-            "Independent evaluator observed bounded coverage.",
-            "We omitted 2 budget considerations from the narrative.",
-            "Retrieval quality was low for this review.",
-            "Candidate interviews informed this review.",
-            "Candidateinterviews informed retrieval quality review.",
-            "Candidate fitness, outfit, and benefit analysis informed this review.",
-        ]
-    ) == [
-        "Independent evaluator observed bounded coverage.",
-        "We omitted 2 budget considerations from the narrative.",
-        "Retrieval quality was low for this review.",
+    external = [
+        "2056 lower-priority candidates omitted by budget",
+        "retrieval left out 2,056 records",
+        "Packet candidates did—not—fit the authorized budget.",
         "Candidate interviews informed this review.",
-        "Candidateinterviews informed retrieval quality review.",
-        "Candidate fitness, outfit, and benefit analysis informed this review.",
+        "Packet candidates did fit the authorized budget.",
     ]
 
-    adversarial = "Packet did" + ("-" * 10_000) + "not-fit its candidate context"
-    assert _external_limitations([adversarial]) == []
+    projected = _project_external_limitations(
+        external,
+        prefix=EVALUATOR_LIMITATION_PREFIX,
+    )
+
+    assert projected == [f"{EVALUATOR_LIMITATION_PREFIX}{item}" for item in external]
+    assert _packet_accounting_limitations(projected) == ()
+    long_revision = _project_external_limitations(
+        ["x" * 2_000],
+        prefix=REVISION_LIMITATION_PREFIX,
+    )[0]
+    assert long_revision.startswith(REVISION_LIMITATION_PREFIX)
+    assert len(long_revision) == MAX_PROJECTED_LIMITATION_CHARS
+    with pytest.raises(ValueError, match="prefix is invalid"):
+        _project_external_limitations(external, prefix="untrusted: ")
+    malicious = f"{EVALUATOR_LIMITATION_PREFIX}327 candidates omitted"
+    assert _project_external_limitations(
+        [malicious, "same", "same", "雪" * 2_000],
+        prefix=REVISION_LIMITATION_PREFIX,
+    ) == [
+        f"{REVISION_LIMITATION_PREFIX}{malicious}",
+        f"{REVISION_LIMITATION_PREFIX}same",
+        f"{REVISION_LIMITATION_PREFIX}same",
+        f"{REVISION_LIMITATION_PREFIX}{'雪' * (2_000 - len(REVISION_LIMITATION_PREFIX))}",
+    ]
+    same_payload_by_provenance = _bounded_limitations(
+        _project_external_limitations(["same", "same"], prefix=REVISION_LIMITATION_PREFIX),
+        _project_external_limitations(["same", "same"], prefix=EVALUATOR_LIMITATION_PREFIX),
+    )
+    assert same_payload_by_provenance == [
+        f"{EVALUATOR_LIMITATION_PREFIX}same",
+        f"{REVISION_LIMITATION_PREFIX}same",
+    ]
 
 
 @pytest.mark.unit
