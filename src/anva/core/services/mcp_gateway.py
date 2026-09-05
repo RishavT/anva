@@ -72,7 +72,7 @@ from anva.core.services.context_packets import (
 )
 from anva.core.services.creation import submit_knowledge_proposal
 from anva.core.services.graph import traverse_graph
-from anva.core.services.hostile_inputs import reject_secrets
+from anva.core.services.hostile_inputs import is_secret_bearing_query_key, reject_secrets
 from anva.core.services.retrieval import (
     authorized_source_chunks,
     get_authorized_assertion,
@@ -1410,7 +1410,7 @@ def _reject_private_output_material(
         return
     if isinstance(value, str):
         try:
-            reject_secrets(_mask_public_credential_terminology(value))
+            _reject_output_string(value)
         except ValueError:
             raise MCPGatewayError(
                 "invalid_tool_output",
@@ -1418,6 +1418,109 @@ def _reject_private_output_material(
                 path=path,
                 reason="secret_material",
             ) from None
+
+
+_SERIALIZED_SCAN_MAX_STRINGS = 10_000
+_SERIALIZED_PUBLIC_METADATA_FIELDS = frozenset({"authorization_hash"})
+_EXPLICIT_REDACTION = re.compile(
+    r"^(?:(?i:Authorization\s*[:=]\s*Bearer\s+|Bearer\s+))?\[REDACTED\]$"
+)
+_BEARER_REDACTION_MARKER = re.compile(
+    r"(?i:Authorization\s*[:=]\s*Bearer\s+|Bearer\s+)\[REDACTED\]"
+)
+
+
+def _reject_output_string(value: str, *, serialized_depth: int = 0) -> None:
+    """Classify JSON-serialized content by decoded values without rewriting output."""
+    if serialized_depth > 5:
+        raise ValueError("Serialized output nesting is too deep")
+    stripped = value.lstrip()
+    if stripped.startswith(("{", "[")):
+        decoded = _decode_serialized_json_strings(value)
+        if decoded is not None:
+            for item in decoded:
+                _reject_output_string(item, serialized_depth=serialized_depth + 1)
+            return
+    reject_secrets(_mask_explicit_redactions(_mask_public_credential_terminology(value)))
+
+
+def _mask_explicit_redactions(value: str) -> str:
+    """Mask only an exact standalone product redaction value for classification."""
+    if _EXPLICIT_REDACTION.fullmatch(value):
+        return "public redaction placeholder"
+    if _BEARER_REDACTION_MARKER.search(value):
+        raise ValueError("Redaction placeholder must be a standalone value")
+    return value
+
+
+def _decode_serialized_json_strings(value: str) -> tuple[str, ...] | None:
+    """Return decoded JSON string tokens, including one bounded truncated final token.
+
+    Source chunks are fixed-size slices of canonical JSON and the first slice can end
+    inside a quoted value. This lexer deliberately understands only JSON strings; all
+    other bytes must be JSON structural/scalar syntax. Returning ``None`` falls back to
+    the ordinary fail-closed scanner.
+    """
+    strings: list[str] = []
+    tokens: list[tuple[str, int, int]] = []
+    outside: list[str] = []
+    index = 0
+    length = len(value)
+    while index < length:
+        if value[index] != '"':
+            outside.append(value[index])
+            index += 1
+            continue
+        start = index
+        index += 1
+        escaped = False
+        while index < length:
+            character = value[index]
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                index += 1
+                break
+            index += 1
+        token = value[start:index]
+        complete = token.endswith('"') and not escaped
+        try:
+            decoded = json.loads(token if complete else token + '"')
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return None
+        if not isinstance(decoded, str):
+            return None
+        strings.append(decoded)
+        tokens.append((decoded, start, index))
+        if len(strings) > _SERIALIZED_SCAN_MAX_STRINGS:
+            raise ValueError("Serialized output contains too many string values")
+        if not complete and index != length:
+            return None
+    # Reject credentials outside strings too, while allowing only JSON syntax and
+    # primitive scalar spelling there. This prevents the structural path becoming a
+    # bypass for malformed containers.
+    outside_text = "".join(outside)
+    if re.fullmatch(r"[\s{}\[\],:0-9+\-.eEtruefalsnul]*", outside_text) is None:
+        return None
+    reject_secrets(outside_text)
+    for token_index, (decoded, _start, end) in enumerate(tokens):
+        if decoded in _SERIALIZED_PUBLIC_METADATA_FIELDS or not is_secret_bearing_query_key(
+            decoded
+        ):
+            continue
+        cursor = end
+        while cursor < length and value[cursor].isspace():
+            cursor += 1
+        if cursor >= length or value[cursor] != ":":
+            continue
+        following = tokens[token_index + 1] if token_index + 1 < len(tokens) else None
+        if following is None or value[cursor + 1 : following[1]].strip() != "":
+            raise ValueError("Serialized output contains a secret-bearing field")
+        if _EXPLICIT_REDACTION.fullmatch(following[0]) is None:
+            raise ValueError("Serialized output contains a secret-bearing field")
+    return tuple(strings)
 
 
 _PUBLIC_BEARER_TERMINOLOGY = re.compile(

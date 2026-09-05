@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from typing import cast
 
@@ -786,6 +787,121 @@ def test_runtime_guard_allows_public_bearer_terminology(text: str) -> None:
     _reject_private_output_material(output)
     assert output == expected
     reject_secrets(_mask_public_credential_terminology(text))
+
+
+@pytest.mark.unit
+def test_runtime_guard_classifies_normalized_json_strings_not_serialized_bytes() -> None:
+    sentence = "The first operator sample used a long-lived shared bearer token in a shell script."
+    document = {
+        "headings": [{"level": 1, "line": 32, "text": "Shared token integration sample"}],
+        "links": [],
+        "text": (
+            "---\nclaim:\n  object:\n    value: "
+            + sentence
+            + "\n  statement: "
+            + sentence
+            + "\n---\n\n# Claim\n\n"
+            + sentence
+        ),
+    }
+    serialized = json.dumps(document, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    output = {"data": {"results": [{"text": serialized}]}}
+    expected = deepcopy(output)
+
+    _reject_private_output_material(output)
+
+    assert output == expected
+
+
+@pytest.mark.unit
+def test_runtime_guard_classifies_truncated_normalized_json_final_string() -> None:
+    sentence = "The first operator sample used a long-lived shared bearer token in a shell script."
+    serialized = json.dumps(
+        {"headings": [], "links": [], "text": f"---\nstatement: {sentence}\n---\n{sentence}"},
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    truncated = serialized[:-2]
+    output = {"data": {"results": [{"text": truncated}]}}
+    expected = deepcopy(output)
+
+    _reject_private_output_material(output)
+
+    assert output == expected
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "serialized",
+    [
+        json.dumps({"text": "Bearer token actual-secret-value"}, separators=(",", ":")),
+        json.dumps(
+            {"text": "Bearer token is documented. Bearer token actual-secret-value"},
+            separators=(",", ":"),
+        ),
+        json.dumps({"nested": json.dumps({"text": "Bearer hunter2"})}, separators=(",", ":")),
+        '{"text":"safe","access_token":"actual-secret-value"}',
+        '{"text":"Bearer token is documented.\\nBearer hunter2"',
+        '{"text":"Bearer [REDACTED] actual-secret-value"}',
+        '{"text":"actual-secret-value Bearer [REDACTED]"}',
+        '{"text":"Bearer [REDACTED]\\nBearer hunter2"}',
+        json.dumps({"nested": json.dumps({"text": "Bearer [REDACTED] hunter2"})}),
+        '{"credential":"hunter2"}',
+        '{"security_token":"actual-secret-value"}',
+        '{"token":"actual-secret-value"}',
+        '{"providerCredential":"actual-secret-value"}',
+        '{"access-key-id":"actual-secret-value"}',
+        '{"googleaccessid":"actual-secret-value"}',
+        '{"keypairid":"actual-secret-value"}',
+        '{"sig":"actual-secret-value"}',
+    ],
+)
+def test_runtime_guard_rejects_secrets_in_serialized_or_truncated_json(serialized: str) -> None:
+    with pytest.raises(MCPGatewayError) as rejected:
+        _reject_private_output_material({"data": {"results": [{"text": serialized}]}})
+    assert rejected.value.reason == "secret_material"
+
+
+@pytest.mark.unit
+def test_runtime_guard_allows_explicit_redaction_placeholder_in_serialized_json() -> None:
+    serialized = (
+        f'{{"access_token":"[REDACTED]","authorization":"Bearer [REDACTED]",'
+        f'"authorization_hash":"{SHA256}",'
+        '"text":"Authorization: Bearer [REDACTED]"}'
+    )
+    output = {"data": {"results": [{"text": serialized}]}}
+    expected = deepcopy(output)
+
+    _reject_private_output_material(output)
+
+    assert output == expected
+
+
+@pytest.mark.unit
+def test_runtime_guard_recursively_classifies_escaped_serialized_values() -> None:
+    sentence = "The first operator sample used a long-lived shared bearer token in a shell script."
+    serialized = json.dumps(
+        {"nested": json.dumps({"text": sentence}, separators=(",", ":"))},
+        separators=(",", ":"),
+    )
+    output = {"data": {"results": [{"text": serialized}]}}
+    expected = deepcopy(output)
+
+    _reject_private_output_material(output)
+
+    assert output == expected
+
+
+@pytest.mark.unit
+def test_runtime_guard_rejects_excessively_nested_serialized_values() -> None:
+    serialized = '"safe"'
+    for _ in range(8):
+        serialized = json.dumps({"nested": serialized}, separators=(",", ":"))
+
+    with pytest.raises(MCPGatewayError) as rejected:
+        _reject_private_output_material({"data": {"results": [{"text": serialized}]}})
+    assert rejected.value.reason == "secret_material"
 
 
 @pytest.mark.unit

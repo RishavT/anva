@@ -887,9 +887,25 @@ def test_search_preserves_public_bearer_prose_at_canonical_mcp_boundary(
 ) -> None:
     organization, repository, scope, plaintext = _gateway_tenant("mcp-public-bearer-prose")
     actor = authenticate_bearer(f"Bearer {plaintext}")
-    public_text = (
+    sentence = (
         "The first operator sample used a long-lived shared bearer token in a shell script."
     )
+    normalized_document = {
+        "headings": [{"level": 1, "line": 12, "text": "Shared token integration sample"}],
+        "links": [],
+        "text": (
+            f"---\nclaim:\n  object:\n    value: {sentence}\n"
+            f"  statement: {sentence}\n---\n\n# Claim\n\n{sentence}\n\n"
+            + ("Public historical context remained unapproved. " * 100)
+        ),
+    }
+    public_text = json.dumps(
+        normalized_document,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )[:4_000]
+    assert len(public_text) == 4_000
     content_hash = "b4fe2b839d8b2be96656b319a6cf8512c332ded3fa07d18c2ad48a6c26a9ef64"
     result = SearchResult(
         chunk_id=uuid.uuid4(),
