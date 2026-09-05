@@ -105,7 +105,15 @@ def test_active_docs_use_the_exact_published_risk_and_source_scan_facts() -> Non
 
     compatibility = " ".join(COMPATIBILITY.read_text(encoding="utf-8").split())
     assert "three MEDIUM and eight LOW Django vulnerability findings" in compatibility
+    assert "one medium and three low" not in compatibility.lower()
     assert "not part of the separately approved" in compatibility
+
+    lines = COMPATIBILITY.read_text(encoding="utf-8").splitlines()
+    table_start = lines.index("| Component | Candidate boundary | Evidence status |")
+    table_end = lines.index("", table_start)
+    table = lines[table_start:table_end]
+    assert all(line.startswith("|") and line.endswith("|") for line in table)
+    assert any(line.startswith("| Other browsers |") for line in table)
 
 
 def test_release_ownership_uses_published_v016_decision_not_tracked_v010_exception() -> None:

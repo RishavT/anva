@@ -15,7 +15,7 @@ operator-signoff run `33910747236` completed the separate human gate.
 | Docker Compose | v2 plugin; Compose is the only supported application and operational interface | Exact candidate runner used Docker Compose `5.3.1` |
 | Host operating system | A Docker-supported Linux host is the primary boundary | Exact lanes passed on Linux; macOS/Windows host behavior unverified |
 | Python | `>=3.12,<3.13`; runtime image uses Python 3.12 | Public wheel and digest-addressed runtime image were built and lifecycle-verified |
-| Django | Locked by `uv.lock`/`pyproject.toml` | Exact source scan has zero high/critical findings but retains one medium and three low fixable Django findings |
+| Django | Locked by `uv.lock`/`pyproject.toml` | Exact source scan has zero high/critical findings and records three MEDIUM and eight LOW Django vulnerability findings |
 | PostgreSQL | PostgreSQL 16 with pgvector | Exact-image atomic-generation backup, failed/successful restore handling, and disposable `0019`→head reversal/forward rehearsal passed |
 | Object storage | Application runtime accepts a configured S3-compatible bucket; operational backup drill uses Compose-managed MinIO | Authenticated bucket readiness and current paired MinIO backup/restore passed locally; external object-store backup is unsupported and unverified |
 | MCP | Contract version `1`; Streamable HTTP through the official Python SDK | Two exact-candidate official-client tests passed against write-capable and actual read-only services |
@@ -24,12 +24,12 @@ operator-signoff run `33910747236` completed the separate human gate.
 | Codex | Historically tested with Codex CLI `0.145.0` | Historical host evidence; the portable archive is published |
 | Claude Code | Historically tested with Claude Code `2.1.220` | Historical host evidence; the portable archive is published |
 | Browser | Headless Chromium/ChromeDriver `151.0.7922.71` in the project browser-test image | Two exact-source browser journeys passed; decommission requires a setup-authenticated session no older than 15 minutes and has no post-setup reauthentication flow |
+| Other browsers | No support claim | Deferred |
 
 The immutable source-security asset also records three MEDIUM and eight LOW
 Django vulnerability findings. They are lower-severity compatibility evidence,
 not part of the separately approved 14-unique-CVE/18-high-or-critical-tuple
 image-risk decision.
-| Other browsers | No support claim | Deferred |
 
 ## Version compatibility rules
 
