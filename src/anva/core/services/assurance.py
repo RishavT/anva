@@ -98,6 +98,10 @@ REQUIREMENT_TRACEABILITY_LIMITATION = (
 REQUIRED_ASSURANCE_CONTEXT_LIMITATION_PREFIX = (
     "Required assurance context was discovered but could not fit the authorized bounded packet:"
 )
+_PACKET_OMISSION_LIMITATION = re.compile(
+    r"^\s*[1-9][0-9]*\s+lower-priority\s+candidates\s+omitted\s+by\s+budget\s*$",
+    re.IGNORECASE,
+)
 _RETRIEVAL_IDENTIFIER = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
 _RETRIEVAL_STOP_WORDS = frozenset(
     {
@@ -483,6 +487,24 @@ def _required_context_limitations(limitations: list[str]) -> tuple[str, ...]:
                 if limitation.startswith(REQUIRED_ASSURANCE_CONTEXT_LIMITATION_PREFIX)
             }
         )
+    )
+
+
+def _external_limitations(limitations: list[str]) -> list[str]:
+    """Exclude packet accounting claims not sourced from the sealed packet."""
+    return [
+        limitation
+        for limitation in limitations
+        if _PACKET_OMISSION_LIMITATION.fullmatch(limitation) is None
+    ]
+
+
+def _packet_accounting_limitations(limitations: list[str]) -> tuple[str, ...]:
+    """Return exact server-owned accounting copied from one sealed packet."""
+    return tuple(
+        limitation
+        for limitation in limitations
+        if _PACKET_OMISSION_LIMITATION.fullmatch(limitation) is not None
     )
 
 
@@ -1480,6 +1502,7 @@ def start_assurance(
     required_run_limitations = (
         *((REQUIREMENT_TRACEABILITY_LIMITATION,) if work_revision is None else ()),
         *_required_context_limitations(packet_limitations),
+        *_packet_accounting_limitations(packet_limitations),
     )
     run = AssuranceRun.objects.create(
         organization=organization,
@@ -1505,7 +1528,7 @@ def start_assurance(
         evaluator_version=evaluator_version,
         prompt_version=prompt_version,
         limitations=_bounded_limitations(
-            cast(list[str], revision.limitations),
+            _external_limitations(cast(list[str], revision.limitations)),
             packet_limitations,
             required=required_run_limitations,
         ),
@@ -2567,11 +2590,16 @@ def _render_report(
         source_budget=REPORT_REASON_SOURCE_BUDGET,
     )
     required_context = _required_context_limitations(limitations)
+    packet_accounting = _packet_accounting_limitations(limitations)
     _preview_limitations, limitations_truncated, limitations_omitted = _bounded_report_items(
         sorted(set(limitations)),
         maximum=REPORT_LIMITATION_ITEM_CHARS,
         source_budget=REPORT_LIMITATION_SOURCE_BUDGET,
-        priority=(REQUIREMENT_TRACEABILITY_LIMITATION, *required_context),
+        priority=(
+            REQUIREMENT_TRACEABILITY_LIMITATION,
+            *required_context,
+            *packet_accounting,
+        ),
     )
     report_was_bounded = any(
         (
@@ -2600,6 +2628,7 @@ def _render_report(
             for item in (
                 REQUIREMENT_TRACEABILITY_LIMITATION,
                 *required_context,
+                *packet_accounting,
                 budget_limitation,
             )
             if item == budget_limitation or item in effective_limitations
@@ -2615,6 +2644,7 @@ def _render_report(
             budget_limitation,
             REQUIREMENT_TRACEABILITY_LIMITATION,
             *required_context,
+            *packet_accounting,
         )
         if item
     )
@@ -2770,6 +2800,7 @@ def _finalize_evaluator_failure(
         required=(
             *((REQUIREMENT_TRACEABILITY_LIMITATION,) if run.work_item_revision_id is None else ()),
             *_required_context_limitations(cast(list[str], run.limitations)),
+            *_packet_accounting_limitations(cast(list[str], run.limitations)),
         ),
     )
     markdown, rendered_html, limitations = _render_report(
@@ -3004,11 +3035,12 @@ def submit_evaluator_result(
     )
     all_limitations = _bounded_limitations(
         cast(list[str], run.limitations),
-        cast(list[str], result["limitations"]),
+        _external_limitations(cast(list[str], result["limitations"])),
         ["No repository code was fetched or executed by this assurance engine."],
         required=(
             *((REQUIREMENT_TRACEABILITY_LIMITATION,) if run.work_item_revision_id is None else ()),
             *_required_context_limitations(cast(list[str], run.limitations)),
+            *_packet_accounting_limitations(cast(list[str], run.limitations)),
         ),
     )
     markdown, rendered_html, all_limitations = _render_report(

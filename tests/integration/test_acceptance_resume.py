@@ -342,6 +342,50 @@ def test_real_official_mcp_and_http_parity_return_truncated_normalized_json(
     assert returned["text"] == normalized
     assert returned["content_hash"] == result.content_hash
 
+    monkeypatch.setattr(
+        mcp_gateway,
+        "search_chunks",
+        lambda **_kwargs: SearchResponse("context", "b" * 64, ()),
+    )
+    context_arguments = {
+        "contract_version": "1",
+        "repository_id": state.identities["repository_id"],
+        "task": "Review exact bounded context",
+        "phase": "PREPARE",
+        "budget": {
+            "max_items": 2,
+            "max_tokens": 100,
+            "max_bytes": 1_000,
+            "max_citations": 2,
+        },
+    }
+    mcp_context = StreamableHTTPMCP(live_mcp_url, token).call(
+        "anva.get_context_packet", context_arguments
+    )
+    http_context = (
+        api.with_token(token)
+        .request("POST", "/mcp/tools/anva.get_context_packet", payload=context_arguments)
+        .payload
+    )
+    context_data = cast(dict[str, object], mcp_context["data"])
+    http_context_data = cast(dict[str, object], http_context["data"])
+    assert mcp_context["contract_version"] == http_context["contract_version"]
+    assert mcp_context["tool"] == http_context["tool"]
+    assert context_data["created"] is True
+    assert http_context_data["created"] is False
+    assert context_data["packet_id"] == http_context_data["packet_id"]
+    assert context_data["packet"] == http_context_data["packet"]
+    packet_id = cast(str, context_data["packet_id"])
+    rest_packet = (
+        api.with_token(token)
+        .request(
+            "GET",
+            f"/context-packets/{packet_id}?repository_id={state.identities['repository_id']}",
+        )
+        .payload
+    )
+    assert rest_packet["packet"] == context_data["packet"]
+
 
 @pytest.mark.integration
 @pytest.mark.django_db(transaction=True)

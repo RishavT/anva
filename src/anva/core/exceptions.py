@@ -66,6 +66,12 @@ class RequiredPolicyBudgetError(DomainOperationError):
     code = "required_policy_budget_exceeded"
 
 
+class RequiredContextBudgetError(DomainOperationError):
+    """A packet budget cannot represent every discovered required context facet."""
+
+    code = "required_context_budget_exceeded"
+
+
 class RateLimitExceededError(DomainOperationError):
     """The authenticated principal exhausted a bounded request window."""
 

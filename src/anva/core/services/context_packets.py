@@ -16,7 +16,11 @@ from django.db.models import Case, F, QuerySet, TextField, Value, When
 from django.db.models.functions import Cast, Concat
 from django.utils import timezone
 
-from anva.core.exceptions import RequiredPolicyBudgetError, ResourceNotFoundError
+from anva.core.exceptions import (
+    RequiredContextBudgetError,
+    RequiredPolicyBudgetError,
+    ResourceNotFoundError,
+)
 from anva.core.models import (
     AccessScope,
     AccessScopeMembership,
@@ -1022,11 +1026,13 @@ def _select(
 ) -> PacketSelection:
     ordered = sorted(_merge_candidates(candidates), key=_candidate_order)
     selected: list[PacketCandidate] = []
+    selected_keys: set[str] = set()
     tokens = 0
     byte_count = 0
     citations = 0
-    omitted = 0
-    for candidate in ordered:
+
+    def add_if_fits(candidate: PacketCandidate) -> bool:
+        nonlocal tokens, byte_count, citations
         next_items = len(selected) + 1
         next_tokens = tokens + candidate.token_count
         next_bytes = byte_count + candidate.byte_count
@@ -1038,34 +1044,62 @@ def _select(
             and next_citations <= budget.max_citations
         )
         if not fits:
-            if candidate.required_policy and (
-                candidate.freshness == ContextPacketItem.Freshness.CURRENT
-            ):
-                raise RequiredPolicyBudgetError(
-                    "Packet budget cannot contain every applicable required current policy"
-                )
-            omitted += 1
-            continue
+            return False
         selected.append(candidate)
+        selected_keys.add(candidate.item_key)
         tokens = next_tokens
         byte_count = next_bytes
         citations = next_citations
-    limitations: tuple[str, ...] = ()
-    if omitted:
-        limitations = (f"{omitted} lower-priority candidates omitted by budget",)
+        return True
+
+    # Required policy and discovered-facet representatives are selected before optional
+    # material.  This prevents an otherwise valid packet from spending its final bound on
+    # lower-priority content.  The final packet is sorted canonically below, so reservation
+    # order cannot leak caller or retrieval ordering.
+    for candidate in ordered:
+        if candidate.required_policy and candidate.freshness == ContextPacketItem.Freshness.CURRENT:
+            if not add_if_fits(candidate):
+                raise RequiredPolicyBudgetError(
+                    "Packet budget cannot contain every applicable required current policy"
+                )
+
     discovered_required = {
         label for candidate in ordered for label in candidate.required_context_facets
     } | set(required_context_overflow)
-    selected_required = {
+    covered_required = {
         label for candidate in selected for label in candidate.required_context_facets
     }
-    missing_required = sorted(discovered_required - selected_required)
-    if missing_required:
-        limitations = (
-            *limitations,
-            "Required assurance context was discovered but could not fit the authorized "
-            f"bounded packet: {', '.join(missing_required)}",
+    while uncovered := discovered_required - covered_required:
+        representatives = sorted(
+            (
+                candidate
+                for candidate in ordered
+                if candidate.item_key not in selected_keys
+                and uncovered.intersection(candidate.required_context_facets)
+            ),
+            key=lambda candidate: (
+                -len(uncovered.intersection(candidate.required_context_facets)),
+                _candidate_order(candidate),
+            ),
         )
+        representative = next(
+            (candidate for candidate in representatives if add_if_fits(candidate)),
+            None,
+        )
+        if representative is None:
+            raise RequiredContextBudgetError(
+                "Packet budget cannot represent discovered required context facets: "
+                f"{', '.join(sorted(uncovered))}"
+            )
+        covered_required.update(representative.required_context_facets)
+
+    for candidate in ordered:
+        if candidate.item_key not in selected_keys:
+            add_if_fits(candidate)
+
+    selected.sort(key=_candidate_order)
+    omitted = len(ordered) - len(selected)
+    limitations = (f"{omitted} lower-priority candidates omitted by budget",) if omitted else ()
     return PacketSelection(tuple(selected), tokens, byte_count, citations, limitations)
 
 
