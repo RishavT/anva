@@ -806,7 +806,7 @@ def test_runtime_guard_allows_public_bearer_terminology(text: str) -> None:
         "Bearer to\u200bken hunter2",
         "Bea\u00adrer token hunter2",
         "Bearer\u200b hunter2",
-        "Bearer token：hunter2",
+        "Bearer token\uff1ahunter2",
         "Bearer token for ABCDEFGHIJKLMNOP",
         "Bearer token to abcdefghijklmnop",
         "Bearer token from actual-secret-value",
