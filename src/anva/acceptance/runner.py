@@ -21,7 +21,12 @@ from anva.acceptance.case import (
     legacy_acceptance_case,
     load_acceptance_case,
 )
-from anva.acceptance.client import MCPBoundary, PublicAPI, StreamableHTTPMCP
+from anva.acceptance.client import (
+    AcceptanceBoundaryError,
+    MCPBoundary,
+    PublicAPI,
+    StreamableHTTPMCP,
+)
 from anva.acceptance.corpus import CANONICAL_MANIFEST_NAME, verify_canonical_corpus
 from anva.acceptance.export import (
     canonical_bytes,
@@ -45,6 +50,71 @@ COMMIT_PATTERN = re.compile(r"^[a-f0-9]{40}$")
 
 class AcceptanceRunnerError(ValueError):
     """The runner stopped at a safe, resumable boundary."""
+
+    def __init__(self, message: str, *, reason_code: str = "runner_rejected") -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+
+
+OPERATOR_DIAGNOSTIC_NAME = "operator-diagnostic.json"
+
+
+def _failure_reason(error: BaseException, *, stage: str) -> tuple[str, int | None]:
+    """Reduce failures to stable, non-oracular operator reason codes."""
+    if isinstance(error, AcceptanceBoundaryError):
+        if error.status in {401, 403}:
+            return "authorization_rejected", error.status
+        if error.code in {"api_unavailable", "mcp_unavailable"}:
+            return "boundary_unavailable", error.status
+        if error.code == "rate_limited":
+            return "rate_limited", error.status
+        return "boundary_rejected", error.status
+    if isinstance(error, AcceptanceRunnerError) and error.reason_code != "runner_rejected":
+        return error.reason_code, None
+    if stage == "semantic_assertions":
+        return "semantic_assertion_failed", None
+    return "runner_rejected", None
+
+
+def _write_operator_diagnostic(
+    state_path: Path,
+    *,
+    run_id: str,
+    stage: str,
+    reason_code: str,
+    boundary_status: int | None,
+) -> None:
+    """Atomically retain only allowlisted failure metadata beside private state."""
+    parent = state_path.parent
+    if parent.is_symlink() or not parent.is_dir() or stat.S_IMODE(parent.stat().st_mode) & 0o077:
+        return
+    path = parent / OPERATOR_DIAGNOSTIC_NAME
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "status": "FAILED",
+        "run_id": run_id,
+        "stage": stage,
+        "reason_code": reason_code,
+    }
+    if boundary_status is not None:
+        payload["boundary_status"] = boundary_status
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write((json.dumps(payload, sort_keys=True) + "\n").encode())
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(path)
+        path.chmod(0o600)
+        directory_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 @dataclass(frozen=True, slots=True)
@@ -309,6 +379,8 @@ class AcceptanceRunner:
     """Drive TST-004 through TST-007 without importing product models or services."""
 
     def __init__(self, config: RunnerConfig) -> None:
+        self._active_stage = "initialization"
+        self._diagnostic_run_id = "unavailable"
         if COMMIT_PATTERN.fullmatch(config.product_commit) is None:
             raise AcceptanceRunnerError("Product commit must be exact 40-character lowercase hex")
         if re.fullmatch(r"[a-f0-9]{64}", config.product_image_sha256) is None or not any(
@@ -750,7 +822,10 @@ class AcceptanceRunner:
                         raise AcceptanceRunnerError("Canonical source sync failed")
                     return
             time.sleep(0.5)
-        raise AcceptanceRunnerError("Canonical source sync did not complete before its bound")
+        raise AcceptanceRunnerError(
+            "Canonical source sync did not complete before its bound",
+            reason_code="sync_timeout",
+        )
 
     def _work_payload(self, state: ResumeState) -> dict[str, object]:
         organization_id = state.identities["organization_id"]
@@ -1012,9 +1087,35 @@ class AcceptanceRunner:
         ).payload
 
     def start(self, *, bootstrap_secret: str | None, token: str | None) -> ResumeState:
+        try:
+            return self._start_once(bootstrap_secret=bootstrap_secret, token=token)
+        except BaseException as error:
+            if isinstance(error, AcceptanceRunnerError | AcceptanceBoundaryError):
+                reason_code, boundary_status = _failure_reason(
+                    error,
+                    stage=self._active_stage,
+                )
+                try:
+                    _write_operator_diagnostic(
+                        self.config.state_path,
+                        run_id=self._diagnostic_run_id,
+                        stage=self._active_stage,
+                        reason_code=reason_code,
+                        boundary_status=boundary_status,
+                    )
+                except OSError:
+                    # Diagnostic durability cannot turn a sanitized product rejection into
+                    # a public I/O traceback or alter the resumable state-machine outcome.
+                    pass
+            raise
+
+    def _start_once(self, *, bootstrap_secret: str | None, token: str | None) -> ResumeState:
+        self._active_stage = "resume_validation"
         if self.config.state_path.exists():
             state = self._load_matching_state()
+            self._diagnostic_run_id = state.run_id
             if state.status == "BOOTSTRAP_PREPARED":
+                self._active_stage = "bootstrap"
                 reconciled = self._reconcile_bootstrap_handoff(state)
                 if reconciled is None:
                     api, active_token = self._bootstrap(bootstrap_secret or "", state)
@@ -1029,41 +1130,55 @@ class AcceptanceRunner:
                 active_token = token
         else:
             state = self._new_state()
+            self._diagnostic_run_id = state.run_id
             self._save(state)
+            self._active_stage = "bootstrap"
             api, active_token = self._bootstrap(bootstrap_secret or "", state)
         mcp: MCPBoundary = StreamableHTTPMCP(self.config.mcp_url, active_token)
 
         source_case = self.case.section("source")
-        source = api.request(
-            "POST",
-            "/source-connections/filesystem",
-            payload={
-                "repository_id": state.identities["repository_id"],
-                "access_scope_id": state.identities["access_scope_id"],
-                "external_key": source_case["external_key"],
-                "display_name": source_case["display_name"],
-                "root": f"{self.config.canonical_root.as_posix()}/payload",
-            },
-            expected=frozenset({200, 201}),
-            operation_id="connectFilesystemSource",
-        ).payload
-        state.identities["source_connection_id"] = _string(source, "id")
-        self._save(state)
-        sync = api.request(
-            "POST",
-            f"/source-connections/{state.identities['source_connection_id']}/sync",
-            payload={"scan_mode": "FULL"},
-            expected=frozenset({202}),
-            operation_id="syncSourceConnection",
-        ).payload
-        state.identities["sync_run_id"] = _string(sync, "id")
-        self._save(state)
+        source_id = state.identities.get("source_connection_id")
+        sync_id = state.identities.get("sync_run_id")
+        if sync_id is not None and source_id is None:
+            raise AcceptanceRunnerError("Acceptance resume source checkpoint is invalid")
+        if source_id is None:
+            self._active_stage = "source_connection"
+            source = api.request(
+                "POST",
+                "/source-connections/filesystem",
+                payload={
+                    "repository_id": state.identities["repository_id"],
+                    "access_scope_id": state.identities["access_scope_id"],
+                    "external_key": source_case["external_key"],
+                    "display_name": source_case["display_name"],
+                    "root": f"{self.config.canonical_root.as_posix()}/payload",
+                },
+                expected=frozenset({200, 201}),
+                operation_id="connectFilesystemSource",
+            ).payload
+            source_id = _string(source, "id")
+            state.identities["source_connection_id"] = source_id
+            self._save(state)
+        if sync_id is None:
+            self._active_stage = "source_sync_start"
+            sync = api.request(
+                "POST",
+                f"/source-connections/{source_id}/sync",
+                payload={"scan_mode": "FULL"},
+                expected=frozenset({202}),
+                operation_id="syncSourceConnection",
+            ).payload
+            sync_id = _string(sync, "id")
+            state.identities["sync_run_id"] = sync_id
+            self._save(state)
+        self._active_stage = "source_sync_wait"
         self._wait_for_sync(
             api,
-            state.identities["source_connection_id"],
-            state.identities["sync_run_id"],
+            source_id,
+            sync_id,
         )
         retrieval = self.case.section("retrieval")
+        self._active_stage = "retrieval_search"
         search = mcp.call(
             "anva.search",
             {
@@ -1074,6 +1189,7 @@ class AcceptanceRunner:
                 "limit": retrieval["search_limit"],
             },
         )
+        self._active_stage = "retrieval_context"
         context = mcp.call(
             "anva.get_context_packet",
             {
@@ -1085,6 +1201,7 @@ class AcceptanceRunner:
             },
         )
         canvas_case = self.case.section("canvas")
+        self._active_stage = "canvas_query"
         canvas = api.request(
             "POST",
             "/canvas/query",
@@ -1097,6 +1214,7 @@ class AcceptanceRunner:
             },
             operation_id="queryOrganizationalCanvas",
         ).payload
+        self._active_stage = "semantic_assertions"
         self._validate_semantic_journey(
             state,
             search=search,
@@ -1104,6 +1222,7 @@ class AcceptanceRunner:
             canvas=canvas,
         )
 
+        self._active_stage = "work_import"
         work = api.request(
             "POST",
             "/work-items/import",
@@ -1114,6 +1233,7 @@ class AcceptanceRunner:
         state.identities["work_item_id"] = _string(work, "work_item_id")
         state.identities["work_item_revision_id"] = _string(work, "work_item_revision_id")
         self._save(state)
+        self._active_stage = "policy_import"
         policy = api.request(
             "POST",
             "/policies/import",
@@ -1126,6 +1246,7 @@ class AcceptanceRunner:
         self._save(state)
         change = self.case.section("change")
         pull_request_number = cast(int, change["pull_request_number"])
+        self._active_stage = "policy_simulation"
         api.request(
             "POST",
             "/policies/simulate",
@@ -1143,6 +1264,7 @@ class AcceptanceRunner:
             expected=frozenset({200, 201}),
             operation_id="simulatePolicy",
         )
+        self._active_stage = "diff_ingestion"
         primary = api.request(
             "POST",
             f"/repositories/{state.identities['repository_id']}/pull-requests/"
@@ -1154,7 +1276,9 @@ class AcceptanceRunner:
         state.identities["pull_request_revision_id"] = _string(primary, "pull_request_revision_id")
         state.hashes["diff_hash"] = _string(primary, "diff_hash")
         self._save(state)
+        self._active_stage = "evidence_submission"
         evidence_ids = self._submit_evidence(api, state)
+        self._active_stage = "assurance_start"
         started = self._start_assurance(
             api,
             state,
@@ -1169,6 +1293,7 @@ class AcceptanceRunner:
 
         stale_probe = change["stale_probe"]
         if isinstance(stale_probe, dict):
+            self._active_stage = "stale_head_verification"
             probe = cast(dict[str, object], stale_probe)
             probe_number = cast(int, probe["pull_request_number"])
             suffix = f" {_string(probe, 'title_suffix')}"
@@ -1207,6 +1332,7 @@ class AcceptanceRunner:
             if stale.get("state") != "STALE" or stale.get("readiness") != "STALE":
                 raise AcceptanceRunnerError("A newer head did not stale the prior assurance run")
         state.status = "AWAITING_EXTERNAL_REVIEW"
+        self._active_stage = "state_commit"
         self._save(state)
         return state
 

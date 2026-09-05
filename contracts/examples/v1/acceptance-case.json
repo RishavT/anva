@@ -116,6 +116,7 @@
             {
               "actions": [
                 "artifact.create",
+                "artifact.view",
                 "assurance.execute",
                 "canvas.view",
                 "evidence.submit",

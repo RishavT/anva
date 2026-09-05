@@ -65,6 +65,7 @@ ACCEPTANCE_INITIATOR_ACTIONS: Final[frozenset[str]] = frozenset(
         "search.query",
         "canvas.view",
         "mcp.context",
+        "artifact.view",
         "artifact.create",
     }
 )

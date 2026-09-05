@@ -2409,6 +2409,868 @@
                           "type": "array",
                           "uniqueItems": true
                         },
+                        "citations": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "canonical_url": {
+                                "maxLength": 4000,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "citation_id": {
+                                "format": "uuid",
+                                "type": "string"
+                              },
+                              "locator": {
+                                "maxLength": 2000,
+                                "type": "string"
+                              },
+                              "observed_at": {
+                                "format": "date-time",
+                                "type": "string"
+                              },
+                              "source_content_hash": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "citation_id",
+                              "canonical_url",
+                              "locator",
+                              "source_content_hash",
+                              "observed_at"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 1000,
+                          "type": "array"
+                        },
+                        "claim": {
+                          "oneOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "assertion_id": {
+                                  "format": "uuid",
+                                  "type": "string"
+                                },
+                                "confidence": {
+                                  "maximum": 1,
+                                  "minimum": 0,
+                                  "type": "number"
+                                },
+                                "predicate": {
+                                  "maxLength": 200,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "required_context_facets": {
+                                  "items": {
+                                    "pattern": "^[a-z][a-z0-9_]{0,39}$",
+                                    "type": "string"
+                                  },
+                                  "maxItems": 9,
+                                  "minItems": 1,
+                                  "type": "array",
+                                  "uniqueItems": true
+                                },
+                                "retrieval_facets": {
+                                  "items": {
+                                    "pattern": "^[a-z][a-z0-9_]{0,39}$",
+                                    "type": "string"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array",
+                                  "uniqueItems": true
+                                },
+                                "review_state": {
+                                  "enum": [
+                                    "UNREVIEWED",
+                                    "AUTO_ACCEPTED",
+                                    "HUMAN_CONFIRMED",
+                                    "DISPUTED",
+                                    "REJECTED",
+                                    "SUPERSEDED",
+                                    "STALE"
+                                  ],
+                                  "type": "string"
+                                },
+                                "staleness_state": {
+                                  "enum": [
+                                    "FRESH",
+                                    "AGING",
+                                    "STALE",
+                                    "CONTRADICTED",
+                                    "SOURCE_UNAVAILABLE"
+                                  ],
+                                  "type": "string"
+                                },
+                                "subject_key": {
+                                  "maxLength": 500,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "value": {
+                                  "oneOf": [
+                                    {
+                                      "maxLength": 10000,
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "boolean"
+                                    },
+                                    {
+                                      "type": "null"
+                                    },
+                                    {
+                                      "items": {
+                                        "oneOf": [
+                                          {
+                                            "maxLength": 10000,
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "type": "boolean"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "maxItems": 200,
+                                      "type": "array"
+                                    },
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "authentication": {
+                                          "type": "boolean"
+                                        },
+                                        "component": {
+                                          "maxLength": 500,
+                                          "minLength": 1,
+                                          "type": "string"
+                                        },
+                                        "enabled": {
+                                          "type": "boolean"
+                                        },
+                                        "id": {
+                                          "maxLength": 500,
+                                          "minLength": 1,
+                                          "type": "string"
+                                        },
+                                        "name": {
+                                          "maxLength": 500,
+                                          "minLength": 1,
+                                          "type": "string"
+                                        },
+                                        "owner": {
+                                          "maxLength": 500,
+                                          "minLength": 1,
+                                          "type": "string"
+                                        },
+                                        "required": {
+                                          "type": "boolean"
+                                        },
+                                        "risk": {
+                                          "maxLength": 100,
+                                          "minLength": 1,
+                                          "type": "string"
+                                        },
+                                        "rule": {
+                                          "maxLength": 10000,
+                                          "minLength": 1,
+                                          "type": "string"
+                                        },
+                                        "service": {
+                                          "maxLength": 500,
+                                          "minLength": 1,
+                                          "type": "string"
+                                        },
+                                        "status": {
+                                          "maxLength": 100,
+                                          "minLength": 1,
+                                          "type": "string"
+                                        },
+                                        "team": {
+                                          "maxLength": 500,
+                                          "minLength": 1,
+                                          "type": "string"
+                                        },
+                                        "text": {
+                                          "maxLength": 10000,
+                                          "minLength": 1,
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [],
+                                      "type": "object"
+                                    },
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "format": {
+                                          "const": "CANONICAL_JSON",
+                                          "type": "string"
+                                        },
+                                        "json": {
+                                          "maxLength": 250000,
+                                          "minLength": 2,
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "format",
+                                        "json"
+                                      ],
+                                      "type": "object"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "assertion_id",
+                                "subject_key",
+                                "predicate",
+                                "value",
+                                "review_state",
+                                "staleness_state",
+                                "confidence"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "assertion_id": {
+                                  "format": "uuid",
+                                  "type": "string"
+                                },
+                                "required_context_facets": {
+                                  "items": {
+                                    "pattern": "^[a-z][a-z0-9_]{0,39}$",
+                                    "type": "string"
+                                  },
+                                  "maxItems": 9,
+                                  "minItems": 1,
+                                  "type": "array",
+                                  "uniqueItems": true
+                                },
+                                "retrieval_facets": {
+                                  "items": {
+                                    "pattern": "^[a-z][a-z0-9_]{0,39}$",
+                                    "type": "string"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array",
+                                  "uniqueItems": true
+                                }
+                              },
+                              "required": [
+                                "assertion_id"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "confidence": {
+                                  "maximum": 1,
+                                  "minimum": 0,
+                                  "type": "number"
+                                },
+                                "relationship_id": {
+                                  "format": "uuid",
+                                  "type": "string"
+                                },
+                                "relationship_type": {
+                                  "enum": [
+                                    "GOAL_MEASURED_BY_METRIC",
+                                    "INITIATIVE_SUPPORTS_GOAL",
+                                    "INITIATIVE_OWNED_BY_TEAM",
+                                    "INITIATIVE_AFFECTS_PRODUCT",
+                                    "PRODUCT_IMPLEMENTED_BY_REPOSITORY",
+                                    "COMPONENT_BELONGS_TO_PRODUCT",
+                                    "REPOSITORY_OWNED_BY_TEAM",
+                                    "REPOSITORY_CONTAINS_COMPONENT",
+                                    "SERVICE_IMPLEMENTED_BY_REPOSITORY",
+                                    "SERVICE_DEPENDS_ON_SERVICE",
+                                    "API_PROVIDED_BY_SERVICE",
+                                    "API_CONSUMED_BY_COMPONENT",
+                                    "DATA_ASSET_USED_BY_SERVICE",
+                                    "DECISION_APPLIES_TO_ENTITY",
+                                    "POLICY_APPLIES_TO_ENTITY",
+                                    "RISK_AFFECTS_ENTITY",
+                                    "INCIDENT_AFFECTED_ENTITY",
+                                    "REQUIREMENT_SUPPORTS_INITIATIVE",
+                                    "REQUIREMENT_IMPLEMENTED_BY_PULL_REQUEST",
+                                    "ACCEPTANCE_CRITERION_VERIFIED_BY_EVIDENCE",
+                                    "TASK_CHANGES_ENTITY",
+                                    "PULL_REQUEST_CHANGES_ENTITY",
+                                    "ENTITY_OWNED_BY_OWNER",
+                                    "ENTITY_REVIEWED_BY_TEAM",
+                                    "OWNED_BY",
+                                    "MAINTAINED_BY",
+                                    "DEPENDS_ON",
+                                    "MEASURED_BY",
+                                    "ADVANCES",
+                                    "IMPLEMENTS",
+                                    "PART_OF",
+                                    "AFFECTS",
+                                    "GOVERNED_BY",
+                                    "EVIDENCED_BY",
+                                    "BLOCKED_BY",
+                                    "CHANGES"
+                                  ],
+                                  "type": "string"
+                                },
+                                "required_context_facets": {
+                                  "items": {
+                                    "pattern": "^[a-z][a-z0-9_]{0,39}$",
+                                    "type": "string"
+                                  },
+                                  "maxItems": 9,
+                                  "minItems": 1,
+                                  "type": "array",
+                                  "uniqueItems": true
+                                },
+                                "retrieval_facets": {
+                                  "items": {
+                                    "pattern": "^[a-z][a-z0-9_]{0,39}$",
+                                    "type": "string"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array",
+                                  "uniqueItems": true
+                                },
+                                "review_state": {
+                                  "enum": [
+                                    "UNREVIEWED",
+                                    "AMBIGUOUS",
+                                    "CONFIRMED",
+                                    "REJECTED"
+                                  ],
+                                  "type": "string"
+                                },
+                                "source_entity_id": {
+                                  "format": "uuid",
+                                  "type": "string"
+                                },
+                                "target_entity_id": {
+                                  "format": "uuid",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "relationship_id",
+                                "relationship_type",
+                                "source_entity_id",
+                                "target_entity_id",
+                                "review_state",
+                                "confidence"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "chunk_id": {
+                                  "format": "uuid",
+                                  "type": "string"
+                                },
+                                "content_hash": {
+                                  "pattern": "^[a-f0-9]{64}$",
+                                  "type": "string"
+                                },
+                                "ranking": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "lexical_rank": {
+                                      "oneOf": [
+                                        {
+                                          "minimum": 1,
+                                          "type": "integer"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "phase": {
+                                      "oneOf": [
+                                        {
+                                          "enum": [
+                                            "PREPARE",
+                                            "BUILD",
+                                            "PREFLIGHT",
+                                            "ASSURANCE"
+                                          ],
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "phase_terms": {
+                                      "items": {
+                                        "maxLength": 100,
+                                        "minLength": 1,
+                                        "type": "string"
+                                      },
+                                      "maxItems": 20,
+                                      "type": "array",
+                                      "uniqueItems": true
+                                    },
+                                    "reciprocal_rank_score": {
+                                      "minimum": 0,
+                                      "type": "number"
+                                    },
+                                    "semantic_rank": {
+                                      "oneOf": [
+                                        {
+                                          "minimum": 1,
+                                          "type": "integer"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "lexical_rank",
+                                    "semantic_rank",
+                                    "reciprocal_rank_score",
+                                    "phase",
+                                    "phase_terms"
+                                  ],
+                                  "type": "object"
+                                },
+                                "required_context_facets": {
+                                  "items": {
+                                    "pattern": "^[a-z][a-z0-9_]{0,39}$",
+                                    "type": "string"
+                                  },
+                                  "maxItems": 9,
+                                  "minItems": 1,
+                                  "type": "array",
+                                  "uniqueItems": true
+                                },
+                                "retrieval_facet": {
+                                  "pattern": "^[a-z][a-z0-9_]{0,39}$",
+                                  "type": "string"
+                                },
+                                "retrieval_facet_position": {
+                                  "maximum": 7,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "retrieval_facets": {
+                                  "items": {
+                                    "pattern": "^[a-z][a-z0-9_]{0,39}$",
+                                    "type": "string"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array",
+                                  "uniqueItems": true
+                                },
+                                "retrieval_match": {
+                                  "enum": [
+                                    "LEXICAL",
+                                    "SEMANTIC_FALLBACK"
+                                  ],
+                                  "type": "string"
+                                },
+                                "search_position": {
+                                  "maximum": 100,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                }
+                              },
+                              "required": [
+                                "chunk_id",
+                                "content_hash",
+                                "ranking",
+                                "search_position"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "conflict_id": {
+                                  "format": "uuid",
+                                  "type": "string"
+                                },
+                                "left": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "review_state": {
+                                      "enum": [
+                                        "UNREVIEWED",
+                                        "AUTO_ACCEPTED",
+                                        "HUMAN_CONFIRMED",
+                                        "DISPUTED",
+                                        "REJECTED",
+                                        "SUPERSEDED",
+                                        "STALE"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "staleness_state": {
+                                      "enum": [
+                                        "FRESH",
+                                        "AGING",
+                                        "STALE",
+                                        "CONTRADICTED",
+                                        "SOURCE_UNAVAILABLE"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "value": {
+                                      "oneOf": [
+                                        {
+                                          "maxLength": 10000,
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "number"
+                                        },
+                                        {
+                                          "type": "boolean"
+                                        },
+                                        {
+                                          "type": "null"
+                                        },
+                                        {
+                                          "items": {
+                                            "oneOf": [
+                                              {
+                                                "maxLength": 10000,
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "number"
+                                              },
+                                              {
+                                                "type": "boolean"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "maxItems": 200,
+                                          "type": "array"
+                                        },
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "authentication": {
+                                              "type": "boolean"
+                                            },
+                                            "component": {
+                                              "maxLength": 500,
+                                              "minLength": 1,
+                                              "type": "string"
+                                            },
+                                            "enabled": {
+                                              "type": "boolean"
+                                            },
+                                            "id": {
+                                              "maxLength": 500,
+                                              "minLength": 1,
+                                              "type": "string"
+                                            },
+                                            "name": {
+                                              "maxLength": 500,
+                                              "minLength": 1,
+                                              "type": "string"
+                                            },
+                                            "owner": {
+                                              "maxLength": 500,
+                                              "minLength": 1,
+                                              "type": "string"
+                                            },
+                                            "required": {
+                                              "type": "boolean"
+                                            },
+                                            "risk": {
+                                              "maxLength": 100,
+                                              "minLength": 1,
+                                              "type": "string"
+                                            },
+                                            "rule": {
+                                              "maxLength": 10000,
+                                              "minLength": 1,
+                                              "type": "string"
+                                            },
+                                            "service": {
+                                              "maxLength": 500,
+                                              "minLength": 1,
+                                              "type": "string"
+                                            },
+                                            "status": {
+                                              "maxLength": 100,
+                                              "minLength": 1,
+                                              "type": "string"
+                                            },
+                                            "team": {
+                                              "maxLength": 500,
+                                              "minLength": 1,
+                                              "type": "string"
+                                            },
+                                            "text": {
+                                              "maxLength": 10000,
+                                              "minLength": 1,
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [],
+                                          "type": "object"
+                                        },
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "format": {
+                                              "const": "CANONICAL_JSON",
+                                              "type": "string"
+                                            },
+                                            "json": {
+                                              "maxLength": 250000,
+                                              "minLength": 2,
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "format",
+                                            "json"
+                                          ],
+                                          "type": "object"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "value",
+                                    "review_state",
+                                    "staleness_state"
+                                  ],
+                                  "type": "object"
+                                },
+                                "left_assertion_id": {
+                                  "format": "uuid",
+                                  "type": "string"
+                                },
+                                "predicate": {
+                                  "maxLength": 200,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "required_context_facets": {
+                                  "items": {
+                                    "pattern": "^[a-z][a-z0-9_]{0,39}$",
+                                    "type": "string"
+                                  },
+                                  "maxItems": 9,
+                                  "minItems": 1,
+                                  "type": "array",
+                                  "uniqueItems": true
+                                },
+                                "retrieval_facets": {
+                                  "items": {
+                                    "pattern": "^[a-z][a-z0-9_]{0,39}$",
+                                    "type": "string"
+                                  },
+                                  "maxItems": 8,
+                                  "minItems": 1,
+                                  "type": "array",
+                                  "uniqueItems": true
+                                },
+                                "right": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "review_state": {
+                                      "enum": [
+                                        "UNREVIEWED",
+                                        "AUTO_ACCEPTED",
+                                        "HUMAN_CONFIRMED",
+                                        "DISPUTED",
+                                        "REJECTED",
+                                        "SUPERSEDED",
+                                        "STALE"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "staleness_state": {
+                                      "enum": [
+                                        "FRESH",
+                                        "AGING",
+                                        "STALE",
+                                        "CONTRADICTED",
+                                        "SOURCE_UNAVAILABLE"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "value": {
+                                      "oneOf": [
+                                        {
+                                          "maxLength": 10000,
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "number"
+                                        },
+                                        {
+                                          "type": "boolean"
+                                        },
+                                        {
+                                          "type": "null"
+                                        },
+                                        {
+                                          "items": {
+                                            "oneOf": [
+                                              {
+                                                "maxLength": 10000,
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "number"
+                                              },
+                                              {
+                                                "type": "boolean"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "maxItems": 200,
+                                          "type": "array"
+                                        },
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "authentication": {
+                                              "type": "boolean"
+                                            },
+                                            "component": {
+                                              "maxLength": 500,
+                                              "minLength": 1,
+                                              "type": "string"
+                                            },
+                                            "enabled": {
+                                              "type": "boolean"
+                                            },
+                                            "id": {
+                                              "maxLength": 500,
+                                              "minLength": 1,
+                                              "type": "string"
+                                            },
+                                            "name": {
+                                              "maxLength": 500,
+                                              "minLength": 1,
+                                              "type": "string"
+                                            },
+                                            "owner": {
+                                              "maxLength": 500,
+                                              "minLength": 1,
+                                              "type": "string"
+                                            },
+                                            "required": {
+                                              "type": "boolean"
+                                            },
+                                            "risk": {
+                                              "maxLength": 100,
+                                              "minLength": 1,
+                                              "type": "string"
+                                            },
+                                            "rule": {
+                                              "maxLength": 10000,
+                                              "minLength": 1,
+                                              "type": "string"
+                                            },
+                                            "service": {
+                                              "maxLength": 500,
+                                              "minLength": 1,
+                                              "type": "string"
+                                            },
+                                            "status": {
+                                              "maxLength": 100,
+                                              "minLength": 1,
+                                              "type": "string"
+                                            },
+                                            "team": {
+                                              "maxLength": 500,
+                                              "minLength": 1,
+                                              "type": "string"
+                                            },
+                                            "text": {
+                                              "maxLength": 10000,
+                                              "minLength": 1,
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [],
+                                          "type": "object"
+                                        },
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "format": {
+                                              "const": "CANONICAL_JSON",
+                                              "type": "string"
+                                            },
+                                            "json": {
+                                              "maxLength": 250000,
+                                              "minLength": 2,
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "format",
+                                            "json"
+                                          ],
+                                          "type": "object"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "value",
+                                    "review_state",
+                                    "staleness_state"
+                                  ],
+                                  "type": "object"
+                                },
+                                "right_assertion_id": {
+                                  "format": "uuid",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "conflict_id",
+                                "left_assertion_id",
+                                "right_assertion_id",
+                                "predicate"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
                         "freshness": {
                           "enum": [
                             "CURRENT",
@@ -2436,6 +3298,11 @@
                           ],
                           "type": "string"
                         },
+                        "selection_reason": {
+                          "maxLength": 2000,
+                          "minLength": 1,
+                          "type": "string"
+                        },
                         "summary": {
                           "maxLength": 10000,
                           "minLength": 1,
@@ -2448,6 +3315,9 @@
                         "summary",
                         "freshness",
                         "is_inferred",
+                        "selection_reason",
+                        "claim",
+                        "citations",
                         "citation_ids"
                       ],
                       "type": "object"
@@ -9944,6 +10814,7 @@
                         {
                           "actions": [
                             "artifact.create",
+                            "artifact.view",
                             "assurance.execute",
                             "canvas.view",
                             "evidence.submit",

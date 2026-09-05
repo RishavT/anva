@@ -153,6 +153,19 @@ The first run precommits a reference instant after the bounded ingestion window,
 and reuses it on every retry. A new run may precommit a different instant and therefore receives a
 different UUIDv5 run namespace. Re-run a stopped phase with the same state, exact pins, product
 commit, and appropriate credential; never edit the resume record or copy credentials into it.
+When `start` stops while the state is `PREPARING`, it reconciles the persisted source and sync
+identities before doing more work. A completed sync is observed through its documented read
+boundary and is not recreated. The same unexpired initiator credential can therefore resume the
+run without duplicating the source or sync.
+
+On a safe `start` rejection, inspect
+`$ANVA_ACCEPTANCE_STATE_DIR/operator-diagnostic.json`. This private, mode-`0600` record contains
+only the run ID, a stable stage, a stable reason code, and (when applicable) an HTTP status. It does
+not retain response bodies, exception text, URLs, headers, or credentials. In particular,
+`authorization_rejected`, `sync_timeout`, and `semantic_assertion_failed` distinguish the common
+operator actions while the command's public output remains deliberately non-oracular. Treat the
+file as the most recent start failure; copy it to operator-owned evidence before retrying if the
+failure record must be retained.
 
 ## Fail closed and clean up
 

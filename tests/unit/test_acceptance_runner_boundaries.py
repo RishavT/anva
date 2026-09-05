@@ -18,7 +18,7 @@ from unittest.mock import patch
 import pytest
 
 from anva import __version__
-from anva.acceptance.client import APIResponse
+from anva.acceptance.client import AcceptanceBoundaryError, APIResponse
 from anva.acceptance.corpus import canonicalize_corpus
 from anva.acceptance.export import AcceptanceExportError
 from anva.acceptance.provenance import REQUIRED_LAUNCH_SERVICES, package_sha256
@@ -31,7 +31,7 @@ from anva.acceptance.runner import (
     _secret_handoff_pending_path,
     _write_secret_handoff,
 )
-from anva.acceptance.state import ResumeState, load_state
+from anva.acceptance.state import ResumeState, load_state, save_state
 from anva.contracts.acceptance import ACCEPTANCE_HTTP_OPERATION_IDS
 from anva.contracts.bootstrap_scope import acceptance_bootstrap_scope_payload
 from anva.contracts.catalog import EXAMPLES
@@ -124,6 +124,8 @@ class FakeProduct:
                     "recovered": False,
                 },
             )
+        if token in {"wrong-token", "expired-token", "reused-token"}:
+            raise AcceptanceBoundaryError("invalid_credential", "synthetic secret", status=401)
         assert token in {"initiator-token-material", "reviewer-token-material"}
         if path == "/source-connections/filesystem":
             return APIResponse(201, {"id": _id(4)})
@@ -842,6 +844,257 @@ def test_runner_rejects_unpinned_product_or_unbounded_sync_before_work(
         AcceptanceRunner(replace(runner.config, product_commit="unknown"))
     with pytest.raises(AcceptanceRunnerError, match="timeout"):
         AcceptanceRunner(replace(runner.config, sync_timeout_seconds=0))
+
+
+@pytest.mark.unit
+def test_completed_slow_sync_resumes_without_duplicate_mutation_through_finalization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner, product = _runner(tmp_path, monkeypatch)
+    runner.config = replace(runner.config, sync_timeout_seconds=30)
+    clock = [0.0]
+    polls = 0
+    original_request = product.request
+
+    def slow_sync(
+        token: str | None,
+        method: str,
+        path: str,
+        payload: dict[str, object] | None,
+        content: bytes | None,
+    ) -> APIResponse:
+        nonlocal polls
+        if path.endswith("/sync-runs") and polls < 41:
+            polls += 1
+            product.calls.append((method, path, token, payload))
+            return APIResponse(200, {"sync_runs": [{"id": _id(5), "state": "PROCESSING"}]})
+        return original_request(token, method, path, payload, content)
+
+    product.request = slow_sync  # type: ignore[method-assign]
+    monkeypatch.setattr("anva.acceptance.runner.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        "anva.acceptance.runner.time.sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+
+    class FailFirstSearch:
+        failed = False
+
+        def call(self, tool_name: str, arguments: Mapping[str, object]) -> dict[str, object]:
+            del arguments
+            if tool_name == "anva.search" and not self.failed:
+                self.failed = True
+                raise AcceptanceBoundaryError("mcp_unavailable", "CANARY-SECRET")
+            return FakeMCP(product).call(tool_name, {})
+
+    boundary = FailFirstSearch()
+    monkeypatch.setattr(
+        "anva.acceptance.runner.StreamableHTTPMCP",
+        lambda _url, _token: boundary,
+    )
+    with pytest.raises(AcceptanceBoundaryError, match="CANARY"):
+        runner.start(bootstrap_secret="bootstrap-material", token=None)
+
+    checkpoint = load_state(runner.config.state_path)
+    assert checkpoint.status == "PREPARING"
+    assert checkpoint.identities["source_connection_id"] == _id(4)
+    assert checkpoint.identities["sync_run_id"] == _id(5)
+    assert clock[0] > 20
+    mutations_before_resume = [
+        (method, path) for method, path, _token, _payload in product.calls if method == "POST"
+    ]
+    assert mutations_before_resume.count(("POST", "/source-connections/filesystem")) == 1
+    assert mutations_before_resume.count(("POST", f"/source-connections/{_id(4)}/sync")) == 1
+    diagnostic = json.loads(
+        (runner.config.state_path.parent / "operator-diagnostic.json").read_bytes()
+    )
+    assert diagnostic == {
+        "schema_version": 1,
+        "status": "FAILED",
+        "run_id": checkpoint.run_id,
+        "stage": "retrieval_search",
+        "reason_code": "boundary_unavailable",
+    }
+    assert b"CANARY-SECRET" not in json.dumps(diagnostic).encode()
+
+    awaiting = runner.start(bootstrap_secret=None, token="initiator-token-material")
+    assert awaiting.status == "AWAITING_EXTERNAL_REVIEW"
+    mutations_after_resume = [
+        (method, path) for method, path, _token, _payload in product.calls if method == "POST"
+    ]
+    assert mutations_after_resume.count(("POST", "/source-connections/filesystem")) == 1
+    assert mutations_after_resume.count(("POST", f"/source-connections/{_id(4)}/sync")) == 1
+    assert mutations_after_resume.count(("POST", "/work-items/import")) == 1
+    assert mutations_after_resume.count(("POST", "/policies/import")) == 1
+    assert mutations_after_resume.count(("POST", "/policies/simulate")) == 1
+    assert sum(path.endswith("/evidence") for _method, path in mutations_after_resume) == 1
+    assert sum(path.endswith("/assurance-runs") for _method, path in mutations_after_resume) == 2
+
+    handoff_path = tmp_path / "handoff" / "review.json"
+    runner.create_review_handoff(
+        reviewer_token="reviewer-token-material",
+        output=handoff_path,
+    )
+    result = deepcopy(EXAMPLES["evaluator-result"])
+    result.update(
+        {
+            "request_id": product.request_id,
+            "organization_id": _id(1),
+            "commit_sha": product.manual_heads[0],
+            "completion": "COMPLETE",
+            "evaluator_version": "external-acceptance-v1",
+            "prompt_version": "acceptance-review-v1",
+            "findings": [],
+            "limitations": [],
+            "evaluated_at": "2026-08-07T00:00:00Z",
+        }
+    )
+    result_path = tmp_path / "external-result.json"
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+    runner.submit_review(
+        reviewer_token="reviewer-token-material",
+        handoff_path=handoff_path,
+        result_path=result_path,
+    )
+    assert (
+        runner.finalize(token="initiator-token-material", mcp=FakeMCP(product)).status == "COMPLETE"
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("token", ["wrong-token", "expired-token", "reused-token"])
+def test_preparing_resume_rejects_invalid_tokens_without_mutation_or_secret_diagnostics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    token: str,
+) -> None:
+    runner, product = _runner(tmp_path, monkeypatch)
+    state = runner._new_state(reference_time="2026-08-07T00:10:00Z")
+    state.status = "PREPARING"
+    state.identities.update(
+        {
+            "organization_id": _id(1),
+            "repository_id": _id(2),
+            "access_scope_id": _id(3),
+            "source_connection_id": _id(4),
+            "sync_run_id": _id(5),
+            "reviewer_service_identity_id": _id(8),
+            "reviewer_token_id": _id(9),
+        }
+    )
+    save_state(runner.config.state_path, state)
+
+    with pytest.raises(AcceptanceBoundaryError):
+        runner.start(bootstrap_secret=None, token=token)
+
+    assert not [call for call in product.calls if call[0] == "POST"]
+    diagnostic_bytes = (runner.config.state_path.parent / "operator-diagnostic.json").read_bytes()
+    assert token.encode() not in diagnostic_bytes
+    assert b"secret" not in diagnostic_bytes.lower()
+    assert json.loads(diagnostic_bytes) == {
+        "schema_version": 1,
+        "status": "FAILED",
+        "run_id": state.run_id,
+        "stage": "source_sync_wait",
+        "reason_code": "authorization_rejected",
+        "boundary_status": 401,
+    }
+
+
+@pytest.mark.unit
+def test_diagnostic_io_failure_preserves_original_sanitizable_boundary_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner, _product = _runner(tmp_path, monkeypatch)
+
+    class UnavailableMCP:
+        def call(self, tool_name: str, arguments: Mapping[str, object]) -> dict[str, object]:
+            del tool_name, arguments
+            raise AcceptanceBoundaryError("mcp_unavailable", "PRIVATE-CANARY")
+
+    monkeypatch.setattr(
+        "anva.acceptance.runner.StreamableHTTPMCP",
+        lambda _url, _token: UnavailableMCP(),
+    )
+    with (
+        patch(
+            "anva.acceptance.runner._write_operator_diagnostic",
+            side_effect=OSError("PRIVATE-DIAGNOSTIC-CANARY"),
+        ),
+        pytest.raises(AcceptanceBoundaryError, match="PRIVATE-CANARY") as captured,
+    ):
+        runner.start(bootstrap_secret="bootstrap-material", token=None)
+
+    assert captured.value.code == "mcp_unavailable"
+
+
+@pytest.mark.unit
+def test_operator_diagnostics_distinguish_sync_timeout_and_semantic_assertion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    timeout_root = tmp_path / "timeout"
+    timeout_root.mkdir()
+    timeout_runner, timeout_product = _runner(timeout_root, monkeypatch)
+    original_timeout_request = timeout_product.request
+
+    def processing(
+        token: str | None,
+        method: str,
+        path: str,
+        payload: dict[str, object] | None,
+        content: bytes | None,
+    ) -> APIResponse:
+        if path.endswith("/sync-runs"):
+            timeout_product.calls.append((method, path, token, payload))
+            return APIResponse(200, {"sync_runs": [{"id": _id(5), "state": "PROCESSING"}]})
+        return original_timeout_request(token, method, path, payload, content)
+
+    timeout_product.request = processing  # type: ignore[method-assign]
+    clock = [0.0]
+    monkeypatch.setattr("anva.acceptance.runner.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        "anva.acceptance.runner.time.sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+    with pytest.raises(AcceptanceRunnerError, match="did not complete"):
+        timeout_runner.start(bootstrap_secret="bootstrap-material", token=None)
+    timeout_diagnostic = json.loads(
+        (timeout_runner.config.state_path.parent / "operator-diagnostic.json").read_bytes()
+    )
+    assert (timeout_diagnostic["stage"], timeout_diagnostic["reason_code"]) == (
+        "source_sync_wait",
+        "sync_timeout",
+    )
+
+    semantic_root = tmp_path / "semantic"
+    semantic_root.mkdir()
+    semantic_runner, _semantic_product = _runner(semantic_root, monkeypatch)
+
+    class EmptyMCP:
+        def call(self, tool_name: str, arguments: Mapping[str, object]) -> dict[str, object]:
+            del arguments
+            if tool_name == "anva.search":
+                return {
+                    "contract_version": "1",
+                    "tool": "anva.search",
+                    "data": {"results": []},
+                    "next_cursor": None,
+                }
+            return FakeMCP().call(tool_name, {})
+
+    monkeypatch.setattr(
+        "anva.acceptance.runner.StreamableHTTPMCP",
+        lambda _url, _token: EmptyMCP(),
+    )
+    with pytest.raises(AcceptanceRunnerError, match="not retrievable"):
+        semantic_runner.start(bootstrap_secret="bootstrap-material", token=None)
+    semantic_diagnostic = json.loads(
+        (semantic_runner.config.state_path.parent / "operator-diagnostic.json").read_bytes()
+    )
+    assert (semantic_diagnostic["stage"], semantic_diagnostic["reason_code"]) == (
+        "semantic_assertions",
+        "semantic_assertion_failed",
+    )
 
 
 @pytest.mark.unit
