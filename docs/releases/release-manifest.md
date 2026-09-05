@@ -28,6 +28,14 @@ reuse an existing `release/` directory for another candidate; `release-build` st
 with `release-clean` and the verifier rejects stale candidate identity, extra files,
 unsafe paths, symlinks, and checksum drift.
 
+The published v0.1.6 schema-v2 manifest therefore still contains the honest
+build-stage value `generated_unpublished`. That value describes when those
+manifest bytes were generated. This does not mean that v0.1.6 remained unpublished.
+Protected run `33781714974`, the immutable `v0.1.6` tag, the GHCR
+digest, the GitHub Release, attestations, and post-publication verification are
+the separate publication record. Do not rewrite the build-stage field after the
+fact or falsify the generator/schema contract.
+
 `release-build` obtains the runtime image from the Compose `api` build definition
 through BuildKit Bake and requires the Docker exporter to rewrite layer timestamps
 to `SOURCE_DATE_EPOCH`. The Dockerfile also removes timestamp-bearing apt logs and

@@ -10,6 +10,17 @@ INSTALL = ROOT / "docs" / "runbooks" / "install-upgrade-uninstall.md"
 RELEASE = ROOT / "docs" / "releases" / "github-native-release.md"
 READINESS = ROOT / "docs" / "releases" / "current-release-readiness.md"
 NOTES = ROOT / "docs" / "releases" / "v0.1.6.md"
+README = ROOT / "README.md"
+CHECKLIST = ROOT / "docs" / "releases" / "release-checklist.md"
+COMPATIBILITY = ROOT / "docs" / "releases" / "compatibility.md"
+MATRIX = ROOT / "docs" / "releases" / "requirements-evidence-matrix.md"
+OWNERSHIP = ROOT / "docs" / "releases" / "release-ownership.md"
+MVP_SUMMARY = ROOT / "docs" / "releases" / "mvp-013.md"
+MANIFEST_GUIDE = ROOT / "docs" / "releases" / "release-manifest.md"
+OPERATOR_GUIDE = ROOT / "docs" / "guides" / "operator.md"
+OPERATOR_DRILL = ROOT / "docs" / "runbooks" / "operator-acceptance-drill.md"
+RETENTION = ROOT / "docs" / "runbooks" / "retention-and-decommission.md"
+PRODUCT_THREAT_MODEL = ROOT / "docs" / "security" / "product-threat-model.md"
 WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 HISTORICAL_REPAIR = ROOT / ".github" / "workflows" / "release-metadata-repair.yml"
 V012_NOTES = ROOT / "docs" / "releases" / "v0.1.2.md"
@@ -27,6 +38,122 @@ def test_active_release_guidance_agrees_on_exact_v016_identity() -> None:
     assert "group: release-v0.1.6" in workflow
     assert "ANVA_SOURCE_VERSION=0.1.6" in INSTALL.read_text(encoding="utf-8")
     assert "anva-install-0.1.6.tar.gz" in INSTALL.read_text(encoding="utf-8")
+
+
+def test_published_v016_records_are_current_and_prepare_v017_fix_forward() -> None:
+    source = "e89b06aed8207cc32eee0eeebde4a2731f0c0203"
+    image = (
+        "ghcr.io/rishavt/anva@sha256:"
+        "916ea866ac290af35b5e97a6bd875fb365b832cb171284cf701a128b5ea524fb"
+    )
+    required = (source, image, "33781714974", "33910747236")
+    for document in (NOTES, READINESS, CHECKLIST, MATRIX, MVP_SUMMARY):
+        text = document.read_text(encoding="utf-8")
+        for value in required:
+            assert value in text, f"{document.name} is missing {value}"
+    for document in (README, NOTES, READINESS, CHECKLIST, COMPATIBILITY):
+        text = document.read_text(encoding="utf-8")
+        assert "v0.1.7" in text, f"{document.name} lacks the fix-forward version"
+    assert "12 public assets" in NOTES.read_text(encoding="utf-8")
+
+
+def test_active_v016_records_do_not_claim_published_or_closed_gates_are_pending() -> None:
+    forbidden_by_document = {
+        README: (
+            "Published `v0.1.5` remains the immutable predecessor",
+            "its still-open human gates",
+        ),
+        NOTES: ("Status: release preparation", "No `v0.1.6` tag"),
+        READINESS: ("is in release preparation", "Human acceptance #44 | Still separate"),
+        COMPATIBILITY: ("human gates #43 and #44 remain open",),
+        CHECKLIST: (
+            "Human gates #43/#44 remain open",
+            "Human completion remains blocked on #43 and #44",
+        ),
+        MATRIX: ("#43/#44 human gates", "#42, #44, and umbrella #13 remain open"),
+        OWNERSHIP: ("does not claim a completed operator exercise",),
+        MVP_SUMMARY: ("human acceptance gates #43 and #44 remain open",),
+        OPERATOR_GUIDE: ("still-open human exercise in #44",),
+        OPERATOR_DRILL: (
+            "The next eligible target is v0.1.6, which is not yet published",
+            "The v0.1.6 release must contain",
+        ),
+        RETENTION: ("Manual interruption/recovery and human acceptance remain open",),
+        PRODUCT_THREAT_MODEL: (
+            "MVP-013 release candidate",
+            "approved exact 13-CVE/16-tuple",
+            "Exact-commit revalidation is pending",
+            "interruption and recovery evidence remain open",
+        ),
+    }
+    for document, forbidden_values in forbidden_by_document.items():
+        text = document.read_text(encoding="utf-8")
+        for value in forbidden_values:
+            assert value not in text, f"{document.name} retains stale claim: {value}"
+
+
+def test_active_docs_use_the_exact_published_risk_and_source_scan_facts() -> None:
+    risk_fact = "14-unique-cve/18-high-or-critical-tuple"
+    for document in (CHECKLIST, PRODUCT_THREAT_MODEL):
+        normalized = "-".join(document.read_text(encoding="utf-8").lower().split())
+        assert risk_fact in normalized, f"{document.name} lacks the exact v0.1.6 risk set"
+        assert "13-cve/16-tuple" not in normalized
+
+    ownership = " ".join(OWNERSHIP.read_text(encoding="utf-8").split()).lower()
+    assert "14 unique cves across 18 high-or-critical package tuples" in ownership
+    assert "13-cve/16-tuple" not in ownership
+
+    compatibility = " ".join(COMPATIBILITY.read_text(encoding="utf-8").split())
+    assert "three MEDIUM and eight LOW Django vulnerability findings" in compatibility
+    assert "one medium and three low" not in compatibility.lower()
+    assert "not part of the separately approved" in compatibility
+
+    lines = COMPATIBILITY.read_text(encoding="utf-8").splitlines()
+    table_start = lines.index("| Component | Candidate boundary | Evidence status |")
+    table_end = lines.index("", table_start)
+    table = lines[table_start:table_end]
+    assert all(line.startswith("|") and line.endswith("|") for line in table)
+    assert any(line.startswith("| Other browsers |") for line in table)
+
+
+def test_release_ownership_uses_published_v016_decision_not_tracked_v010_exception() -> None:
+    ownership = " ".join(OWNERSHIP.read_text(encoding="utf-8").split())
+    assert "releases/download/v0.1.6/vulnerability-risk-acceptance.json" in ownership
+    assert "14 unique CVEs across 18 HIGH-or-CRITICAL package tuples" in ownership
+    assert (
+        "tracked v0.1.0 exception and all older release approvals are historical only" in ownership
+    )
+
+
+def test_completed_operator_and_lifecycle_docs_preserve_future_release_gates() -> None:
+    operator = " ".join(OPERATOR_GUIDE.read_text(encoding="utf-8").split())
+    drill = " ".join(OPERATOR_DRILL.read_text(encoding="utf-8").split())
+    drill_lower = drill.lower()
+    retention = " ".join(RETENTION.read_text(encoding="utf-8").split())
+    threat_model = " ".join(PRODUCT_THREAT_MODEL.read_text(encoding="utf-8").split())
+
+    assert "separate human exercise in #44 are complete" in operator
+    for value in (
+        "now-complete issue #44",
+        "operator-signoff run `33910747236`",
+        "completed v0.1.6 record is externally anchored and final rather than pending",
+        "no future operator exercise may begin during release preparation",
+    ):
+        assert value in drill_lower
+    assert "synthetic interruption/recovery exercise passed" in retention
+    assert "remains explicitly deferred to issue #38" in retention
+    assert "published v0.1.6" in threat_model
+    assert "Persistent telemetry pipeline controls remain post-MVP issue #39" in threat_model
+
+
+def test_published_docs_explain_build_stage_publication_status_semantics() -> None:
+    manifest = MANIFEST_GUIDE.read_text(encoding="utf-8")
+    notes = NOTES.read_text(encoding="utf-8")
+    assert "generated_unpublished" in manifest
+    assert "build-stage" in manifest
+    assert "does not mean that v0.1.6 remained unpublished" in manifest
+    assert "generated_unpublished" in notes
+    assert "build-stage" in notes
 
 
 def test_runtime_build_and_compose_defaults_agree_on_v016() -> None:

@@ -1,5 +1,16 @@
 # GitHub-native v0.1.6 release
 
+## Publication outcome
+
+This procedure completed successfully in protected run
+[`33781714974`](https://github.com/RishavT/anva/actions/runs/33781714974).
+The immutable tag resolves to source
+`e89b06aed8207cc32eee0eeebde4a2731f0c0203`; the published image is
+`ghcr.io/rishavt/anva@sha256:916ea866ac290af35b5e97a6bd875fb365b832cb171284cf701a128b5ea524fb`.
+All 12 public assets and the image passed post-publication verification. The
+separate operator gate completed in signoff run `33910747236`. Subsequent source
+changes are fix-forward preparation for `v0.1.7`, not mutations of v0.1.6.
+
 The release workflow publishes only an existing exact `v0.1.6` tag. It is a
 manual `workflow_dispatch` loaded from reviewed `main`, requires the full
 lowercase candidate commit. Its first job is non-publishing and creates an

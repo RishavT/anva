@@ -1,81 +1,67 @@
-# Current v0.1.6 release readiness
+# Current release readiness
 
-Anva `v0.1.6` is in release preparation. No tag, candidate image, risk
-approval, protected-environment approval, or GitHub Release is claimed here.
+## Published v0.1.6
 
-The preparation baseline is `76dfd4026c59efa41cdddf906e59d0a3f457117c`.
-It contains the generic operator-evidence source-role contract from #117/#118
-in addition to the previously published release controls. The final candidate identity will be the full
-reviewed `main` commit supplied to release dispatch and must equal the commit
-resolved from a newly created immutable `v0.1.6` tag.
+Anva `v0.1.6` is published and immutable:
 
-## Blocking gates
+- tag/source: `v0.1.6` / `e89b06aed8207cc32eee0eeebde4a2731f0c0203`;
+- image: `ghcr.io/rishavt/anva@sha256:916ea866ac290af35b5e97a6bd875fb365b832cb171284cf701a128b5ea524fb`;
+- protected release run: [33781714974](https://github.com/RishavT/anva/actions/runs/33781714974);
+- the exact published risk set received an explicit RishavT decision before
+  protected publication;
+- 12 public assets with checksum closure, SBOMs, scans, risk decision, standard
+  provenance, and supplemental source attestations;
+- protected operator signoff: [33910747236](https://github.com/RishavT/anva/actions/runs/33910747236),
+  with issue #44 completed and exact drill resources removed.
 
-| Gate | Current disposition |
-| --- | --- |
-| Candidate identity | Pending reviewed merge and exact tag-to-commit binding. |
-| Candidate build and scan | Pending a fresh deterministic double-build and scan from reviewed v0.1.6 source. The successful v0.1.5 publication is historical and cannot supply the new image contract. |
-| Residual risk | Pending a fresh attested proposal followed by an explicit RishavT decision through personal protected-environment approval for the exact source, digest, report, tuple set, runtime controls, and expiry. GitHub's exact-run approval record and proposal SHA must bind the generated decision. No prior decision or approval can be replayed. |
-| Publication | Pending a separate protected `release` environment approval after the build and attest job succeeds. |
-| Human acceptance #44 | Still separate. Harness success cannot approve or finalize it. |
+The separately generated schema-v2 manifest retains
+`publication_status=generated_unpublished` because that field describes the
+build-stage bytes before registry or Release mutation. It is not the current
+publication status. The hosted release, digest, attestations, and successful
+post-publication verification are authoritative for publication.
 
-The workflow remains fail closed until these gates are satisfied. Publication
-must produce checksums, SPDX/CycloneDX SBOMs, standard GitHub provenance,
-supplemental source predicates, immutable GHCR identity, and clean install and
-demo verification from downloaded assets.
+## Current main and v0.1.7 preparation
 
-## Historical v0.1.5 identity
+Current source contains post-v0.1.6 fixes and documentation. None changes the
+immutable v0.1.6 tag, image, artifacts, risk decision, or operator ledger.
+`v0.1.7` is the next patch/fix-forward version. It is **not published** and has
+no candidate tag, image, decision, approval, or Release until a separately
+reviewed preparation reaches the protected workflow.
 
-The successful v0.1.5 release remains bound to product source
-`491cdd7830a7f4d6af7140f6a4744f95c80c46a9`, immutable image
-`sha256:19488230c6f7900cda33bd11adc7f1ad824d23b77ee87fd65ac883cd0dacc725`,
-and release run `33727525411`. Its operator drill is `NOT_ACCEPTED` because that
-image predates the source-role contract. Its publication approval must not be
-replayed for v0.1.6.
+| Gate | v0.1.6 evidence | v0.1.7 disposition |
+| --- | --- | --- |
+| Candidate identity | Exact `e89b06a` tag/source verified | Pending a future reviewed source and immutable tag |
+| Build and scan | Deterministic build, scan and SBOM jobs succeeded in `33781714974` | Must be generated afresh |
+| Residual risk | Exact digest-bound RishavT decision published and attested | Must not replay v0.1.6 approval |
+| Publication | Protected publication and verification succeeded | Pending a future protected release run |
+| Operator acceptance | Drill/signoff `33910747236` completed | Reuse is forbidden if a future release changes the applicable boundary |
 
-## Historical v0.1.0 identity
+## Historical release sequence
 
-The published v0.1.0 tag remains bound to
-`d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac` and image digest
-`sha256:29af794b9fda21e75461866437dd4853db54b54072252d0df9aa2eed77807c2d`.
-Its metadata-repair workflow and risk decision are immutable historical
-evidence and are not retargeted to v0.1.6.
+- `v0.1.0` is published at source `d919a2ca8fee32cbd2c0746ca8fcf3fed83920ac`.
+- `v0.1.1` (`d813c9b75923285761cfc3ec1105e63ca98aea0e`) was aborted
+  after runs `33691370693` and `33698109859`; both were cancelled with zero
+  approvals and no release.
+- `v0.1.2` (`53f58e6bc01b0b5ac8316f030ba17048285049b6`) received
+  exactly one RishavT `Build and attest` environment approval in
+  `33703772407`, then failed exact-candidate binding. It produced no generated
+  or attested risk decision and received no publish/verify approval.
+- `v0.1.3` (`ae6310a942b96ca0173d66cd452b09ec218b0118`) received
+  exactly one RishavT `Build and attest` environment approval in
+  `33713418248`, then failed decision-attestation readback. It received zero
+  Publish or Verify approvals. No v0.1.3 GHCR image or GitHub Release exists.
+- `v0.1.4` (`098e7727d4c307a8bbf25c05c36b0d27e25b4274`) received
+  exactly one RishavT `Build and attest` environment approval in
+  `33718942806`. It passed immediate attestation readback but failed the
+  mode-0600 auth bind for registry copy. It received zero Publish or Verify
+  approvals. No v0.1.4 GHCR image or GitHub Release exists.
+- `v0.1.5` is the published rollback predecessor at source
+  `491cdd7830a7f4d6af7140f6a4744f95c80c46a9` and digest
+  `sha256:19488230c6f7900cda33bd11adc7f1ad824d23b77ee87fd65ac883cd0dacc725`.
 
-## Historical v0.1.1 identity
+## Deferred boundary
 
-The immutable v0.1.1 tag remains bound to
-`d813c9b75923285761cfc3ec1105e63ca98aea0e`. It is aborted and unpublished.
-Runs `33691370693` and `33698109859` exposed build nondeterminism and were
-cancelled with zero approvals. No v0.1.1 GHCR image or GitHub Release exists.
-
-## Historical v0.1.2 identity
-
-The immutable v0.1.2 tag remains bound to
-`53f58e6bc01b0b5ac8316f030ba17048285049b6`. It is aborted and unpublished.
-Run `33703772407` received exactly one RishavT `Build and attest` environment
-approval, then failed exact-candidate binding when its protected rebuild
-diverged. It produced no generated or attested risk decision, received no
-publish/verify approval, and published no GHCR image or GitHub Release.
-
-## Historical v0.1.3 identity
-
-The immutable v0.1.3 tag remains bound to
-`ae6310a942b96ca0173d66cd452b09ec218b0118`. Run `33713418248` received exactly
-one RishavT `Build and attest` environment approval. The protected build reached
-decision-attestation creation and upload, then failed closed during immediate
-readback because the verification step lacked its image-digest binding. It
-received zero Publish or Verify approvals. No v0.1.3 GHCR image or GitHub
-Release exists.
-
-## Historical v0.1.4 identity
-
-The immutable v0.1.4 tag remains bound to
-`098e7727d4c307a8bbf25c05c36b0d27e25b4274`. Run `33718942806` received exactly
-one RishavT `Build and attest` environment approval, explicitly excluding
-Publish and Verify. The protected build reproduced the exact candidate,
-generated and attested the risk decision, and passed immediate attestation
-readback. Its first Skopeo registry copy then failed because the dropped-
-capability container could not read the runner-owned mode-0600 auth bind. It
-received zero Publish or Verify approvals. No v0.1.4 GHCR image or GitHub
-Release exists. #106 landed after the immutable tag and is included only by
-fixing forward to v0.1.6; no v0.1.4 approval or decision authorizes v0.1.6.
+Issues #37–#40 remain legitimate post-MVP work for session re-entry, external
+object-store recovery, durable observability, and managed deployment. Issue #49
+retains a correctness-preserving performance follow-up and the unchanged 250 ms
+p95 target. None is represented as completed by v0.1.6.

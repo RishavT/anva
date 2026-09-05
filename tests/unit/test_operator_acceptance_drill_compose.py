@@ -329,9 +329,13 @@ def test_signoff_workflow_is_protected_pinned_and_minimally_permissioned() -> No
 @pytest.mark.unit
 def test_runbook_never_claims_the_human_drill_is_automated() -> None:
     runbook = (ROOT / "docs/runbooks/operator-acceptance-drill.md").read_text(encoding="utf-8")
+    normalized = " ".join(runbook.split())
 
     assert "PENDING_RISHAV_EXECUTION" in runbook
     assert "NOT_ACCEPTED_OPERATOR_TOOL_PREDATES_SOURCE_ROLE_CONTRACT" in runbook
     assert "Only Rishav" in runbook
     assert "must not be inferred from command success" in runbook
-    assert "does not close #44" in runbook
+    assert (
+        "does not by itself execute a genuine human exercise or authorize a release" in normalized
+    )
+    assert "now-complete issue #44" in normalized
