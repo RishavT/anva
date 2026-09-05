@@ -770,6 +770,8 @@ def test_runtime_guard_rejects_nested_credentials_but_allows_public_auth_metadat
         "Bearer token during the migration was never approved.",
         "Bearer token or an approved standard must be documented.",
         "Bearer token and audience validation are separate controls.",
+        "Bearer token with (approved workload identity) is documented.",
+        "Bearer token for production-ready services was never approved.",
         "Bearer token authentication is prohibited. This control is documented.",
         "The shared bearer token in a shell script. This account is public.",
         "Use a short lived bearer credential only during migration.",
@@ -815,6 +817,11 @@ def test_runtime_guard_allows_public_bearer_terminology(text: str) -> None:
             for connector in ("with", "for", "from", "to", "in", "during", "or", "and")
             for prefix in ("", "the ", "workload ", "the approved ")
             for value in ("hunter2", "ABCDEFGHIJKLMNOP", "actual-secret-value", "hun\u200bter2")
+        ],
+        *[
+            f"Bearer token {connector} the {value}"
+            for connector in ("with", "for", "from", "to", "in", "during", "or", "and")
+            for value in ("пароль", "密码", "秘密", "비밀번호", "رمز", "סיסמה")
         ],
         "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signaturevalue",
         f"actual canary ghp_{'C' * 36}",
