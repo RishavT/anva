@@ -1440,15 +1440,23 @@ def _normalize_public_output(
         if not isinstance(item, dict):
             continue
         payload = item.get("payload")
-        if not isinstance(payload, dict) or "value" not in payload:
+        if not isinstance(payload, dict):
             continue
-        value = payload["value"]
-        if _PUBLIC_NATIVE_ASSERTION_VALUE_VALIDATOR.is_valid(value):
-            continue
-        payload["value"] = {
-            "format": "CANONICAL_JSON",
-            "json": canonical_payload_bytes(value).decode("utf-8"),
-        }
+        value_containers = [payload]
+        if item.get("kind") == "CONFLICT":
+            value_containers.extend(
+                side for name in ("left", "right") if isinstance((side := payload.get(name)), dict)
+            )
+        for value_container in value_containers:
+            if "value" not in value_container:
+                continue
+            value = value_container["value"]
+            if _PUBLIC_NATIVE_ASSERTION_VALUE_VALIDATOR.is_valid(value):
+                continue
+            value_container["value"] = {
+                "format": "CANONICAL_JSON",
+                "json": canonical_payload_bytes(value).decode("utf-8"),
+            }
     return normalized
 
 

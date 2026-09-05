@@ -50,7 +50,9 @@ from anva.core.services.ingestion import (
 )
 from anva.core.services.intent import import_work_item
 from anva.core.services.jobs import claim_next_job, complete_job
+from anva.core.services.mcp_gateway import dispatch_tool
 from anva.core.services.policies import import_policy
+from anva.mcp.contracts import validate_tool_output
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "assurance-broad-context.json"
 HEAD = "d" * 40
@@ -516,6 +518,20 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         limitation.startswith(REQUIRED_ASSURANCE_CONTEXT_LIMITATION_PREFIX)
         for limitation in packet.limitations
     )
+
+    # The packet is retrieved through the same official public MCP boundary used by
+    # acceptance resume; its server-derived facet metadata must satisfy that contract.
+    public_response = dispatch_tool(
+        actor=actor,
+        tool_name="anva.get_context_packet",
+        arguments={
+            "contract_version": "1",
+            "repository_id": str(repository.id),
+            "packet_id": str(packet.id),
+        },
+        transport="STREAMABLE_HTTP_MCP",
+    )
+    validate_tool_output("anva.get_context_packet", public_response)
 
     reviewer = User.objects.create(
         email=f"reviewer-{uuid.uuid4()}@example.test",
