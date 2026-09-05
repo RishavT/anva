@@ -811,21 +811,10 @@ def test_runtime_guard_allows_public_bearer_terminology(text: str) -> None:
         "Bearer token to abcdefghijklmnop",
         "Bearer token from actual-secret-value",
         *[
-            f"Bearer token {connector} {value}"
-            for connector, value in zip(
-                ("with", "for", "from", "to", "in", "during", "or", "and"),
-                (
-                    "hunter2",
-                    "abc123",
-                    "letmein",
-                    "secret123",
-                    "passcode",
-                    "qwerty",
-                    "abc123",
-                    "hunter2",
-                ),
-                strict=True,
-            )
+            f"Bearer token {connector} {prefix}{value}"
+            for connector in ("with", "for", "from", "to", "in", "during", "or", "and")
+            for prefix in ("", "the ", "workload ", "the approved ")
+            for value in ("hunter2", "ABCDEFGHIJKLMNOP", "actual-secret-value", "hun\u200bter2")
         ],
         "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signaturevalue",
         f"actual canary ghp_{'C' * 36}",
