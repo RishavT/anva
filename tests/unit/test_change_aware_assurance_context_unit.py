@@ -322,6 +322,32 @@ def test_required_packing_is_bounded_and_deterministic_at_eight_facet_limit() ->
 
 
 @pytest.mark.unit
+def test_required_packing_fails_stably_at_candidate_and_operation_bounds() -> None:
+    candidates = [
+        _candidate("required:task", tier=1, summary="task", facet="task"),
+        _candidate("required:conflict", tier=1, summary="conflict", facet="conflict"),
+    ]
+    budget = PacketBudget(max_items=2, max_tokens=100, max_bytes=10_000, max_citations=2)
+
+    with (
+        patch(
+            "anva.core.services.context_packets.MAX_REQUIRED_PACKING_CANDIDATES",
+            1,
+        ),
+        pytest.raises(RequiredContextBudgetError, match="deterministic candidate bound"),
+    ):
+        _select(candidates, budget)
+    with (
+        patch(
+            "anva.core.services.context_packets.MAX_REQUIRED_PACKING_OPERATIONS",
+            0,
+        ),
+        pytest.raises(RequiredContextBudgetError, match="deterministic operation bound"),
+    ):
+        _select(candidates, budget)
+
+
+@pytest.mark.unit
 def test_packet_omission_accounting_is_server_owned_in_assurance_output() -> None:
     assert _external_limitations(
         [
@@ -330,6 +356,8 @@ def test_packet_omission_accounting_is_server_owned_in_assurance_output() -> Non
             "2056 lower-priority candidates omitted by budget",
             "2056 candidates were omitted by the retrieval budget",
             "Broader retrieval omitted 2056 candidates",
+            "Two thousand lower-priority candidates omitted by budget",
+            "Packet 2 did not omit any retrieval candidates",
             "Independent evaluator observed bounded coverage.",
             "We omitted 2 budget considerations from the narrative.",
         ]

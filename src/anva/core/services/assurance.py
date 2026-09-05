@@ -499,10 +499,9 @@ def _external_limitations(limitations: list[str]) -> list[str]:
 
 def _looks_like_packet_accounting(limitation: str) -> bool:
     normalized = " ".join(limitation.casefold().split())
-    has_count = any(character.isdigit() for character in normalized)
     has_omission = "omit" in normalized
     has_packet_term = any(term in normalized for term in ("candidate", "retrieval", "packet"))
-    return has_count and has_omission and has_packet_term
+    return has_omission and has_packet_term
 
 
 def _packet_accounting_limitations(limitations: list[str]) -> tuple[str, ...]:

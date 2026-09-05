@@ -66,7 +66,9 @@ from anva.core.services.search_index import EMBEDDING_VERSION, INDEX_VERSION
 MAX_ASSERTION_CANDIDATES = 500
 MAX_RELATIONSHIP_CANDIDATES = 200
 MAX_RETRIEVAL_FACETS = 8
+MAX_REQUIRED_PACKING_CANDIDATES = 10_000
 MAX_REQUIRED_PACKING_STATES = 50_000
+MAX_REQUIRED_PACKING_OPERATIONS = 1_000_000
 _FACET_LABEL = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 _QUERY_TERM = re.compile(r"[a-z0-9][a-z0-9_.:/-]*")
 
@@ -1086,6 +1088,12 @@ def _select(
         for candidate in ordered
         if candidate.item_key not in selected_keys and candidate.required_context_facets
     ]
+    if len(representatives) > MAX_REQUIRED_PACKING_CANDIDATES:
+        raise RequiredContextBudgetError(
+            "Required context packing exceeded its deterministic candidate bound"
+        )
+    state_count = 1
+    operations = 0
     for candidate in representatives:
         candidate_mask = sum(
             label_bits[label] for label in candidate.required_context_facets if label in label_bits
@@ -1096,6 +1104,11 @@ def _select(
             if next_mask == mask:
                 continue
             for chosen, state_tokens, state_bytes, state_citations in mask_states:
+                operations += 1
+                if operations > MAX_REQUIRED_PACKING_OPERATIONS:
+                    raise RequiredContextBudgetError(
+                        "Required context packing exceeded its deterministic operation bound"
+                    )
                 proposal = (
                     (*chosen, candidate),
                     state_tokens + candidate.token_count,
@@ -1123,6 +1136,11 @@ def _select(
                 ):
                     continue
                 frontier = states.setdefault(next_mask, [])
+                operations += len(frontier)
+                if operations > MAX_REQUIRED_PACKING_OPERATIONS:
+                    raise RequiredContextBudgetError(
+                        "Required context packing exceeded its deterministic operation bound"
+                    )
                 if any(
                     len(existing[0]) <= len(proposal[0])
                     and existing[1] <= proposal[1]
@@ -1131,6 +1149,7 @@ def _select(
                     for existing in frontier
                 ):
                     continue
+                previous_count = len(frontier)
                 frontier[:] = [
                     existing
                     for existing in frontier
@@ -1142,9 +1161,8 @@ def _select(
                     )
                 ]
                 frontier.append(proposal)
-                if sum(len(mask_states) for mask_states in states.values()) > (
-                    MAX_REQUIRED_PACKING_STATES
-                ):
+                state_count += len(frontier) - previous_count
+                if state_count > MAX_REQUIRED_PACKING_STATES:
                     raise RequiredContextBudgetError(
                         "Required context packing exceeded its deterministic state bound"
                     )
