@@ -1409,7 +1409,7 @@ def _reject_private_output_material(
         return
     if isinstance(value, str):
         try:
-            reject_secrets(value)
+            reject_secrets(_mask_public_credential_terminology(value))
         except ValueError:
             raise MCPGatewayError(
                 "invalid_tool_output",
@@ -1417,6 +1417,63 @@ def _reject_private_output_material(
                 path=path,
                 reason="secret_material",
             ) from None
+
+
+_PUBLIC_BEARER_TERMINOLOGY = re.compile(
+    r"(?i)\b(?:(?:long|short)[ -]lived\s+)?(?:shared\s+)?"
+    r"bearer\s+(?:token|tokens|authentication|credential|credentials|scheme)\b"
+)
+_AUTHORIZATION_VALUE_PREFIX = re.compile(r"(?i)authorization\s*[:=]\s*$")
+_PUBLIC_VALUE_DISCLOSURE = re.compile(
+    r"(?ix)(?:"
+    r"\b(?:is|was|equals?)\s+(?!(?:prohibited|deprecated|forbidden|not|never|required)\b)\S+"
+    r"|[,;:=]\s*(?!(?:which|and|or|but)\b)\S+"
+    r")"
+)
+_PUBLIC_PROSE_FOLLOWERS = frozenset(
+    {
+        "and",
+        "are",
+        "authentication",
+        "became",
+        "by",
+        "during",
+        "for",
+        "from",
+        "in",
+        "is",
+        "must",
+        "only",
+        "or",
+        "requires",
+        "remain",
+        "remains",
+        "should",
+        "to",
+        "was",
+        "were",
+        "with",
+        "without",
+    }
+)
+
+
+def _mask_public_credential_terminology(value: str) -> str:
+    """Mask bearer terminology, but never credential syntax, before output scanning."""
+
+    def replacement(match: re.Match[str]) -> str:
+        # An Authorization field is credential syntax even when its value is a weak word.
+        if _AUTHORIZATION_VALUE_PREFIX.search(value[: match.start()]):
+            return match.group(0)
+        tail = value[match.end() :]
+        if _PUBLIC_VALUE_DISCLOSURE.search(tail):
+            return match.group(0)
+        following = re.match(r"\s+([^\s,.;:]+)", tail)
+        if following is not None and following.group(1).casefold() not in _PUBLIC_PROSE_FOLLOWERS:
+            return match.group(0)
+        return "public authentication terminology"
+
+    return _PUBLIC_BEARER_TERMINOLOGY.sub(replacement, value)
 
 
 def _normalize_public_output(
