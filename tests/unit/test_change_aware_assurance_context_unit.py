@@ -7,7 +7,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -32,6 +32,7 @@ from anva.core.services.context_packets import (
     PacketBudget,
     PacketCandidate,
     RetrievalFacet,
+    _conflict_candidates,
     _normalized_facets,
     _required_matching_facets,
     _select,
@@ -348,6 +349,83 @@ def test_required_packing_fails_stably_at_candidate_and_operation_bounds() -> No
 
 
 @pytest.mark.unit
+def test_conflict_retrieval_fetches_only_bound_plus_one_and_fails_closed() -> None:
+    ordered = MagicMock()
+    ordered.__getitem__.return_value = [object()] * 501
+    selected = MagicMock()
+    selected.order_by.return_value = ordered
+    queryset = MagicMock()
+    queryset.filter.return_value = queryset
+    queryset.select_related.return_value = selected
+    assertion_id = uuid.uuid4()
+
+    with (
+        patch(
+            "anva.core.services.context_packets.AssertionConflict.objects.filter",
+            return_value=queryset,
+        ) as manager_filter,
+        patch("anva.core.services.context_packets._authorized_provenance") as provenance,
+        pytest.raises(
+            RequiredContextBudgetError,
+            match=r"^Conflict candidate retrieval exceeded its deterministic bound$",
+        ),
+    ):
+        _conflict_candidates(
+            actor=cast(Any, SimpleNamespace(organization_id=uuid.uuid4())),
+            repository_id=uuid.uuid4(),
+            selected_assertion_ids={assertion_id},
+            relevant_assertion_facets={assertion_id: ("task",)},
+            change_aware=True,
+        )
+
+    provenance.assert_not_called()
+    assert manager_filter.call_args.kwargs["organization_id"] is not None
+    assert manager_filter.call_args.kwargs["left_assertion_id__in"] == {assertion_id}
+    assert manager_filter.call_args.kwargs["right_assertion_id__in"] == {assertion_id}
+    queryset.filter.assert_called_once()
+    selected.order_by.assert_called_once_with("id")
+    assert ordered.__getitem__.call_args.args[0] == slice(None, 501, None)
+
+
+@pytest.mark.unit
+def test_change_aware_conflicts_prefilter_irrelevant_rows_before_bound() -> None:
+    ordered = MagicMock()
+    ordered.__getitem__.return_value = []
+    selected = MagicMock()
+    selected.order_by.return_value = ordered
+    relevant_queryset = MagicMock()
+    relevant_queryset.select_related.return_value = selected
+    queryset = MagicMock()
+    queryset.filter.return_value = relevant_queryset
+    assertion_id = uuid.uuid4()
+
+    with (
+        patch(
+            "anva.core.services.context_packets.AssertionConflict.objects.filter",
+            return_value=queryset,
+        ),
+        patch(
+            "anva.core.services.context_packets._authorized_provenance",
+            return_value=[],
+        ),
+    ):
+        assert (
+            _conflict_candidates(
+                actor=cast(Any, SimpleNamespace(organization_id=uuid.uuid4())),
+                repository_id=uuid.uuid4(),
+                selected_assertion_ids={assertion_id, uuid.uuid4()},
+                relevant_assertion_facets={assertion_id: ("task",)},
+                change_aware=True,
+            )
+            == []
+        )
+
+    queryset.filter.assert_called_once()
+    relevant_queryset.select_related.assert_called_once_with("left_assertion", "right_assertion")
+    assert ordered.__getitem__.call_args.args[0] == slice(None, 501, None)
+
+
+@pytest.mark.unit
 def test_packet_omission_accounting_is_server_owned_in_assurance_output() -> None:
     assert _external_limitations(
         [
@@ -358,12 +436,16 @@ def test_packet_omission_accounting_is_server_owned_in_assurance_output() -> Non
             "Broader retrieval omitted 2056 candidates",
             "Two thousand lower-priority candidates omitted by budget",
             "Packet 2 did not omit any retrieval candidates",
+            "2,056 lower-priority candidates excluded by budget",
+            "retrieval left out 2,056 records",
             "Independent evaluator observed bounded coverage.",
             "We omitted 2 budget considerations from the narrative.",
+            "Retrieval quality was low for this review.",
         ]
     ) == [
         "Independent evaluator observed bounded coverage.",
         "We omitted 2 budget considerations from the narrative.",
+        "Retrieval quality was low for this review.",
     ]
 
 

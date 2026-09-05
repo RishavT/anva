@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Any, NoReturn, cast
 
 from django.db import connection, transaction
-from django.db.models import Case, F, QuerySet, TextField, Value, When
+from django.db.models import Case, F, Q, QuerySet, TextField, Value, When
 from django.db.models.functions import Cast, Concat
 from django.utils import timezone
 
@@ -65,6 +65,7 @@ from anva.core.services.search_index import EMBEDDING_VERSION, INDEX_VERSION
 
 MAX_ASSERTION_CANDIDATES = 500
 MAX_RELATIONSHIP_CANDIDATES = 200
+MAX_CONFLICT_CANDIDATES = 500
 MAX_RETRIEVAL_FACETS = 8
 MAX_REQUIRED_PACKING_CANDIDATES = 10_000
 MAX_REQUIRED_PACKING_STATES = 50_000
@@ -925,16 +926,27 @@ def _conflict_candidates(
 ) -> list[PacketCandidate]:
     if not selected_assertion_ids:
         return []
-    conflicts = (
-        AssertionConflict.objects.filter(
-            organization_id=actor.organization_id,
-            status=AssertionConflict.Status.OPEN,
-            left_assertion_id__in=selected_assertion_ids,
-            right_assertion_id__in=selected_assertion_ids,
-        )
-        .select_related("left_assertion", "right_assertion")
-        .order_by("id")
+    conflict_queryset = AssertionConflict.objects.filter(
+        organization_id=actor.organization_id,
+        status=AssertionConflict.Status.OPEN,
+        left_assertion_id__in=selected_assertion_ids,
+        right_assertion_id__in=selected_assertion_ids,
     )
+    if change_aware:
+        relevant_assertion_ids = set(relevant_assertion_facets)
+        conflict_queryset = conflict_queryset.filter(
+            Q(left_assertion_id__in=relevant_assertion_ids)
+            | Q(right_assertion_id__in=relevant_assertion_ids)
+        )
+    bounded_conflicts = list(
+        conflict_queryset.select_related("left_assertion", "right_assertion").order_by("id")[
+            : MAX_CONFLICT_CANDIDATES + 1
+        ]
+    )
+    if len(bounded_conflicts) > MAX_CONFLICT_CANDIDATES:
+        raise RequiredContextBudgetError(
+            "Conflict candidate retrieval exceeded its deterministic bound"
+        )
     candidates: list[PacketCandidate] = []
     provenance_by_assertion: dict[uuid.UUID, AssertionProvenance] = {}
     for provenance in _authorized_provenance(
@@ -943,7 +955,7 @@ def _conflict_candidates(
         assertion_ids=selected_assertion_ids,
     ):
         provenance_by_assertion.setdefault(provenance.assertion_id, provenance)
-    for conflict in conflicts:
+    for conflict in bounded_conflicts:
         matched_facets = tuple(
             sorted(
                 {
@@ -1094,6 +1106,14 @@ def _select(
         )
     state_count = 1
     operations = 0
+    representative_costs = {
+        candidate.item_key: (
+            candidate.token_count,
+            candidate.byte_count,
+            len(candidate.citations),
+        )
+        for candidate in representatives
+    }
     for candidate in representatives:
         candidate_mask = sum(
             label_bits[label] for label in candidate.required_context_facets if label in label_bits
@@ -1109,11 +1129,14 @@ def _select(
                     raise RequiredContextBudgetError(
                         "Required context packing exceeded its deterministic operation bound"
                     )
+                candidate_tokens, candidate_bytes, candidate_citations = representative_costs[
+                    candidate.item_key
+                ]
                 proposal = (
                     (*chosen, candidate),
-                    state_tokens + candidate.token_count,
-                    state_bytes + candidate.byte_count,
-                    state_citations + len(candidate.citations),
+                    state_tokens + candidate_tokens,
+                    state_bytes + candidate_bytes,
+                    state_citations + candidate_citations,
                 )
                 proposal_dimensions = (
                     len(selected) + len(proposal[0]),
