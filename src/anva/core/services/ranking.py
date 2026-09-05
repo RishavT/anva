@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 RRF_K = 60
-RETRIEVAL_ALGORITHM_VERSION = "permission-first-rrf-v2"
+RETRIEVAL_ALGORITHM_VERSION = "permission-first-rrf-v3-change-aware"
 
 PHASE_TERMS: dict[str, tuple[str, ...]] = {
     "PREPARE": ("requirement", "policy", "decision", "owner", "dependency"),

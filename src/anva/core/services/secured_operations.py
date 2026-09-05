@@ -54,6 +54,7 @@ def review_assertion(
     from anva.core.services.context_packets import invalidate_context_packets
 
     invalidate_context_packets(
+        actor=authorized_actor,
         organization_id=actor.organization_id,
         repository_id=repository_id,
         reason=ContextPacketInvalidation.Reason.CORRECTION,
