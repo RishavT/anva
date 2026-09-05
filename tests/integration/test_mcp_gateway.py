@@ -887,9 +887,7 @@ def test_search_preserves_public_bearer_prose_at_canonical_mcp_boundary(
 ) -> None:
     organization, repository, scope, plaintext = _gateway_tenant("mcp-public-bearer-prose")
     actor = authenticate_bearer(f"Bearer {plaintext}")
-    sentence = (
-        "The first operator sample used a long-lived shared bearer token in a shell script."
-    )
+    sentence = "The first operator sample used a long-lived shared bearer token in a shell script."
     normalized_document = {
         "headings": [{"level": 1, "line": 12, "text": "Shared token integration sample"}],
         "links": [],
