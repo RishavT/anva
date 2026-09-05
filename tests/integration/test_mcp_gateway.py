@@ -924,8 +924,8 @@ def test_search_preserves_public_bearer_prose_at_canonical_mcp_boundary(
 
     validate_tool_output("anva.search", response)
     returned = response["data"]["results"][0]  # type: ignore[index]
-    assert returned["text"] == public_text  # type: ignore[index]
-    assert returned["content_hash"] == content_hash  # type: ignore[index]
+    assert returned["text"] == public_text
+    assert returned["content_hash"] == content_hash
     assert MCPToolInvocation.objects.get(request_id=actor.request_id).outcome == "SUCCEEDED"
 
 
