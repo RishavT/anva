@@ -833,6 +833,12 @@ def test_runtime_guard_allows_public_bearer_terminology(text: str) -> None:
             for connector in ("with", "for", "from", "to", "in", "during", "or", "and")
             for value in ("---", "()", "''")
         ],
+        *[
+            f"Bearer token {modifier} {assignment}{value}"
+            for modifier in ("authentication", "only")
+            for assignment in ("is ", "equals ", ": ", "= ")
+            for value in ("hunter2", "actual-secret-value", "пароль")
+        ],
         "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signaturevalue",
         f"actual canary ghp_{'C' * 36}",
         "access_token=actual-secret-value",
