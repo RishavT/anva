@@ -1528,10 +1528,11 @@ def _mask_public_credential_terminology(value: str) -> str:
         if following is not None and following.group(1).casefold() not in _PUBLIC_PROSE_FOLLOWERS:
             return match.group(0)
         if following is not None and following.group(1).casefold() in _VALUE_CONNECTORS:
-            clause_words = re.findall(r"[a-z0-9]+", sentence_tail[following.end() :].casefold())
-            if not clause_words or any(
-                word not in _SAFE_CONNECTOR_CLAUSE_WORDS for word in clause_words
-            ):
+            clause = sentence_tail[following.end() :].strip()
+            if re.fullmatch(r"[A-Za-z0-9\s()'-]+", clause) is None:
+                return match.group(0)
+            clause_words = re.findall(r"[a-z0-9]+", clause.casefold())
+            if any(word not in _SAFE_CONNECTOR_CLAUSE_WORDS for word in clause_words):
                 return match.group(0)
         return "public authentication terminology"
 
