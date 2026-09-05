@@ -1424,11 +1424,10 @@ _PUBLIC_BEARER_TERMINOLOGY = re.compile(
     r"bearer\s+(?:token|tokens|authentication|credential|credentials|scheme)\b"
 )
 _AUTHORIZATION_VALUE_PREFIX = re.compile(r"(?i)authorization\s*[:=]\s*$")
-_PUBLIC_VALUE_DISCLOSURE = re.compile(
-    r"(?ix)(?:"
-    r"\b(?:is|was|equals?)\s+(?!(?:prohibited|deprecated|forbidden|not|never|required)\b)\S+"
-    r"|[,;:=]\s*(?!(?:which|and|or|but)\b)\S+"
-    r")"
+_ZERO_WIDTH = re.compile("[\u200b\u200c\u200d\u2060\ufeff]")
+_DISCLOSURE_ASSIGNMENT = re.compile(
+    r"(?i)\b(?:is|was|equals?)\s+"
+    r"(?!(?:prohibited|deprecated|forbidden|not|never|required|unsupported|obsolete)\b)\S+"
 )
 _PUBLIC_PROSE_FOLLOWERS = frozenset(
     {
@@ -1456,6 +1455,7 @@ _PUBLIC_PROSE_FOLLOWERS = frozenset(
         "without",
     }
 )
+_VALUE_CONNECTORS = frozenset({"and", "during", "for", "from", "in", "or", "to", "with"})
 
 
 def _mask_public_credential_terminology(value: str) -> str:
@@ -1466,11 +1466,22 @@ def _mask_public_credential_terminology(value: str) -> str:
         if _AUTHORIZATION_VALUE_PREFIX.search(value[: match.start()]):
             return match.group(0)
         tail = value[match.end() :]
-        if _PUBLIC_VALUE_DISCLOSURE.search(tail):
+        if _ZERO_WIDTH.search(tail[:1]):
             return match.group(0)
-        following = re.match(r"\s+([^\s,.;:]+)", tail)
+        sentence_tail = re.split(r"[.!?\n]", _ZERO_WIDTH.sub("", tail), maxsplit=1)[0]
+        if re.match(r"\s*[,;:=]\s*(?!(?:which|and|or|but)\b)\S+", sentence_tail, re.I):
+            return match.group(0)
+        if _DISCLOSURE_ASSIGNMENT.search(sentence_tail):
+            return match.group(0)
+        following = re.match(r"\s+([^\s,.;:]+)", sentence_tail)
         if following is not None and following.group(1).casefold() not in _PUBLIC_PROSE_FOLLOWERS:
             return match.group(0)
+        if following is not None and following.group(1).casefold() in _VALUE_CONNECTORS:
+            adjacent = re.match(r"\s+([^\s,.;:]+)", sentence_tail[following.end() :])
+            if adjacent is not None:
+                atom = adjacent.group(1)
+                if len(atom) >= 16 or re.search(r"[-_~+/=]", atom):
+                    return match.group(0)
         return "public authentication terminology"
 
     return _PUBLIC_BEARER_TERMINOLOGY.sub(replacement, value)
