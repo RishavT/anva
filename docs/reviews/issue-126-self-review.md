@@ -28,7 +28,15 @@ Review target: `feature/126-release-docs-reconciliation`, based on
   value was rewritten.
 - Regression coverage: `test_release_documentation.py` requires exact release
   and operator identities, the v0.1.7 boundary, and build-stage status
-  semantics, and rejects the previously authoritative stale phrases.
+  semantics, and rejects the previously authoritative stale phrases across the
+  release records, operator guide/drill, retention runbook, and product threat
+  model.
+- Exact risk facts: the downloaded, checksummed public v0.1.6 assets prove 14
+  unique CVEs across 18 HIGH-or-CRITICAL image package tuples, with approval
+  through 2026-10-03, and three MEDIUM plus eight LOW Django source findings.
+  Active documentation now distinguishes these sets. Release ownership links
+  the immutable v0.1.6 decision asset and identifies the tracked v0.1.0
+  exception as historical only.
 
 ## Validation
 
@@ -36,6 +44,9 @@ Review target: `feature/126-release-docs-reconciliation`, based on
   148 release/documentation tests passed.
 - Ruff format and lint checks passed for the changed test module in the same
   Compose test container.
+- After the independent review correction, the expanded documentation module
+  passed all 15 tests together with repository-wide Ruff format and lint in
+  project `anva-issue126-correction`.
 - `git diff --check` passed.
 - Exact project Compose resources are removed after validation.
 
