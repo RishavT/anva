@@ -2411,6 +2411,15 @@ EXAMPLES: Final[dict[str, dict[str, object]]] = {
                 "max_bytes": 100000,
                 "max_citations": 100,
             },
+            "retrieval_facets": [
+                {
+                    "label": "policy",
+                    "query": "checkout ownership policy",
+                    "anchors": ["ADR-42"],
+                    "required_if_matched": True,
+                    "coverage_incomplete": False,
+                }
+            ],
         },
         "authorization_hash": "c" * 64,
         "selection_hash": "b" * 64,
@@ -2438,7 +2447,11 @@ EXAMPLES: Final[dict[str, dict[str, object]]] = {
                 "freshness": "CURRENT",
                 "selection_reason": "Relevant decision",
                 "rank_score": 1.0,
-                "payload": {"assertion_id": "00000000-0000-4000-8000-000000000303"},
+                "payload": {
+                    "assertion_id": "00000000-0000-4000-8000-000000000303",
+                    "retrieval_facets": ["policy"],
+                    "required_context_facets": ["policy"],
+                },
                 "anva_sources": [RETRIEVAL_CITATION_EXAMPLE],
             }
         ],

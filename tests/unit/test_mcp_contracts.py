@@ -5,12 +5,14 @@ from __future__ import annotations
 import base64
 import json
 import uuid
+from copy import deepcopy
 from datetime import UTC, datetime
 
 import pytest
 from django.conf import settings
 from jsonschema import Draft202012Validator
 
+from anva.contracts.catalog import EXAMPLES
 from anva.core.services.context import ActorContext
 from anva.core.services.mcp_gateway import (
     MCPGatewayError,
@@ -21,9 +23,14 @@ from anva.core.services.mcp_gateway import (
 )
 from anva.core.services.retrieval import SourceExcerpt
 from anva.mcp.contracts import (
+    ASSERTION_PACKET_PAYLOAD,
+    CONFLICT_PACKET_PAYLOAD,
+    DECISION_REFERENCE_PACKET_PAYLOAD,
     PROPOSAL_TOOL_NAMES,
     READ_TOOL_NAMES,
+    RELATIONSHIP_PACKET_PAYLOAD,
     RESOURCE_CONTRACTS,
+    SOURCE_PACKET_PAYLOAD,
     TOOL_CONTRACTS,
     validate_tool_output,
 )
@@ -67,6 +74,155 @@ def test_every_tool_has_closed_valid_versioned_input_and_output_schema() -> None
                     pending.extend(node.values())
                 elif isinstance(node, list):
                     pending.extend(node)
+
+
+@pytest.mark.unit
+def test_context_packet_contract_accepts_only_bounded_facet_metadata() -> None:
+    legacy = {
+        "contract_version": "1",
+        "tool": "anva.get_context_packet",
+        "data": {
+            "packet_id": EXAMPLES["context-packet"]["packet_id"],
+            "created": True,
+            "packet": deepcopy(EXAMPLES["context-packet"]),
+        },
+    }
+    legacy_packet = legacy["data"]["packet"]
+    legacy_packet["request"].pop("retrieval_facets")
+    legacy_packet["items"][0]["payload"].pop("retrieval_facets")
+    legacy_packet["items"][0]["payload"].pop("required_context_facets")
+    validate_tool_output("anva.get_context_packet", legacy)
+
+    response = deepcopy(legacy)
+    payload = response["data"]["packet"]["items"][0]["payload"]
+    payload["retrieval_facets"] = ["policy", "changed_paths"]
+    payload["required_context_facets"] = ["policy"]
+    validate_tool_output("anva.get_context_packet", response)
+
+    request = response["data"]["packet"]["request"]
+    request["retrieval_facets"] = [
+        {
+            "label": "policy",
+            "query": "current policy",
+            "anchors": ["POLICY-1"],
+            "required_if_matched": True,
+            "coverage_incomplete": False,
+        }
+    ]
+    validate_tool_output("anva.get_context_packet", response)
+
+    invalid_values = (
+        [],
+        ["facet_1"] * 2,
+        [f"facet_{index}" for index in range(9)],
+        ["Not-Lowercase"],
+        ["x" * 41],
+    )
+    for invalid_value in invalid_values:
+        invalid = deepcopy(response)
+        invalid_payload = invalid["data"]["packet"]["items"][0]["payload"]
+        invalid_payload["retrieval_facets"] = invalid_value
+        with pytest.raises(ValueError, match="MCP output contract failed"):
+            validate_tool_output("anva.get_context_packet", invalid)
+
+    unknown = deepcopy(response)
+    unknown["data"]["packet"]["items"][0]["payload"]["retrieval_facet_queries"] = ["secret query"]
+    with pytest.raises(ValueError, match="MCP output contract failed"):
+        validate_tool_output("anva.get_context_packet", unknown)
+
+    malformed_request = deepcopy(response)
+    malformed_request["data"]["packet"]["request"]["retrieval_facets"][0]["query"] = "x" * 501
+    with pytest.raises(ValueError, match="MCP output contract failed"):
+        validate_tool_output("anva.get_context_packet", malformed_request)
+
+    missing_required_anchor = deepcopy(response)
+    missing_required_anchor["data"]["packet"]["request"]["retrieval_facets"][0]["anchors"] = []
+    with pytest.raises(ValueError, match="MCP output contract failed"):
+        validate_tool_output("anva.get_context_packet", missing_required_anchor)
+
+    nine_required_facets = deepcopy(response)
+    nine_required_facets["data"]["packet"]["items"][0]["payload"]["required_context_facets"] = [
+        "conflict",
+        *[f"facet_{index}" for index in range(8)],
+    ]
+    validate_tool_output("anva.get_context_packet", nine_required_facets)
+    nine_required_facets["data"]["packet"]["items"][0]["payload"]["required_context_facets"].append(
+        "overflow"
+    )
+    with pytest.raises(ValueError, match="MCP output contract failed"):
+        validate_tool_output("anva.get_context_packet", nine_required_facets)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("schema", "producer_keys"),
+    [
+        (
+            ASSERTION_PACKET_PAYLOAD,
+            {
+                "assertion_id",
+                "subject_key",
+                "predicate",
+                "value",
+                "review_state",
+                "staleness_state",
+                "confidence",
+                "retrieval_facets",
+                "required_context_facets",
+            },
+        ),
+        (
+            DECISION_REFERENCE_PACKET_PAYLOAD,
+            {"assertion_id", "retrieval_facets", "required_context_facets"},
+        ),
+        (
+            RELATIONSHIP_PACKET_PAYLOAD,
+            {
+                "relationship_id",
+                "relationship_type",
+                "source_entity_id",
+                "target_entity_id",
+                "review_state",
+                "confidence",
+                "retrieval_facets",
+                "required_context_facets",
+            },
+        ),
+        (
+            SOURCE_PACKET_PAYLOAD,
+            {
+                "chunk_id",
+                "content_hash",
+                "ranking",
+                "search_position",
+                "retrieval_facet",
+                "retrieval_facet_position",
+                "retrieval_match",
+                "retrieval_facets",
+                "required_context_facets",
+            },
+        ),
+        (
+            CONFLICT_PACKET_PAYLOAD,
+            {
+                "conflict_id",
+                "left_assertion_id",
+                "right_assertion_id",
+                "predicate",
+                "left",
+                "right",
+                "retrieval_facets",
+                "required_context_facets",
+            },
+        ),
+    ],
+)
+def test_context_item_payload_contract_matches_exhaustive_producer_key_inventory(
+    schema: dict[str, object],
+    producer_keys: set[str],
+) -> None:
+    assert schema["additionalProperties"] is False
+    assert set(schema["properties"]) == producer_keys
 
 
 @pytest.mark.unit

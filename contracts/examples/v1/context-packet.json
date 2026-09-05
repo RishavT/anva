@@ -33,7 +33,13 @@
       "item_key": "assertion:00000000-0000-4000-8000-000000000303",
       "kind": "DECISION",
       "payload": {
-        "assertion_id": "00000000-0000-4000-8000-000000000303"
+        "assertion_id": "00000000-0000-4000-8000-000000000303",
+        "required_context_facets": [
+          "policy"
+        ],
+        "retrieval_facets": [
+          "policy"
+        ]
       },
       "rank_score": 1.0,
       "selection_reason": "Relevant decision",
@@ -53,6 +59,17 @@
       "max_tokens": 8000
     },
     "phase": "PREFLIGHT",
+    "retrieval_facets": [
+      {
+        "anchors": [
+          "ADR-42"
+        ],
+        "coverage_incomplete": false,
+        "label": "policy",
+        "query": "checkout ownership policy",
+        "required_if_matched": true
+      }
+    ],
     "task": "Prepare checkout for deployment"
   },
   "retrieval_algorithm_version": "permission-first-rrf-v1",

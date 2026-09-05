@@ -657,6 +657,58 @@ def test_nested_assertion_json_gets_a_deterministic_closed_public_representation
 
 
 @pytest.mark.unit
+def test_conflict_side_values_get_the_same_closed_public_representation() -> None:
+    raw_left = {"claim": "Current governed claim", "metadata": {"revision": 2}}
+    raw_right = {"claim": "Stale contradictory claim", "metadata": {"revision": 1}}
+    result: dict[str, object] = {
+        "data": {
+            "packet": {
+                "items": [
+                    {
+                        "kind": "CONFLICT",
+                        "payload": {
+                            "left": {"value": raw_left},
+                            "right": {"value": raw_right},
+                        },
+                    }
+                ]
+            }
+        }
+    }
+
+    normalized = _normalize_public_output("anva.get_context_packet", result)
+    item = cast(
+        dict[str, object],
+        cast(
+            list[dict[str, object]],
+            cast(dict[str, object], cast(dict[str, object], normalized["data"])["packet"])["items"],
+        )[0],
+    )
+    payload = cast(dict[str, object], item["payload"])
+    assert cast(dict[str, object], payload["left"])["value"] == {
+        "format": "CANONICAL_JSON",
+        "json": '{"claim":"Current governed claim","metadata":{"revision":2}}',
+    }
+    assert cast(dict[str, object], payload["right"])["value"] == {
+        "format": "CANONICAL_JSON",
+        "json": '{"claim":"Stale contradictory claim","metadata":{"revision":1}}',
+    }
+    assert result["data"] == {
+        "packet": {
+            "items": [
+                {
+                    "kind": "CONFLICT",
+                    "payload": {
+                        "left": {"value": raw_left},
+                        "right": {"value": raw_right},
+                    },
+                }
+            ]
+        }
+    }
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize(
     "value",
     [

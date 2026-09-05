@@ -634,7 +634,38 @@ def _context_item(
     )
 
 
-ASSERTION_PACKET_PAYLOAD: Final[dict[str, object]] = _closed(
+RETRIEVAL_FACET_LABELS: Final[dict[str, object]] = {
+    "type": "array",
+    "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_]{0,39}$",
+    },
+    "minItems": 1,
+    "maxItems": 8,
+    "uniqueItems": True,
+}
+REQUIRED_CONTEXT_FACET_LABELS: Final[dict[str, object]] = {
+    **deepcopy(RETRIEVAL_FACET_LABELS),
+    "maxItems": 9,
+}
+
+
+def _context_payload(
+    properties: dict[str, object],
+    required: tuple[str, ...],
+) -> dict[str, object]:
+    """Close one item payload while allowing bounded server-derived facet metadata."""
+    return _closed(
+        {
+            **properties,
+            "retrieval_facets": deepcopy(RETRIEVAL_FACET_LABELS),
+            "required_context_facets": deepcopy(REQUIRED_CONTEXT_FACET_LABELS),
+        },
+        required,
+    )
+
+
+ASSERTION_PACKET_PAYLOAD: Final[dict[str, object]] = _context_payload(
     {
         "assertion_id": deepcopy(UUID),
         "subject_key": {"type": "string", "minLength": 1, "maxLength": 500},
@@ -668,11 +699,11 @@ ASSERTION_PACKET_PAYLOAD: Final[dict[str, object]] = _closed(
         "confidence",
     ),
 )
-DECISION_REFERENCE_PACKET_PAYLOAD: Final[dict[str, object]] = _closed(
+DECISION_REFERENCE_PACKET_PAYLOAD: Final[dict[str, object]] = _context_payload(
     {"assertion_id": deepcopy(UUID)},
     ("assertion_id",),
 )
-RELATIONSHIP_PACKET_PAYLOAD: Final[dict[str, object]] = _closed(
+RELATIONSHIP_PACKET_PAYLOAD: Final[dict[str, object]] = _context_payload(
     {
         "relationship_id": deepcopy(UUID),
         "relationship_type": {"type": "string", "enum": list(RELATIONSHIP_TYPES)},
@@ -693,21 +724,51 @@ RELATIONSHIP_PACKET_PAYLOAD: Final[dict[str, object]] = _closed(
         "confidence",
     ),
 )
-SOURCE_PACKET_PAYLOAD: Final[dict[str, object]] = _closed(
+SOURCE_PACKET_PAYLOAD: Final[dict[str, object]] = _context_payload(
     {
         "chunk_id": deepcopy(UUID),
         "content_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
         "ranking": RANKING_EXPLANATION,
         "search_position": {"type": "integer", "minimum": 1, "maximum": 100},
+        "retrieval_facet": deepcopy(RETRIEVAL_FACET_LABELS["items"]),
+        "retrieval_facet_position": {"type": "integer", "minimum": 0, "maximum": 7},
+        "retrieval_match": {
+            "type": "string",
+            "enum": ["LEXICAL", "SEMANTIC_FALLBACK"],
+        },
     },
     ("chunk_id", "content_hash", "ranking", "search_position"),
 )
-CONFLICT_PACKET_PAYLOAD: Final[dict[str, object]] = _closed(
+CONFLICT_SIDE: Final[dict[str, object]] = _closed(
+    {
+        "value": PUBLIC_ASSERTION_VALUE,
+        "review_state": {
+            "type": "string",
+            "enum": [
+                "UNREVIEWED",
+                "AUTO_ACCEPTED",
+                "HUMAN_CONFIRMED",
+                "DISPUTED",
+                "REJECTED",
+                "SUPERSEDED",
+                "STALE",
+            ],
+        },
+        "staleness_state": {
+            "type": "string",
+            "enum": ["FRESH", "AGING", "STALE", "CONTRADICTED", "SOURCE_UNAVAILABLE"],
+        },
+    },
+    ("value", "review_state", "staleness_state"),
+)
+CONFLICT_PACKET_PAYLOAD: Final[dict[str, object]] = _context_payload(
     {
         "conflict_id": deepcopy(UUID),
         "left_assertion_id": deepcopy(UUID),
         "right_assertion_id": deepcopy(UUID),
         "predicate": {"type": "string", "minLength": 1, "maxLength": 200},
+        "left": CONFLICT_SIDE,
+        "right": CONFLICT_SIDE,
     },
     ("conflict_id", "left_assertion_id", "right_assertion_id", "predicate"),
 )
@@ -726,6 +787,33 @@ CONTEXT_ITEM: Final[dict[str, object]] = {
         _context_item({"type": "string", "const": "CONFLICT"}, CONFLICT_PACKET_PAYLOAD),
     ]
 }
+RETRIEVAL_FACET: Final[dict[str, object]] = _closed(
+    {
+        "label": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,39}$",
+        },
+        "query": {"type": "string", "minLength": 1, "maxLength": 500},
+        "anchors": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "maxLength": 200},
+            "maxItems": 16,
+            "uniqueItems": True,
+        },
+        "required_if_matched": {"type": "boolean"},
+        "coverage_incomplete": {"type": "boolean"},
+    },
+    ("label", "query", "anchors", "required_if_matched", "coverage_incomplete"),
+)
+RETRIEVAL_FACET["allOf"] = [
+    {
+        "if": {
+            "properties": {"required_if_matched": {"const": True}},
+            "required": ["required_if_matched"],
+        },
+        "then": {"properties": {"anchors": {"minItems": 1}}},
+    }
+]
 CONTEXT_REQUEST: Final[dict[str, object]] = _closed(
     {
         "task": {"type": "string", "minLength": 1, "maxLength": 2_000},
@@ -742,6 +830,13 @@ CONTEXT_REQUEST: Final[dict[str, object]] = _closed(
             },
             ("max_items", "max_tokens", "max_bytes", "max_citations"),
         ),
+        "retrieval_facets": {
+            "type": "array",
+            "items": RETRIEVAL_FACET,
+            "minItems": 1,
+            "maxItems": 8,
+            "uniqueItems": True,
+        },
     },
     ("task", "phase", "budget"),
 )
