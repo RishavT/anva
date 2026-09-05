@@ -3,7 +3,9 @@
 This runbook covers the GitHub-native `v0.1.6` installation path and the
 source-checkout fallback. The commands become usable only after the protected
 release workflow publishes and verifies the exact tag, assets, attestations,
-immutable GHCR image, and install lifecycle. Human gate #44 remains separate.
+immutable GHCR image, and install lifecycle. That publication completed in run
+`33781714974`; the separate human gate completed in operator-signoff run
+`33910747236`.
 
 ## GitHub-native v0.1.6 installation
 
@@ -196,10 +198,9 @@ disposable PostgreSQL project, restores the database dump there, migrates `core`
 from `0020` back to `0019`, reapplies the head migration, and removes only that
 disposable project's resources. It never reverses the live database.
 
-A current worktree rehearsal passed this disposable-clone behavior, removed the
-clone resources, and left the live project at `0020`; exact-commit revalidation
-remains pending. This is schema reversibility evidence, not proof of
-older-application compatibility.
+The exact published lifecycle passed this disposable-clone behavior, removed
+the clone resources, and left the live project at the current migration. This
+is schema reversibility evidence, not proof of older-application compatibility.
 
 After an upgrade, verify readiness, authentication, a representative repository
 query, protected metrics access, object retrieval, and background processing.
