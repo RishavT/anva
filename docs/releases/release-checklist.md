@@ -1,170 +1,117 @@
 # MVP-013 release checklist
 
-This is a fail-closed checklist. Check an item only after linking evidence from
-the exact release commit. A command in documentation is not execution evidence.
-The [release-freeze contract](release-freeze-contract.md) fixes the remaining
-scope, allowed exceptions, evidence, and retest rules.
-The [current readiness audit](current-release-readiness.md) maps open gates to
-release-blocker and post-MVP issues without treating documentation as evidence.
-The historical evidence index records local candidate lanes. Public technical
-publication is separately proven by `v0.1.0`, source `d919...`, image digest
-`sha256:29af...`, 13 assets, and successful run `33596661334`. Human gates
-#43/#44 remain open.
+This checklist records the published v0.1.6 self-hosted MVP boundary. A checked
+item is backed by execution evidence, not documentation alone. Future `v0.1.7`
+preparation must create a new checklist and must not alter or replay v0.1.6
+identities, decisions, approvals, artifacts, or attestations.
 
-Checked local results bind to source commit
-`94231d7e57767b18a4cd9546ad5bf33afc13a735`, tree
-`43395db015a2205c739647c1b6dfb9b02626abd2`, runtime image
-`anva-mvp13:0.1.0` ID
-`sha256:c6ae3a8abfd4c54d91df94be0dfe7f1bc1c52e73da58a4617b2bc30a3b1f6f2c`,
-and evidence archive SHA-256
-`d90916f8063911757a05f8e0b16e25e5a64063609046a04e44aea9065d6dbeb8`.
+## Exact release identity
 
-## Identity and artifacts
-
-- [x] Version `0.1.0`, tag `v0.1.0`, and source `d919...` are authoritative.
-- [x] Standard and supplemental provenance attest the downloadable subjects.
-- [x] Runtime image is published and verified at `sha256:29af794b...`.
-- [x] Worktree has no tracked or untracked changes, and the runtime image OCI
-  revision exactly equals the clean candidate commit.
-- [x] Runtime base images and Compose dependencies are pinned by digest.
-- [x] Python wheel and Codex/Claude skill archives are rebuilt and verified in
-  the release environment rather than copied from stale source artifacts.
-- [x] `SHA256SUMS` covers every downloadable artifact and the release manifest.
-- [x] CycloneDX and SPDX SBOMs cover the local runtime image and its installed
-  Python/OS package inventory.
-- [x] Checksums verify from the clean local candidate environment.
+- [x] Tag/source: `v0.1.6` / `e89b06aed8207cc32eee0eeebde4a2731f0c0203`.
+- [x] Immutable image:
+  `ghcr.io/rishavt/anva@sha256:916ea866ac290af35b5e97a6bd875fb365b832cb171284cf701a128b5ea524fb`.
+- [x] Protected release run
+  [33781714974](https://github.com/RishavT/anva/actions/runs/33781714974)
+  completed Build exact risk proposal, Build and attest, Create GitHub Release,
+  and Verify published release.
+- [x] Twelve public assets include the wheel, install and skill archives,
+  SPDX/CycloneDX SBOMs, source/image reports, exact risk decision, manifest,
+  notes, and `SHA256SUMS`.
+- [x] Standard provenance and supplemental source predicates bind every public
+  subject and OCI digest to the exact tag/source.
+- [x] The manifest's `generated_unpublished` value remains the truthful
+  build-stage status of those bytes; hosted release/run/digest evidence records
+  the later publication state.
 
 ## Install and lifecycle
 
-- [ ] Production configuration records `ANVA_ENV=production`,
-  `ANVA_DEBUG=false`, exact hosts/URLs, out-of-band unique secrets, a metrics
-  token, TLS termination, exact trusted-proxy IPs, and reviewed resolved Compose
-  configuration.
-- [x] Fresh-bundle published-image Compose install passes without host Python,
-  Node.js, npm, or Go.
-- [x] One-command synthetic demo/bootstrap passes and is idempotent or fails
-  safely on replay.
-- [ ] Demo token is observed only in the attached terminal; its `run --rm`
-  container, Docker logs, redirected output, and operator transcript retain no
-  token.
-- [x] Preserve-data uninstall is verified.
-- [x] Clean-data uninstall names and removes only the intended Compose volumes.
-- [ ] Skill and MCP uninstall procedures refuse to overwrite or remove modified
-  user content.
-
-## Database and storage
-
-- [x] Zero-to-head migration passes on a clean database.
-- [x] Forward migration from the recorded pre-MVP-013 `core.0019` schema passes
-  in the guarded disposable clone.
-- [ ] Previous-application rollback on the upgraded schema or backup-based
-  rollback is rehearsed and documented.
-- [x] PostgreSQL and object-storage backup writes a unique generation,
-  verifies it, and atomically changes `current` without overwriting the last
-  valid generation on failure.
-- [ ] Backup restores into a distinct clean Compose project.
-- [x] Backup stops/resumes only writers that were running, and an injected
-  restore failure leaves those writers stopped for operator recovery.
-- [x] Migration reversal/forward runs only on a guarded disposable restored
-  database clone and proves that the live database was never reversed.
-- [ ] Restored tenant, audit, provenance, artifact, and object identities match
-  the backup manifest.
+- [x] Fresh downloaded-bundle Compose installation used the published image
+  without rebuilding and required no host Python, Node.js, npm, or Go.
+- [x] Resolved production configuration, unique-secret requirements, TLS and
+  exact trusted-proxy responsibilities are documented and gated.
+- [x] Migrations, readiness, idempotent synthetic demo, terminal-only token
+  handling, preserve-data uninstall, and exact-project clean uninstall passed.
+- [x] Skill/MCP installers and uninstall paths refuse to overwrite or remove
+  modified user content.
+- [x] Backup generation/verification, paired restore into a clean project,
+  injected failure handling, writer stop/resume, and disposable migration
+  reversal/reapply are exercised.
+- [x] Restored tenant, audit, provenance, artifact, and object identities are
+  compared to the paired manifest within the Compose-managed MinIO boundary.
+- [ ] External object-store and deployment-sized recovery are not claimed;
+  they remain post-MVP issue #38.
 
 ## Security and privacy
 
-- [ ] Product threat model is reviewed.
-- [ ] Cross-tenant API/search/Canvas/MCP/artifact matrix passes.
-- [ ] Source and credential revocation matrix passes.
-- [ ] TST-007 artifact-security cases pass through Anva on the exact release
-  commit, not only through the fixture validator. The issue 29 local candidate
-  passes all six pinned byte classes, but freeze, independent review, merge, and
-  release indexing remain open.
-- [ ] The separate five-source prompt-injection corpus passes through the
-  product boundary with zero mutation or leakage; TST-007 artifact evidence
-  does not satisfy this gate.
-- [ ] Log, trace, metric, report, package and image secret-canary scans report
-  zero leakage.
-- [x] Source vulnerability, secret, and misconfiguration scans exclude only the
-  documented operator-owned paths and pass their high/critical gate.
-- [x] Every image high/critical finding is fixed or appears in the reviewed,
-  unexpired 13-CVE/16-tuple exception approved by Rishav Thakker for v0.1.0
-  from 2026-08-26 through 2026-09-25. Publication still fails closed until the
-  release workflow proves the exact tuple set and generates acceptance bound to
-  the final source, scan hash, and immutable GHCR digest.
-- [ ] Dependency, container, license and repository scans pass under the
-  documented severity policy.
-- [x] Retention behavior, decommission behavior, retained data, and unsupported
-  erasure claims are documented exactly.
-- [x] Retention rejects caller time, requires explicit expiry and organization
-  minimum, and never purges another tenant's rate buckets; decommission requires
-  a <=15-minute human session, CSRF, and both exact confirmations while bearer
-  and CLI attempts fail closed.
+- [x] Product and feature threat models are reviewed.
+- [x] Cross-tenant API/search/Canvas/MCP/artifact and source/credential
+  revocation matrices pass.
+- [x] All six pinned TST-007 artifact byte classes pass through Anva.
+- [x] Five hostile source classes remain inert across two tenants with zero
+  mutation or leakage.
+- [x] Logs, traces, metrics, reports, packages, images, and release evidence
+  pass bounded secret/canary checks.
+- [x] Source/image scans, exact 13-CVE/16-tuple time-bounded risk decision,
+  SBOMs, licenses, and repository checks passed for the published digest.
+- [x] Retention/decommission behavior, access revocation, retained data, and
+  unsupported legal-erasure claims are documented and tested.
+- [ ] OAuth, external model governance, managed deployment, and commercial
+  penetration testing remain post-MVP issue #40.
 
 ## Operations
 
-- [x] Liveness remains dependency-free.
-- [x] Readiness proves database access, migration currency, and authenticated
-  access to the configured object-storage bucket.
-- [ ] Rate-limit behavior and stable `429`/`Retry-After` contracts pass under
-  concurrent processes.
-- [x] Structured logs carry correlation and trace identifiers without content
-  or credentials.
-- [ ] The implemented metrics surface is scraped through the documented
-  authenticated proxy boundary and its exported series support a recorded
-  operator triage exercise. Persistent aggregation, dashboards, managed alert
-  delivery, and distributed tracing are post-MVP under issue 39.
-- [ ] Empty/missing metrics token fails closed, the valid-token scrape uses
-  HTTPS, and forwarded client/protocol headers are honored only from exact
-  trusted proxy IPs.
-- [x] Application access logs remain disabled while structured request logs and
-  server errors are retained under bounded logging.
-- [ ] Incident, permission-leak, credential-rotation, restore, retention and
-  decommission runbooks have named evidence and escalation owners.
+- [x] Dependency-free liveness and database/migration/object-store readiness
+  checks pass.
+- [x] Database-backed process-shared rate limiting and stable
+  `429`/`Retry-After` behavior pass.
+- [x] Correlated structured logs, W3C trace identifiers, protected metrics,
+  exact proxy attribution, and bounded logging pass.
+- [x] The deployment-owned metrics/proxy, credential, permission-leak,
+  restore, storage, retention/decommission and escalation drill completed.
+- [x] Rishav Thakker is the named release, security, application, platform,
+  and operations/on-call owner with primary and alternate escalation paths.
+- [x] Protected operator signoff run
+  [33910747236](https://github.com/RishavT/anva/actions/runs/33910747236)
+  and the final anchor attestations verify; exact drill cleanup is 0/0/0.
+- [ ] Persistent aggregation, dashboards, alert delivery, and distributed
+  tracing remain post-MVP issue #39.
 
 ## Test and evaluation
 
-- [x] Formatting, lint, typing, migration drift, generated contracts, skill
-  packaging, coverage and browser stages pass.
-- [x] Unit, integration, contract, security, retrieval, assurance, skill,
-  corpus and real MCP Compose stages pass with zero unexpected skips.
-- [ ] Exact `anva-test` commit is pinned and its own non-browser and browser
-  baselines pass.
-- [ ] All 31 committed public `anva-test` cases import and replay through Anva
-  with complete inventory, stable bindings, deterministic public results, and
-  a clean-reader verification. This breadth gate does not require 31 separate
-  human or native-agent review sessions.
-- [ ] One representative context-free manual assurance review runs from sealed
-  public inputs against the messy knowledge corpus on the exact release commit,
-  using an independent reviewer identity with no private oracle/grader access.
+- [x] Formatting, Ruff, typing, migration drift, generated contracts, skill
+  packaging, coverage, security, MCP, and browser gates pass.
+- [x] Exact-current post-fix CI
+  [33951634105](https://github.com/RishavT/anva/actions/runs/33951634105)
+  passed 1,255 tests with six documented skips, then both required Chromium
+  journeys, and cleaned its Compose resources.
+- [x] All 31 committed public cases import and replay deterministically with
+  stable identities, equal aggregates, clean-reader tamper rejection,
+  foreign-authority denial, and inert canary.
+- [x] One representative context-free independent review over the messy
+  knowledge corpus passed; its two minor defects were fixed and tested.
+- [x] The separate multi-stage `anva-test#18` contracts-root defect remains
+  honestly open and is not represented as completed product evidence.
+- [x] Canvas issue #49 preserves both passing/failing measurements and the
+  unchanged 250 ms p95 target under its explicit post-MVP disposition.
 
 ## Completion record
 
-- [x] Checksummed per-lane result logs and structured summaries are stored
-  without credentials; this does not claim that every command invocation was
-  recorded.
-- [x] Screenshots, browser-performance and coverage results, scan reports,
-  SBOMs, restore report, migration report and evaluation results are indexed.
-- [x] V3 requirements map to evidence or an explicit deferred/not-applicable
-  decision.
-- [x] Known limitations and residual risks are recorded, including lower source
-  findings and the approved 13-CVE/16-tuple no-fix exception. The checked-in
-  owner decision is not itself the digest-bound release acceptance; that
-  generated artifact is required from the exact published image and expires
-  after 2026-09-25 UTC.
-- [x] The evidenced `mvp13-runtime-final`,
-  `mvp13-runtime-final-rehearsal`, and `mvp13-release` scan/manifest projects
-  have zero scoped one-shots, networks, and volumes; browser/scanner resources
-  were removed and the named builder cache was zero. Required local
-  candidate/runtime artifacts were retained and the measured task footprint is
-  recorded against the 5 GB working limit. This does not claim removal of
-  legacy development/runtime support or MinIO client resources.
-- [ ] Human completion remains blocked on #43 and #44; technical publication
-  must not be presented as closing either gate.
+- [x] Checksummed result logs, screenshots, performance/coverage reports,
+  scans, SBOMs, lifecycle reports, evaluation results, limitations, and
+  requirement mappings are indexed.
+- [x] Product release gate #43 and operator gate #44 are complete.
+- [x] Operator drill UUID `3933a24e-f70a-4869-9041-7f2db668db8d` has final
+  ledger SHA-256
+  `2338af9ee4d83469e461d02394051b73c02845718741cdea3b7ae8afadfede41`.
+- [x] Release and drill task projects report zero containers, networks, and
+  volumes; private temporary drill material was removed.
+- [x] Post-MVP issues #37–#40 and #49 are explicit and are not converted into
+  self-hosted MVP completion claims.
 
-## Documentation descendant
+## Fix-forward boundary
 
-All checked product/runtime boxes bind to source parent `94231d7e...`, tree
-`43395db...`, and runtime image ID `c6ae3a8a...`. A docs-only descendant may
-record these results without invalidating them, but it is not itself the tested
-runtime commit. Any non-documentation change requires a new candidate and
-reverification.
+Current `main` contains changes after immutable source `e89b06a`, including the
+operator-finalizer correction and this documentation reconciliation. These
+bytes are not v0.1.6 artifacts. `v0.1.7` is the next patch and remains pending a
+new reviewed source/tag, fresh risk decision, protected approvals, artifacts,
+attestations, publication, and post-publication verification.

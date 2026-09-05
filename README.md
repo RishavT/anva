@@ -218,9 +218,10 @@ digest-addressed GHCR image only after completing the verification steps in the
 install runbook; source-checkout installation remains available as a fallback.
 See the [v0.1.6 release notes](docs/releases/v0.1.6.md), [compatibility
 matrix](docs/releases/compatibility.md), and [current readiness
-audit](docs/releases/current-release-readiness.md) for the pending same-source
-patch identity and its still-open human gates. Published `v0.1.5` remains the
-immutable predecessor while the protected v0.1.6 release is prepared.
+audit](docs/releases/current-release-readiness.md) for the exact published
+identity, completed operator gate, limitations, and the separate `v0.1.7`
+fix-forward preparation boundary. Published `v0.1.5` remains the verified
+rollback predecessor where schema compatibility permits it.
 
 After a test or drill, remove only the named task project with `make test-down`
 or `COMPOSE_PROJECT=<exact-project> make uninstall-clean`; inspect the resolved
