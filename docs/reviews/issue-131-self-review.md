@@ -38,6 +38,7 @@ relationship, source, and conflict payload variants. All objects remain closed; 
 ## Verification
 
 - Docker Compose Ruff formatting and lint: passed.
+- Mypy: no issues across 207 source files.
 - Focused MCP/schema/normalization plus full 107-document broad-corpus integration:
   31 passed.
 - Contract generation wrote all 33 artifacts successfully with example validation.

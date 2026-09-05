@@ -678,12 +678,9 @@ def test_conflict_side_values_get_the_same_closed_public_representation() -> Non
 
     normalized = _normalize_public_output("anva.get_context_packet", result)
     item = cast(
-        dict[str, object],
-        cast(
-            list[dict[str, object]],
-            cast(dict[str, object], cast(dict[str, object], normalized["data"])["packet"])["items"],
-        )[0],
-    )
+        list[dict[str, object]],
+        cast(dict[str, object], cast(dict[str, object], normalized["data"])["packet"])["items"],
+    )[0]
     payload = cast(dict[str, object], item["payload"])
     assert cast(dict[str, object], payload["left"])["value"] == {
         "format": "CANONICAL_JSON",
