@@ -1457,7 +1457,7 @@ _PUBLIC_PROSE_FOLLOWERS = frozenset(
     }
 )
 _VALUE_CONNECTORS = frozenset({"and", "during", "for", "from", "in", "or", "to", "with"})
-_SAFE_CONNECTOR_OBJECTS = frozenset(
+_SAFE_CONNECTOR_CLAUSE_WORDS = frozenset(
     {
         "a",
         "an",
@@ -1469,19 +1469,42 @@ _SAFE_CONNECTOR_OBJECTS = frozenset(
         "control",
         "controls",
         "documented",
+        "demonstration",
+        "examples",
+        "hour",
         "identity",
+        "is",
         "migration",
+        "must",
+        "never",
+        "obsolete",
+        "one",
         "operator",
         "policy",
         "production",
+        "prohibited",
         "public",
+        "ready",
+        "remain",
+        "remained",
+        "remains",
+        "required",
         "rotation",
+        "sample",
+        "script",
+        "separate",
         "service",
         "services",
         "shell",
         "standard",
+        "standards",
+        "unsupported",
+        "was",
         "validation",
         "workload",
+        "are",
+        "as",
+        "be",
     }
 )
 
@@ -1505,8 +1528,10 @@ def _mask_public_credential_terminology(value: str) -> str:
         if following is not None and following.group(1).casefold() not in _PUBLIC_PROSE_FOLLOWERS:
             return match.group(0)
         if following is not None and following.group(1).casefold() in _VALUE_CONNECTORS:
-            adjacent = re.match(r"\s+([^\s,.;:]+)", sentence_tail[following.end() :])
-            if adjacent is not None and adjacent.group(1).casefold() not in _SAFE_CONNECTOR_OBJECTS:
+            clause_words = re.findall(r"[a-z0-9]+", sentence_tail[following.end() :].casefold())
+            if not clause_words or any(
+                word not in _SAFE_CONNECTOR_CLAUSE_WORDS for word in clause_words
+            ):
                 return match.group(0)
         return "public authentication terminology"
 
