@@ -66,6 +66,7 @@ from anva.core.services.search_index import EMBEDDING_VERSION, INDEX_VERSION
 MAX_ASSERTION_CANDIDATES = 500
 MAX_RELATIONSHIP_CANDIDATES = 200
 MAX_RETRIEVAL_FACETS = 8
+MAX_REQUIRED_PACKING_STATES = 50_000
 _FACET_LABEL = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 _QUERY_TERM = re.compile(r"[a-z0-9][a-z0-9_.:/-]*")
 
@@ -1069,29 +1070,110 @@ def _select(
     covered_required = {
         label for candidate in selected for label in candidate.required_context_facets
     }
-    while uncovered := discovered_required - covered_required:
-        representatives = sorted(
-            (
-                candidate
-                for candidate in ordered
-                if candidate.item_key not in selected_keys
-                and uncovered.intersection(candidate.required_context_facets)
-            ),
-            key=lambda candidate: (
-                -len(uncovered.intersection(candidate.required_context_facets)),
-                _candidate_order(candidate),
-            ),
+    required_labels = tuple(sorted(discovered_required))
+    label_bits = {label: 1 << position for position, label in enumerate(required_labels)}
+    full_mask = (1 << len(required_labels)) - 1
+    initial_mask = sum(label_bits[label] for label in covered_required)
+    # Each mask retains only resource-Pareto-optimal deterministic selections.  With at
+    # most eight required facets this finds a feasible packing without greedy dead ends,
+    # while bounding the state space independently of retrieval order.
+    states: dict[
+        int,
+        list[tuple[tuple[PacketCandidate, ...], int, int, int]],
+    ] = {initial_mask: [((), tokens, byte_count, citations)]}
+    representatives = [
+        candidate
+        for candidate in ordered
+        if candidate.item_key not in selected_keys and candidate.required_context_facets
+    ]
+    for candidate in representatives:
+        candidate_mask = sum(
+            label_bits[label] for label in candidate.required_context_facets if label in label_bits
         )
-        representative = next(
-            (candidate for candidate in representatives if add_if_fits(candidate)),
-            None,
+        state_snapshot = [(mask, tuple(mask_states)) for mask, mask_states in states.items()]
+        for mask, mask_states in state_snapshot:
+            next_mask = mask | candidate_mask
+            if next_mask == mask:
+                continue
+            for chosen, state_tokens, state_bytes, state_citations in mask_states:
+                proposal = (
+                    (*chosen, candidate),
+                    state_tokens + candidate.token_count,
+                    state_bytes + candidate.byte_count,
+                    state_citations + len(candidate.citations),
+                )
+                proposal_dimensions = (
+                    len(selected) + len(proposal[0]),
+                    proposal[1],
+                    proposal[2],
+                    proposal[3],
+                )
+                if not all(
+                    value <= limit
+                    for value, limit in zip(
+                        proposal_dimensions,
+                        (
+                            budget.max_items,
+                            budget.max_tokens,
+                            budget.max_bytes,
+                            budget.max_citations,
+                        ),
+                        strict=True,
+                    )
+                ):
+                    continue
+                frontier = states.setdefault(next_mask, [])
+                if any(
+                    len(existing[0]) <= len(proposal[0])
+                    and existing[1] <= proposal[1]
+                    and existing[2] <= proposal[2]
+                    and existing[3] <= proposal[3]
+                    for existing in frontier
+                ):
+                    continue
+                frontier[:] = [
+                    existing
+                    for existing in frontier
+                    if not (
+                        len(proposal[0]) <= len(existing[0])
+                        and proposal[1] <= existing[1]
+                        and proposal[2] <= existing[2]
+                        and proposal[3] <= existing[3]
+                    )
+                ]
+                frontier.append(proposal)
+                if sum(len(mask_states) for mask_states in states.values()) > (
+                    MAX_REQUIRED_PACKING_STATES
+                ):
+                    raise RequiredContextBudgetError(
+                        "Required context packing exceeded its deterministic state bound"
+                    )
+    feasible = states.get(full_mask, [])
+    if not feasible:
+        best_mask = min(
+            states,
+            key=lambda mask: (-mask.bit_count(), mask),
         )
-        if representative is None:
+        missing = {label for label, bit in label_bits.items() if best_mask & bit == 0}
+        if missing:
             raise RequiredContextBudgetError(
                 "Packet budget cannot represent discovered required context facets: "
-                f"{', '.join(sorted(uncovered))}"
+                f"{', '.join(sorted(missing))}"
             )
-        covered_required.update(representative.required_context_facets)
+    else:
+        chosen, _tokens, _bytes, _citations = min(
+            feasible,
+            key=lambda state: (
+                len(state[0]),
+                state[1],
+                state[2],
+                state[3],
+                tuple(_candidate_order(candidate) for candidate in state[0]),
+            ),
+        )
+        for candidate in chosen:
+            if not add_if_fits(candidate):  # pragma: no cover - proven by the DP bounds above
+                raise RuntimeError("Required context packing diverged from its bounded selection")
 
     for candidate in ordered:
         if candidate.item_key not in selected_keys:

@@ -275,15 +275,68 @@ def test_required_representatives_that_cannot_fit_together_fail_stably() -> None
 
 
 @pytest.mark.unit
+def test_required_packing_avoids_greedy_multi_facet_dead_end() -> None:
+    combined = replace(
+        _candidate("required:combined", tier=1, summary="a" * 100),
+        matched_facets=("conflict", "task"),
+        required_context_facets=("conflict", "task"),
+    )
+    separate = [
+        _candidate("required:task", tier=2, summary="b" * 40, facet="task"),
+        _candidate("required:conflict", tier=2, summary="c" * 40, facet="conflict"),
+        _candidate("required:evidence", tier=2, summary="d" * 40, facet="evidence"),
+    ]
+
+    selection = _select(
+        [combined, *separate],
+        PacketBudget(max_items=3, max_tokens=30, max_bytes=10_000, max_citations=3),
+    )
+
+    assert {candidate.item_key for candidate in selection.candidates} == {
+        "required:task",
+        "required:conflict",
+        "required:evidence",
+    }
+    assert selection.selected_tokens == 30
+    assert selection.limitations == ("1 lower-priority candidates omitted by budget",)
+
+
+@pytest.mark.unit
+def test_required_packing_is_bounded_and_deterministic_at_eight_facet_limit() -> None:
+    required = [
+        _candidate(f"required:facet-{index}", tier=3, summary="x" * 16, facet=f"facet_{index}")
+        for index in range(8)
+    ]
+    optional = _candidate("optional:first", tier=1, summary="optional")
+    budget = PacketBudget(max_items=8, max_tokens=32, max_bytes=20_000, max_citations=8)
+
+    first = _select([optional, *required], budget)
+    replay = _select([*reversed(required), optional], budget)
+
+    assert first == replay
+    assert len(first.candidates) == budget.max_items
+    assert first.selected_tokens == budget.max_tokens
+    assert first.selected_bytes <= budget.max_bytes
+    assert first.selected_citations == budget.max_citations
+    assert first.limitations == ("1 lower-priority candidates omitted by budget",)
+
+
+@pytest.mark.unit
 def test_packet_omission_accounting_is_server_owned_in_assurance_output() -> None:
     assert _external_limitations(
         [
             "2056 lower-priority candidates omitted by budget",
             "  999 LOWER-PRIORITY   CANDIDATES OMITTED BY BUDGET  ",
             "2056 lower-priority candidates omitted by budget",
+            "2056 candidates were omitted by the retrieval budget",
+            "Broader retrieval omitted 2056 candidates",
             "Independent evaluator observed bounded coverage.",
+            "We omitted 2 budget considerations from the narrative.",
         ]
-    ) == ["Independent evaluator observed bounded coverage."]
+    ) == [
+        "Independent evaluator observed bounded coverage.",
+        "We omitted 2 budget considerations from the narrative.",
+    ]
 
 
 @pytest.mark.unit
