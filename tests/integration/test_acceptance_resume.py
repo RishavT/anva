@@ -23,7 +23,7 @@ from django.conf import settings
 from django.db import connections
 from django.utils import timezone
 
-from anva.acceptance.client import AcceptanceBoundaryError, PublicAPI
+from anva.acceptance.client import AcceptanceBoundaryError, PublicAPI, StreamableHTTPMCP
 from anva.acceptance.corpus import canonicalize_corpus
 from anva.acceptance.provenance import REQUIRED_LAUNCH_SERVICES, package_sha256
 from anva.acceptance.runner import AcceptanceRunner, RunnerConfig
@@ -44,10 +44,13 @@ from anva.core.models import (
     SyncRun,
     WorkItem,
 )
+from anva.core.services import mcp_gateway
 from anva.core.services.authorization import Action
 from anva.core.services.context import ActorContext
 from anva.core.services.ingestion import execute_ingestion_job
 from anva.core.services.jobs import claim_next_job, complete_job
+from anva.core.services.ranking import RankingExplanation
+from anva.core.services.search import SearchResponse, SearchResult
 from anva.core.services.tokens import authenticate_bearer
 
 SOURCE_TEXT = (
@@ -261,6 +264,83 @@ def _expect_resume_auth_rejection(runner: AcceptanceRunner, token: str) -> None:
 def live_mcp_url() -> Iterator[str]:
     with _live_mcp_server() as url:
         yield url
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_real_official_mcp_and_http_parity_return_truncated_normalized_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    live_server: object,
+    live_mcp_url: str,
+) -> None:
+    runner = _runner(
+        tmp_path,
+        api_url=f"{live_server}/api/v1",
+        mcp_url=live_mcp_url,
+    )
+    state = runner._new_state()
+    runner._save(state)
+    api, token = runner._bootstrap("test-only-bootstrap-secret", state)
+    sentence = "The first operator sample used a long-lived shared bearer token in a shell script."
+    normalized = json.dumps(
+        {
+            "headings": [{"level": 1, "line": 32, "text": "Shared token integration sample"}],
+            "links": [],
+            "text": (
+                f"---\nclaim:\n  object:\n    value: {sentence}\n"
+                f"  statement: {sentence}\n---\n\n# Claim\n\n{sentence}\n\n"
+                + ("Public historical context remained unapproved. " * 100)
+            ),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )[:4_000]
+    assert len(normalized) == 4_000 and not normalized.endswith('"}')
+    scope_id = uuid.UUID(state.identities["access_scope_id"])
+    result = SearchResult(
+        chunk_id=uuid.uuid4(),
+        text=normalized,
+        content_hash=hashlib.sha256(normalized.encode()).hexdigest(),
+        pointer="/",
+        canonical_url="file:///app/acceptance/canonical/payload/archive/r001.md",
+        access_scope_id=scope_id,
+        source_location_id=uuid.uuid4(),
+        source_observation_id=uuid.uuid4(),
+        access_snapshot_id=uuid.uuid4(),
+        observed_at=timezone.now(),
+        explanation=RankingExplanation(1, 1, 1.0, "PREPARE", ("policy",)),
+    )
+    monkeypatch.setattr(
+        mcp_gateway,
+        "search_chunks",
+        lambda **_kwargs: SearchResponse("governance", "a" * 64, (result,)),
+    )
+    arguments = {
+        "contract_version": "1",
+        "repository_id": state.identities["repository_id"],
+        "query": "operator bridge authentication shared token workload identity",
+        "phase": "PREPARE",
+    }
+
+    mcp_payload = StreamableHTTPMCP(live_mcp_url, token).call("anva.search", arguments)
+    http_payload = (
+        api.with_token(token)
+        .request(
+            "POST",
+            "/mcp/tools/anva.search",
+            payload=arguments,
+        )
+        .payload
+    )
+
+    assert mcp_payload == http_payload
+    data = cast(dict[str, object], mcp_payload["data"])
+    results = cast(list[object], data["results"])
+    returned = cast(dict[str, object], results[0])
+    assert returned["text"] == normalized
+    assert returned["content_hash"] == result.content_hash
 
 
 @pytest.mark.integration

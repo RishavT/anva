@@ -28,6 +28,8 @@ from anva.mcp.contracts import (
 UUIDS = tuple(f"00000000-0000-4000-8000-{index:012d}" for index in range(1, 40))
 NOW = "2026-08-22T00:00:00Z"
 SHA256 = "a" * 64
+GITHUB_TOKEN = f"ghp_{'G' * 36}"
+UNICODE_ESCAPED_GITHUB_TOKEN = "".join(f"\\u{ord(character):04x}" for character in GITHUB_TOKEN)
 
 
 def _citation(offset: int = 0) -> dict[str, object]:
@@ -855,6 +857,12 @@ def test_runtime_guard_classifies_truncated_normalized_json_final_string() -> No
         '{"googleaccessid":"actual-secret-value"}',
         '{"keypairid":"actual-secret-value"}',
         '{"sig":"actual-secret-value"}',
+        f'{{"text":"{UNICODE_ESCAPED_GITHUB_TOKEN}"}}',
+        f'{{"text":"{UNICODE_ESCAPED_GITHUB_TOKEN}' + "\\u00",
+        json.dumps(
+            {"nested": f'{{"text":"{UNICODE_ESCAPED_GITHUB_TOKEN}' + "\\u00"},
+            separators=(",", ":"),
+        ),
     ],
 )
 def test_runtime_guard_rejects_secrets_in_serialized_or_truncated_json(serialized: str) -> None:
