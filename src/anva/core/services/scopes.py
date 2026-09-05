@@ -441,6 +441,7 @@ def revoke_source_connection(
             from anva.core.services.context_packets import invalidate_context_packets
 
             invalidate_context_packets(
+                actor=audit_actor,
                 organization_id=source.organization_id,
                 repository_id=source.repository_id,
                 reason=ContextPacketInvalidation.Reason.REVOCATION,

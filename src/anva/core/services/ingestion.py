@@ -1380,6 +1380,7 @@ def _execute_ingestion_job(
             from anva.core.services.context_packets import invalidate_context_packets
 
             invalidate_context_packets(
+                actor=worker_actor,
                 organization_id=run.organization_id,
                 repository_id=run.source_connection.repository_id,
                 reason=ContextPacketInvalidation.Reason.INGESTION,

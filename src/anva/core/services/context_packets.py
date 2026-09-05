@@ -5,8 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, NoReturn, cast
 
@@ -25,6 +26,7 @@ from anva.core.models import (
     AccessSnapshot,
     AssertionConflict,
     AssertionProvenance,
+    AssuranceRun,
     ContextPacketCitation,
     ContextPacketInvalidation,
     ContextPacketItem,
@@ -59,6 +61,9 @@ from anva.core.services.search_index import EMBEDDING_VERSION, INDEX_VERSION
 
 MAX_ASSERTION_CANDIDATES = 500
 MAX_RELATIONSHIP_CANDIDATES = 200
+MAX_RETRIEVAL_FACETS = 8
+_FACET_LABEL = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+_QUERY_TERM = re.compile(r"[a-z0-9][a-z0-9_.:/-]*")
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +96,17 @@ class PacketBudget:
             "max_bytes": self.max_bytes,
             "max_citations": self.max_citations,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class RetrievalFacet:
+    """One bounded, server-derived aspect of the change under review."""
+
+    label: str
+    query: str
+    anchors: tuple[str, ...] = ()
+    required_if_matched: bool = True
+    coverage_incomplete: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +147,8 @@ class PacketCandidate:
     payload: dict[str, object]
     contributing_scope_ids: tuple[uuid.UUID, ...]
     citations: tuple[CitationCandidate, ...]
+    matched_facets: tuple[str, ...] = ()
+    required_context_facets: tuple[str, ...] = ()
     source_assertion_id: uuid.UUID | None = None
     source_relationship_id: uuid.UUID | None = None
     source_chunk_id: uuid.UUID | None = None
@@ -144,12 +162,21 @@ class PacketCandidate:
     def byte_count(self) -> int:
         return len(
             json.dumps(
-                self.payload,
+                self.effective_payload,
                 ensure_ascii=False,
                 separators=(",", ":"),
                 sort_keys=True,
             ).encode()
         )
+
+    @property
+    def effective_payload(self) -> dict[str, object]:
+        payload = dict(self.payload)
+        if self.matched_facets:
+            payload["retrieval_facets"] = list(self.matched_facets)
+        if self.required_context_facets:
+            payload["required_context_facets"] = list(self.required_context_facets)
+        return payload
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -161,7 +188,7 @@ class PacketCandidate:
             "is_inferred": self.is_inferred,
             "selection_reason": self.selection_reason,
             "rank_score": self.rank_score,
-            "payload": self.payload,
+            "payload": self.effective_payload,
             "anva_sources": [citation.as_dict() for citation in self.citations],
         }
 
@@ -173,6 +200,108 @@ class PacketSelection:
     selected_bytes: int
     selected_citations: int
     limitations: tuple[str, ...]
+
+
+def _normalized_facets(
+    *,
+    task: str,
+    retrieval_facets: tuple[RetrievalFacet, ...] | None,
+) -> tuple[RetrievalFacet, ...]:
+    if retrieval_facets is None:
+        return (RetrievalFacet(label="task", query=task[:500], required_if_matched=False),)
+    if not retrieval_facets or len(retrieval_facets) > MAX_RETRIEVAL_FACETS:
+        raise ValueError("retrieval_facets must contain between 1 and 8 entries")
+    normalized: list[RetrievalFacet] = []
+    labels: set[str] = set()
+    for facet in retrieval_facets:
+        label = facet.label.strip().casefold()
+        query = " ".join(facet.query.split())
+        if _FACET_LABEL.fullmatch(label) is None or label in labels:
+            raise ValueError("retrieval facet labels must be unique lowercase identifiers")
+        if not query or len(query) > 500:
+            raise ValueError("retrieval facet queries must contain between 1 and 500 characters")
+        labels.add(label)
+        anchors = tuple(dict.fromkeys(" ".join(anchor.split()) for anchor in facet.anchors))
+        if len(anchors) > 16 or any(not anchor or len(anchor) > 200 for anchor in anchors):
+            raise ValueError("retrieval facet anchors must contain up to 16 bounded values")
+        if facet.required_if_matched and not anchors:
+            raise ValueError("required retrieval facets must include exact anchors")
+        normalized.append(
+            RetrievalFacet(
+                label,
+                query,
+                anchors,
+                facet.required_if_matched,
+                facet.coverage_incomplete,
+            )
+        )
+    return tuple(normalized)
+
+
+def _query_terms(query: str) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            term
+            for term in _QUERY_TERM.findall(query.casefold())
+            if len(term) > 1 and term not in {"and", "or", "not"}
+        )
+    )
+
+
+def _matching_facets(summary: str, facets: tuple[RetrievalFacet, ...]) -> tuple[str, ...]:
+    normalized = summary.casefold()
+    return tuple(
+        facet.label
+        for facet in facets
+        if any(term in normalized for term in _query_terms(facet.query))
+    )
+
+
+def _required_matching_facets(
+    summary: str,
+    matched: tuple[str, ...],
+    facets: tuple[RetrievalFacet, ...],
+) -> tuple[str, ...]:
+    normalized = " ".join(summary.casefold().split())
+    required = {
+        facet.label
+        for facet in facets
+        if facet.required_if_matched
+        and any(" ".join(anchor.casefold().split()) in normalized for anchor in facet.anchors)
+    }
+    return tuple(label for label in matched if label in required)
+
+
+def _candidate_order(candidate: PacketCandidate) -> tuple[object, ...]:
+    return (
+        candidate.tier,
+        candidate.freshness != ContextPacketItem.Freshness.CURRENT,
+        -candidate.rank_score,
+        candidate.item_key,
+    )
+
+
+def _merge_candidates(candidates: list[PacketCandidate]) -> list[PacketCandidate]:
+    """Deduplicate a source while preserving every facet it substantively matched."""
+    grouped: dict[str, list[PacketCandidate]] = {}
+    for candidate in candidates:
+        grouped.setdefault(candidate.item_key, []).append(candidate)
+    merged: list[PacketCandidate] = []
+    for item_key in sorted(grouped):
+        variants = grouped[item_key]
+        best = min(variants, key=_candidate_order)
+        matched = tuple(sorted({label for item in variants for label in item.matched_facets}))
+        required = tuple(
+            sorted({label for item in variants for label in item.required_context_facets})
+        )
+        merged.append(
+            replace(
+                best,
+                matched_facets=matched,
+                required_context_facets=required,
+            )
+        )
+    return merged
 
 
 def _json_hash(value: object) -> str:
@@ -470,9 +599,9 @@ def _assertion_candidates(
     *,
     actor: ActorContext,
     repository_id: uuid.UUID,
-    query: str,
+    facets: tuple[RetrievalFacet, ...],
+    change_aware: bool,
 ) -> list[PacketCandidate]:
-    query_terms = tuple(term.casefold() for term in query.split() if len(term) > 1)
     assertions = list(
         authorized_assertions(
             actor=actor,
@@ -502,7 +631,9 @@ def _assertion_candidates(
             continue
         summary = _assertion_summary(assertion)
         required = _required_policy(assertion)
-        matches = not query_terms or any(term in summary.casefold() for term in query_terms)
+        matched_facets = _matching_facets(summary, facets)
+        required_facets = _required_matching_facets(summary, matched_facets, facets)
+        matches = bool(matched_facets)
         kind = _assertion_kind(assertion)
         if not matches and kind not in {
             ContextPacketItem.Kind.POLICY,
@@ -513,14 +644,20 @@ def _assertion_candidates(
         if required and _freshness(assertion) == ContextPacketItem.Freshness.CURRENT:
             tier = 0
             reason = "Applicable required current policy"
-        elif kind == ContextPacketItem.Kind.POLICY:
+        elif change_aware and required_facets:
+            tier = 1
+            reason = f"Change-aware assurance anchored match: {', '.join(required_facets)}"
+        elif change_aware and matches:
             tier = 3
-            reason = "Applicable policy"
+            reason = f"Change-aware assurance lexical fallback: {', '.join(matched_facets)}"
+        elif kind == ContextPacketItem.Kind.POLICY:
+            tier = 6 if change_aware else 3
+            reason = "Governed policy fallback"
         elif kind == ContextPacketItem.Kind.DECISION:
-            tier = 5
+            tier = 7 if change_aware else 5
             reason = "Relevant decision"
         elif kind == ContextPacketItem.Kind.INCIDENT:
-            tier = 6
+            tier = 8 if change_aware else 6
             reason = "Relevant risk or incident"
         else:
             tier = 2
@@ -556,6 +693,8 @@ def _assertion_candidates(
                     )
                 ),
                 citations=citations,
+                matched_facets=matched_facets,
+                required_context_facets=required_facets,
                 source_assertion_id=assertion.id,
             )
         )
@@ -615,9 +754,9 @@ def _relationship_candidates(
     *,
     actor: ActorContext,
     repository_id: uuid.UUID,
-    query: str,
+    facets: tuple[RetrievalFacet, ...],
+    change_aware: bool,
 ) -> list[PacketCandidate]:
-    query_terms = tuple(term.casefold() for term in query.split() if len(term) > 1)
     relationships = (
         _authorized_packet_relationships(
             actor=actor,
@@ -642,8 +781,10 @@ def _relationship_candidates(
             f"{relationship.source_entity.display_name} "
             f"{relationship.relationship_type} {relationship.target_entity.display_name}"
         )
-        if query_terms and not any(term in summary.casefold() for term in query_terms):
+        matched_facets = _matching_facets(summary, facets)
+        if not matched_facets:
             continue
+        required_facets = _required_matching_facets(summary, matched_facets, facets)
         citation = CitationCandidate(
             access_scope_id=relationship.access_snapshot.access_scope_id,
             source_location_id=relationship.source_location_id,
@@ -664,9 +805,13 @@ def _relationship_candidates(
                 is_inferred=(
                     relationship.extraction_class == KnowledgeAssertion.ExtractionClass.INTERPRETIVE
                 ),
-                selection_reason="Direct authorized entity relationship",
+                selection_reason=(
+                    f"Change-aware assurance relationship: {', '.join(matched_facets)}"
+                    if change_aware
+                    else "Direct authorized entity relationship"
+                ),
                 rank_score=max(0.0, relationship.confidence),
-                tier=1,
+                tier=1 if required_facets or not change_aware else 3,
                 required_policy=False,
                 payload={
                     "relationship_id": str(relationship.id),
@@ -688,13 +833,22 @@ def _relationship_candidates(
                     )
                 ),
                 citations=(citation,),
+                matched_facets=matched_facets,
+                required_context_facets=required_facets,
                 source_relationship_id=relationship.id,
             )
         )
     return candidates
 
 
-def _chunk_candidate(result: SearchResult, position: int) -> PacketCandidate:
+def _chunk_candidate(
+    result: SearchResult,
+    position: int,
+    *,
+    facet: RetrievalFacet,
+    facet_position: int,
+    change_aware: bool,
+) -> PacketCandidate:
     citation = CitationCandidate(
         access_scope_id=result.access_scope_id,
         source_location_id=result.source_location_id,
@@ -706,6 +860,22 @@ def _chunk_candidate(result: SearchResult, position: int) -> PacketCandidate:
         observed_at=result.observed_at,
     )
     summary = result.text[:10_000]
+    lexical_match = result.explanation.lexical_rank is not None
+    matched_facets = (facet.label,) if lexical_match else ()
+    required_facets = _required_matching_facets(summary, matched_facets, (facet,))
+    tier = 1 if change_aware and required_facets else 4
+    if change_aware and lexical_match and not required_facets:
+        tier = 3
+    reason = "Permission-filtered hybrid source match"
+    if change_aware:
+        mode = (
+            "anchored lexical"
+            if required_facets
+            else "lexical fallback"
+            if lexical_match
+            else "semantic fallback"
+        )
+        reason = f"Change-aware assurance {facet.label} {mode} match"
     return PacketCandidate(
         item_id=uuid.uuid4(),
         kind=ContextPacketItem.Kind.SOURCE_EXCERPT,
@@ -713,18 +883,27 @@ def _chunk_candidate(result: SearchResult, position: int) -> PacketCandidate:
         summary=summary,
         freshness=ContextPacketItem.Freshness.CURRENT,
         is_inferred=False,
-        selection_reason="Permission-filtered hybrid source match",
-        rank_score=max(0.0, result.explanation.reciprocal_rank_score),
-        tier=4,
+        selection_reason=reason,
+        rank_score=max(
+            0.0,
+            result.explanation.reciprocal_rank_score
+            + ((MAX_RETRIEVAL_FACETS - facet_position) if lexical_match else 0),
+        ),
+        tier=tier,
         required_policy=False,
         payload={
             "chunk_id": str(result.chunk_id),
             "content_hash": result.content_hash,
             "ranking": result.explanation.as_dict(),
             "search_position": position,
+            "retrieval_facet": facet.label,
+            "retrieval_facet_position": facet_position,
+            "retrieval_match": "LEXICAL" if lexical_match else "SEMANTIC_FALLBACK",
         },
         contributing_scope_ids=(result.access_scope_id,),
         citations=(citation,),
+        matched_facets=matched_facets,
+        required_context_facets=required_facets,
         source_chunk_id=result.chunk_id,
     )
 
@@ -734,6 +913,8 @@ def _conflict_candidates(
     actor: ActorContext,
     repository_id: uuid.UUID,
     selected_assertion_ids: set[uuid.UUID],
+    relevant_assertion_facets: dict[uuid.UUID, tuple[str, ...]],
+    change_aware: bool,
 ) -> list[PacketCandidate]:
     if not selected_assertion_ids:
         return []
@@ -756,6 +937,16 @@ def _conflict_candidates(
     ):
         provenance_by_assertion.setdefault(provenance.assertion_id, provenance)
     for conflict in conflicts:
+        matched_facets = tuple(
+            sorted(
+                {
+                    *relevant_assertion_facets.get(conflict.left_assertion_id, ()),
+                    *relevant_assertion_facets.get(conflict.right_assertion_id, ()),
+                }
+            )
+        )
+        if change_aware and not matched_facets:
+            continue
         left_provenance = provenance_by_assertion.get(conflict.left_assertion_id)
         right_provenance = provenance_by_assertion.get(conflict.right_assertion_id)
         if (
@@ -781,15 +972,29 @@ def _conflict_candidates(
                 ),
                 freshness=ContextPacketItem.Freshness.CURRENT,
                 is_inferred=False,
-                selection_reason="Authorized contradiction among selected assertions",
+                selection_reason=(
+                    f"Change-aware contradiction: {', '.join(matched_facets)}"
+                    if change_aware
+                    else "Authorized contradiction among selected assertions"
+                ),
                 rank_score=0.0,
-                tier=7,
+                tier=2 if change_aware else 7,
                 required_policy=False,
                 payload={
                     "conflict_id": str(conflict.id),
                     "left_assertion_id": str(conflict.left_assertion_id),
                     "right_assertion_id": str(conflict.right_assertion_id),
                     "predicate": conflict.predicate,
+                    "left": {
+                        "value": conflict.left_assertion.value,
+                        "review_state": conflict.left_assertion.review_state,
+                        "staleness_state": conflict.left_assertion.staleness_state,
+                    },
+                    "right": {
+                        "value": conflict.right_assertion.value,
+                        "review_state": conflict.right_assertion.review_state,
+                        "staleness_state": conflict.right_assertion.staleness_state,
+                    },
                 },
                 contributing_scope_ids=tuple(
                     sorted(
@@ -801,6 +1006,8 @@ def _conflict_candidates(
                     )
                 ),
                 citations=citations,
+                matched_facets=matched_facets,
+                required_context_facets=(*matched_facets, "conflict"),
                 source_conflict_id=conflict.id,
             )
         )
@@ -810,17 +1017,10 @@ def _conflict_candidates(
 def _select(
     candidates: list[PacketCandidate],
     budget: PacketBudget,
+    *,
+    required_context_overflow: tuple[str, ...] = (),
 ) -> PacketSelection:
-    deduplicated = {candidate.item_key: candidate for candidate in candidates}
-    ordered = sorted(
-        deduplicated.values(),
-        key=lambda candidate: (
-            candidate.tier,
-            candidate.freshness != ContextPacketItem.Freshness.CURRENT,
-            -candidate.rank_score,
-            candidate.item_key,
-        ),
-    )
+    ordered = sorted(_merge_candidates(candidates), key=_candidate_order)
     selected: list[PacketCandidate] = []
     tokens = 0
     byte_count = 0
@@ -853,6 +1053,19 @@ def _select(
     limitations: tuple[str, ...] = ()
     if omitted:
         limitations = (f"{omitted} lower-priority candidates omitted by budget",)
+    discovered_required = {
+        label for candidate in ordered for label in candidate.required_context_facets
+    } | set(required_context_overflow)
+    selected_required = {
+        label for candidate in selected for label in candidate.required_context_facets
+    }
+    missing_required = sorted(discovered_required - selected_required)
+    if missing_required:
+        limitations = (
+            *limitations,
+            "Required assurance context was discovered but could not fit the authorized "
+            f"bounded packet: {', '.join(missing_required)}",
+        )
     return PacketSelection(tuple(selected), tokens, byte_count, citations, limitations)
 
 
@@ -1157,6 +1370,7 @@ def build_context_packet(
     task: str,
     phase: str,
     budget: PacketBudget | None = None,
+    retrieval_facets: tuple[RetrievalFacet, ...] | None = None,
 ) -> tuple[ContextPacketRecord, bool]:
     """Build or reuse an exact immutable packet for one actor/repository snapshot."""
     normalized_task = " ".join(task.split())
@@ -1166,6 +1380,8 @@ def build_context_packet(
     if normalized_phase not in ContextPacketRecord.Phase.values:
         raise ValueError("phase is invalid")
     budget = budget or PacketBudget()
+    facets = _normalized_facets(task=normalized_task, retrieval_facets=retrieval_facets)
+    change_aware = retrieval_facets is not None
     authorize_action(
         actor=actor,
         action=Action.ARTIFACT_CREATE,
@@ -1176,11 +1392,22 @@ def build_context_packet(
         repository_id=repository_id,
     )
     watermark = _watermark(actor=actor, repository_id=repository_id)
-    normalized_request = {
+    normalized_request: dict[str, object] = {
         "task": normalized_task,
         "phase": normalized_phase,
         "budget": budget.as_dict(),
     }
+    if change_aware:
+        normalized_request["retrieval_facets"] = [
+            {
+                "label": facet.label,
+                "query": facet.query,
+                "anchors": list(facet.anchors),
+                "required_if_matched": facet.required_if_matched,
+                "coverage_incomplete": facet.coverage_incomplete,
+            }
+            for facet in facets
+        ]
     request_hash = _json_hash(normalized_request)
     cache_key = _json_hash(
         {
@@ -1216,24 +1443,35 @@ def build_context_packet(
     assertions = _assertion_candidates(
         actor=actor,
         repository_id=repository_id,
-        query=normalized_task,
+        facets=facets,
+        change_aware=change_aware,
     )
     relationships = _relationship_candidates(
         actor=actor,
         repository_id=repository_id,
-        query=normalized_task,
+        facets=facets,
+        change_aware=change_aware,
     )
-    search_response = search_chunks(
-        actor=actor,
-        repository_id=repository_id,
-        query=normalized_task,
-        phase=normalized_phase,
-        limit=min(100, budget.max_items),
-    )
-    chunks = [
-        _chunk_candidate(result, position)
-        for position, result in enumerate(search_response.results, start=1)
-    ]
+    chunks: list[PacketCandidate] = []
+    per_facet_limit = min(100, max(25, budget.max_items))
+    for facet_position, facet in enumerate(facets):
+        search_response = search_chunks(
+            actor=actor,
+            repository_id=repository_id,
+            query=facet.query,
+            phase=normalized_phase,
+            limit=per_facet_limit,
+        )
+        chunks.extend(
+            _chunk_candidate(
+                result,
+                position,
+                facet=facet,
+                facet_position=facet_position,
+                change_aware=change_aware,
+            )
+            for position, result in enumerate(search_response.results, start=1)
+        )
     selected_assertions = {
         candidate.source_assertion_id
         for candidate in assertions
@@ -1243,10 +1481,74 @@ def build_context_packet(
         actor=actor,
         repository_id=repository_id,
         selected_assertion_ids=selected_assertions,
+        relevant_assertion_facets={
+            candidate.source_assertion_id: candidate.matched_facets
+            for candidate in assertions
+            if candidate.source_assertion_id is not None and candidate.matched_facets
+        },
+        change_aware=change_aware,
     )
+    if change_aware and conflicts:
+        conflict_assertion_ids = {
+            assertion_id
+            for conflict in conflicts
+            for assertion_id in (
+                uuid.UUID(cast(str, conflict.payload["left_assertion_id"])),
+                uuid.UUID(cast(str, conflict.payload["right_assertion_id"])),
+            )
+        }
+        conflict_facets = {
+            assertion_id: tuple(
+                sorted(
+                    {
+                        label
+                        for conflict in conflicts
+                        if assertion_id
+                        in {
+                            uuid.UUID(cast(str, conflict.payload["left_assertion_id"])),
+                            uuid.UUID(cast(str, conflict.payload["right_assertion_id"])),
+                        }
+                        for label in conflict.matched_facets
+                    }
+                )
+            )
+            for assertion_id in conflict_assertion_ids
+        }
+        assertions = [
+            replace(
+                candidate,
+                tier=min(candidate.tier, 2),
+                selection_reason=(
+                    f"Change-aware conflict endpoint: "
+                    f"{', '.join(conflict_facets[candidate.source_assertion_id])}"
+                ),
+                matched_facets=tuple(
+                    sorted(
+                        {
+                            *candidate.matched_facets,
+                            *conflict_facets[candidate.source_assertion_id],
+                        }
+                    )
+                ),
+                required_context_facets=tuple(
+                    sorted(
+                        {
+                            *candidate.required_context_facets,
+                            *conflict_facets[candidate.source_assertion_id],
+                        }
+                    )
+                ),
+            )
+            if candidate.source_assertion_id in conflict_assertion_ids
+            else candidate
+            for candidate in assertions
+        ]
     selection = _select(
         [*assertions, *relationships, *chunks, *conflicts],
         budget,
+        required_context_overflow=tuple(
+            facet.label for facet in facets if facet.coverage_incomplete
+        ),
     )
     selection_hash = _json_hash([candidate.as_dict() for candidate in selection.candidates])
     packet_id = uuid.uuid4()
@@ -1348,7 +1650,7 @@ def build_context_packet(
             rank_score=candidate.rank_score,
             token_count=candidate.token_count,
             byte_count=candidate.byte_count,
-            payload=candidate.payload,
+            payload=candidate.effective_payload,
             source_assertion_id=candidate.source_assertion_id,
             source_relationship_id=candidate.source_relationship_id,
             source_chunk_id=candidate.source_chunk_id,
@@ -1403,12 +1705,15 @@ def get_context_packet(
 @transaction.atomic
 def invalidate_context_packets(
     *,
+    actor: ActorContext,
     organization_id: uuid.UUID,
     repository_id: uuid.UUID,
     reason: str,
     details: dict[str, object] | None = None,
 ) -> int:
     """Advance a repository watermark and append invalidations without deletion."""
+    if actor.organization_id != organization_id:
+        raise ValueError("Context invalidation actor must belong to the organization")
     if reason not in ContextPacketInvalidation.Reason.values:
         raise ValueError("invalidation reason is invalid")
     repository = Repository.objects.get(
@@ -1442,4 +1747,24 @@ def invalidate_context_packets(
         for packet in packets
     ]
     ContextPacketInvalidation.objects.bulk_create(invalidations)
+    from anva.core.services.assurance import _stale_invalidated_context
+
+    affected_runs = list(
+        AssuranceRun.objects.select_for_update()
+        .filter(
+            organization_id=organization_id,
+            repository=repository,
+            context_packet_id__in=[packet.id for packet in packets],
+        )
+        .exclude(
+            state__in=[
+                AssuranceRun.State.STALE,
+                AssuranceRun.State.CANCELLED,
+                AssuranceRun.State.FAILED,
+            ]
+        )
+        .order_by("created_at", "id")
+    )
+    for run in affected_runs:
+        _stale_invalidated_context(actor=actor, run=run)
     return len(invalidations)

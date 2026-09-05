@@ -1,0 +1,36 @@
+{
+  "archive_document_count": 102,
+  "archives": [
+    "Archive 01 policy governance quarterly planning and generic controls.",
+    "Archive 02 policy governance quarterly planning and generic controls.",
+    "Archive 03 policy governance quarterly planning and generic controls.",
+    "Archive 04 policy governance quarterly planning and generic controls.",
+    "Archive 05 policy governance quarterly planning and generic controls.",
+    "Archive 06 policy governance quarterly planning and generic controls.",
+    "Archive 07 policy governance quarterly planning and generic controls.",
+    "Archive 08 policy governance quarterly planning and generic controls.",
+    "Archive 09 policy governance quarterly planning and generic controls.",
+    "Archive 10 policy governance quarterly planning and generic controls.",
+    "Archive 11 policy governance quarterly planning and generic controls.",
+    "Archive 12 policy governance quarterly planning and generic controls.",
+    "Archive 13 policy governance quarterly planning and generic controls.",
+    "Archive 14 policy governance quarterly planning and generic controls.",
+    "Archive 15 policy governance quarterly planning and generic controls.",
+    "Archive 16 policy governance quarterly planning and generic controls.",
+    "Archive 17 policy governance quarterly planning and generic controls.",
+    "Archive 18 policy governance quarterly planning and generic controls.",
+    "Archive 19 policy governance quarterly planning and generic controls.",
+    "Archive 20 policy governance quarterly planning and generic controls.",
+    "Archive 21 policy governance quarterly planning and generic controls.",
+    "Archive 22 policy governance quarterly planning and generic controls.",
+    "Archive 23 policy governance quarterly planning and generic controls.",
+    "Archive 24 policy governance quarterly planning and generic controls."
+  ],
+  "sources": {
+    "current-policy.md": "# Current contact redaction control\nSupport contact fields must be redacted before observability export. The control is active and human confirmed.\n",
+    "stale-policy.md": "# Legacy contact logging control\nSupport contact fields may be copied into observability logs. This retired instruction is stale and contradicted.\n",
+    "work.md": "# HC-482 redact passenger contact fields\nThe current work requires contact_redaction for passenger email and telephone values in support events.\n",
+    "evidence.md": "# CONTACT_REDACTION_TEST evidence\nThe exact-head contact_redaction integration scenario passed for passenger support event sanitization.\n",
+    "pull-request.md": "# Pull request contact redaction guard\nThe change updates src/support/contact_redaction.py and its integration coverage for passenger support events.\n"
+  }
+}
