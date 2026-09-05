@@ -499,24 +499,20 @@ def _external_limitations(limitations: list[str]) -> list[str]:
 
 def _looks_like_packet_accounting(limitation: str) -> bool:
     normalized = " ".join(limitation.casefold().split())
-    if "candidate" in normalized:
-        return True
-    exclusion_terms = (
-        "omit",
-        "omission",
-        "exclud",
-        "left out",
-        "drop",
-        "truncat",
-        "crowd",
-        "could not fit",
-        "did not fit",
-        "unable to fit",
-        "withhold",
+    has_accounting_subject = (
+        re.search(r"\b(?:candidate|candidates|retrieval|packet)\b", normalized) is not None
     )
-    return any(term in normalized for term in ("retrieval", "packet")) and any(
-        term in normalized for term in exclusion_terms
+    has_exclusion = (
+        re.search(
+            r"\b(?:omit\w*|omission\w*|exclud\w*|drop\w*|truncat\w*|crowd\w*|"
+            r"withhold\w*|withheld)\b|"
+            r"\b(?:left|leave|leaves|leaving)\b(?:\s+\w+){0,4}\s+\bout\b|"
+            r"\b(?:could|did|does|do|unable)\b(?:\s+\w+){0,3}\s+\bfit\b",
+            normalized,
+        )
+        is not None
     )
+    return has_accounting_subject and has_exclusion
 
 
 def _packet_accounting_limitations(limitations: list[str]) -> tuple[str, ...]:

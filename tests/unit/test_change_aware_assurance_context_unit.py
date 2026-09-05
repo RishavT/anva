@@ -438,14 +438,20 @@ def test_packet_omission_accounting_is_server_owned_in_assurance_output() -> Non
             "Packet 2 did not omit any retrieval candidates",
             "2,056 lower-priority candidates excluded by budget",
             "retrieval left out 2,056 records",
+            "The packet did not leave any records out",
+            "CANDIDATE-records were EXCLUDED\tby budget",
             "Independent evaluator observed bounded coverage.",
             "We omitted 2 budget considerations from the narrative.",
             "Retrieval quality was low for this review.",
+            "Candidate interviews informed this review.",
+            "Candidateinterviews informed retrieval quality review.",
         ]
     ) == [
         "Independent evaluator observed bounded coverage.",
         "We omitted 2 budget considerations from the narrative.",
         "Retrieval quality was low for this review.",
+        "Candidate interviews informed this review.",
+        "Candidateinterviews informed retrieval quality review.",
     ]
 
 
