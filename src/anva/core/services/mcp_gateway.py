@@ -1428,6 +1428,9 @@ _EXPLICIT_REDACTION = re.compile(
 _BEARER_REDACTION_MARKER = re.compile(
     r"(?i:Authorization\s*[:=]\s*Bearer\s+|Bearer\s+)\[REDACTED\]"
 )
+_JSON_CONTAINER_PREFIX = re.compile(
+    r'^(?:\{\s*(?:"|\})|\[\s*(?:"|\{|\[|\]|-?\d|true\b|false\b|null\b))'
+)
 
 
 def _reject_output_string(value: str, *, serialized_depth: int = 0) -> None:
@@ -1435,12 +1438,11 @@ def _reject_output_string(value: str, *, serialized_depth: int = 0) -> None:
     if serialized_depth > 5:
         raise ValueError("Serialized output nesting is too deep")
     stripped = value.lstrip()
-    if stripped.startswith(("{", "[")):
+    if _JSON_CONTAINER_PREFIX.match(stripped):
         decoded = _decode_serialized_json_strings(value)
-        if decoded is not None:
-            for item in decoded:
-                _reject_output_string(item, serialized_depth=serialized_depth + 1)
-            return
+        for item in decoded:
+            _reject_output_string(item, serialized_depth=serialized_depth + 1)
+        return
     reject_secrets(_mask_explicit_redactions(_mask_public_credential_terminology(value)))
 
 
@@ -1453,13 +1455,14 @@ def _mask_explicit_redactions(value: str) -> str:
     return value
 
 
-def _decode_serialized_json_strings(value: str) -> tuple[str, ...] | None:
+def _decode_serialized_json_strings(value: str) -> tuple[str, ...]:
     """Return decoded JSON string tokens, including one bounded truncated final token.
 
     Source chunks are fixed-size slices of canonical JSON and the first slice can end
     inside a quoted value. This lexer deliberately understands only JSON strings; all
-    other bytes must be JSON structural/scalar syntax. Returning ``None`` falls back to
-    the ordinary fail-closed scanner.
+    other bytes must be JSON structural/scalar syntax. Once a container prefix is
+    recognized, malformed or incomplete escapes fail closed instead of falling back
+    to a raw scan that cannot see through JSON encoding.
     """
     strings: list[str] = []
     tokens: list[tuple[str, int, int]] = []
@@ -1489,21 +1492,21 @@ def _decode_serialized_json_strings(value: str) -> tuple[str, ...] | None:
         try:
             decoded = json.loads(token if complete else token + '"')
         except (json.JSONDecodeError, UnicodeDecodeError):
-            return None
+            raise ValueError("Serialized output contains invalid string encoding") from None
         if not isinstance(decoded, str):
-            return None
+            raise ValueError("Serialized output contains an invalid string token")
         strings.append(decoded)
         tokens.append((decoded, start, index))
         if len(strings) > _SERIALIZED_SCAN_MAX_STRINGS:
             raise ValueError("Serialized output contains too many string values")
         if not complete and index != length:
-            return None
+            raise ValueError("Serialized output contains invalid truncation")
     # Reject credentials outside strings too, while allowing only JSON syntax and
     # primitive scalar spelling there. This prevents the structural path becoming a
     # bypass for malformed containers.
     outside_text = "".join(outside)
     if re.fullmatch(r"[\s{}\[\],:0-9+\-.eEtruefalsnul]*", outside_text) is None:
-        return None
+        raise ValueError("Serialized output contains invalid structural bytes")
     reject_secrets(outside_text)
     for token_index, (decoded, _start, end) in enumerate(tokens):
         if decoded in _SERIALIZED_PUBLIC_METADATA_FIELDS or not is_secret_bearing_query_key(
