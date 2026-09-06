@@ -42,6 +42,7 @@ from anva.core.models import (
     Organization,
     OutboxEvent,
     PullRequest,
+    ReadinessDecision,
     Repository,
     RepositoryAccessToken,
     Role,
@@ -1321,10 +1322,18 @@ def test_evaluator_scope_admits_independent_reviewer_and_check_evidence_must_res
             reference_time=REFERENCE_TIME,
             deterministic_checks=invalid_checks,
         )
-    assert not AssuranceRun.objects.filter(
+    rejected_attempt = AssuranceRun.objects.get(
         organization=organization,
         pull_request_number=31,
-    ).exists()
+    )
+    assert rejected_attempt.state == AssuranceRun.State.FAILED
+    assert rejected_attempt.readiness == ReadinessDecision.Status.BLOCKED
+    assert rejected_attempt.failure_code == "ASSURANCE_CONTEXT_INCOMPLETE"
+    assert rejected_attempt.readinessdecision.reason_codes == [
+        "CONFLICT_REVIEW_REQUIRED",
+        "ASSURANCE_CONTEXT_INCOMPLETE",
+    ]
+    assert not EvaluatorTask.objects.filter(assurance_run=rejected_attempt).exists()
 
     evaluator = FakeEvaluator(FakeScenario.SUCCESS_NO_FINDINGS)
     started = start_assurance(

@@ -1412,7 +1412,12 @@ def _start_assurance_bound(
     """Build exact deterministic context and enqueue one independent manual review."""
     provisional_run = AssuranceRun.objects.select_for_update().get(id=provisional_run.id)
     if provisional_run.state != AssuranceRun.State.REQUESTED:
-        task = EvaluatorTask.objects.filter(assurance_run=provisional_run).first()
+        task_query = EvaluatorTask.objects.filter(assurance_run=provisional_run)
+        task = (
+            task_query.get()
+            if provisional_run.state == AssuranceRun.State.MODEL_REVIEW
+            else task_query.first()
+        )
         return AssuranceStartResult(provisional_run, cast(EvaluatorTask, task), False)
     if reference_time.tzinfo is None:
         raise ValueError("reference_time must include a timezone")
