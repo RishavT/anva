@@ -120,6 +120,10 @@ make acceptance-canonicalize
 make acceptance-verify
 export ANVA_ACCEPTANCE_STATE_DIR=/private/path/state
 export ANVA_ACCEPTANCE_CREDENTIAL_DIR=/private/path/credentials
+export ANVA_REVISION=<exact-40-character-product-commit>
+export ANVA_BUILD_INPUT_SHA256=<64-lowercase-hex>
+export ANVA_IMAGE_SHA256=<local-image-id-without-sha256-prefix>
+export ANVA_ACCEPTANCE_LAUNCH_MANIFEST=/protected/path/launch-manifest.json
 make acceptance-start
 # Supply the reviewer-only token and handoff directory.
 make acceptance-review-request
@@ -133,7 +137,9 @@ make acceptance-down
 Only `acceptance-adapter` receives the raw bind mount. Product and runner services receive the
 ephemeral canonical volume read-only. Product execution pauses for an independently authenticated
 evaluator and seals deterministic public results only after exact-head completion. See the
-[acceptance corpus runbook](docs/runbooks/acceptance-corpus.md). The integration suite uses a
+[acceptance corpus runbook](docs/runbooks/acceptance-corpus.md). `acceptance-start` generates the
+required schema-backed, secret-free launch manifest when its protected host path is absent and
+preserves an existing immutable v1 manifest for compatible resume. The integration suite uses a
 separate `anva-tests` Compose project with non-persistent `test-postgres` and `test-minio`
 services, never the development containers or data volumes. Remove that project after a local
 test session with `make test-down`.

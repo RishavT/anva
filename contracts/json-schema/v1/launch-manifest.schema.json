@@ -1,0 +1,229 @@
+{
+  "$id": "https://schemas.anva.dev/v1/launch-manifest.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Immutable, secret-free attestation of the exact image and security-relevant resolved Compose model used by every public acceptance phase.",
+  "properties": {
+    "build_input_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "engine_image_id": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "image_reference": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$",
+      "type": "string"
+    },
+    "kind": {
+      "const": "anva-docker-launch",
+      "type": "string"
+    },
+    "package_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "product_commit": {
+      "pattern": "^[a-f0-9]{40}$",
+      "type": "string"
+    },
+    "resolved_compose_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "type": "integer"
+    },
+    "services": {
+      "additionalProperties": false,
+      "properties": {
+        "acceptance-product-finalize": {
+          "additionalProperties": false,
+          "properties": {
+            "config_sha256": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "engine_image_id": {
+              "pattern": "^sha256:[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "image_reference": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "config_sha256",
+            "engine_image_id",
+            "image_reference"
+          ],
+          "type": "object"
+        },
+        "acceptance-product-start": {
+          "additionalProperties": false,
+          "properties": {
+            "config_sha256": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "engine_image_id": {
+              "pattern": "^sha256:[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "image_reference": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "config_sha256",
+            "engine_image_id",
+            "image_reference"
+          ],
+          "type": "object"
+        },
+        "acceptance-review-request": {
+          "additionalProperties": false,
+          "properties": {
+            "config_sha256": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "engine_image_id": {
+              "pattern": "^sha256:[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "image_reference": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "config_sha256",
+            "engine_image_id",
+            "image_reference"
+          ],
+          "type": "object"
+        },
+        "acceptance-review-submit": {
+          "additionalProperties": false,
+          "properties": {
+            "config_sha256": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "engine_image_id": {
+              "pattern": "^sha256:[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "image_reference": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "config_sha256",
+            "engine_image_id",
+            "image_reference"
+          ],
+          "type": "object"
+        },
+        "api": {
+          "additionalProperties": false,
+          "properties": {
+            "config_sha256": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "engine_image_id": {
+              "pattern": "^sha256:[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "image_reference": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "config_sha256",
+            "engine_image_id",
+            "image_reference"
+          ],
+          "type": "object"
+        },
+        "mcp": {
+          "additionalProperties": false,
+          "properties": {
+            "config_sha256": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "engine_image_id": {
+              "pattern": "^sha256:[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "image_reference": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "config_sha256",
+            "engine_image_id",
+            "image_reference"
+          ],
+          "type": "object"
+        },
+        "worker": {
+          "additionalProperties": false,
+          "properties": {
+            "config_sha256": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "engine_image_id": {
+              "pattern": "^sha256:[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "image_reference": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "config_sha256",
+            "engine_image_id",
+            "image_reference"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "api",
+        "worker",
+        "mcp",
+        "acceptance-product-start",
+        "acceptance-review-request",
+        "acceptance-review-submit",
+        "acceptance-product-finalize"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema_version",
+    "kind",
+    "product_commit",
+    "build_input_sha256",
+    "package_sha256",
+    "engine_image_id",
+    "image_reference",
+    "resolved_compose_sha256",
+    "services"
+  ],
+  "title": "Anva Docker Acceptance Launch Manifest",
+  "type": "object"
+}

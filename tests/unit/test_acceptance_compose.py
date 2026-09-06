@@ -319,7 +319,12 @@ def test_product_acceptance_make_targets_use_scoped_compose_services() -> None:
         ("acceptance-review-submit", "acceptance-review-submit"),
         ("acceptance-finalize", "acceptance-product-finalize"),
     ):
-        assert f"{target}: acceptance-identity-preflight" in makefile
+        dependency = (
+            "acceptance-launch-manifest"
+            if target == "acceptance-start"
+            else "acceptance-identity-preflight"
+        )
+        assert f"{target}: {dependency}" in makefile
         body = makefile.split(f"\n{target}:", 1)[1].split("\n\n", 1)[0]
         assert f"run --rm --no-deps {service}" in body
         assert "prune" not in body
@@ -327,6 +332,77 @@ def test_product_acceptance_make_targets_use_scoped_compose_services() -> None:
         assert 'test -n "$(ANVA_IMAGE_SHA256)"' in body
         assert 'test -n "$(ANVA_BUILD_INPUT_SHA256)"' in body
         assert 'test -n "$(ANVA_ACCEPTANCE_LAUNCH_MANIFEST)"' in body
+
+
+@pytest.mark.unit
+def test_public_launch_manifest_make_path_is_hardened_and_start_uses_it() -> None:
+    makefile = Path("Makefile").read_text(encoding="utf-8")
+    body = makefile.split("\nacceptance-launch-manifest: acceptance-identity-preflight", 1)[
+        1
+    ].split("\n\nacceptance-start:", 1)[0]
+
+    assert "acceptance-start: acceptance-launch-manifest" in makefile
+    assert "ANVA_ACCEPTANCE_LAUNCH_MANIFEST is the required protected host output path" in body
+    assert "Reusing existing immutable launch manifest" in body
+    assert "acceptance launch-manifest" in body
+    assert "--network none" in body
+    assert "--read-only" in body
+    assert "--cap-drop ALL" in body
+    assert "--security-opt no-new-privileges" in body
+    assert '--user "$$(id -u):$$(id -g)"' in body
+    assert "readonly" in body
+    assert "chmod 0444" in body
+    assert "config --format json" in body
+    assert "docker image inspect" in body
+    assert "prune" not in body
+
+
+@pytest.mark.unit
+def test_cli_launch_manifest_option_is_explicitly_optional_with_supported_default(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from anva.entrypoints.cli import build_parser
+
+    parser = build_parser()
+    with pytest.raises(SystemExit) as captured:
+        parser.parse_args(["acceptance", "start", "--help"])
+    assert captured.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "Optional in-container manifest path" in help_text
+    assert "/acceptance/launch/manifest.json" in help_text
+    assert "ANVA_ACCEPTANCE_LAUNCH_MANIFEST" in help_text
+
+    arguments = parser.parse_args(
+        [
+            "acceptance",
+            "start",
+            "--canonical-root",
+            "/canonical",
+            "--state",
+            "/state/resume.json",
+            "--output",
+            "/output",
+            "--manifest-sha256",
+            "a" * 64,
+            "--source-fingerprint",
+            "b" * 64,
+            "--canonical-manifest-sha256",
+            "c" * 64,
+            "--product-commit",
+            "d" * 40,
+            "--product-image-sha256",
+            "e" * 64,
+            "--product-image-reference",
+            "anva:test",
+            "--build-input-sha256",
+            "f" * 64,
+            "--launch-service",
+            "acceptance-product-start",
+            "--credential-output",
+            "/credentials/credentials.json",
+        ]
+    )
+    assert arguments.launch_manifest == Path("/acceptance/launch/manifest.json")
 
 
 @pytest.mark.unit

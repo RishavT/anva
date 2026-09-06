@@ -130,6 +130,23 @@ def build_parser() -> argparse.ArgumentParser:
     acceptance_verify.add_argument("--manifest-sha256", required=True)
     acceptance_verify.add_argument("--source-fingerprint", required=True)
     acceptance_verify.add_argument("--canonical-manifest-sha256", required=True)
+    acceptance_launch_manifest = acceptance_commands.add_parser(
+        "launch-manifest",
+        help="Generate the public immutable Docker launch manifest from resolved runtime inputs",
+    )
+    acceptance_launch_manifest.add_argument("--resolved-compose", required=True, type=Path)
+    acceptance_launch_manifest.add_argument("--image-inspect", required=True, type=Path)
+    acceptance_launch_manifest.add_argument("--product-commit", required=True)
+    acceptance_launch_manifest.add_argument("--product-image-sha256", required=True)
+    acceptance_launch_manifest.add_argument("--product-image-reference", required=True)
+    acceptance_launch_manifest.add_argument("--build-input-sha256", required=True)
+    acceptance_launch_manifest.add_argument("--launch-manifest-source", required=True, type=Path)
+    acceptance_launch_manifest.add_argument(
+        "--build-provenance",
+        type=Path,
+        default=Path("/app/anva-build-provenance.json"),
+        help="Optional in-image build provenance path (default: /app/anva-build-provenance.json)",
+    )
     acceptance_common = argparse.ArgumentParser(add_help=False)
     acceptance_common.add_argument(
         "--api-url", default=os.getenv("ANVA_API_URL", "http://api:8000/api/v1")
@@ -162,6 +179,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--launch-manifest",
         type=Path,
         default=Path("/acceptance/launch/manifest.json"),
+        help=(
+            "Optional in-container manifest path (default: /acceptance/launch/manifest.json); "
+            "Make workflows require ANVA_ACCEPTANCE_LAUNCH_MANIFEST as the protected host path"
+        ),
     )
     acceptance_start = acceptance_commands.add_parser(
         "start",
@@ -1128,6 +1149,36 @@ def _acceptance_request(arguments: argparse.Namespace) -> int:
                 expected_source_fingerprint=str(arguments.source_fingerprint),
                 expected_canonical_manifest_sha256=str(arguments.canonical_manifest_sha256),
             ).as_dict()
+        elif arguments.acceptance_command == "launch-manifest":
+            from anva.acceptance.launch_manifest import generate_launch_manifest
+            from anva.acceptance.provenance import AcceptanceProvenanceError
+
+            try:
+                payload = generate_launch_manifest(
+                    arguments.resolved_compose,
+                    arguments.image_inspect,
+                    build_provenance_path=arguments.build_provenance,
+                    product_commit=str(arguments.product_commit),
+                    build_input_sha256=str(arguments.build_input_sha256),
+                    product_image_sha256=str(arguments.product_image_sha256),
+                    image_reference=str(arguments.product_image_reference),
+                    launch_manifest_source=arguments.launch_manifest_source,
+                )
+            except AcceptanceProvenanceError as error:
+                print(
+                    json.dumps(
+                        {
+                            "code": "acceptance_launch_manifest_rejected",
+                            "message": (
+                                "Launch manifest generation failed safely; inspect the stable "
+                                "reason code and the public acceptance runbook"
+                            ),
+                            "reason_code": error.reason_code,
+                        },
+                        sort_keys=True,
+                    )
+                )
+                return 2
         else:
             from anva.acceptance.runner import AcceptanceRunner, RunnerConfig
 

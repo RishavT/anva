@@ -5,7 +5,7 @@ from __future__ import annotations
 from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import ValidationError
 
-from anva.contracts.catalog import KNOWLEDGE_CHANGE, SCHEMA_VERSION, SCHEMAS
+from anva.contracts.catalog import KNOWLEDGE_CHANGE, SCHEMAS
 
 
 class ContractValidationError(ValueError):
@@ -27,11 +27,16 @@ def validate_payload(schema_name: str, payload: object) -> None:
     if not isinstance(payload, dict):
         raise ContractValidationError(f"{schema_name} payload must be a JSON object")
 
+    properties = schema.get("properties")
+    version_schema = properties.get("schema_version") if isinstance(properties, dict) else None
+    supported_version = version_schema.get("const") if isinstance(version_schema, dict) else None
+    if supported_version is None:
+        raise ContractValidationError(f"Contract '{schema_name}' has no schema version")
     version = payload.get("schema_version")
-    if version != SCHEMA_VERSION:
+    if version != supported_version:
         raise UnsupportedContractVersionError(
             f"Unsupported {schema_name} schema_version {version!r}; "
-            f"supported versions: {SCHEMA_VERSION}"
+            f"supported versions: {supported_version}"
         )
 
     try:

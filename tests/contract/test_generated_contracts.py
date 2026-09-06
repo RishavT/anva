@@ -40,7 +40,7 @@ def test_contract_catalog_and_checked_in_generation_are_current() -> None:
     second = rendered_artifacts()
 
     assert first == second
-    assert len(first) == 33
+    assert len(first) == 35
     check_artifacts(first)
 
 
