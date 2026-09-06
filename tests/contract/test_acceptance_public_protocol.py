@@ -244,6 +244,11 @@ def test_acceptance_case_is_closed_public_only_and_has_two_distinct_valid_cases(
                 "from": "assurance.deterministic_checks[].code",
                 "mustReference": "work_item.acceptance_criteria[].code",
             },
+            {
+                "code": "acceptance_case_diff_invalid",
+                "from": "change.unified_diff",
+                "mustSatisfy": "manual-diff ingestion parser",
+            },
         ],
     }
     first = EXAMPLES["acceptance-case"]

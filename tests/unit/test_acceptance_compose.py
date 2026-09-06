@@ -357,6 +357,55 @@ def test_acceptance_case_preflight_is_hardened_and_precedes_launch() -> None:
 
 
 @pytest.mark.unit
+def test_acceptance_start_stops_before_compose_when_case_preflight_fails(
+    tmp_path: Path,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    calls = tmp_path / "docker-calls"
+    docker = fake_bin / "docker"
+    docker.write_text(
+        '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$ANVA_TEST_DOCKER_CALLS"\nexit 2\n',
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    malformed_case = tmp_path / "malformed-case.json"
+    malformed_case.write_text("{}\n", encoding="utf-8")
+    environment = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "ANVA_TEST_DOCKER_CALLS": str(calls),
+    }
+
+    make = shutil.which("make")
+    assert make is not None
+    result = subprocess.run(  # noqa: S603 - fixed local test command and arguments
+        [
+            make,
+            "acceptance-start",
+            f"ANVA_ACCEPTANCE_CASE_FILE={malformed_case}",
+            "ANVA_REVISION=" + "a" * 40,
+            "ANVA_IMAGE_SHA256=sha256:" + "b" * 64,
+            "ANVA_BUILD_INPUT_SHA256=" + "c" * 64,
+            f"ANVA_ACCEPTANCE_LAUNCH_MANIFEST={tmp_path / 'launch.json'}",
+            f"ANVA_ACCEPTANCE_STATE_DIR={tmp_path}",
+        ],
+        cwd=Path.cwd(),
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    recorded = calls.read_text(encoding="utf-8").splitlines()
+    assert len(recorded) == 1
+    assert recorded[0].startswith("run ")
+    assert "acceptance case-validate" in recorded[0]
+    assert all("compose" not in call for call in recorded)
+
+
+@pytest.mark.unit
 def test_public_launch_manifest_make_path_is_hardened_and_start_uses_it() -> None:
     makefile = Path("Makefile").read_text(encoding="utf-8")
     body = makefile.split("\nacceptance-launch-manifest: acceptance-identity-preflight", 1)[

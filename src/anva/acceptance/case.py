@@ -21,6 +21,7 @@ from anva.contracts.bootstrap_scope import (
     validate_acceptance_bootstrap_scope,
 )
 from anva.contracts.validation import contract_input_byte_limit, validate_payload
+from anva.core.services.diffs import parse_unified_diff
 
 MAX_CASE_BYTES = contract_input_byte_limit("acceptance-case")
 MAX_EVIDENCE_BYTES = 4_096
@@ -141,6 +142,15 @@ def _validate_cross_section(payload: dict[str, object]) -> bytes:
     head_commit = _string(change, "head_commit")
     if base_commit == head_commit:
         raise AcceptanceCaseError("Acceptance case base and head commits must differ")
+    try:
+        parse_unified_diff(_string(change, "unified_diff"))
+    except ValueError as error:
+        raise AcceptanceCaseError(
+            f"Acceptance case unified diff is invalid: {error}",
+            code="acceptance_case_diff_invalid",
+            path="change.unified_diff",
+            reference="manual-diff ingestion",
+        ) from error
     stale_probe = change["stale_probe"]
     if isinstance(stale_probe, dict):
         probe = cast(dict[str, object], stale_probe)

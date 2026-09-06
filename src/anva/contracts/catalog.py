@@ -16,7 +16,10 @@ from anva.contract_limits import (
     MAX_CANVAS_QUERY_EDGES,
     MAX_CANVAS_QUERY_NODES,
 )
-from anva.contracts.acceptance_case_semantics import ACCEPTANCE_CASE_GOVERNANCE_RULES
+from anva.contracts.acceptance_case_semantics import (
+    ACCEPTANCE_CASE_DIFF_RULE,
+    ACCEPTANCE_CASE_GOVERNANCE_RULES,
+)
 from anva.contracts.bootstrap_scope import (
     BOOTSTRAP_SCOPE_SCHEMA,
     acceptance_bootstrap_scope_payload,
@@ -2024,7 +2027,10 @@ ACCEPTANCE_CASE_SCHEMA = versioned_schema(
 ACCEPTANCE_CASE_SCHEMA["x-anva-semantic-validation"] = {
     "command": "anva acceptance case-validate --case <path>",
     "required": True,
-    "rules": [rule.contract() for rule in ACCEPTANCE_CASE_GOVERNANCE_RULES],
+    "rules": [
+        *[rule.contract() for rule in ACCEPTANCE_CASE_GOVERNANCE_RULES],
+        ACCEPTANCE_CASE_DIFF_RULE,
+    ],
 }
 ACCEPTANCE_CASE_SCHEMA["x-anva-input"] = {
     "media_type": ACCEPTANCE_CASE_MEDIA_TYPE,

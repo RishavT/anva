@@ -35,3 +35,9 @@ ACCEPTANCE_CASE_GOVERNANCE_RULES: Final = (
         "work_item.acceptance_criteria[].code",
     ),
 )
+
+ACCEPTANCE_CASE_DIFF_RULE: Final[dict[str, str]] = {
+    "code": "acceptance_case_diff_invalid",
+    "from": "change.unified_diff",
+    "mustSatisfy": "manual-diff ingestion parser",
+}

@@ -61,14 +61,18 @@ def redact_text(value: object) -> str:
     result = str(value)
     for pattern in SECRET_PATTERNS:
         result = pattern.sub(REDACTED, result)
-    configured_secrets = {
-        str(settings.SECRET_KEY),
-        str(settings.TOKEN_PEPPER),
-        str(settings.BOOTSTRAP_SECRET),
-        str(settings.ANVA_METRICS_TOKEN),
-        str(settings.OBJECT_STORAGE_SECRET_KEY),
-        *(str(secret) for secret in settings.ANVA_GITHUB_WEBHOOK_SECRETS),
-    }
+    configured_secrets = (
+        {
+            str(settings.SECRET_KEY),
+            str(settings.TOKEN_PEPPER),
+            str(settings.BOOTSTRAP_SECRET),
+            str(settings.ANVA_METRICS_TOKEN),
+            str(settings.OBJECT_STORAGE_SECRET_KEY),
+            *(str(secret) for secret in settings.ANVA_GITHUB_WEBHOOK_SECRETS),
+        }
+        if settings.configured
+        else set()
+    )
     for secret in configured_secrets:
         if secret:
             result = result.replace(secret, REDACTED)

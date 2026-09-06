@@ -182,6 +182,43 @@ def test_case_accepts_codes_governed_by_both_work_and_policy() -> None:
 
 @pytest.mark.unit
 @pytest.mark.parametrize(
+    "unified_diff",
+    [
+        (
+            "diff --git a/src/a.py b/src/a.py\n"
+            "--- a/src/a.py\n"
+            "+++ b/src/a.py\n"
+            "@@ -18,7 +18,9 @@ def deliver(row, gateway, store, now):\n"
+            + "".join(f" line {index}\n" for index in range(13))
+            + "+extra one\n+extra two\n"
+        ),
+        (
+            "diff --git a/src/a.py b/src/a.py\n"
+            "--- a/src/a.py\n"
+            "+++ b/src/a.py\n"
+            "@@ -1 +1 @@\n"
+            " unchanged\n"
+        ),
+    ],
+)
+def test_case_rejects_diff_that_runtime_ingestion_rejects(unified_diff: str) -> None:
+    case = _case()
+    cast(dict[str, object], case["change"])["unified_diff"] = unified_diff
+
+    with pytest.raises(AcceptanceCaseError) as captured:
+        acceptance_case(case)
+
+    assert captured.value.diagnostic() == {
+        "code": "acceptance_case_diff_invalid",
+        "message": "Acceptance case unified diff is invalid: " + str(captured.value.__cause__),
+        "path": "change.unified_diff",
+        "reference": "manual-diff ingestion",
+    }
+    assert captured.value.schema_valid is True
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
     ("section", "field", "message"),
     [
         ("work_item", "requirements", "requirement codes must be unique"),
@@ -322,10 +359,14 @@ def test_case_input_metadata_exposes_loader_wire_semantics() -> None:
 
 
 @pytest.mark.unit
-def test_multibyte_diff_schema_bound_stays_inside_loader_byte_limit(tmp_path: Path) -> None:
+def test_valid_multibyte_diff_stays_inside_loader_byte_limit(tmp_path: Path) -> None:
     accepted = _case()
     cast(dict[str, object], accepted["change"])["unified_diff"] = (
-        "💡" * MAX_ACCEPTANCE_UNIFIED_DIFF_CHARACTERS
+        "diff --git a/a.py b/a.py\n"
+        "new file mode 100644\n"
+        "--- /dev/null\n"
+        "+++ b/a.py\n"
+        "@@ -0,0 +1 @@\n+" + "💡" * 90_000 + "\n"
     )
     path = tmp_path / "multibyte-case.json"
     path.write_text(json.dumps(accepted, ensure_ascii=False), encoding="utf-8")
@@ -341,8 +382,16 @@ def test_multibyte_diff_schema_bound_stays_inside_loader_byte_limit(tmp_path: Pa
     with pytest.raises(AcceptanceCaseError, match="unsafe|bound"):
         load_acceptance_case(escaped_path)
 
+    assert (
+        len(cast(str, cast(dict[str, object], accepted["change"])["unified_diff"]))
+        < MAX_ACCEPTANCE_UNIFIED_DIFF_CHARACTERS
+    )
+
     cumulative = deepcopy(accepted)
     cast(dict[str, object], cumulative["change"])["description"] = "💡" * 50_000
+    cast(dict[str, object], cumulative["change"])["affected_paths"] = [
+        f"{index:04d}" + "💡" * 496 for index in range(200)
+    ]
     cast(dict[str, object], cumulative["work_item"])["summary"] = "💡" * 20_000
     cast(dict[str, object], cumulative["retrieval"])["context_task"] = "💡" * 2_000
     cast(dict[str, object], cumulative["evidence"])["limitations"] = [

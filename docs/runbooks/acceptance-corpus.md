@@ -91,11 +91,17 @@ preflight (the `acceptance-start` target runs it automatically):
 ANVA_ACCEPTANCE_CASE_FILE=/absolute/path/case.json make acceptance-case-validate
 ```
 
-The generated schema's `x-anva-semantic-validation` annotation publishes the same three rules used
-by the preflight and fail-closed runtime: every evidence criterion code must name a work acceptance
-criterion, and every deterministic-check code must name both a policy requirement and a work
-acceptance criterion. A structurally valid document is not a valid acceptance case until this
-semantic preflight reports both `schema_valid` and `semantic_valid` as true.
+The generated schema's `x-anva-semantic-validation` annotation publishes the same rules used by
+the preflight and fail-closed runtime: every evidence criterion code must name a work acceptance
+criterion, every deterministic-check code must name both a policy requirement and a work
+acceptance criterion, and `change.unified_diff` must pass the exact bounded parser used by live
+manual-diff ingestion. That parser validates file and path headers, hunk ranges and exact old/new
+line counts, line prefixes and EOF markers, supported mode/rename metadata, path safety,
+duplicates, effective changes, controls/encoding, and size/count limits. Binary and combined diffs
+remain unsupported. A structurally valid document is not a valid acceptance case until this
+semantic preflight reports both `schema_valid` and `semantic_valid` as true. Diff failures also
+report `diff_valid: false`; diagnostics name the public field and invariant but never echo paths or
+case content.
 
 The closed `organization.bootstrap_scope` object explicitly requests one repository, one human
 membership with the least-privilege `VIEWER` role, and exactly two named service identities. The
