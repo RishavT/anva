@@ -450,6 +450,9 @@ def test_exact_replay_manual_queue_report_and_new_revision_staleness() -> None:
         result=result,
     )
     assert completed.run.state == AssuranceRun.State.COMPLETED
+    claim.task.refresh_from_db()
+    assert claim.task.result_artifact is not None
+    assert claim.task.result_artifact.payload == result
     assert completed.readiness.status == "READY_WITH_WARNINGS"
     assert "REQUIREMENT_TRACEABILITY_NOT_ESTABLISHED" in completed.readiness.reason_codes
     assert len(completed.run.limitations) == MAX_LIMITATIONS

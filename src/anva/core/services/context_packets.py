@@ -12,11 +12,15 @@ from datetime import datetime
 from typing import Any, NoReturn, cast
 
 from django.db import connection, transaction
-from django.db.models import Case, F, QuerySet, TextField, Value, When
+from django.db.models import Case, F, Q, QuerySet, TextField, Value, When
 from django.db.models.functions import Cast, Concat
 from django.utils import timezone
 
-from anva.core.exceptions import RequiredPolicyBudgetError, ResourceNotFoundError
+from anva.core.exceptions import (
+    RequiredContextBudgetError,
+    RequiredPolicyBudgetError,
+    ResourceNotFoundError,
+)
 from anva.core.models import (
     AccessScope,
     AccessScopeMembership,
@@ -61,7 +65,11 @@ from anva.core.services.search_index import EMBEDDING_VERSION, INDEX_VERSION
 
 MAX_ASSERTION_CANDIDATES = 500
 MAX_RELATIONSHIP_CANDIDATES = 200
+MAX_CONFLICT_CANDIDATES = 500
 MAX_RETRIEVAL_FACETS = 8
+MAX_REQUIRED_PACKING_CANDIDATES = 10_000
+MAX_REQUIRED_PACKING_STATES = 50_000
+MAX_REQUIRED_PACKING_OPERATIONS = 1_000_000
 _FACET_LABEL = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 _QUERY_TERM = re.compile(r"[a-z0-9][a-z0-9_.:/-]*")
 
@@ -918,16 +926,27 @@ def _conflict_candidates(
 ) -> list[PacketCandidate]:
     if not selected_assertion_ids:
         return []
-    conflicts = (
-        AssertionConflict.objects.filter(
-            organization_id=actor.organization_id,
-            status=AssertionConflict.Status.OPEN,
-            left_assertion_id__in=selected_assertion_ids,
-            right_assertion_id__in=selected_assertion_ids,
-        )
-        .select_related("left_assertion", "right_assertion")
-        .order_by("id")
+    conflict_queryset = AssertionConflict.objects.filter(
+        organization_id=actor.organization_id,
+        status=AssertionConflict.Status.OPEN,
+        left_assertion_id__in=selected_assertion_ids,
+        right_assertion_id__in=selected_assertion_ids,
     )
+    if change_aware:
+        relevant_assertion_ids = set(relevant_assertion_facets)
+        conflict_queryset = conflict_queryset.filter(
+            Q(left_assertion_id__in=relevant_assertion_ids)
+            | Q(right_assertion_id__in=relevant_assertion_ids)
+        )
+    bounded_conflicts = list(
+        conflict_queryset.select_related("left_assertion", "right_assertion").order_by("id")[
+            : MAX_CONFLICT_CANDIDATES + 1
+        ]
+    )
+    if len(bounded_conflicts) > MAX_CONFLICT_CANDIDATES:
+        raise RequiredContextBudgetError(
+            "Conflict candidate retrieval exceeded its deterministic bound"
+        )
     candidates: list[PacketCandidate] = []
     provenance_by_assertion: dict[uuid.UUID, AssertionProvenance] = {}
     for provenance in _authorized_provenance(
@@ -936,7 +955,7 @@ def _conflict_candidates(
         assertion_ids=selected_assertion_ids,
     ):
         provenance_by_assertion.setdefault(provenance.assertion_id, provenance)
-    for conflict in conflicts:
+    for conflict in bounded_conflicts:
         matched_facets = tuple(
             sorted(
                 {
@@ -1022,11 +1041,13 @@ def _select(
 ) -> PacketSelection:
     ordered = sorted(_merge_candidates(candidates), key=_candidate_order)
     selected: list[PacketCandidate] = []
+    selected_keys: set[str] = set()
     tokens = 0
     byte_count = 0
     citations = 0
-    omitted = 0
-    for candidate in ordered:
+
+    def add_if_fits(candidate: PacketCandidate) -> bool:
+        nonlocal tokens, byte_count, citations
         next_items = len(selected) + 1
         next_tokens = tokens + candidate.token_count
         next_bytes = byte_count + candidate.byte_count
@@ -1038,34 +1059,170 @@ def _select(
             and next_citations <= budget.max_citations
         )
         if not fits:
-            if candidate.required_policy and (
-                candidate.freshness == ContextPacketItem.Freshness.CURRENT
-            ):
-                raise RequiredPolicyBudgetError(
-                    "Packet budget cannot contain every applicable required current policy"
-                )
-            omitted += 1
-            continue
+            return False
         selected.append(candidate)
+        selected_keys.add(candidate.item_key)
         tokens = next_tokens
         byte_count = next_bytes
         citations = next_citations
-    limitations: tuple[str, ...] = ()
-    if omitted:
-        limitations = (f"{omitted} lower-priority candidates omitted by budget",)
+        return True
+
+    # Required policy and discovered-facet representatives are selected before optional
+    # material.  This prevents an otherwise valid packet from spending its final bound on
+    # lower-priority content.  The final packet is sorted canonically below, so reservation
+    # order cannot leak caller or retrieval ordering.
+    for candidate in ordered:
+        if candidate.required_policy and candidate.freshness == ContextPacketItem.Freshness.CURRENT:
+            if not add_if_fits(candidate):
+                raise RequiredPolicyBudgetError(
+                    "Packet budget cannot contain every applicable required current policy"
+                )
+
     discovered_required = {
         label for candidate in ordered for label in candidate.required_context_facets
     } | set(required_context_overflow)
-    selected_required = {
+    covered_required = {
         label for candidate in selected for label in candidate.required_context_facets
     }
-    missing_required = sorted(discovered_required - selected_required)
-    if missing_required:
-        limitations = (
-            *limitations,
-            "Required assurance context was discovered but could not fit the authorized "
-            f"bounded packet: {', '.join(missing_required)}",
+    required_labels = tuple(sorted(discovered_required))
+    label_bits = {label: 1 << position for position, label in enumerate(required_labels)}
+    full_mask = (1 << len(required_labels)) - 1
+    initial_mask = sum(label_bits[label] for label in covered_required)
+    # Each mask retains only resource-Pareto-optimal deterministic selections.  With at
+    # most eight required facets this finds a feasible packing without greedy dead ends,
+    # while bounding the state space independently of retrieval order.
+    states: dict[
+        int,
+        list[tuple[tuple[PacketCandidate, ...], int, int, int]],
+    ] = {initial_mask: [((), tokens, byte_count, citations)]}
+    representatives = [
+        candidate
+        for candidate in ordered
+        if candidate.item_key not in selected_keys and candidate.required_context_facets
+    ]
+    if len(representatives) > MAX_REQUIRED_PACKING_CANDIDATES:
+        raise RequiredContextBudgetError(
+            "Required context packing exceeded its deterministic candidate bound"
         )
+    state_count = 1
+    operations = 0
+    representative_costs = {
+        candidate.item_key: (
+            candidate.token_count,
+            candidate.byte_count,
+            len(candidate.citations),
+        )
+        for candidate in representatives
+    }
+    for candidate in representatives:
+        candidate_mask = sum(
+            label_bits[label] for label in candidate.required_context_facets if label in label_bits
+        )
+        state_snapshot = [(mask, tuple(mask_states)) for mask, mask_states in states.items()]
+        for mask, mask_states in state_snapshot:
+            next_mask = mask | candidate_mask
+            if next_mask == mask:
+                continue
+            for chosen, state_tokens, state_bytes, state_citations in mask_states:
+                operations += 1
+                if operations > MAX_REQUIRED_PACKING_OPERATIONS:
+                    raise RequiredContextBudgetError(
+                        "Required context packing exceeded its deterministic operation bound"
+                    )
+                candidate_tokens, candidate_bytes, candidate_citations = representative_costs[
+                    candidate.item_key
+                ]
+                proposal = (
+                    (*chosen, candidate),
+                    state_tokens + candidate_tokens,
+                    state_bytes + candidate_bytes,
+                    state_citations + candidate_citations,
+                )
+                proposal_dimensions = (
+                    len(selected) + len(proposal[0]),
+                    proposal[1],
+                    proposal[2],
+                    proposal[3],
+                )
+                if not all(
+                    value <= limit
+                    for value, limit in zip(
+                        proposal_dimensions,
+                        (
+                            budget.max_items,
+                            budget.max_tokens,
+                            budget.max_bytes,
+                            budget.max_citations,
+                        ),
+                        strict=True,
+                    )
+                ):
+                    continue
+                frontier = states.setdefault(next_mask, [])
+                operations += len(frontier)
+                if operations > MAX_REQUIRED_PACKING_OPERATIONS:
+                    raise RequiredContextBudgetError(
+                        "Required context packing exceeded its deterministic operation bound"
+                    )
+                if any(
+                    len(existing[0]) <= len(proposal[0])
+                    and existing[1] <= proposal[1]
+                    and existing[2] <= proposal[2]
+                    and existing[3] <= proposal[3]
+                    for existing in frontier
+                ):
+                    continue
+                previous_count = len(frontier)
+                frontier[:] = [
+                    existing
+                    for existing in frontier
+                    if not (
+                        len(proposal[0]) <= len(existing[0])
+                        and proposal[1] <= existing[1]
+                        and proposal[2] <= existing[2]
+                        and proposal[3] <= existing[3]
+                    )
+                ]
+                frontier.append(proposal)
+                state_count += len(frontier) - previous_count
+                if state_count > MAX_REQUIRED_PACKING_STATES:
+                    raise RequiredContextBudgetError(
+                        "Required context packing exceeded its deterministic state bound"
+                    )
+    feasible = states.get(full_mask, [])
+    if not feasible:
+        best_mask = min(
+            states,
+            key=lambda mask: (-mask.bit_count(), mask),
+        )
+        missing = {label for label, bit in label_bits.items() if best_mask & bit == 0}
+        if missing:
+            raise RequiredContextBudgetError(
+                "Packet budget cannot represent discovered required context facets: "
+                f"{', '.join(sorted(missing))}"
+            )
+    else:
+        chosen, _tokens, _bytes, _citations = min(
+            feasible,
+            key=lambda state: (
+                len(state[0]),
+                state[1],
+                state[2],
+                state[3],
+                tuple(_candidate_order(candidate) for candidate in state[0]),
+            ),
+        )
+        for candidate in chosen:
+            if not add_if_fits(candidate):  # pragma: no cover - proven by the DP bounds above
+                raise RuntimeError("Required context packing diverged from its bounded selection")
+
+    for candidate in ordered:
+        if candidate.item_key not in selected_keys:
+            add_if_fits(candidate)
+
+    selected.sort(key=_candidate_order)
+    omitted = len(ordered) - len(selected)
+    limitations = (f"{omitted} lower-priority candidates omitted by budget",) if omitted else ()
     return PacketSelection(tuple(selected), tokens, byte_count, citations, limitations)
 
 

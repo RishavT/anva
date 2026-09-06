@@ -265,6 +265,32 @@ def test_codex_and_claude_workflow_traces_share_exact_authorized_packet() -> Non
         transport="MCP",
     )
     validate_tool_output("anva.search", search_result)
+    client = Client()
+    authorization = f"Bearer {plaintext}"
+    http_packet = client.get(
+        f"/api/v1/context-packets/{codex_data['packet_id']}",
+        {"repository_id": str(repository.id)},
+        HTTP_AUTHORIZATION=authorization,
+    )
+    assert http_packet.status_code == 200
+    assert http_packet.json()["packet"] == codex_packet
+    http_search = client.post(
+        "/api/v1/search",
+        data=json.dumps(
+            {
+                "repository_id": str(repository.id),
+                "query": "Host-neutral workflow parity",
+                "phase": "PREPARE",
+                "limit": 20,
+            }
+        ),
+        content_type="application/json",
+        HTTP_AUTHORIZATION=authorization,
+    )
+    assert http_search.status_code == 200
+    search_data = search_result["data"]
+    assert isinstance(search_data, dict)
+    assert http_search.json()["results"] == search_data["results"]
     for request_ids in (codex_request_ids, claude_request_ids):
         assert [
             MCPToolInvocation.objects.get(request_id=request_id).tool_name
