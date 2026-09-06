@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -92,6 +93,29 @@ def test_acceptance_case_validate_reports_full_semantic_validity(
     assert payload["status"] == "valid"
     assert payload["schema_valid"] is True
     assert payload["semantic_valid"] is True
+    assert payload["evidence_valid"] is True
+
+
+@pytest.mark.unit
+def test_acceptance_case_validate_rejects_inspector_invalid_evidence(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    case = deepcopy(EXAMPLES["acceptance-case"])
+    evidence = cast(dict[str, object], case["evidence"])
+    raw = base64.b64decode(cast(str, evidence["content_base64"]), validate=True)
+    evidence["content_base64"] = base64.b64encode(
+        raw.replace(b'"status":"PASSED"', b'"status":"UNKNOWN"')
+    ).decode()
+    path = tmp_path / "case.json"
+    path.write_text(json.dumps(case), encoding="utf-8")
+
+    assert main(["acceptance", "case-validate", "--case", str(path)]) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["evidence_valid"] is False
+    assert payload["schema_valid"] is True
+    assert payload["semantic_valid"] is False
+    assert payload["rule"] == "MANIFEST_SCHEMA_INVALID"
+    assert "UNKNOWN" not in json.dumps(payload)
 
 
 @pytest.mark.unit
