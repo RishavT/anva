@@ -4,14 +4,23 @@ from __future__ import annotations
 
 import json
 import uuid
+from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from django.db import DatabaseError, connection, transaction
+from django.test import RequestFactory
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
-from anva.core.exceptions import RequiredPolicyBudgetError, ResourceNotFoundError
+from anva.core import views as core_views
+from anva.core.exceptions import (
+    RequiredContextBudgetError,
+    RequiredPolicyBudgetError,
+    RequiredSearchAnchorUnavailableError,
+    ResourceNotFoundError,
+)
 from anva.core.models import (
     AccessScope,
     AccessScopeMembership,
@@ -51,6 +60,8 @@ from anva.core.services.authorization import Action
 from anva.core.services.context import ActorContext
 from anva.core.services.context_packets import (
     PacketBudget,
+    RequiredSearchAnchor,
+    _required_search_anchor_candidates,
     build_context_packet,
     get_context_packet,
 )
@@ -61,6 +72,7 @@ from anva.core.services.ingestion import (
     request_ingestion_sync,
 )
 from anva.core.services.jobs import cancel_job, claim_next_job, complete_job, enqueue_job
+from anva.core.services.mcp_gateway import _context_packet
 from anva.core.services.retrieval import (
     authorized_assertions,
     authorized_relationships,
@@ -192,6 +204,17 @@ def _execute_requested(actor: ActorContext, source: SourceConnection) -> SyncRun
     return completed_run
 
 
+def _required_anchor(result: Any) -> RequiredSearchAnchor:
+    return RequiredSearchAnchor(
+        chunk_id=result.chunk_id,
+        content_hash=result.content_hash,
+        access_scope_id=result.access_scope_id,
+        source_location_id=result.source_location_id,
+        source_observation_id=result.source_observation_id,
+        access_snapshot_id=result.access_snapshot_id,
+    )
+
+
 @pytest.mark.integration
 @pytest.mark.django_db
 def test_ingestion_builds_versioned_indexes_and_hybrid_search_is_reproducible(
@@ -250,6 +273,236 @@ def test_ingestion_builds_versioned_indexes_and_hybrid_search_is_reproducible(
     assert len(first.results) == 1
     assert first.results[0].content_hash == chunks.get().content_hash
     assert first.results[0].explanation.lexical_rank == 1
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_required_search_anchor_survives_dense_context_and_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for index in range(55):
+        payload = {"topic": "dense common retry context", "index": index}
+        if index == 37:
+            payload["decision"] = "distinctive capped retry anchor six attempts"
+        (tmp_path / f"document-{index:02d}.json").write_text(json.dumps(payload))
+    actor, source = _source_setup(tmp_path, monkeypatch, slug="required-search-anchor")
+    _execute_requested(actor, source)
+    repository_id = source.repository_id
+    assert repository_id is not None
+    search = search_chunks(
+        actor=actor,
+        repository_id=repository_id,
+        query="distinctive capped retry anchor six attempts",
+        phase="ASSURANCE",
+        limit=50,
+    )
+    assert search.results
+    target = search.results[0]
+    anchor = _required_anchor(target)
+    budget = PacketBudget(max_items=1, max_tokens=8_000, max_bytes=100_000, max_citations=1)
+
+    with CaptureQueriesContext(connection) as resolver_queries:
+        resolved_anchors = _required_search_anchor_candidates(
+            actor=actor,
+            repository_id=repository_id,
+            anchors=(anchor,),
+            visible_scope_ids=(anchor.access_scope_id,),
+        )
+    assert len(resolver_queries) == 1
+    assert len(resolved_anchors) == 1
+    assert len(resolved_anchors) <= 16
+
+    with CaptureQueriesContext(connection) as anchor_queries:
+        packet, created = build_context_packet(
+            actor=actor,
+            repository_id=repository_id,
+            task="dense common retry context",
+            phase=ContextPacketRecord.Phase.ASSURANCE,
+            budget=budget,
+            required_search_anchors=(anchor,),
+        )
+    assert len(anchor_queries) <= 80
+    cached, cached_created = build_context_packet(
+        actor=actor,
+        repository_id=repository_id,
+        task="dense   common retry context",
+        phase=ContextPacketRecord.Phase.ASSURANCE,
+        budget=budget,
+        required_search_anchors=(anchor, anchor),
+    )
+
+    assert created is True
+    assert cached_created is False
+    assert cached.id == packet.id
+    assert packet.normalized_request["required_search_anchors"] == [anchor.as_dict()]
+    selected = cast(list[dict[str, Any]], packet.artifact.payload["items"])
+    assert len(selected) == 1
+    assert selected[0]["item_key"] == f"chunk:{target.chunk_id}"
+    assert cast(dict[str, object], selected[0]["payload"])["required_search_anchor"] is True
+    citations = cast(list[dict[str, object]], selected[0]["anva_sources"])
+    assert citations[0]["access_snapshot_id"] == str(target.access_snapshot_id)
+    assert citations[0]["source_content_hash"] == target.content_hash
+    assert packet.artifact.payload["limitations"]
+
+    adapter_payload: dict[str, object] = {
+        "repository_id": str(repository_id),
+        "task": "adapter parity exact anchor",
+        "phase": "ASSURANCE",
+        "budget": budget.as_dict(),
+        "required_search_anchors": [anchor.as_dict()],
+    }
+    mcp_data = _context_packet(actor, adapter_payload)
+    monkeypatch.setattr(core_views, "_actor", lambda _request: actor)
+    request = RequestFactory().post(
+        "/api/v1/context-packets",
+        data=json.dumps(adapter_payload),
+        content_type="application/json",
+    )
+    rest_response = core_views.context_packets(request)
+    rest_data = json.loads(rest_response.content)
+    assert rest_response.status_code == 200
+    assert mcp_data["created"] is True
+    assert rest_data["created"] is False
+    assert rest_data["packet_id"] == mcp_data["packet_id"]
+    assert rest_data["packet"] == mcp_data["packet"]
+
+    failures = (
+        replace(anchor, content_hash="f" * 64),
+        replace(anchor, access_scope_id=uuid.uuid4()),
+        replace(anchor, source_location_id=uuid.uuid4()),
+        replace(anchor, source_observation_id=uuid.uuid4()),
+        replace(anchor, access_snapshot_id=uuid.uuid4()),
+    )
+    for index, unavailable in enumerate(failures):
+        with pytest.raises(
+            RequiredSearchAnchorUnavailableError,
+            match=r"^One or more required search anchors are unavailable$",
+        ):
+            build_context_packet(
+                actor=actor,
+                repository_id=repository_id,
+                task=f"unavailable anchor {index}",
+                phase=ContextPacketRecord.Phase.ASSURANCE,
+                required_search_anchors=(unavailable,),
+            )
+
+    other_repository = Repository.objects.create(
+        organization=source.organization,
+        external_id="filesystem:required-search-anchor-other",
+        name="required-search-anchor-other",
+    )
+    with pytest.raises(
+        RequiredSearchAnchorUnavailableError,
+        match=r"^One or more required search anchors are unavailable$",
+    ):
+        build_context_packet(
+            actor=replace(actor, repository_id=other_repository.id),
+            repository_id=other_repository.id,
+            task="cross repository anchor",
+            phase=ContextPacketRecord.Phase.ASSURANCE,
+            required_search_anchors=(anchor,),
+        )
+
+    target_scope = AccessScope.objects.get(id=anchor.access_scope_id)
+    target_scope.all_memberships = False
+    target_scope.save(update_fields=["all_memberships", "updated_at"])
+    original_membership = Membership.objects.get(user_id=uuid.UUID(actor.actor_id))
+    AccessScopeMembership.objects.create(
+        organization=source.organization,
+        access_scope=target_scope,
+        membership=original_membership,
+    )
+    unauthorized_actor = _actor(
+        source.organization,
+        cast(Repository, source.repository),
+        Role.Code.ORG_ADMIN,
+        "anchor-outsider",
+    )
+    outsider_scope = AccessScope.objects.create(
+        organization=source.organization,
+        name="anchor-outsider-visible",
+        all_repositories=True,
+    )
+    AccessScopeMembership.objects.create(
+        organization=source.organization,
+        access_scope=outsider_scope,
+        membership=Membership.objects.get(user_id=uuid.UUID(unauthorized_actor.actor_id)),
+    )
+    with pytest.raises(
+        RequiredSearchAnchorUnavailableError,
+        match=r"^One or more required search anchors are unavailable$",
+    ):
+        build_context_packet(
+            actor=unauthorized_actor,
+            repository_id=repository_id,
+            task="unauthorized anchor",
+            phase=ContextPacketRecord.Phase.ASSURANCE,
+            required_search_anchors=(anchor,),
+        )
+
+    second = search.results[1]
+    second_anchor = _required_anchor(second)
+    cross_product_anchor = replace(
+        anchor,
+        access_scope_id=second_anchor.access_scope_id,
+        source_location_id=second_anchor.source_location_id,
+        source_observation_id=second_anchor.source_observation_id,
+        access_snapshot_id=second_anchor.access_snapshot_id,
+    )
+    cross_product_second = replace(
+        second_anchor,
+        access_scope_id=anchor.access_scope_id,
+        source_location_id=anchor.source_location_id,
+        source_observation_id=anchor.source_observation_id,
+        access_snapshot_id=anchor.access_snapshot_id,
+    )
+    with pytest.raises(
+        RequiredSearchAnchorUnavailableError,
+        match=r"^One or more required search anchors are unavailable$",
+    ):
+        build_context_packet(
+            actor=actor,
+            repository_id=repository_id,
+            task="cross product identity must not resolve",
+            phase=ContextPacketRecord.Phase.ASSURANCE,
+            required_search_anchors=(cross_product_anchor, cross_product_second),
+        )
+    with pytest.raises(RequiredContextBudgetError, match="required search anchor"):
+        build_context_packet(
+            actor=actor,
+            repository_id=repository_id,
+            task="two anchors cannot fit one item",
+            phase=ContextPacketRecord.Phase.ASSURANCE,
+            budget=budget,
+            required_search_anchors=(anchor, second_anchor),
+        )
+
+    SourceChunkVisibility.objects.filter(
+        organization=source.organization,
+        source_chunk_id=anchor.chunk_id,
+        access_snapshot_id=anchor.access_snapshot_id,
+    ).update(state=SourceChunkVisibility.State.REVOKED, revoked_at=timezone.now())
+    with pytest.raises(
+        RequiredSearchAnchorUnavailableError,
+        match=r"^One or more required search anchors are unavailable$",
+    ):
+        build_context_packet(
+            actor=actor,
+            repository_id=repository_id,
+            task="revoked anchor",
+            phase=ContextPacketRecord.Phase.ASSURANCE,
+            required_search_anchors=(anchor,),
+        )
+
+    zero_anchor_packet, _ = build_context_packet(
+        actor=actor,
+        repository_id=repository_id,
+        task="zero anchors retain legacy behavior",
+        phase=ContextPacketRecord.Phase.ASSURANCE,
+        required_search_anchors=(),
+    )
+    assert "required_search_anchors" not in zero_anchor_packet.normalized_request
 
 
 @pytest.mark.integration

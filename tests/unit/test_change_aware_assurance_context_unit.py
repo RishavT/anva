@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -34,11 +35,14 @@ from anva.core.services.context_packets import (
     CitationCandidate,
     PacketBudget,
     PacketCandidate,
+    RequiredSearchAnchor,
     RetrievalFacet,
     _conflict_candidates,
     _normalized_facets,
     _required_matching_facets,
     _select,
+    normalize_required_search_anchors,
+    parse_required_search_anchors,
 )
 
 
@@ -61,6 +65,7 @@ def _candidate(
     tier: int,
     summary: str,
     facet: str = "",
+    required_search_anchor: bool = False,
 ) -> PacketCandidate:
     return PacketCandidate(
         item_id=uuid.uuid5(uuid.NAMESPACE_URL, key),
@@ -78,6 +83,18 @@ def _candidate(
         citations=(_citation(),),
         matched_facets=(facet,) if facet else (),
         required_context_facets=(facet,) if facet else (),
+        required_search_anchor=required_search_anchor,
+    )
+
+
+def _search_anchor(seed: int = 0) -> RequiredSearchAnchor:
+    return RequiredSearchAnchor(
+        chunk_id=uuid.UUID(int=seed * 6 + 1),
+        content_hash=f"{seed:064x}",
+        access_scope_id=uuid.UUID(int=seed * 6 + 2),
+        source_location_id=uuid.UUID(int=seed * 6 + 3),
+        source_observation_id=uuid.UUID(int=seed * 6 + 4),
+        access_snapshot_id=uuid.UUID(int=seed * 6 + 5),
     )
 
 
@@ -108,6 +125,85 @@ def test_facets_validate_bounds_and_default_long_tasks_remain_searchable() -> No
                 RetrievalFacet("work", "first", ("WORK-1",)),
                 RetrievalFacet("work", "second", ("WORK-2",)),
             ),
+        )
+
+
+@pytest.mark.unit
+def test_required_search_anchors_are_bounded_deduplicated_and_canonical() -> None:
+    first = _search_anchor(1)
+    second = _search_anchor(2)
+
+    assert normalize_required_search_anchors((second, first, second)) == (first, second)
+    parsed = parse_required_search_anchors([second.as_dict(), first.as_dict(), second.as_dict()])
+    assert parsed == (first, second)
+    with pytest.raises(ValueError, match="required_search_anchors is invalid"):
+        parse_required_search_anchors([first.as_dict()] * 17)
+    maximum = tuple(_search_anchor(index) for index in range(1, 17))
+    assert len(normalize_required_search_anchors(maximum)) == 16
+    encoded_size = len(
+        json.dumps(
+            [anchor.as_dict() for anchor in maximum],
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+    )
+    with patch(
+        "anva.core.services.context_packets.MAX_REQUIRED_SEARCH_ANCHORS_BYTES",
+        encoded_size,
+    ):
+        assert normalize_required_search_anchors(maximum) == maximum
+    with (
+        patch(
+            "anva.core.services.context_packets.MAX_REQUIRED_SEARCH_ANCHORS_BYTES",
+            encoded_size - 1,
+        ),
+        pytest.raises(ValueError, match="serialized byte bound"),
+    ):
+        normalize_required_search_anchors(maximum)
+    malformed = first.as_dict()
+    malformed["content_hash"] = "not-a-hash"
+    with pytest.raises(ValueError, match="required_search_anchors is invalid"):
+        parse_required_search_anchors([malformed])
+
+
+@pytest.mark.unit
+def test_required_search_anchors_reserve_capacity_and_preserve_omission_accounting() -> None:
+    anchors = [
+        _candidate(
+            f"anchor:{index}",
+            tier=8,
+            summary=f"required source {index}",
+            required_search_anchor=True,
+        )
+        for index in range(2)
+    ]
+    optional = [
+        _candidate(f"optional:{index}", tier=1, summary=f"dense noise {index}")
+        for index in range(4)
+    ]
+    budget = PacketBudget(max_items=3, max_tokens=100, max_bytes=10_000, max_citations=3)
+
+    selected = _select([*optional, *anchors], budget)
+    replay = _select([*reversed(anchors), *reversed(optional)], budget)
+
+    assert selected == replay
+    assert {item.item_key for item in selected.candidates} >= {"anchor:0", "anchor:1"}
+    assert selected.limitations == ("3 lower-priority candidates omitted by budget",)
+
+
+@pytest.mark.unit
+def test_policy_anchor_and_required_facet_combined_caps_fail_closed() -> None:
+    policy = replace(
+        _candidate("policy", tier=0, summary="required policy"),
+        required_policy=True,
+    )
+    anchor = _candidate("anchor", tier=1, summary="required anchor", required_search_anchor=True)
+    facet = _candidate("facet", tier=1, summary="required facet", facet="work")
+
+    with pytest.raises(RequiredContextBudgetError, match="facets: work"):
+        _select(
+            [policy, anchor, facet],
+            PacketBudget(max_items=2, max_tokens=100, max_bytes=10_000, max_citations=3),
         )
 
 

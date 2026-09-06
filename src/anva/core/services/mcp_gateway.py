@@ -69,6 +69,7 @@ from anva.core.services.context_packets import (
     authorized_assertion_citations,
     build_context_packet,
     get_context_packet,
+    parse_required_search_anchors,
 )
 from anva.core.services.creation import submit_knowledge_proposal
 from anva.core.services.graph import traverse_graph
@@ -599,6 +600,9 @@ def _context_packet(actor: ActorContext, arguments: dict[str, object]) -> dict[s
         task=cast(str, arguments["task"]),
         phase=cast(str, arguments["phase"]),
         budget=budget,
+        required_search_anchors=parse_required_search_anchors(
+            arguments.get("required_search_anchors")
+        ),
     )
     return {
         "packet_id": str(record.id),

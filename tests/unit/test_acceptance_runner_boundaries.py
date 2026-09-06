@@ -351,6 +351,10 @@ class FakeMCP:
                             "pointer": "/",
                             "canonical_url": "file:///canonical/organization/decision.md",
                             "text": SOURCE_NORMALIZED,
+                            "access_scope_id": _id(3),
+                            "source_location_id": _id(44),
+                            "source_observation_id": _id(45),
+                            "access_snapshot_id": _id(46),
                         }
                     ]
                 },
@@ -728,6 +732,16 @@ def test_finalize_reuses_case_retrieval_canvas_and_all_public_operations(
     assert context_calls[-1]["task"] == retrieval["context_task"]
     assert context_calls[-1]["phase"] == retrieval["context_phase"]
     assert context_calls[-1]["budget"] == retrieval["budget"]
+    assert context_calls[-1]["required_search_anchors"] == [
+        {
+            "chunk_id": _id(42),
+            "content_hash": SOURCE_NORMALIZED_SHA256,
+            "access_scope_id": _id(3),
+            "source_location_id": _id(44),
+            "source_observation_id": _id(45),
+            "access_snapshot_id": _id(46),
+        }
+    ]
     canvas_payloads = [
         payload
         for method, path, _token, payload in product.calls

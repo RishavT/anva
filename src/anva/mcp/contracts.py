@@ -325,6 +325,29 @@ SEARCH_RESULT: Final[dict[str, object]] = _closed(
         "explanation",
     ),
 )
+REQUIRED_SEARCH_ANCHOR: Final[dict[str, object]] = _closed(
+    {
+        "chunk_id": deepcopy(UUID),
+        "content_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "access_scope_id": deepcopy(UUID),
+        "source_location_id": deepcopy(UUID),
+        "source_observation_id": deepcopy(UUID),
+        "access_snapshot_id": deepcopy(UUID),
+    },
+    (
+        "chunk_id",
+        "content_hash",
+        "access_scope_id",
+        "source_location_id",
+        "source_observation_id",
+        "access_snapshot_id",
+    ),
+)
+REQUIRED_SEARCH_ANCHORS: Final[dict[str, object]] = {
+    "type": "array",
+    "items": REQUIRED_SEARCH_ANCHOR,
+    "maxItems": 16,
+}
 PUBLIC_SCALAR_VARIANTS: Final[list[dict[str, object]]] = [
     {"type": "string", "maxLength": 10_000},
     {"type": "number"},
@@ -736,9 +759,18 @@ SOURCE_PACKET_PAYLOAD: Final[dict[str, object]] = _context_payload(
             "type": "string",
             "enum": ["LEXICAL", "SEMANTIC_FALLBACK"],
         },
+        "required_search_anchor": {"type": "boolean", "const": True},
     },
-    ("chunk_id", "content_hash", "ranking", "search_position"),
+    ("chunk_id", "content_hash"),
 )
+SOURCE_PACKET_PAYLOAD["allOf"] = [
+    {
+        "anyOf": [
+            {"required": ["ranking", "search_position"]},
+            {"required": ["required_search_anchor"]},
+        ]
+    }
+]
 CONFLICT_SIDE: Final[dict[str, object]] = _closed(
     {
         "value": PUBLIC_ASSERTION_VALUE,
@@ -837,6 +869,7 @@ CONTEXT_REQUEST: Final[dict[str, object]] = _closed(
             "maxItems": 8,
             "uniqueItems": True,
         },
+        "required_search_anchors": deepcopy(REQUIRED_SEARCH_ANCHORS),
     },
     ("task", "phase", "budget"),
 )
@@ -982,12 +1015,19 @@ TOOL_CONTRACTS: Final[tuple[ToolContract, ...]] = (
                     },
                     (),
                 ),
+                "required_search_anchors": deepcopy(REQUIRED_SEARCH_ANCHORS),
             },
             (),
             one_of=[
                 {
                     "required": ["packet_id"],
-                    "not": {"anyOf": [{"required": ["task"]}, {"required": ["phase"]}]},
+                    "not": {
+                        "anyOf": [
+                            {"required": ["task"]},
+                            {"required": ["phase"]},
+                            {"required": ["required_search_anchors"]},
+                        ]
+                    },
                 },
                 {
                     "required": ["task", "phase"],

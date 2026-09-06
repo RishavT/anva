@@ -497,6 +497,56 @@ class AcceptanceRunner:
     def _semantic_query(self) -> str:
         return _string(self.case.section("retrieval"), "search_query")
 
+    def _required_search_anchors(self, search: dict[str, object]) -> list[dict[str, str]]:
+        """Carry exact required public search identities into context selection."""
+        data = search.get("data")
+        results = data.get("results") if isinstance(data, dict) else None
+        if not isinstance(results, list):
+            return []
+        anchors: list[dict[str, str]] = []
+        identity_keys = (
+            "chunk_id",
+            "content_hash",
+            "access_scope_id",
+            "source_location_id",
+            "source_observation_id",
+            "access_snapshot_id",
+        )
+        for relative, _raw_digest, expected_text in self.expected_sources:
+            for item in results:
+                if not isinstance(item, dict) or not str(item.get("canonical_url", "")).endswith(
+                    relative
+                ):
+                    continue
+                matched, _observed_hash = _normalized_source_matches(item, expected_text)
+                if not matched or not all(
+                    isinstance(item.get(key), str) and item.get(key) for key in identity_keys
+                ):
+                    continue
+                anchors.append({key: cast(str, item[key]) for key in identity_keys})
+                break
+        if len(anchors) > 16:
+            raise AcceptanceRunnerError("Required search anchors exceed the public context bound")
+        return anchors
+
+    def _context_arguments(
+        self,
+        state: ResumeState,
+        search: dict[str, object],
+    ) -> dict[str, object]:
+        retrieval = self.case.section("retrieval")
+        arguments: dict[str, object] = {
+            "contract_version": "1",
+            "repository_id": state.identities["repository_id"],
+            "task": retrieval["context_task"],
+            "phase": retrieval["context_phase"],
+            "budget": retrieval["budget"],
+        }
+        anchors = self._required_search_anchors(search)
+        if anchors:
+            arguments["required_search_anchors"] = anchors
+        return arguments
+
     def _validate_semantic_journey(
         self,
         state: ResumeState,
@@ -1192,13 +1242,7 @@ class AcceptanceRunner:
         self._active_stage = "retrieval_context"
         context = mcp.call(
             "anva.get_context_packet",
-            {
-                "contract_version": "1",
-                "repository_id": state.identities["repository_id"],
-                "task": retrieval["context_task"],
-                "phase": retrieval["context_phase"],
-                "budget": retrieval["budget"],
-            },
+            self._context_arguments(state, search),
         )
         canvas_case = self.case.section("canvas")
         self._active_stage = "canvas_query"
@@ -1563,13 +1607,7 @@ class AcceptanceRunner:
         )
         context = boundary.call(
             "anva.get_context_packet",
-            {
-                "contract_version": "1",
-                "repository_id": state.identities["repository_id"],
-                "task": retrieval["context_task"],
-                "phase": retrieval["context_phase"],
-                "budget": retrieval["budget"],
-            },
+            self._context_arguments(state, search),
         )
         canvas_case = self.case.section("canvas")
         canvas = api.request(

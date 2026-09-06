@@ -131,6 +131,26 @@ def openapi_document() -> dict[str, object]:
         "required": True,
         "schema": {"type": "string", "format": "uuid"},
     }
+    context_tool = next(
+        tool for tool in TOOL_CONTRACTS if tool["name"] == "anva.get_context_packet"
+    )
+    context_input = context_tool["input_schema"]
+    context_properties = cast(dict[str, object], context_input["properties"])
+    context_packet_request: dict[str, object] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            key: deepcopy(context_properties[key])
+            for key in (
+                "repository_id",
+                "task",
+                "phase",
+                "budget",
+                "required_search_anchors",
+            )
+        },
+        "required": ["repository_id", "task", "phase"],
+    }
     repository_query_parameter = {
         "name": "repository_id",
         "in": "query",
@@ -1709,7 +1729,11 @@ def openapi_document() -> dict[str, object]:
                 "post": {
                     "operationId": "buildContextPacket",
                     "parameters": mutation_parameters,
-                    "responses": created_responses,
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": context_packet_request}},
+                    },
+                    "responses": created_or_replayed_responses,
                 }
             },
             "/context-packets/{resource_id}": {

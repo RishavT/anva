@@ -19,6 +19,7 @@ from django.utils import timezone
 from anva.core.exceptions import (
     RequiredContextBudgetError,
     RequiredPolicyBudgetError,
+    RequiredSearchAnchorUnavailableError,
     ResourceNotFoundError,
 )
 from anva.core.models import (
@@ -41,6 +42,7 @@ from anva.core.models import (
     Organization,
     Repository,
     RetrievalWatermark,
+    SourceChunkVisibility,
 )
 from anva.core.services.authorization import (
     NOT_FOUND_MESSAGE,
@@ -67,6 +69,8 @@ MAX_ASSERTION_CANDIDATES = 500
 MAX_RELATIONSHIP_CANDIDATES = 200
 MAX_CONFLICT_CANDIDATES = 500
 MAX_RETRIEVAL_FACETS = 8
+MAX_REQUIRED_SEARCH_ANCHORS = 16
+MAX_REQUIRED_SEARCH_ANCHORS_BYTES = 16_384
 MAX_REQUIRED_PACKING_CANDIDATES = 10_000
 MAX_REQUIRED_PACKING_STATES = 50_000
 MAX_REQUIRED_PACKING_OPERATIONS = 1_000_000
@@ -118,6 +122,33 @@ class RetrievalFacet:
 
 
 @dataclass(frozen=True, slots=True)
+class RequiredSearchAnchor:
+    """Exact public search identity that must survive into the context packet."""
+
+    chunk_id: uuid.UUID
+    content_hash: str
+    access_scope_id: uuid.UUID
+    source_location_id: uuid.UUID
+    source_observation_id: uuid.UUID
+    access_snapshot_id: uuid.UUID
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "chunk_id": str(self.chunk_id),
+            "content_hash": self.content_hash,
+            "access_scope_id": str(self.access_scope_id),
+            "source_location_id": str(self.source_location_id),
+            "source_observation_id": str(self.source_observation_id),
+            "access_snapshot_id": str(self.access_snapshot_id),
+        }
+
+    @property
+    def canonical_key(self) -> tuple[str, ...]:
+        payload = self.as_dict()
+        return tuple(payload[key] for key in sorted(payload))
+
+
+@dataclass(frozen=True, slots=True)
 class CitationCandidate:
     access_scope_id: uuid.UUID
     source_location_id: uuid.UUID
@@ -157,6 +188,7 @@ class PacketCandidate:
     citations: tuple[CitationCandidate, ...]
     matched_facets: tuple[str, ...] = ()
     required_context_facets: tuple[str, ...] = ()
+    required_search_anchor: bool = False
     source_assertion_id: uuid.UUID | None = None
     source_relationship_id: uuid.UUID | None = None
     source_chunk_id: uuid.UUID | None = None
@@ -180,6 +212,8 @@ class PacketCandidate:
     @property
     def effective_payload(self) -> dict[str, object]:
         payload = dict(self.payload)
+        if self.required_search_anchor:
+            payload["required_search_anchor"] = True
         if self.matched_facets:
             payload["retrieval_facets"] = list(self.matched_facets)
         if self.required_context_facets:
@@ -208,6 +242,85 @@ class PacketSelection:
     selected_bytes: int
     selected_citations: int
     limitations: tuple[str, ...]
+
+
+def normalize_required_search_anchors(
+    anchors: tuple[RequiredSearchAnchor, ...] | None,
+) -> tuple[RequiredSearchAnchor, ...]:
+    """Bound, deduplicate, and canonically order caller-required search identities."""
+    raw = anchors or ()
+    if len(raw) > MAX_REQUIRED_SEARCH_ANCHORS:
+        raise ValueError(
+            f"required_search_anchors cannot exceed {MAX_REQUIRED_SEARCH_ANCHORS} entries"
+        )
+    for anchor in raw:
+        if not isinstance(anchor, RequiredSearchAnchor):
+            raise ValueError("required_search_anchors is invalid")
+        if (
+            any(
+                not isinstance(value, uuid.UUID)
+                for value in (
+                    anchor.chunk_id,
+                    anchor.access_scope_id,
+                    anchor.source_location_id,
+                    anchor.source_observation_id,
+                    anchor.access_snapshot_id,
+                )
+            )
+            or re.fullmatch(r"[a-f0-9]{64}", anchor.content_hash) is None
+        ):
+            raise ValueError("required_search_anchors is invalid")
+    normalized = tuple(sorted(set(raw), key=lambda anchor: anchor.canonical_key))
+    if len({anchor.chunk_id for anchor in normalized}) != len(normalized):
+        raise ValueError("required_search_anchors must identify distinct chunks")
+    serialized = json.dumps(
+        [anchor.as_dict() for anchor in normalized],
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    if len(serialized) > MAX_REQUIRED_SEARCH_ANCHORS_BYTES:
+        raise ValueError("required_search_anchors exceeds its serialized byte bound")
+    return normalized
+
+
+def parse_required_search_anchors(value: object) -> tuple[RequiredSearchAnchor, ...]:
+    """Parse the shared MCP/REST representation before any database work."""
+    if value is None:
+        return ()
+    if not isinstance(value, list) or len(value) > MAX_REQUIRED_SEARCH_ANCHORS:
+        raise ValueError("required_search_anchors is invalid")
+    expected = {
+        "chunk_id",
+        "content_hash",
+        "access_scope_id",
+        "source_location_id",
+        "source_observation_id",
+        "access_snapshot_id",
+    }
+    anchors: list[RequiredSearchAnchor] = []
+    try:
+        for item in value:
+            if not isinstance(item, dict) or set(item) != expected:
+                raise ValueError("required_search_anchors is invalid")
+            content_hash = item["content_hash"]
+            identity_values = [item[key] for key in expected if key != "content_hash"]
+            if not isinstance(content_hash, str) or not all(
+                isinstance(identity, str) for identity in identity_values
+            ):
+                raise ValueError("required_search_anchors is invalid")
+            anchors.append(
+                RequiredSearchAnchor(
+                    chunk_id=uuid.UUID(cast(str, item["chunk_id"])),
+                    content_hash=content_hash,
+                    access_scope_id=uuid.UUID(cast(str, item["access_scope_id"])),
+                    source_location_id=uuid.UUID(cast(str, item["source_location_id"])),
+                    source_observation_id=uuid.UUID(cast(str, item["source_observation_id"])),
+                    access_snapshot_id=uuid.UUID(cast(str, item["access_snapshot_id"])),
+                )
+            )
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("required_search_anchors is invalid") from error
+    return normalize_required_search_anchors(tuple(anchors))
 
 
 def _normalized_facets(
@@ -307,6 +420,7 @@ def _merge_candidates(candidates: list[PacketCandidate]) -> list[PacketCandidate
                 best,
                 matched_facets=matched,
                 required_context_facets=required,
+                required_search_anchor=any(item.required_search_anchor for item in variants),
             )
         )
     return merged
@@ -916,6 +1030,151 @@ def _chunk_candidate(
     )
 
 
+def _required_search_anchor_candidates(
+    *,
+    actor: ActorContext,
+    repository_id: uuid.UUID,
+    anchors: tuple[RequiredSearchAnchor, ...],
+    visible_scope_ids: tuple[uuid.UUID, ...] | list[uuid.UUID],
+) -> list[PacketCandidate]:
+    """Resolve exact search identities in one permission-first, current-lineage query."""
+    if not anchors:
+        return []
+    anchor_scope_ids = {anchor.access_scope_id for anchor in anchors} & set(visible_scope_ids)
+    exact_identity = Q()
+    for anchor in anchors:
+        exact_identity |= Q(
+            source_chunk_id=anchor.chunk_id,
+            source_chunk__content_hash=anchor.content_hash,
+            access_scope_id=anchor.access_scope_id,
+            source_location_id=anchor.source_location_id,
+            source_observation_id=anchor.source_observation_id,
+            access_snapshot_id=anchor.access_snapshot_id,
+        )
+    rows = (
+        SourceChunkVisibility.objects.filter(
+            exact_identity,
+            organization_id=actor.organization_id,
+            access_scope_id__in=anchor_scope_ids,
+            state=SourceChunkVisibility.State.AVAILABLE,
+            revoked_at__isnull=True,
+            access_scope__is_active=True,
+            access_snapshot__revoked_at__isnull=True,
+            access_snapshot__access_scope_id=F("access_scope_id"),
+            access_snapshot__source_connection_id=F(
+                "source_observation__source_document__source_container__source_connection_id"
+            ),
+            source_observation__access_snapshot_id=F("access_snapshot_id"),
+            source_observation__status="PRESENT",
+            source_observation__source_document__state="PRESENT",
+            source_observation__source_revision_id=F(
+                "source_observation__source_document__current_revision_id"
+            ),
+            source_observation__sync_run_id=F(
+                "source_observation__source_document__last_seen_run_id"
+            ),
+            source_location__source_observation_id=F("source_observation_id"),
+            source_location__parsed_source_id=F("source_chunk__parsed_source_id"),
+            source_location__parsed_source__source_revision_id=F(
+                "source_observation__source_revision_id"
+            ),
+            source_observation__source_document__source_container__source_connection__repository_id=(
+                repository_id
+            ),
+            source_observation__source_document__source_container__source_connection__state__in=(
+                "ACTIVE",
+                "DEGRADED",
+            ),
+            access_scope__accessscopesource__source_connection_id=F(
+                "source_observation__source_document__source_container__source_connection_id"
+            ),
+        )
+        .select_related(
+            "source_chunk",
+            "source_location",
+            "source_observation__source_document",
+        )
+        .order_by("source_chunk_id", "access_scope_id", "id")
+        .distinct()
+    )
+    resolved_by_key: dict[tuple[object, ...], SourceChunkVisibility] = {}
+    ambiguous_keys: set[tuple[object, ...]] = set()
+    for row in rows:
+        key = (
+            row.source_chunk_id,
+            row.source_chunk.content_hash,
+            row.access_scope_id,
+            row.source_location_id,
+            row.source_observation_id,
+            row.access_snapshot_id,
+        )
+        if key in resolved_by_key:
+            ambiguous_keys.add(key)
+        resolved_by_key[key] = row
+    requested_keys = {
+        (
+            anchor.chunk_id,
+            anchor.content_hash,
+            anchor.access_scope_id,
+            anchor.source_location_id,
+            anchor.source_observation_id,
+            anchor.access_snapshot_id,
+        )
+        for anchor in anchors
+    }
+    by_key = {key: row for key, row in resolved_by_key.items() if key in requested_keys}
+    if set(by_key) != requested_keys or ambiguous_keys & requested_keys:
+        raise RequiredSearchAnchorUnavailableError(
+            "One or more required search anchors are unavailable"
+        )
+    candidates: list[PacketCandidate] = []
+    for anchor in anchors:
+        row = by_key[
+            (
+                anchor.chunk_id,
+                anchor.content_hash,
+                anchor.access_scope_id,
+                anchor.source_location_id,
+                anchor.source_observation_id,
+                anchor.access_snapshot_id,
+            )
+        ]
+        document = row.source_observation.source_document
+        citation = CitationCandidate(
+            access_scope_id=row.access_scope_id,
+            source_location_id=row.source_location_id,
+            source_observation_id=row.source_observation_id,
+            access_snapshot_id=row.access_snapshot_id,
+            canonical_url=document.canonical_url,
+            locator=row.source_location.pointer,
+            source_content_hash=row.source_chunk.content_hash,
+            observed_at=row.observed_at,
+        )
+        candidates.append(
+            PacketCandidate(
+                item_id=uuid.uuid4(),
+                kind=ContextPacketItem.Kind.SOURCE_EXCERPT,
+                item_key=f"chunk:{row.source_chunk_id}",
+                summary=row.source_chunk.text[:10_000],
+                freshness=ContextPacketItem.Freshness.CURRENT,
+                is_inferred=False,
+                selection_reason="Caller-required authorized search anchor",
+                rank_score=0.0,
+                tier=1,
+                required_policy=False,
+                payload={
+                    "chunk_id": str(row.source_chunk_id),
+                    "content_hash": row.source_chunk.content_hash,
+                },
+                contributing_scope_ids=(row.access_scope_id,),
+                citations=(citation,),
+                required_search_anchor=True,
+                source_chunk_id=row.source_chunk_id,
+            )
+        )
+    return candidates
+
+
 def _conflict_candidates(
     *,
     actor: ActorContext,
@@ -1076,6 +1335,13 @@ def _select(
             if not add_if_fits(candidate):
                 raise RequiredPolicyBudgetError(
                     "Packet budget cannot contain every applicable required current policy"
+                )
+
+    for candidate in ordered:
+        if candidate.required_search_anchor and candidate.item_key not in selected_keys:
+            if not add_if_fits(candidate):
+                raise RequiredContextBudgetError(
+                    "Packet budget cannot contain every required search anchor"
                 )
 
     discovered_required = {
@@ -1528,6 +1794,7 @@ def build_context_packet(
     phase: str,
     budget: PacketBudget | None = None,
     retrieval_facets: tuple[RetrievalFacet, ...] | None = None,
+    required_search_anchors: tuple[RequiredSearchAnchor, ...] | None = None,
 ) -> tuple[ContextPacketRecord, bool]:
     """Build or reuse an exact immutable packet for one actor/repository snapshot."""
     normalized_task = " ".join(task.split())
@@ -1538,6 +1805,7 @@ def build_context_packet(
         raise ValueError("phase is invalid")
     budget = budget or PacketBudget()
     facets = _normalized_facets(task=normalized_task, retrieval_facets=retrieval_facets)
+    search_anchors = normalize_required_search_anchors(required_search_anchors)
     change_aware = retrieval_facets is not None
     authorize_action(
         actor=actor,
@@ -1564,6 +1832,10 @@ def build_context_packet(
                 "coverage_incomplete": facet.coverage_incomplete,
             }
             for facet in facets
+        ]
+    if search_anchors:
+        normalized_request["required_search_anchors"] = [
+            anchor.as_dict() for anchor in search_anchors
         ]
     request_hash = _json_hash(normalized_request)
     cache_key = _json_hash(
@@ -1596,6 +1868,13 @@ def build_context_packet(
             packet=cached,
         )
         return cached, False
+
+    anchored_chunks = _required_search_anchor_candidates(
+        actor=actor,
+        repository_id=repository_id,
+        anchors=search_anchors,
+        visible_scope_ids=visible_scopes,
+    )
 
     assertions = _assertion_candidates(
         actor=actor,
@@ -1701,7 +1980,7 @@ def build_context_packet(
             for candidate in assertions
         ]
     selection = _select(
-        [*assertions, *relationships, *chunks, *conflicts],
+        [*assertions, *relationships, *chunks, *anchored_chunks, *conflicts],
         budget,
         required_context_overflow=tuple(
             facet.label for facet in facets if facet.coverage_incomplete

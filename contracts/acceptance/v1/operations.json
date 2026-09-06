@@ -11033,6 +11033,23 @@
                                     },
                                     {
                                       "additionalProperties": false,
+                                      "allOf": [
+                                        {
+                                          "anyOf": [
+                                            {
+                                              "required": [
+                                                "ranking",
+                                                "search_position"
+                                              ]
+                                            },
+                                            {
+                                              "required": [
+                                                "required_search_anchor"
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ],
                                       "properties": {
                                         "chunk_id": {
                                           "format": "uuid",
@@ -11117,6 +11134,10 @@
                                           "type": "array",
                                           "uniqueItems": true
                                         },
+                                        "required_search_anchor": {
+                                          "const": true,
+                                          "type": "boolean"
+                                        },
                                         "retrieval_facet": {
                                           "pattern": "^[a-z][a-z0-9_]{0,39}$",
                                           "type": "string"
@@ -11151,9 +11172,7 @@
                                       },
                                       "required": [
                                         "chunk_id",
-                                        "content_hash",
-                                        "ranking",
-                                        "search_position"
+                                        "content_hash"
                                       ],
                                       "type": "object"
                                     },
@@ -13677,6 +13696,11 @@
                   "required": [
                     "phase"
                   ]
+                },
+                {
+                  "required": [
+                    "required_search_anchors"
+                  ]
                 }
               ]
             },
@@ -13744,6 +13768,48 @@
           "repository_id": {
             "format": "uuid",
             "type": "string"
+          },
+          "required_search_anchors": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "access_scope_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "access_snapshot_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "chunk_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "content_hash": {
+                  "pattern": "^[a-f0-9]{64}$",
+                  "type": "string"
+                },
+                "source_location_id": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "source_observation_id": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "chunk_id",
+                "content_hash",
+                "access_scope_id",
+                "source_location_id",
+                "source_observation_id",
+                "access_snapshot_id"
+              ],
+              "type": "object"
+            },
+            "maxItems": 16,
+            "type": "array"
           },
           "task": {
             "maxLength": 2000,
@@ -14676,6 +14742,23 @@
                             },
                             "payload": {
                               "additionalProperties": false,
+                              "allOf": [
+                                {
+                                  "anyOf": [
+                                    {
+                                      "required": [
+                                        "ranking",
+                                        "search_position"
+                                      ]
+                                    },
+                                    {
+                                      "required": [
+                                        "required_search_anchor"
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ],
                               "properties": {
                                 "chunk_id": {
                                   "format": "uuid",
@@ -14760,6 +14843,10 @@
                                   "type": "array",
                                   "uniqueItems": true
                                 },
+                                "required_search_anchor": {
+                                  "const": true,
+                                  "type": "boolean"
+                                },
                                 "retrieval_facet": {
                                   "pattern": "^[a-z][a-z0-9_]{0,39}$",
                                   "type": "string"
@@ -14794,9 +14881,7 @@
                               },
                               "required": [
                                 "chunk_id",
-                                "content_hash",
-                                "ranking",
-                                "search_position"
+                                "content_hash"
                               ],
                               "type": "object"
                             },
@@ -15374,6 +15459,48 @@
                           "ASSURANCE"
                         ],
                         "type": "string"
+                      },
+                      "required_search_anchors": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "access_scope_id": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "access_snapshot_id": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "chunk_id": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "content_hash": {
+                              "pattern": "^[a-f0-9]{64}$",
+                              "type": "string"
+                            },
+                            "source_location_id": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "source_observation_id": {
+                              "format": "uuid",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "chunk_id",
+                            "content_hash",
+                            "access_scope_id",
+                            "source_location_id",
+                            "source_observation_id",
+                            "access_snapshot_id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 16,
+                        "type": "array"
                       },
                       "retrieval_facets": {
                         "items": {
