@@ -33,6 +33,11 @@ from anva.acceptance.runner import (
     _write_secret_handoff,
 )
 from anva.acceptance.state import ResumeState, load_state, save_state
+from anva.contract_limits import (
+    MAX_CANVAS_QUERY_DEPTH,
+    MAX_CANVAS_QUERY_EDGES,
+    MAX_CANVAS_QUERY_NODES,
+)
 from anva.contracts.acceptance import ACCEPTANCE_HTTP_OPERATION_IDS
 from anva.contracts.bootstrap_scope import acceptance_bootstrap_scope_payload
 from anva.contracts.catalog import EXAMPLES
@@ -713,9 +718,9 @@ def test_finalize_reuses_case_retrieval_canvas_and_all_public_operations(
     canvas_case.update(
         {
             "layers": ["governance", "provenance"],
-            "depth": 2,
-            "node_limit": 71,
-            "edge_limit": 83,
+            "depth": MAX_CANVAS_QUERY_DEPTH,
+            "node_limit": MAX_CANVAS_QUERY_NODES,
+            "edge_limit": MAX_CANVAS_QUERY_EDGES,
         }
     )
     runner, product = _runner(tmp_path, monkeypatch, case_payload=case)

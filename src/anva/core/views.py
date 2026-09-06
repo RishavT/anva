@@ -56,6 +56,8 @@ from anva.core.services.authorization import (
 )
 from anva.core.services.bootstrap import bootstrap_local_organization
 from anva.core.services.canvas import (
+    CANVAS_EDGE_LIMIT,
+    CANVAS_NODE_LIMIT,
     CANVAS_PAYLOAD_LIMIT_BYTES,
     CanvasQuery,
     canvas_entity_detail,
@@ -458,8 +460,8 @@ def _canvas_query_payload(payload: dict[str, object]) -> CanvasQuery:
         anchor_id=optional_uuid("anchor_id"),
         depth=optional_int("depth", 2) if "depth" in payload else None,
         provided_semantic_fields=provided_semantic_fields,
-        node_limit=optional_int("node_limit", 300),
-        edge_limit=optional_int("edge_limit", 600),
+        node_limit=optional_int("node_limit", CANVAS_NODE_LIMIT),
+        edge_limit=optional_int("edge_limit", CANVAS_EDGE_LIMIT),
     )
 
 

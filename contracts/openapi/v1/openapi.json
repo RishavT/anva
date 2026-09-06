@@ -1465,12 +1465,12 @@
             "additionalProperties": false,
             "properties": {
               "depth": {
-                "maximum": 6,
+                "maximum": 4,
                 "minimum": 1,
                 "type": "integer"
               },
               "edge_limit": {
-                "maximum": 1000,
+                "maximum": 600,
                 "minimum": 1,
                 "type": "integer"
               },
@@ -1490,7 +1490,7 @@
                 "uniqueItems": true
               },
               "node_limit": {
-                "maximum": 500,
+                "maximum": 300,
                 "minimum": 1,
                 "type": "integer"
               }
@@ -5588,12 +5588,12 @@
             "additionalProperties": false,
             "properties": {
               "edges": {
-                "maximum": 1000,
+                "maximum": 600,
                 "minimum": 0,
                 "type": "integer"
               },
               "nodes": {
-                "maximum": 500,
+                "maximum": 300,
                 "minimum": 0,
                 "type": "integer"
               }
@@ -5691,7 +5691,7 @@
               ],
               "type": "object"
             },
-            "maxItems": 1000,
+            "maxItems": 600,
             "type": "array"
           },
           "generated_at": {
@@ -5735,17 +5735,17 @@
             "additionalProperties": false,
             "properties": {
               "depth": {
-                "maximum": 6,
+                "maximum": 4,
                 "minimum": 1,
                 "type": "integer"
               },
               "edges": {
-                "maximum": 1000,
+                "maximum": 600,
                 "minimum": 1,
                 "type": "integer"
               },
               "nodes": {
-                "maximum": 500,
+                "maximum": 300,
                 "minimum": 1,
                 "type": "integer"
               },
@@ -5915,7 +5915,7 @@
               ],
               "type": "object"
             },
-            "maxItems": 500,
+            "maxItems": 300,
             "type": "array"
           },
           "repositories": {

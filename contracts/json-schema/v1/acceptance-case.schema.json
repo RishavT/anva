@@ -482,12 +482,12 @@
       "additionalProperties": false,
       "properties": {
         "depth": {
-          "maximum": 6,
+          "maximum": 4,
           "minimum": 1,
           "type": "integer"
         },
         "edge_limit": {
-          "maximum": 1000,
+          "maximum": 600,
           "minimum": 1,
           "type": "integer"
         },
@@ -507,7 +507,7 @@
           "uniqueItems": true
         },
         "node_limit": {
-          "maximum": 500,
+          "maximum": 300,
           "minimum": 1,
           "type": "integer"
         }

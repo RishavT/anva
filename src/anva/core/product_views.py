@@ -24,7 +24,12 @@ from anva.core.exceptions import (
     ResourceNotFoundError,
 )
 from anva.core.models import KnowledgeProposal, SyncRun
-from anva.core.services.canvas import CANVAS_PAYLOAD_LIMIT_BYTES, CanvasQuery
+from anva.core.services.canvas import (
+    CANVAS_EDGE_LIMIT,
+    CANVAS_NODE_LIMIT,
+    CANVAS_PAYLOAD_LIMIT_BYTES,
+    CanvasQuery,
+)
 from anva.core.services.product_ui import (
     ProductUIFacade,
     SetupInput,
@@ -518,8 +523,8 @@ def _canvas_query(
         anchor_id=optional_uuid("anchor_id"),
         depth=integer("depth", 2, optional=True),
         provided_semantic_fields=provided_semantic_fields,
-        node_limit=cast(int, integer("node_limit", 300)),
-        edge_limit=cast(int, integer("edge_limit", 600)),
+        node_limit=cast(int, integer("node_limit", CANVAS_NODE_LIMIT)),
+        edge_limit=cast(int, integer("edge_limit", CANVAS_EDGE_LIMIT)),
     )
 
 

@@ -12,6 +12,9 @@ from anva.contract_limits import (
     ACCEPTANCE_CASE_SERIALIZATION,
     MAX_ACCEPTANCE_CASE_BYTES,
     MAX_ACCEPTANCE_UNIFIED_DIFF_CHARACTERS,
+    MAX_CANVAS_QUERY_DEPTH,
+    MAX_CANVAS_QUERY_EDGES,
+    MAX_CANVAS_QUERY_NODES,
 )
 from anva.contracts.bootstrap_scope import (
     BOOTSTRAP_SCOPE_SCHEMA,
@@ -1633,9 +1636,21 @@ ACCEPTANCE_CASE_SCHEMA = versioned_schema(
                     "maxItems": 4,
                     "uniqueItems": True,
                 },
-                "depth": {"type": "integer", "minimum": 1, "maximum": 6},
-                "node_limit": {"type": "integer", "minimum": 1, "maximum": 500},
-                "edge_limit": {"type": "integer", "minimum": 1, "maximum": 1_000},
+                "depth": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_CANVAS_QUERY_DEPTH,
+                },
+                "node_limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_CANVAS_QUERY_NODES,
+                },
+                "edge_limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_CANVAS_QUERY_EDGES,
+                },
             },
             "required": ["layers", "depth", "node_limit", "edge_limit"],
         },
