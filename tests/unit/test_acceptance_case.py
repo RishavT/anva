@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import io
 import json
 import re
 from collections.abc import Callable
@@ -29,6 +31,7 @@ from anva.contract_limits import (
 from anva.contracts.bootstrap_scope import ACCEPTANCE_INITIATOR_ACTIONS
 from anva.contracts.catalog import EXAMPLES, SCHEMAS
 from anva.contracts.validation import ContractValidationError, contract_input_byte_limit
+from anva.core.services.evidence_uploads import EvidenceUploadError, inspect_evidence_upload
 
 
 def _case() -> dict[str, object]:
@@ -303,8 +306,65 @@ def test_case_rejects_json_evidence_for_a_different_head() -> None:
         ).encode()
     ).decode()
 
-    with pytest.raises(AcceptanceCaseError, match="exact head"):
+    with pytest.raises(AcceptanceCaseError) as captured:
         acceptance_case(case)
+
+    assert captured.value.diagnostic()["rule"] == "EVIDENCE_HEAD_MISMATCH"
+
+
+@pytest.mark.unit
+def test_case_rejects_evidence_check_extra_detail_with_stable_diagnostic() -> None:
+    case = _case()
+    evidence = cast(dict[str, object], case["evidence"])
+    evidence["content_base64"] = base64.b64encode(
+        json.dumps(
+            {
+                "checks": [{"name": "TESTS_PASS", "status": "PASSED", "detail": "must not echo"}],
+                "head_sha": cast(dict[str, object], case["change"])["head_commit"],
+                "schema_version": 1,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+    ).decode()
+
+    with pytest.raises(AcceptanceCaseError) as captured:
+        acceptance_case(case)
+
+    assert captured.value.diagnostic() == {
+        "artifact_index": 0,
+        "artifact_kind": "TEST_RESULT",
+        "artifact_name": "Ember exact-head tests",
+        "code": "acceptance_case_evidence_invalid",
+        "message": "Acceptance evidence is not accepted by the bounded content inspector",
+        "path": "evidence.content_base64",
+        "reference": "evidence upload inspection",
+        "rule": "MANIFEST_SCHEMA_INVALID",
+    }
+    assert captured.value.schema_valid is True
+
+
+@pytest.mark.unit
+def test_case_evidence_validation_has_live_inspector_parity() -> None:
+    case = _case()
+    evidence = cast(dict[str, object], case["evidence"])
+    raw = base64.b64decode(cast(str, evidence["content_base64"]), validate=True)
+    head = cast(str, cast(dict[str, object], case["change"])["head_commit"])
+    malformed = raw.replace(b'"status":"PASSED"', b'"status":"UNKNOWN"')
+    evidence["content_base64"] = base64.b64encode(malformed).decode()
+
+    with pytest.raises(EvidenceUploadError) as live:
+        inspect_evidence_upload(
+            io.BytesIO(malformed),
+            content_length=len(malformed),
+            expected_size=len(malformed),
+            expected_sha256=hashlib.sha256(malformed).hexdigest(),
+            commit_sha=head,
+        )
+    with pytest.raises(AcceptanceCaseError) as preflight:
+        acceptance_case(case)
+
+    assert preflight.value.diagnostic()["rule"] == live.value.code
 
 
 @pytest.mark.unit

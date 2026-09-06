@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import io
 import json
 import os
 import stat
@@ -22,9 +23,14 @@ from anva.contracts.bootstrap_scope import (
 )
 from anva.contracts.validation import contract_input_byte_limit, validate_payload
 from anva.core.services.diffs import parse_unified_diff
+from anva.core.services.evidence_archive import (
+    DEFAULT_UPLOAD_LIMITS,
+    EvidenceUploadError,
+    inspect_evidence_upload,
+)
 
 MAX_CASE_BYTES = contract_input_byte_limit("acceptance-case")
-MAX_EVIDENCE_BYTES = 4_096
+MAX_EVIDENCE_BYTES = DEFAULT_UPLOAD_LIMITS.max_upload_bytes
 FORBIDDEN_PRIVATE_KEYS = frozenset(
     {
         "oracle",
@@ -61,20 +67,36 @@ class AcceptanceCaseError(ValueError):
         path: str | None = None,
         reference: str | None = None,
         schema_valid: bool | None = None,
+        artifact_index: int | None = None,
+        artifact_name: str | None = None,
+        artifact_kind: str | None = None,
+        rule: str | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.path = path
         self.reference = reference
         self.schema_valid = schema_valid
+        self.artifact_index = artifact_index
+        self.artifact_name = artifact_name
+        self.artifact_kind = artifact_kind
+        self.rule = rule
 
-    def diagnostic(self) -> dict[str, str]:
+    def diagnostic(self) -> dict[str, object]:
         """Return a stable, public operator diagnostic without case contents."""
-        result = {"code": self.code, "message": str(self)}
+        result: dict[str, object] = {"code": self.code, "message": str(self)}
         if self.path is not None:
             result["path"] = self.path
         if self.reference is not None:
             result["reference"] = self.reference
+        if self.artifact_index is not None:
+            result["artifact_index"] = self.artifact_index
+        if self.artifact_name is not None:
+            result["artifact_name"] = self.artifact_name
+        if self.artifact_kind is not None:
+            result["artifact_kind"] = self.artifact_kind
+        if self.rule is not None:
+            result["rule"] = self.rule
         return result
 
 
@@ -240,12 +262,26 @@ def _validate_cross_section(payload: dict[str, object]) -> bytes:
         raise AcceptanceCaseError("Acceptance evidence encoding is invalid") from error
     if not 1 <= len(evidence_bytes) <= MAX_EVIDENCE_BYTES:
         raise AcceptanceCaseError("Acceptance evidence size is outside its bound")
+    evidence_digest = hashlib.sha256(evidence_bytes).hexdigest()
     try:
-        evidence_payload = json.loads(evidence_bytes)
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        evidence_payload = None
-    if isinstance(evidence_payload, dict) and evidence_payload.get("head_sha") != head_commit:
-        raise AcceptanceCaseError("Acceptance JSON evidence must match the exact head commit")
+        inspect_evidence_upload(
+            io.BytesIO(evidence_bytes),
+            content_length=len(evidence_bytes),
+            expected_size=len(evidence_bytes),
+            expected_sha256=evidence_digest,
+            commit_sha=head_commit,
+        )
+    except EvidenceUploadError as error:
+        raise AcceptanceCaseError(
+            "Acceptance evidence is not accepted by the bounded content inspector",
+            code="acceptance_case_evidence_invalid",
+            path="evidence.content_base64",
+            reference="evidence upload inspection",
+            artifact_index=0,
+            artifact_name=_string(evidence, "name"),
+            artifact_kind=evidence_kind,
+            rule=error.code,
+        ) from None
     semantic = _object(payload, "semantic_assertions")
     source_paths = semantic["source_paths"]
     if not isinstance(source_paths, list) or len(set(cast(list[str], source_paths))) != len(

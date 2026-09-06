@@ -1139,6 +1139,7 @@ def _acceptance_request(arguments: argparse.Namespace) -> int:
             validated = load_acceptance_case(arguments.case)
             payload = {
                 "case_id": validated.case_id,
+                "evidence_valid": True,
                 "schema_valid": True,
                 "semantic_valid": True,
                 "sha256": validated.sha256,
@@ -1278,6 +1279,9 @@ def _acceptance_request(arguments: argparse.Namespace) -> int:
             diagnostic.update(
                 {
                     "diff_valid": False if error.code == "acceptance_case_diff_invalid" else None,
+                    "evidence_valid": (
+                        False if error.code == "acceptance_case_evidence_invalid" else None
+                    ),
                     "schema_valid": error.schema_valid,
                     "semantic_valid": False,
                     "status": "invalid",
@@ -1285,6 +1289,8 @@ def _acceptance_request(arguments: argparse.Namespace) -> int:
             )
             if diagnostic["diff_valid"] is None:
                 del diagnostic["diff_valid"]
+            if diagnostic["evidence_valid"] is None:
+                del diagnostic["evidence_valid"]
             print(json.dumps(diagnostic, sort_keys=True))
             return 2
         if is_case_preflight and isinstance(error, ContractValidationError):

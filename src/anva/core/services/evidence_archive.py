@@ -20,8 +20,11 @@ from typing import IO, Any, Final
 
 from anva.core.exceptions import DomainOperationError
 from anva.core.logging import redact_text
-from anva.core.models import EvidenceBlob
 from anva.core.services.hostile_inputs import validate_full_commit
+
+MEDIA_TYPE_JSON: Final = "application/json"
+MEDIA_TYPE_ZIP: Final = "application/zip"
+MEDIA_TYPE_TAR: Final = "application/x-tar"
 
 GAP_UPLOAD_TOO_LARGE: Final = "UPLOAD_TOO_LARGE"
 GAP_UPLOAD_SIZE_MISMATCH: Final = "UPLOAD_SIZE_MISMATCH"
@@ -257,14 +260,14 @@ def _validate_manifest(value: Any, commit_sha: str) -> str:
 
 def _sniff_media_type(prefix: bytes) -> str | None:
     if prefix.startswith(_ZIP_SIGNATURES):
-        return EvidenceBlob.MediaType.ZIP
+        return MEDIA_TYPE_ZIP
     if (
         len(prefix) >= _TAR_MAGIC_OFFSET + 6
         and prefix[_TAR_MAGIC_OFFSET : _TAR_MAGIC_OFFSET + 6] in _TAR_MAGICS
     ):
-        return EvidenceBlob.MediaType.TAR
+        return MEDIA_TYPE_TAR
     if prefix.lstrip(b" \t\r\n").startswith((b"{", b"[")):
-        return EvidenceBlob.MediaType.JSON
+        return MEDIA_TYPE_JSON
     return None
 
 
@@ -640,7 +643,7 @@ def _inspect_spool(
     detected_media_type = _sniff_media_type(prefix)
     if detected_media_type is None:
         raise _UnsafeUploadError(GAP_MEDIA_TYPE_NOT_ALLOWED)
-    if detected_media_type == EvidenceBlob.MediaType.JSON:
+    if detected_media_type == MEDIA_TYPE_JSON:
         if size > limits.max_manifest_bytes:
             raise _UnsafeUploadError(GAP_MANIFEST_TOO_LARGE)
         spool.seek(0)
@@ -660,7 +663,7 @@ def _inspect_spool(
             "results_sha256": digest,
             "check_count": check_count,
         }
-    elif detected_media_type == EvidenceBlob.MediaType.ZIP:
+    elif detected_media_type == MEDIA_TYPE_ZIP:
         summary = _inspect_zip(spool, commit_sha=commit_sha, limits=limits)
     else:
         summary = _inspect_tar(spool, commit_sha=commit_sha, limits=limits)

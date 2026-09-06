@@ -103,6 +103,16 @@ semantic preflight reports both `schema_valid` and `semantic_valid` as true. Dif
 report `diff_valid: false`; diagnostics name the public field and invariant but never echo paths or
 case content.
 
+The same preflight decodes the embedded `evidence.content_base64` artifact within the published
+4,096-byte limit and passes its bytes, exact `change.head_commit`, size, and SHA-256 to the
+production evidence-upload inspector. JSON results and the two supported inert archive containers
+(ZIP and TAR) therefore satisfy the live upload shapes, duplicate-key and check-name rules, schema
+versions, exact-head binding, manifest/results hash binding, archive path and member rules, and
+resource limits before any service starts. Evidence `kind` describes the record's role; it does not
+relax byte inspection or select a different parser. Opaque bytes are intentionally rejected by both
+live ingestion and case preflight. Rejections identify the artifact index, public name and kind,
+and a stable inspector rule without echoing decoded content.
+
 The closed `organization.bootstrap_scope` object explicitly requests one repository, one human
 membership with the least-privilege `VIEWER` role, and exactly two named service identities. The
 initiator has only the actions needed by the acceptance journey (`artifact.create`, `artifact.view`,
