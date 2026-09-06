@@ -30,9 +30,11 @@ from anva.core.models import (
     AssertionValidityInterval,
     AuditEvent,
     BackgroundJob,
+    ContextPacketCitation,
     ContextPacketInvalidation,
     ContextPacketItem,
     ContextPacketRecord,
+    ImmutableArtifact,
     IngestionFailure,
     IngestionStageResult,
     KnowledgeAssertion,
@@ -325,7 +327,9 @@ def test_required_search_anchor_survives_dense_context_and_fails_closed(
             budget=budget,
             required_search_anchors=(anchor,),
         )
-    assert len(anchor_queries) <= 80
+    # Includes bounded phase-local SET LOCAL statements that continually reduce the
+    # PostgreSQL timeout to the shared remaining deadline.
+    assert len(anchor_queries) <= 100
     cached, cached_created = build_context_packet(
         actor=actor,
         repository_id=repository_id,
@@ -506,6 +510,46 @@ def test_required_search_anchor_survives_dense_context_and_fails_closed(
         required_search_anchors=(),
     )
     assert "required_search_anchors" not in zero_anchor_packet.normalized_request
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_context_packet_publication_rolls_back_invalid_bulk_member(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "member.json").write_text(json.dumps({"policy": "retain exact hashes"}))
+    actor, source = _source_setup(tmp_path, monkeypatch, slug="invalid-packet-member")
+    _execute_requested(actor, source)
+    assert source.repository_id is not None
+    before = {
+        "scopes": AccessScope.objects.count(),
+        "artifacts": ImmutableArtifact.objects.count(),
+        "packets": ContextPacketRecord.objects.count(),
+        "items": ContextPacketItem.objects.count(),
+        "citations": ContextPacketCitation.objects.count(),
+    }
+    original_bulk_create = ContextPacketItem.objects.bulk_create
+
+    def invalid_bulk_create(items: list[ContextPacketItem], *args: Any, **kwargs: Any) -> Any:
+        assert items
+        items[0].organization_id = uuid.uuid4()
+        return original_bulk_create(items, *args, **kwargs)
+
+    monkeypatch.setattr(ContextPacketItem.objects, "bulk_create", invalid_bulk_create)
+    with pytest.raises(DatabaseError):
+        build_context_packet(
+            actor=actor,
+            repository_id=source.repository_id,
+            task="retain exact hashes",
+            phase=ContextPacketRecord.Phase.ASSURANCE,
+        )
+
+    assert AccessScope.objects.count() == before["scopes"]
+    assert ImmutableArtifact.objects.count() == before["artifacts"]
+    assert ContextPacketRecord.objects.count() == before["packets"]
+    assert ContextPacketItem.objects.count() == before["items"]
+    assert ContextPacketCitation.objects.count() == before["citations"]
 
 
 @pytest.mark.integration

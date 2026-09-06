@@ -19,6 +19,7 @@ from anva.contracts.catalog import EXAMPLES
 from anva.core.exceptions import (
     IdempotencyConflictError,
     LeaseConflictError,
+    RequiredContextBudgetError,
     ResourceNotFoundError,
 )
 from anva.core.models import (
@@ -28,8 +29,11 @@ from anva.core.models import (
     AssertionProvenance,
     AssertionValidityInterval,
     AssuranceRun,
+    ContextPacketCitation,
     ContextPacketItem,
+    ContextPacketRecord,
     EvaluatorTask,
+    ImmutableArtifact,
     KnowledgeAssertion,
     Membership,
     Organization,
@@ -38,6 +42,7 @@ from anva.core.models import (
     SourceChunkVisibility,
     SourceConnection,
     User,
+    content_hash,
 )
 from anva.core.services import assurance as assurance_service
 from anva.core.services.assurance import (
@@ -533,29 +538,6 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         started.run.limitations,
     )
     assert captured_query_counts[0] < 200
-    if started.evaluator_task is None:
-        assert started.run.state == AssuranceRun.State.FAILED
-        assert started.run.failure_code == "ASSURANCE_CONTEXT_INCOMPLETE"
-        bounded_retry = start_assurance(
-            actor=actor,
-            pull_request_revision_id=ingested.revision.id,
-            policy_version_ids=[policy_version.id],
-            reference_time=reference_time,
-            deterministic_checks=[
-                {
-                    "code": "CONTACT_REDACTION_TEST",
-                    "status": "PASSED",
-                    "blocking": True,
-                    "summary": "Exact-head passenger contact redaction scenario passed.",
-                    "evidence_ids": [],
-                }
-            ],
-            work_item_revision_id=work.work_item_revision.id,
-        )
-        assert bounded_retry.created is False
-        assert bounded_retry.run.id == started.run.id
-        assert bounded_retry.evaluator_task is None
-        return
     assert started.evaluator_task is not None, (
         started.run.state,
         started.run.failure_code,
@@ -610,7 +592,38 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         ContextPacketItem.objects.filter(context_packet=packet).order_by("position")
     )
     artifact_items = cast(list[dict[str, object]], packet.artifact.payload["items"])
+    assert [item.position for item in ordered_items] == list(range(1, len(ordered_items) + 1))
+    assert [str(item.id) for item in ordered_items] == [item["item_id"] for item in artifact_items]
     assert [item.payload for item in ordered_items] == [item["payload"] for item in artifact_items]
+    assert all(item.content_hash == content_hash(item.payload) for item in ordered_items)
+    assert all(
+        set(item.access_scope.derived_from.values_list("id", flat=True))
+        and set(item.access_scope.derived_from.values_list("id", flat=True)) <= {scope.id}
+        for item in ordered_items
+    )
+    citations = list(
+        ContextPacketCitation.objects.filter(context_packet=packet).order_by(
+            "context_item_id", "position"
+        )
+    )
+    artifact_items_by_id = {item["item_id"]: item for item in artifact_items}
+    assert all(
+        citation.context_item_id in {item.id for item in ordered_items} for citation in citations
+    )
+    for item in ordered_items:
+        item_citations = [citation for citation in citations if citation.context_item_id == item.id]
+        assert [citation.position for citation in item_citations] == list(
+            range(1, len(item_citations) + 1)
+        )
+        artifact_citations = cast(
+            list[dict[str, object]], artifact_items_by_id[str(item.id)]["anva_sources"]
+        )
+        assert [citation.source_content_hash for citation in item_citations] == [
+            citation["source_content_hash"] for citation in artifact_citations
+        ]
+        assert all(isinstance(citation.id, uuid.UUID) for citation in item_citations)
+    assert packet.selection_hash == content_hash(artifact_items)
+    assert packet.artifact.content_hash == content_hash(packet.artifact.payload)
     assert all(
         item.byte_count
         == len(
@@ -844,6 +857,47 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
     assert changed.run.state == AssuranceRun.State.STALE
     assert changed.evaluator_task.state == changed.evaluator_task.State.CANCELLED
     assert changed.evaluator_task.failure_code == "STALE_CONTEXT"
+
+    # A deadline exhausted after scopes/artifact/packet have begun publication rolls
+    # the inner transaction back before the durable failed-run finalizer executes.
+    packet_count = ContextPacketRecord.objects.count()
+    artifact_count = ImmutableArtifact.objects.count()
+    item_count = ContextPacketItem.objects.count()
+    citation_count = ContextPacketCitation.objects.count()
+    original_item_bulk_create = ContextPacketItem.objects.bulk_create
+
+    def expire_at_item_publication(*_args: object, **_kwargs: object) -> object:
+        raise RequiredContextBudgetError("Context construction deadline exhausted")
+
+    monkeypatch.setattr(
+        ContextPacketItem.objects,
+        "bulk_create",
+        expire_at_item_publication,
+    )
+    tail_timeout = start_assurance(
+        actor=actor,
+        pull_request_revision_id=ingested.revision.id,
+        policy_version_ids=[policy_version.id],
+        reference_time=reference_time,
+        deterministic_checks=[
+            {
+                "code": "CONTACT_REDACTION_TEST",
+                "status": "PASSED",
+                "blocking": True,
+                "summary": "Exact-head passenger contact redaction scenario passed.",
+                "evidence_ids": [],
+            }
+        ],
+        work_item_revision_id=work.work_item_revision.id,
+    )
+    monkeypatch.setattr(ContextPacketItem.objects, "bulk_create", original_item_bulk_create)
+    assert tail_timeout.run.state == AssuranceRun.State.FAILED
+    assert tail_timeout.run.failure_code == "ASSURANCE_CONTEXT_INCOMPLETE"
+    assert tail_timeout.evaluator_task is None
+    assert ContextPacketRecord.objects.count() == packet_count
+    assert ImmutableArtifact.objects.count() == artifact_count
+    assert ContextPacketItem.objects.count() == item_count
+    assert ContextPacketCitation.objects.count() == citation_count
 
     # Overall scan exhaustion is a durable, named non-ready assurance result,
     # never a context-build 409 and never an evaluator task over partial input.

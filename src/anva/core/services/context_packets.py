@@ -45,6 +45,9 @@ from anva.core.models import (
     RetrievalWatermark,
     SourceChunkVisibility,
 )
+from anva.core.models import (
+    content_hash as model_content_hash,
+)
 from anva.core.services.authorization import (
     NOT_FOUND_MESSAGE,
     Action,
@@ -1448,7 +1451,10 @@ def _select(
     budget: PacketBudget,
     *,
     required_context_overflow: tuple[str, ...] = (),
+    deadline: float | None = None,
 ) -> PacketSelection:
+    deadline = deadline or monotonic() + CONTEXT_SCAN_MAX_SECONDS
+    _require_context_deadline(deadline)
     ordered = sorted(_merge_candidates(candidates), key=_candidate_order)
     selected: list[PacketCandidate] = []
     selected_keys: set[str] = set()
@@ -1482,6 +1488,7 @@ def _select(
     # lower-priority content.  The final packet is sorted canonically below, so reservation
     # order cannot leak caller or retrieval ordering.
     for candidate in ordered:
+        _require_context_deadline(deadline)
         if candidate.required_policy and candidate.freshness == ContextPacketItem.Freshness.CURRENT:
             if not add_if_fits(candidate):
                 raise RequiredPolicyBudgetError(
@@ -1489,6 +1496,7 @@ def _select(
                 )
 
     for candidate in ordered:
+        _require_context_deadline(deadline)
         if candidate.required_search_anchor and candidate.item_key not in selected_keys:
             if not add_if_fits(candidate):
                 raise RequiredContextBudgetError(
@@ -1532,11 +1540,13 @@ def _select(
         for candidate in representatives
     }
     for candidate in representatives:
+        _require_context_deadline(deadline)
         candidate_mask = sum(
             label_bits[label] for label in candidate.required_context_facets if label in label_bits
         )
         state_snapshot = [(mask, tuple(mask_states)) for mask, mask_states in states.items()]
         for mask, mask_states in state_snapshot:
+            _require_context_deadline(deadline)
             next_mask = mask | candidate_mask
             if next_mask == mask:
                 continue
@@ -1634,6 +1644,7 @@ def _select(
                 raise RuntimeError("Required context packing diverged from its bounded selection")
 
     for candidate in ordered:
+        _require_context_deadline(deadline)
         if candidate.item_key not in selected_keys:
             add_if_fits(candidate)
 
@@ -1649,8 +1660,11 @@ def seal_actor_scope(
     repository_id: uuid.UUID,
     source_scope_ids: set[uuid.UUID],
     scope_key: uuid.UUID,
+    deadline: float | None = None,
 ) -> AccessScope:
     """Create an actor-and-repository-only scope narrower than every input scope."""
+    deadline = deadline or monotonic() + CONTEXT_SCAN_MAX_SECONDS
+    _set_remaining_statement_timeout(deadline)
     principal = resolve_principal(actor)
     scopes = list(
         AccessScope.objects.select_for_update()
@@ -1663,12 +1677,15 @@ def seal_actor_scope(
     )
     if len(scopes) != len(source_scope_ids):
         raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    _require_context_deadline(deadline)
     organization = Organization.objects.get(id=actor.organization_id)
     derived = AccessScope.objects.create(
         organization=organization,
         name=f"context-packet:{scope_key}",
     )
+    _require_context_deadline(deadline)
     derived.derived_from.set(scopes)
+    _require_context_deadline(deadline)
     if principal.membership is not None:
         AccessScopeMembership.objects.create(
             organization=organization,
@@ -1688,6 +1705,7 @@ def seal_actor_scope(
         access_scope=derived,
         repository_id=repository_id,
     )
+    _require_context_deadline(deadline)
     source_ids = AccessScopeSource.objects.filter(access_scope_id__in=source_scope_ids).values_list(
         "source_connection_id", flat=True
     )
@@ -1701,6 +1719,7 @@ def seal_actor_scope(
             for source_id in sorted(set(source_ids))
         ]
     )
+    _require_context_deadline(deadline)
     derived.is_derived = True
     derived.boundary_sealed_at = timezone.now()
     derived.save(
@@ -2134,6 +2153,7 @@ def build_context_packet(
         change_aware=change_aware,
         deadline=deadline,
     )
+    _require_context_deadline(deadline)
     completeness_payload = [
         {
             "kind": "assertion",
@@ -2151,6 +2171,7 @@ def build_context_packet(
         }
         for candidate in conflicts
     ]
+    _require_context_deadline(deadline)
     completeness = ContextCompleteness(
         assertion_count=len(assertions),
         conflict_count=len(conflicts),
@@ -2164,6 +2185,7 @@ def build_context_packet(
         ),
     )
     if change_aware and conflicts:
+        _require_context_deadline(deadline)
         conflict_assertion_ids = {
             assertion_id
             for conflict in conflicts
@@ -2218,13 +2240,16 @@ def build_context_packet(
             else candidate
             for candidate in assertions
         ]
+        _require_context_deadline(deadline)
     selection = _select(
         [*assertions, *relationships, *chunks, *anchored_chunks, *conflicts],
         budget,
         required_context_overflow=tuple(
             facet.label for facet in facets if facet.coverage_incomplete
         ),
+        deadline=deadline,
     )
+    _require_context_deadline(deadline)
     selected_conflicts = sum(
         candidate.source_conflict_id is not None for candidate in selection.candidates
     )
@@ -2249,10 +2274,12 @@ def build_context_packet(
 
     # Publication is a separate security boundary: a revocation, scope change, or
     # ingestion watermark movement during scanning invalidates this result.
+    _set_remaining_statement_timeout(deadline)
     current_scopes, current_authorization_hash = _authorization_snapshot(
         actor=actor,
         repository_id=repository_id,
     )
+    _set_remaining_statement_timeout(deadline)
     current_watermark = _watermark(actor=actor, repository_id=repository_id)
     if (
         current_scopes != visible_scopes
@@ -2261,6 +2288,7 @@ def build_context_packet(
     ):
         raise RequiredContextBudgetError("ASSURANCE_CONTEXT_INCOMPLETE")
     selection_hash = _json_hash([candidate.as_dict() for candidate in selection.candidates])
+    _require_context_deadline(deadline)
     packet_id = uuid.uuid4()
     generated_at = timezone.now()
     packet_payload: dict[str, Any] = {
@@ -2303,6 +2331,7 @@ def build_context_packet(
     scopes_by_boundary: dict[tuple[uuid.UUID, ...], AccessScope] = {}
     item_scopes: dict[uuid.UUID, AccessScope] = {}
     for candidate in selection.candidates:
+        _require_context_deadline(deadline)
         boundary = tuple(sorted(candidate.contributing_scope_ids))
         scope = scopes_by_boundary.get(boundary)
         if scope is None:
@@ -2311,6 +2340,7 @@ def build_context_packet(
                 repository_id=repository_id,
                 source_scope_ids=set(boundary),
                 scope_key=candidate.item_id,
+                deadline=deadline,
             )
             scopes_by_boundary[boundary] = scope
         item_scopes[candidate.item_id] = scope
@@ -2320,8 +2350,11 @@ def build_context_packet(
         repository_id=repository_id,
         source_scope_ids=selected_scope_ids,
         scope_key=packet_id,
+        deadline=deadline,
     )
+    _require_context_deadline(deadline)
     organization = Organization.objects.get(id=actor.organization_id)
+    _require_context_deadline(deadline)
     artifact = ImmutableArtifact.objects.create(
         organization=organization,
         access_scope=sealed_scope,
@@ -2330,6 +2363,7 @@ def build_context_packet(
         schema_version="1.0",
         payload=packet_payload,
     )
+    _require_context_deadline(deadline)
     packet = ContextPacketRecord.objects.create(
         id=packet_id,
         organization=organization,
@@ -2376,6 +2410,7 @@ def build_context_packet(
             token_count=candidate.token_count,
             byte_count=candidate.byte_count,
             payload=candidate.effective_payload,
+            content_hash=model_content_hash(candidate.effective_payload),
             source_assertion_id=candidate.source_assertion_id,
             source_relationship_id=candidate.source_relationship_id,
             source_chunk_id=candidate.source_chunk_id,
@@ -2383,7 +2418,9 @@ def build_context_packet(
         )
         for position, candidate in enumerate(selection.candidates, start=1)
     ]
+    _set_remaining_statement_timeout(deadline)
     ContextPacketItem.objects.bulk_create(items)
+    _set_remaining_statement_timeout(deadline)
     ContextPacketCitation.objects.bulk_create(
         [
             ContextPacketCitation(
@@ -2403,6 +2440,7 @@ def build_context_packet(
             for citation_position, citation in enumerate(candidate.citations, start=1)
         ]
     )
+    _require_context_deadline(deadline)
     return packet, True
 
 
