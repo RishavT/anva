@@ -807,24 +807,21 @@ def _assertion_candidates(
     last_id: uuid.UUID | None = None
     scanned = 0
     started = monotonic()
+    candidate_capacity = min(CONTEXT_SCAN_MAX_ROWS, CONTEXT_SCAN_MAX_OPERATIONS // 2)
     while True:
         page_query = eligible
         if last_id is not None:
             page_query = page_query.filter(id__gt=last_id)
-        remaining = CONTEXT_SCAN_MAX_ROWS - scanned
+        remaining = candidate_capacity - scanned
         if remaining <= 0:
-            candidates.complete = False
+            candidates.complete = not page_query.exists()
             break
-        assertions = list(page_query[: min(CONTEXT_SCAN_PAGE_SIZE, remaining + 1)])
+        assertions = list(page_query[: min(CONTEXT_SCAN_PAGE_SIZE, remaining)])
         if not assertions:
             break
         scanned += len(assertions)
         candidates.processed_count = scanned
-        if (
-            scanned > CONTEXT_SCAN_MAX_ROWS
-            or scanned * 2 > CONTEXT_SCAN_MAX_OPERATIONS
-            or monotonic() - started > CONTEXT_SCAN_MAX_SECONDS
-        ):
+        if monotonic() - started > CONTEXT_SCAN_MAX_SECONDS:
             candidates.complete = False
             break
         last_id = assertions[-1].id
@@ -918,6 +915,9 @@ def _assertion_candidates(
                     source_assertion_id=assertion.id,
                 )
             )
+        if len(assertions) == remaining:
+            candidates.complete = not eligible.filter(id__gt=last_id).exists()
+            break
     return candidates
 
 
@@ -1302,27 +1302,26 @@ def _conflict_candidates(
     scan_complete = True
     last_id: uuid.UUID | None = None
     started = monotonic()
+    candidate_capacity = min(CONTEXT_SCAN_MAX_ROWS, CONTEXT_SCAN_MAX_OPERATIONS // 2)
     while True:
         page_query = ordered_conflicts
         if last_id is not None:
             page_query = page_query.filter(id__gt=last_id)
-        remaining = CONTEXT_SCAN_MAX_ROWS - len(selected_assertion_ids) - len(bounded_conflicts)
+        remaining = candidate_capacity - len(selected_assertion_ids) - len(bounded_conflicts)
         if remaining <= 0:
-            scan_complete = False
+            scan_complete = not page_query.exists()
             break
-        page = list(page_query[: min(CONTEXT_SCAN_PAGE_SIZE, remaining + 1)])
+        page = list(page_query[: min(CONTEXT_SCAN_PAGE_SIZE, remaining)])
         if not page:
             break
         bounded_conflicts.extend(page)
-        if (
-            len(bounded_conflicts) + len(selected_assertion_ids) > CONTEXT_SCAN_MAX_ROWS
-            or (len(bounded_conflicts) + len(selected_assertion_ids)) * 2
-            > CONTEXT_SCAN_MAX_OPERATIONS
-            or monotonic() - started > CONTEXT_SCAN_MAX_SECONDS
-        ):
+        if monotonic() - started > CONTEXT_SCAN_MAX_SECONDS:
             scan_complete = False
             break
         last_id = page[-1].id
+        if len(page) == remaining:
+            scan_complete = not conflict_queryset.filter(id__gt=last_id).exists()
+            break
     candidates = ScannedCandidates()
     candidates.complete = scan_complete
     candidates.processed_count = len(bounded_conflicts)

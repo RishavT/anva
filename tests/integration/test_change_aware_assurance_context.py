@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from django.db import connection
+from django.db import DatabaseError, connection
 from django.utils import timezone
 
 from anva.contracts.catalog import EXAMPLES
@@ -783,7 +783,7 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
     # never a context-build 409 and never an evaluator task over partial input.
     monkeypatch.setattr(
         "anva.core.services.context_packets.CONTEXT_SCAN_MAX_ROWS",
-        1,
+        0,
     )
     exhausted = start_assurance(
         actor=actor,
@@ -917,6 +917,48 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         current_head_commit=HEAD
     )
     monkeypatch.setattr(assurance_service, "build_context_packet", original_build_context_packet)
+    invalidate_context_packets(
+        actor=actor,
+        organization_id=organization.id,
+        repository_id=repository.id,
+        reason="MANUAL",
+        details={"test": "fail-authorization-snapshot-after-provisional-run"},
+    )
+    original_authorization_snapshot = assurance_service._authorization_snapshot
+
+    def fail_authorization_snapshot(**_kwargs: Any) -> Any:
+        raise DatabaseError("forced authorization snapshot failure")
+
+    monkeypatch.setattr(
+        assurance_service,
+        "_authorization_snapshot",
+        fail_authorization_snapshot,
+    )
+    snapshot_failed = start_assurance(
+        actor=actor,
+        pull_request_revision_id=ingested.revision.id,
+        policy_version_ids=[policy_version.id],
+        reference_time=reference_time,
+        deterministic_checks=[
+            {
+                "code": "SNAPSHOT_REMAINS_AVAILABLE",
+                "status": "PASSED",
+                "blocking": True,
+                "summary": "Authorization snapshot remained available.",
+                "evidence_ids": [],
+            }
+        ],
+        work_item_revision_id=work.work_item_revision.id,
+    )
+    assert_incomplete_run(snapshot_failed)
+    assert snapshot_failed.run.context_artifact is None
+    assert not EvaluatorTask.objects.filter(assurance_run=snapshot_failed.run).exists()
+
+    monkeypatch.setattr(
+        assurance_service,
+        "_authorization_snapshot",
+        original_authorization_snapshot,
+    )
     invalidate_context_packets(
         actor=actor,
         organization_id=organization.id,

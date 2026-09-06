@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import re
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from typing import TypedDict
 
 import pytest
-from django.db import DatabaseError, transaction
+from django.db import DatabaseError, close_old_connections, connections, transaction
 from django.test import override_settings
 from django.utils import timezone
 
@@ -266,6 +267,58 @@ def _ingest(
         is_draft=False,
         state=state,
         unified_diff=MANUAL_DIFF,
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_concurrent_identical_assurance_starts_bind_one_canonical_run() -> None:
+    organization, repository, scope, actor = _tenant()
+    policy_version_id = _policy(organization, repository, scope, actor)
+    ingested = _ingest(
+        actor=actor,
+        repository=repository,
+        scope=scope,
+        number=35,
+        head="6" * 40,
+    )
+
+    def start() -> tuple[uuid.UUID, uuid.UUID | None, bool]:
+        close_old_connections()
+        try:
+            result = start_assurance(
+                actor=actor,
+                pull_request_revision_id=ingested.revision.id,
+                policy_version_ids=[policy_version_id],
+                reference_time=REFERENCE_TIME,
+                deterministic_checks=_passing_checks(),
+                evaluator_version="concurrent-evaluator-v1",
+                trigger_key="9" * 64,
+            )
+            return (
+                result.run.id,
+                result.evaluator_task.id if result.evaluator_task is not None else None,
+                result.created,
+            )
+        finally:
+            connections.close_all()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _index: start(), range(2)))
+
+    assert len({run_id for run_id, _task_id, _created in results}) == 1
+    assert len({task_id for _run_id, task_id, _created in results}) == 1
+    assert sorted(created for _run_id, _task_id, created in results) == [False, True]
+    canonical_run_id = results[0][0]
+    assert EvaluatorTask.objects.filter(assurance_run_id=canonical_run_id).count() == 1
+    assert (
+        AssuranceRun.objects.filter(
+            organization=organization,
+            pull_request_number=35,
+            state=AssuranceRun.State.CANCELLED,
+            failure_code="DUPLICATE_ASSURANCE_START",
+        ).count()
+        <= 1
     )
 
 

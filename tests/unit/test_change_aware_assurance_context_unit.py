@@ -36,12 +36,14 @@ from anva.core.services.context_packets import (
     MAX_REQUIRED_SEARCH_ANCHORS,
     MAX_REQUIRED_SEARCH_ANCHORS_BYTES,
     CitationCandidate,
+    ContextCompleteness,
     PacketBudget,
     PacketCandidate,
     RequiredSearchAnchor,
     RetrievalFacet,
     _assertion_candidates,
     _conflict_candidates,
+    _json_hash,
     _merge_candidates,
     _normalized_facets,
     _required_matching_facets,
@@ -154,6 +156,113 @@ def test_assertion_scan_finds_relevance_after_legacy_uuid_prefix() -> None:
     assert [candidate.source_assertion_id for candidate in candidates] == [assertions[-1].id]
     assert cast(Any, candidates).processed_count == 501
     assert cast(Any, candidates).complete is True
+
+
+class _KeysetRows:
+    def __init__(self, rows: list[Any]) -> None:
+        self.rows = rows
+
+    def filter(self, *_args: Any, **kwargs: Any) -> _KeysetRows:
+        minimum = kwargs.get("id__gt")
+        if minimum is None:
+            return self
+        return _KeysetRows([row for row in self.rows if row.id > minimum])
+
+    def select_related(self, *_args: str) -> _KeysetRows:
+        return self
+
+    def order_by(self, *_args: str) -> _KeysetRows:
+        return self
+
+    def distinct(self, *_args: str) -> _KeysetRows:
+        return self
+
+    def exists(self) -> bool:
+        return bool(self.rows)
+
+    def __getitem__(self, key: slice) -> list[Any]:
+        return self.rows[key]
+
+    def __iter__(self) -> Any:
+        return iter(self.rows)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(("row_count", "complete"), [(4, True), (5, True), (6, False)])
+def test_assertion_scan_cap_boundary(row_count: int, complete: bool) -> None:
+    assertions = [
+        SimpleNamespace(
+            id=uuid.UUID(int=index + 1),
+            access_scope_id=uuid.uuid4(),
+            subject_key=f"policy-{index}",
+            predicate="requires",
+            value="review",
+            review_state="UNREVIEWED",
+            staleness_state="FRESH",
+            confidence=1.0,
+            is_inferred=False,
+        )
+        for index in range(row_count)
+    ]
+    eligible = _KeysetRows(assertions)
+    initial_provenance = MagicMock()
+    initial_provenance.order_by.return_value.values.return_value = MagicMock()
+
+    def provenance(*, assertion_ids: set[uuid.UUID] | None = None, **_kwargs: Any) -> Any:
+        if assertion_ids is None:
+            return initial_provenance
+        return _KeysetRows(
+            [
+                SimpleNamespace(assertion_id=item.id, id=item.id)
+                for item in assertions
+                if item.id in assertion_ids
+            ]
+        )
+
+    with (
+        patch("anva.core.services.context_packets.CONTEXT_SCAN_MAX_ROWS", 5),
+        patch("anva.core.services.context_packets.CONTEXT_SCAN_MAX_OPERATIONS", 10),
+        patch("anva.core.services.context_packets.CONTEXT_SCAN_PAGE_SIZE", 3),
+        patch("anva.core.services.context_packets.resolve_authorized_repository_scopes"),
+        patch(
+            "anva.core.services.context_packets._authorized_provenance_for_authorization",
+            side_effect=provenance,
+        ),
+        patch("anva.core.services.context_packets.authorized_assertions", return_value=eligible),
+        patch(
+            "anva.core.services.context_packets._citation_from_provenance", return_value=_citation()
+        ),
+    ):
+        candidates = _assertion_candidates(
+            actor=cast(Any, SimpleNamespace()),
+            repository_id=uuid.uuid4(),
+            facets=(),
+            change_aware=False,
+        )
+
+    assert cast(Any, candidates).processed_count == min(row_count, 5)
+    assert cast(Any, candidates).processed_count <= 5
+    assert cast(Any, candidates).complete is complete
+    digest = _json_hash(
+        [
+            {"id": str(candidate.source_assertion_id), "payload": candidate.payload}
+            for candidate in candidates
+        ]
+    )
+    metadata = ContextCompleteness(
+        assertion_count=len(candidates),
+        conflict_count=0,
+        processed_count=cast(Any, candidates).processed_count,
+        digest=digest,
+        complete=complete,
+    ).as_dict()
+    assert metadata["digest"] == digest
+    if complete:
+        assert metadata["exact_digest"] == digest
+        assert "partial_digest" not in metadata
+    else:
+        assert metadata["partial_digest"] == digest
+        assert "exact_digest" not in metadata
 
 
 def _search_anchor(seed: int = 0) -> RequiredSearchAnchor:
@@ -634,6 +743,75 @@ def test_conflict_retrieval_keyset_scans_legacy_boundary(row_count: int) -> None
         call.args[0] == slice(None, CONTEXT_SCAN_PAGE_SIZE, None)
         for call in ordered.__getitem__.call_args_list
     )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(("row_count", "complete"), [(4, True), (5, True), (6, False)])
+def test_conflict_scan_cap_boundary_with_non_aligned_remainder(
+    row_count: int,
+    complete: bool,
+) -> None:
+    assertion_id = uuid.uuid4()
+    endpoint = SimpleNamespace(
+        access_scope_id=uuid.uuid4(),
+        value="review",
+        review_state="UNREVIEWED",
+        staleness_state="FRESH",
+    )
+    conflicts = _KeysetRows(
+        [
+            SimpleNamespace(
+                id=uuid.UUID(int=index + 1),
+                left_assertion_id=assertion_id,
+                right_assertion_id=assertion_id,
+                left_assertion=endpoint,
+                right_assertion=endpoint,
+                predicate="requires",
+            )
+            for index in range(row_count)
+        ]
+    )
+    with (
+        patch("anva.core.services.context_packets.CONTEXT_SCAN_MAX_ROWS", 6),
+        patch("anva.core.services.context_packets.CONTEXT_SCAN_MAX_OPERATIONS", 12),
+        patch("anva.core.services.context_packets.CONTEXT_SCAN_PAGE_SIZE", 3),
+        patch(
+            "anva.core.services.context_packets.AssertionConflict.objects.filter",
+            return_value=conflicts,
+        ),
+        patch(
+            "anva.core.services.context_packets._authorized_provenance",
+            return_value=_KeysetRows([SimpleNamespace(assertion_id=assertion_id, id=uuid.uuid4())]),
+        ),
+        patch(
+            "anva.core.services.context_packets._citation_from_provenance", return_value=_citation()
+        ),
+    ):
+        candidates = _conflict_candidates(
+            actor=cast(Any, SimpleNamespace(organization_id=uuid.uuid4())),
+            repository_id=uuid.uuid4(),
+            selected_assertion_ids={assertion_id},
+            relevant_assertion_facets={assertion_id: ("task",)},
+            change_aware=True,
+        )
+
+    assert cast(Any, candidates).processed_count == min(row_count, 5)
+    assert cast(Any, candidates).processed_count <= 5
+    assert cast(Any, candidates).complete is complete
+    digest = _json_hash(
+        [
+            {"id": str(candidate.source_conflict_id), "payload": candidate.payload}
+            for candidate in candidates
+        ]
+    )
+    metadata = ContextCompleteness(
+        assertion_count=1,
+        conflict_count=len(candidates),
+        processed_count=1 + cast(Any, candidates).processed_count,
+        digest=digest,
+        complete=complete,
+    ).as_dict()
+    assert metadata["exact_digest" if complete else "partial_digest"] == digest
 
 
 @pytest.mark.unit
