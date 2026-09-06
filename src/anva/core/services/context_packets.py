@@ -14,7 +14,7 @@ from time import monotonic
 from typing import Any, NoReturn, cast
 
 from django.db import connection, transaction
-from django.db.models import BooleanField, Case, F, Q, QuerySet, Subquery, TextField, Value, When
+from django.db.models import BooleanField, Case, F, Q, QuerySet, TextField, Value, When
 from django.db.models.expressions import RawSQL
 from django.db.models.functions import Cast, Concat
 from django.utils import timezone
@@ -303,6 +303,8 @@ class ScannedCandidates(list[PacketCandidate]):
         super().__init__()
         self.complete = True
         self.eligible_assertion_ids: set[uuid.UUID] = set()
+        self.provenance_by_assertion: dict[uuid.UUID, AssertionProvenance] = {}
+        self.authorization: AuthorizedRepositoryScopes | None = None
         self.processed_count = 0
 
 
@@ -641,22 +643,29 @@ def _authorized_provenance(
     )
 
 
-def _eligible_assertions_for_authorization(
+def _eligible_assertion_provenance_for_authorization(
     *,
     actor: ActorContext,
     authorization: AuthorizedRepositoryScopes,
-    current_provenance: QuerySet[AssertionProvenance],
-) -> QuerySet[KnowledgeAssertion]:
-    """Select current assertions whose current provenance is authorized."""
-    return (
-        KnowledgeAssertion.objects.filter(
-            organization_id=actor.organization_id,
-            access_scope_id__in=authorization.scope_ids_for(Action.SEARCH),
-            valid_until__isnull=True,
-            id__in=Subquery(current_provenance.order_by().values("assertion_id")),
+    current_provenance: QuerySet[AssertionProvenance] | None = None,
+) -> QuerySet[AssertionProvenance]:
+    """Select one deterministic authorized current provenance per assertion."""
+    provenance = current_provenance
+    if provenance is None:
+        provenance = _authorized_provenance_for_authorization(
+            actor=actor,
+            authorization=authorization,
+            assertion_ids=None,
         )
-        .select_related("access_scope")
-        .order_by("id")
+    return (
+        provenance.filter(
+            assertion__organization_id=actor.organization_id,
+            assertion__access_scope_id__in=authorization.scope_ids_for(Action.SEARCH),
+            assertion__valid_until__isnull=True,
+        )
+        .select_related("assertion", "assertion__access_scope")
+        .order_by("assertion_id", "observed_at", "id")
+        .distinct("assertion_id")
     )
 
 
@@ -820,13 +829,14 @@ def _assertion_candidates(
         authorization=authorization,
         assertion_ids=None,
     )
-    eligible = _eligible_assertions_for_authorization(
+    eligible = _eligible_assertion_provenance_for_authorization(
         actor=actor,
         authorization=authorization,
         current_provenance=current_provenance,
     )
 
     candidates = ScannedCandidates()
+    candidates.authorization = authorization
     deadline = deadline or monotonic() + CONTEXT_SCAN_MAX_SECONDS
     last_id: uuid.UUID | None = None
     scanned = 0
@@ -837,57 +847,39 @@ def _assertion_candidates(
             break
         page_query = eligible
         if last_id is not None:
-            page_query = page_query.filter(id__gt=last_id)
+            page_query = page_query.filter(assertion_id__gt=last_id)
         remaining = candidate_capacity - scanned
         if remaining <= 0:
             candidates.complete = not page_query.exists()
             break
-        assertions = list(page_query[: min(CONTEXT_SCAN_PAGE_SIZE, remaining)])
-        if not assertions:
+        page_limit = min(CONTEXT_SCAN_PAGE_SIZE, remaining)
+        page_rows = list(page_query[: page_limit + 1])
+        has_more = len(page_rows) > page_limit
+        provenance_page = page_rows[:page_limit]
+        if not provenance_page:
             break
-        scanned += len(assertions)
+        assertions = [provenance.assertion for provenance in provenance_page]
+        scanned += len(provenance_page)
         candidates.processed_count = scanned
         candidates.eligible_assertion_ids.update(assertion.id for assertion in assertions)
         if monotonic() >= deadline:
             candidates.complete = False
             break
-        last_id = assertions[-1].id
-        citation_assertion_ids = {
-            assertion.id
-            for assertion in assertions
-            if _matching_facets(_assertion_summary(assertion), facets)
-            or _assertion_kind(assertion)
-            in {
-                ContextPacketItem.Kind.POLICY,
-                ContextPacketItem.Kind.DECISION,
-                ContextPacketItem.Kind.INCIDENT,
-            }
+        last_id = provenance_page[-1].assertion_id
+        provenance_by_assertion = {
+            provenance.assertion_id: provenance for provenance in provenance_page
         }
-        provenance_by_assertion: dict[uuid.UUID, tuple[CitationCandidate, ...]] = {}
-        provenance_rows = (
-            _authorized_provenance_for_authorization(
-                actor=actor,
-                authorization=authorization,
-                assertion_ids=citation_assertion_ids,
-            )
-            .order_by("assertion_id", "observed_at", "id")
-            .distinct("assertion_id")
-        )
-        for provenance in provenance_rows:
-            existing = provenance_by_assertion.get(provenance.assertion_id, ())
-            provenance_by_assertion[provenance.assertion_id] = (
-                *existing,
-                _citation_from_provenance(provenance),
-            )
+        candidates.provenance_by_assertion.update(provenance_by_assertion)
         for assertion in assertions:
-            citations = provenance_by_assertion.get(assertion.id, ())
-            if not citations or assertion.access_scope_id is None:
+            provenance = provenance_by_assertion[assertion.id]
+            if assertion.access_scope_id is None:
                 continue
             summary = _assertion_summary(assertion)
             required = _required_policy(assertion)
             matched_facets = _matching_facets(summary, facets)
             required_facets = _required_matching_facets(summary, matched_facets, facets)
             matches = bool(matched_facets)
+            citations = (_citation_from_provenance(provenance),)
             kind = _assertion_kind(assertion)
             if not matches and kind not in {
                 ContextPacketItem.Kind.POLICY,
@@ -952,8 +944,10 @@ def _assertion_candidates(
                     source_assertion_id=assertion.id,
                 )
             )
+        if not has_more:
+            break
         if len(assertions) == remaining:
-            candidates.complete = not eligible.filter(id__gt=last_id).exists()
+            candidates.complete = False
             break
     return candidates
 
@@ -1349,6 +1343,8 @@ def _conflict_candidates(
     relevant_assertion_facets: dict[uuid.UUID, tuple[str, ...]],
     change_aware: bool,
     deadline: float | None = None,
+    selected_assertion_provenance: dict[uuid.UUID, AssertionProvenance] | None = None,
+    authorization: AuthorizedRepositoryScopes | None = None,
 ) -> list[PacketCandidate]:
     if not selected_assertion_ids:
         return []
@@ -1377,7 +1373,10 @@ def _conflict_candidates(
         if remaining <= 0:
             scan_complete = not page_query.exists()
             break
-        page = list(page_query[: min(CONTEXT_SCAN_PAGE_SIZE, remaining)])
+        page_limit = min(CONTEXT_SCAN_PAGE_SIZE, remaining)
+        page_rows = list(page_query[: page_limit + 1])
+        has_more = len(page_rows) > page_limit
+        page = page_rows[:page_limit]
         if not page:
             break
         bounded_conflicts.extend(page)
@@ -1385,32 +1384,63 @@ def _conflict_candidates(
             scan_complete = False
             break
         last_id = page[-1].id
+        if not has_more:
+            break
         if len(page) == remaining:
-            scan_complete = not conflict_queryset.filter(id__gt=last_id).exists()
+            scan_complete = False
             break
     candidates = ScannedCandidates()
     candidates.complete = scan_complete
     candidates.processed_count = len(bounded_conflicts)
-    provenance_by_assertion: dict[uuid.UUID, AssertionProvenance] = {}
     conflict_endpoint_ids = {
         assertion_id
         for conflict in bounded_conflicts
         for assertion_id in (conflict.left_assertion_id, conflict.right_assertion_id)
     }
-    ordered_endpoint_ids = sorted(conflict_endpoint_ids, key=str)
-    for offset in range(0, len(ordered_endpoint_ids), CONTEXT_SCAN_PAGE_SIZE * 2):
-        endpoint_page = set(ordered_endpoint_ids[offset : offset + CONTEXT_SCAN_PAGE_SIZE * 2])
-        provenance_rows = (
-            _authorized_provenance(
-                actor=actor,
-                repository_id=repository_id,
-                assertion_ids=endpoint_page,
+    provenance_by_assertion: dict[uuid.UUID, AssertionProvenance] = {}
+    if selected_assertion_provenance is not None and authorization is not None:
+        cached_provenance = {
+            assertion_id: provenance
+            for assertion_id, provenance in selected_assertion_provenance.items()
+            if assertion_id in conflict_endpoint_ids
+        }
+        authorized_provenance_ids: set[uuid.UUID] = set()
+        ordered_cached_ids = sorted(cached_provenance, key=str)
+        for offset in range(0, len(ordered_cached_ids), CONTEXT_SCAN_PAGE_SIZE * 2):
+            assertion_page = set(ordered_cached_ids[offset : offset + CONTEXT_SCAN_PAGE_SIZE * 2])
+            authorized_provenance_ids.update(
+                _authorized_provenance_for_authorization(
+                    actor=actor,
+                    authorization=authorization,
+                    assertion_ids=assertion_page,
+                )
+                .filter(
+                    id__in=[cached_provenance[assertion_id].id for assertion_id in assertion_page]
+                )
+                .order_by()
+                .values_list("id", flat=True)
+                .distinct()
             )
-            .order_by("assertion_id", "observed_at", "id")
-            .distinct("assertion_id")
-        )
-        for provenance in provenance_rows:
-            provenance_by_assertion.setdefault(provenance.assertion_id, provenance)
+        provenance_by_assertion = {
+            assertion_id: provenance
+            for assertion_id, provenance in cached_provenance.items()
+            if provenance.id in authorized_provenance_ids
+        }
+    else:
+        ordered_endpoint_ids = sorted(conflict_endpoint_ids, key=str)
+        for offset in range(0, len(ordered_endpoint_ids), CONTEXT_SCAN_PAGE_SIZE * 2):
+            endpoint_page = set(ordered_endpoint_ids[offset : offset + CONTEXT_SCAN_PAGE_SIZE * 2])
+            provenance_rows = (
+                _authorized_provenance(
+                    actor=actor,
+                    repository_id=repository_id,
+                    assertion_ids=endpoint_page,
+                )
+                .order_by("assertion_id", "observed_at", "id")
+                .distinct("assertion_id")
+            )
+            for provenance in provenance_rows:
+                provenance_by_assertion.setdefault(provenance.assertion_id, provenance)
     for conflict in bounded_conflicts:
         matched_facets = tuple(
             sorted(
@@ -2216,6 +2246,8 @@ def _build_context_packet_bounded(
         },
         change_aware=change_aware,
         deadline=deadline,
+        selected_assertion_provenance=getattr(assertions, "provenance_by_assertion", None),
+        authorization=getattr(assertions, "authorization", None),
     )
     _require_context_deadline(deadline)
     completeness_payload = [
@@ -2248,32 +2280,22 @@ def _build_context_packet_bounded(
             getattr(assertions, "complete", True) and getattr(conflicts, "complete", True)
         ),
     )
+    if not completeness.complete:
+        raise RequiredContextBudgetError("ASSURANCE_CONTEXT_INCOMPLETE")
     if change_aware and conflicts:
         _require_context_deadline(deadline)
-        conflict_assertion_ids = {
-            assertion_id
-            for conflict in conflicts
-            for assertion_id in (
+        conflict_facet_sets: dict[uuid.UUID, set[str]] = {}
+        for conflict in conflicts:
+            endpoint_ids = (
                 uuid.UUID(cast(str, conflict.payload["left_assertion_id"])),
                 uuid.UUID(cast(str, conflict.payload["right_assertion_id"])),
             )
-        }
+            for assertion_id in endpoint_ids:
+                conflict_facet_sets.setdefault(assertion_id, set()).update(conflict.matched_facets)
+        conflict_assertion_ids = set(conflict_facet_sets)
         conflict_facets = {
-            assertion_id: tuple(
-                sorted(
-                    {
-                        label
-                        for conflict in conflicts
-                        if assertion_id
-                        in {
-                            uuid.UUID(cast(str, conflict.payload["left_assertion_id"])),
-                            uuid.UUID(cast(str, conflict.payload["right_assertion_id"])),
-                        }
-                        for label in conflict.matched_facets
-                    }
-                )
-            )
-            for assertion_id in conflict_assertion_ids
+            assertion_id: tuple(sorted(labels))
+            for assertion_id, labels in conflict_facet_sets.items()
         }
         assertions = [
             replace(
@@ -2326,16 +2348,6 @@ def _build_context_packet_bounded(
                 f"complete scan digest {completeness.digest}",
             ),
         )
-    if not completeness.complete:
-        selection = replace(
-            selection,
-            limitations=(
-                *selection.limitations,
-                "Required assurance context was discovered but could not fit the authorized "
-                "bounded packet: ASSURANCE_CONTEXT_INCOMPLETE",
-            ),
-        )
-
     # Publication is a separate security boundary: a revocation, scope change, or
     # ingestion watermark movement during scanning invalidates this result.
     _set_remaining_statement_timeout(deadline)

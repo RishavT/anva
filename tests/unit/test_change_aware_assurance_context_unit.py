@@ -43,6 +43,7 @@ from anva.core.services.context_packets import (
     RetrievalFacet,
     _assertion_candidates,
     _conflict_candidates,
+    _eligible_assertion_provenance_for_authorization,
     _json_hash,
     _merge_candidates,
     _normalized_facets,
@@ -95,6 +96,26 @@ def _candidate(
 
 
 @pytest.mark.unit
+def test_eligible_assertion_provenance_does_not_evaluate_input_queryset() -> None:
+    current_provenance = MagicMock()
+    current_provenance.__bool__.side_effect = AssertionError("queryset truthiness executes SQL")
+    authorization = MagicMock()
+    authorization.scope_ids_for.return_value = (uuid.uuid4(),)
+
+    with patch(
+        "anva.core.services.context_packets._authorized_provenance_for_authorization"
+    ) as fallback:
+        _eligible_assertion_provenance_for_authorization(
+            actor=cast(Any, SimpleNamespace(organization_id=uuid.uuid4())),
+            authorization=authorization,
+            current_provenance=current_provenance,
+        )
+
+    fallback.assert_not_called()
+    current_provenance.filter.assert_called_once()
+
+
+@pytest.mark.unit
 def test_assertion_scan_finds_relevance_after_legacy_uuid_prefix() -> None:
     assertions = [
         SimpleNamespace(
@@ -110,18 +131,14 @@ def test_assertion_scan_finds_relevance_after_legacy_uuid_prefix() -> None:
         )
         for index in range(501)
     ]
+    eligible_rows = [
+        SimpleNamespace(assertion_id=assertion.id, assertion=assertion) for assertion in assertions
+    ]
     ordered = MagicMock()
-    ordered.__getitem__.side_effect = [assertions[:200], assertions[200:400], assertions[400:], []]
+    ordered.__getitem__.return_value = eligible_rows
     ordered.filter.return_value = ordered
     initial_provenance = MagicMock()
     initial_provenance.order_by.return_value.values.return_value = MagicMock()
-
-    def provenance_page(page: list[SimpleNamespace]) -> MagicMock:
-        query = MagicMock()
-        query.order_by.return_value.distinct.return_value = [
-            SimpleNamespace(assertion_id=assertion.id) for assertion in page
-        ]
-        return query
 
     with (
         patch(
@@ -130,15 +147,10 @@ def test_assertion_scan_finds_relevance_after_legacy_uuid_prefix() -> None:
         ),
         patch(
             "anva.core.services.context_packets._authorized_provenance_for_authorization",
-            side_effect=[
-                initial_provenance,
-                provenance_page(assertions[:200]),
-                provenance_page(assertions[200:400]),
-                provenance_page(assertions[400:]),
-            ],
+            return_value=initial_provenance,
         ),
         patch(
-            "anva.core.services.context_packets._eligible_assertions_for_authorization",
+            "anva.core.services.context_packets._eligible_assertion_provenance_for_authorization",
             return_value=ordered,
         ),
         patch(
@@ -163,10 +175,16 @@ class _KeysetRows:
         self.rows = rows
 
     def filter(self, *_args: Any, **kwargs: Any) -> _KeysetRows:
-        minimum = kwargs.get("id__gt")
+        minimum = kwargs.get("id__gt", kwargs.get("assertion_id__gt"))
         if minimum is None:
             return self
-        return _KeysetRows([row for row in self.rows if row.id > minimum])
+        return _KeysetRows(
+            [
+                row
+                for row in self.rows
+                if getattr(row, "assertion_id", getattr(row, "id", None)) > minimum
+            ]
+        )
 
     def select_related(self, *_args: str) -> _KeysetRows:
         return self
@@ -188,7 +206,10 @@ class _KeysetRows:
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize(("row_count", "complete"), [(4, True), (5, True), (6, False)])
+@pytest.mark.parametrize(
+    ("row_count", "complete"),
+    [(2, True), (3, True), (4, True), (5, True), (6, False)],
+)
 def test_assertion_scan_cap_boundary(row_count: int, complete: bool) -> None:
     assertions = [
         SimpleNamespace(
@@ -204,20 +225,14 @@ def test_assertion_scan_cap_boundary(row_count: int, complete: bool) -> None:
         )
         for index in range(row_count)
     ]
-    eligible = _KeysetRows(assertions)
+    eligible = _KeysetRows(
+        [
+            SimpleNamespace(assertion_id=assertion.id, assertion=assertion)
+            for assertion in assertions
+        ]
+    )
     initial_provenance = MagicMock()
     initial_provenance.order_by.return_value.values.return_value = MagicMock()
-
-    def provenance(*, assertion_ids: set[uuid.UUID] | None = None, **_kwargs: Any) -> Any:
-        if assertion_ids is None:
-            return initial_provenance
-        return _KeysetRows(
-            [
-                SimpleNamespace(assertion_id=item.id, id=item.id)
-                for item in assertions
-                if item.id in assertion_ids
-            ]
-        )
 
     with (
         patch("anva.core.services.context_packets.CONTEXT_SCAN_MAX_ROWS", 5),
@@ -226,10 +241,10 @@ def test_assertion_scan_cap_boundary(row_count: int, complete: bool) -> None:
         patch("anva.core.services.context_packets.resolve_authorized_repository_scopes"),
         patch(
             "anva.core.services.context_packets._authorized_provenance_for_authorization",
-            side_effect=provenance,
+            return_value=initial_provenance,
         ),
         patch(
-            "anva.core.services.context_packets._eligible_assertions_for_authorization",
+            "anva.core.services.context_packets._eligible_assertion_provenance_for_authorization",
             return_value=eligible,
         ),
         patch(
@@ -708,8 +723,7 @@ def test_conflict_retrieval_keyset_scans_legacy_boundary(row_count: int) -> None
         )
         for index in range(row_count)
     ]
-    pages = [rows[offset : offset + 200] for offset in range(0, row_count, 200)]
-    ordered.__getitem__.side_effect = [*pages, []]
+    ordered.__getitem__.return_value = rows
     ordered.filter.return_value = ordered
     selected = MagicMock()
     selected.order_by.return_value = ordered
@@ -740,15 +754,14 @@ def test_conflict_retrieval_keyset_scans_legacy_boundary(row_count: int) -> None
     assert open_conflicts.call_args.kwargs["relevant_assertion_ids"] == {assertion_id}
     assert open_conflicts.call_args.kwargs["change_aware"] is True
     selected.order_by.assert_called_once_with("id")
-    assert ordered.__getitem__.call_count == len(pages) + 1
-    assert all(
-        call.args[0] == slice(None, CONTEXT_SCAN_PAGE_SIZE, None)
-        for call in ordered.__getitem__.call_args_list
-    )
+    ordered.__getitem__.assert_called_once_with(slice(None, CONTEXT_SCAN_PAGE_SIZE + 1, None))
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize(("row_count", "complete"), [(4, True), (5, True), (6, False)])
+@pytest.mark.parametrize(
+    ("row_count", "complete"),
+    [(2, True), (3, True), (4, True), (5, True), (6, False)],
+)
 def test_conflict_scan_cap_boundary_with_non_aligned_remainder(
     row_count: int,
     complete: bool,
@@ -848,7 +861,7 @@ def test_change_aware_conflicts_prefilter_irrelevant_rows_before_bound() -> None
         )
 
     relevant_queryset.select_related.assert_called_once_with("left_assertion", "right_assertion")
-    assert ordered.__getitem__.call_args.args[0] == slice(None, CONTEXT_SCAN_PAGE_SIZE, None)
+    assert ordered.__getitem__.call_args.args[0] == slice(None, CONTEXT_SCAN_PAGE_SIZE + 1, None)
 
 
 @pytest.mark.unit

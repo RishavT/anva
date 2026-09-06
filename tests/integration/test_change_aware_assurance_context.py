@@ -57,7 +57,7 @@ from anva.core.services.context import ActorContext
 from anva.core.services.context_packets import (
     _authorized_provenance_for_authorization,
     _conflict_candidates,
-    _eligible_assertions_for_authorization,
+    _eligible_assertion_provenance_for_authorization,
     _open_conflicts_for_assertions,
     invalidate_context_packets,
 )
@@ -573,13 +573,14 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         authorization=authorization,
         assertion_ids=None,
     )
-    optimized_ids = list(
-        _eligible_assertions_for_authorization(
+    optimized_provenance = list(
+        _eligible_assertion_provenance_for_authorization(
             actor=actor,
             authorization=authorization,
             current_provenance=current_provenance,
-        ).values_list("id", flat=True)
+        )
     )
+    optimized_ids = [provenance.assertion_id for provenance in optimized_provenance]
     reference_ids = list(
         authorized_assertions(actor=actor, repository_id=repository.id, action=Action.SEARCH)
         .filter(id__in=Subquery(current_provenance.order_by().values("assertion_id")))
@@ -590,6 +591,44 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
     assert optimized_ids == reference_ids
     assert len(optimized_ids) == len(set(optimized_ids))
     assert noise_assertions[0].id in optimized_ids
+    reference_provenance = list(
+        current_provenance.filter(assertion_id__in=reference_ids)
+        .order_by("assertion_id", "observed_at", "id")
+        .distinct("assertion_id")
+    )
+    assert [
+        (
+            provenance.assertion_id,
+            provenance.source_location_id,
+            provenance.source_observation_id,
+            provenance.access_snapshot_id,
+            provenance.observed_at,
+            provenance.id,
+        )
+        for provenance in optimized_provenance
+    ] == [
+        (
+            provenance.assertion_id,
+            provenance.source_location_id,
+            provenance.source_observation_id,
+            provenance.access_snapshot_id,
+            provenance.observed_at,
+            provenance.id,
+        )
+        for provenance in reference_provenance
+    ]
+    selected_multi_provenance = next(
+        provenance
+        for provenance in optimized_provenance
+        if provenance.assertion_id == noise_assertions[0].id
+    )
+    expected_multi_provenance = (
+        AssertionProvenance.objects.filter(assertion=noise_assertions[0])
+        .order_by("observed_at", "id")
+        .first()
+    )
+    assert expected_multi_provenance is not None
+    assert selected_multi_provenance.id == expected_multi_provenance.id
     assert {
         no_normalized_provenance.id,
         expired_assertion.id,
@@ -782,6 +821,9 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         started.run.state,
         started.run.failure_code,
         started.run.limitations,
+        context_elapsed,
+        captured_query_counts,
+        last_context_statement,
         started.run.context_artifact.payload.get("completeness")
         if started.run.context_artifact is not None
         else None,
@@ -1236,6 +1278,18 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         "anva.core.services.context_packets.CONTEXT_SCAN_MAX_ROWS",
         0,
     )
+
+    def publication_counts() -> tuple[int, int, int, int, int, int]:
+        return (
+            ContextPacketRecord.objects.count(),
+            ImmutableArtifact.objects.count(),
+            ContextPacketItem.objects.count(),
+            ContextPacketCitation.objects.count(),
+            AccessScope.objects.count(),
+            EvaluatorTask.objects.count(),
+        )
+
+    incomplete_publication_counts = publication_counts()
     exhausted = start_assurance(
         actor=actor,
         pull_request_revision_id=ingested.revision.id,
@@ -1267,6 +1321,7 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         limitation.startswith(REQUIRED_ASSURANCE_CONTEXT_LIMITATION_PREFIX)
         for limitation in exhausted.run.limitations
     )
+    assert publication_counts() == incomplete_publication_counts
     exhausted_retry = start_assurance(
         actor=actor,
         pull_request_revision_id=ingested.revision.id,
@@ -1292,11 +1347,18 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         assert bounded.created is True
         assert bounded.evaluator_task is None
         assert bounded.run.state == AssuranceRun.State.FAILED
+        assert bounded.run.failure_code == "ASSURANCE_CONTEXT_INCOMPLETE"
         assert bounded.run.readiness == "BLOCKED"
+        assert bounded.run.context_artifact is None
+        assert bounded.run.context_packet is None
         assert bounded.run.readinessdecision.reason_codes == [
             "CONFLICT_REVIEW_REQUIRED",
             "ASSURANCE_CONTEXT_INCOMPLETE",
         ]
+        assert any(
+            limitation.startswith(REQUIRED_ASSURANCE_CONTEXT_LIMITATION_PREFIX)
+            for limitation in bounded.run.limitations
+        )
 
     assert_incomplete_run(exhausted)
     monkeypatch.setattr("anva.core.services.context_packets.CONTEXT_SCAN_MAX_ROWS", 50_000)
@@ -1308,6 +1370,7 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         details={"test": "force-operation-budget"},
     )
     monkeypatch.setattr("anva.core.services.context_packets.CONTEXT_SCAN_MAX_OPERATIONS", 1)
+    operation_publication_counts = publication_counts()
     operation_exhausted = start_assurance(
         actor=actor,
         pull_request_revision_id=ingested.revision.id,
@@ -1325,6 +1388,26 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         work_item_revision_id=work.work_item_revision.id,
     )
     assert_incomplete_run(operation_exhausted)
+    assert publication_counts() == operation_publication_counts
+    operation_retry = start_assurance(
+        actor=actor,
+        pull_request_revision_id=ingested.revision.id,
+        policy_version_ids=[policy_version.id],
+        reference_time=reference_time,
+        deterministic_checks=[
+            {
+                "code": "CONTACT_REDACTION_TEST",
+                "status": "PASSED",
+                "blocking": True,
+                "summary": "Exact-head passenger contact redaction scenario passed.",
+                "evidence_ids": [],
+            }
+        ],
+        work_item_revision_id=work.work_item_revision.id,
+    )
+    assert operation_retry.created is False
+    assert operation_retry.run.id == operation_exhausted.run.id
+    assert publication_counts() == operation_publication_counts
 
     monkeypatch.setattr("anva.core.services.context_packets.CONTEXT_SCAN_MAX_OPERATIONS", 100_000)
     invalidate_context_packets(
@@ -1336,6 +1419,7 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
     )
     ticks = chain([0.0, 5.0], repeat(5.0))
     monkeypatch.setattr("anva.core.services.context_packets.monotonic", lambda: next(ticks))
+    time_publication_counts = publication_counts()
     time_exhausted = start_assurance(
         actor=actor,
         pull_request_revision_id=ingested.revision.id,
@@ -1353,6 +1437,26 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         work_item_revision_id=work.work_item_revision.id,
     )
     assert_incomplete_run(time_exhausted)
+    assert publication_counts() == time_publication_counts
+    time_retry = start_assurance(
+        actor=actor,
+        pull_request_revision_id=ingested.revision.id,
+        policy_version_ids=[policy_version.id],
+        reference_time=reference_time,
+        deterministic_checks=[
+            {
+                "code": "CONTACT_REDACTION_TEST",
+                "status": "PASSED",
+                "blocking": True,
+                "summary": "Exact-head passenger contact redaction scenario passed.",
+                "evidence_ids": [],
+            }
+        ],
+        work_item_revision_id=work.work_item_revision.id,
+    )
+    assert time_retry.created is False
+    assert time_retry.run.id == time_exhausted.run.id
+    assert publication_counts() == time_publication_counts
 
     monkeypatch.setattr("anva.core.services.context_packets.monotonic", time.monotonic)
     invalidate_context_packets(
