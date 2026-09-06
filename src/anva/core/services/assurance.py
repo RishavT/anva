@@ -1351,7 +1351,7 @@ def start_assurance(
         }
     )
     with transaction.atomic():
-        provisional_run, provisional_created = AssuranceRun.objects.get_or_create(
+        provisional_run, _provisional_created = AssuranceRun.objects.get_or_create(
             organization_id=actor.organization_id,
             repository_external_id=revision.pull_request.repository.external_id,
             pull_request_number=revision.pull_request.number,
@@ -1370,9 +1370,6 @@ def start_assurance(
                 "prompt_version": prompt_version,
             },
         )
-    if not provisional_created:
-        task = EvaluatorTask.objects.filter(assurance_run=provisional_run).first()
-        return AssuranceStartResult(provisional_run, cast(EvaluatorTask, task), False)
     try:
         with transaction.atomic():
             return _start_assurance_bound(
@@ -1413,6 +1410,10 @@ def _start_assurance_bound(
     reviewer_token_id: uuid.UUID | None = None,
 ) -> AssuranceStartResult:
     """Build exact deterministic context and enqueue one independent manual review."""
+    provisional_run = AssuranceRun.objects.select_for_update().get(id=provisional_run.id)
+    if provisional_run.state != AssuranceRun.State.REQUESTED:
+        task = EvaluatorTask.objects.filter(assurance_run=provisional_run).first()
+        return AssuranceStartResult(provisional_run, cast(EvaluatorTask, task), False)
     if reference_time.tzinfo is None:
         raise ValueError("reference_time must include a timezone")
     if trigger_key and (
