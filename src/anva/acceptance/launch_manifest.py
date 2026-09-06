@@ -30,6 +30,7 @@ LAUNCH_MANIFEST_TARGET = "/acceptance/launch/manifest.json"
 CANONICAL_ROOT_TARGET = "/app/acceptance/canonical"
 CASE_TARGET = "/acceptance/case/case.json"
 DEPENDENCY_SERVICES = frozenset({"postgres", "minio", "minio-init", "migrate"})
+DOCKER_ID_MAX = 2_147_483_647
 DEPENDENCY_IMAGES = {
     "postgres": (
         "pgvector/pgvector:pg16@sha256:"
@@ -212,6 +213,31 @@ def _read_json(path: Path, *, maximum: int, label: str) -> object:
         return json.loads(path.read_bytes())
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise _reject("launch_input_invalid", f"{label} input is invalid") from error
+
+
+def _docker_numeric_id(value: str) -> int | None:
+    """Parse Docker's non-negative signed-decimal UID/GID form without huge integers."""
+    if re.fullmatch(r"\+?[0-9]+", value) is None:
+        return None
+    digits = value.lstrip("+").lstrip("0") or "0"
+    maximum = str(DOCKER_ID_MAX)
+    if len(digits) > len(maximum) or (len(digits) == len(maximum) and digits > maximum):
+        return None
+    return int(digits)
+
+
+def _image_user_is_nonroot(image_user: str) -> bool:
+    """Accept only the product account or in-range numeric non-root UID/GID identities."""
+    if image_user != image_user.strip() or image_user.count(":") > 1:
+        return False
+    user, separator, group = image_user.partition(":")
+    uid = _docker_numeric_id(user)
+    if user != "anva" and (uid is None or uid == 0):
+        return False
+    if not separator:
+        return True
+    gid = _docker_numeric_id(group)
+    return group == "anva" or (gid is not None and gid > 0)
 
 
 def _canonical_bytes(value: object) -> bytes:
@@ -525,16 +551,13 @@ def generate_launch_manifest(
     image_id = f"sha256:{product_image_sha256}"
     config = image_values.get("Config")
     labels = config.get("Labels") if isinstance(config, dict) else None
-    image_user = str(config.get("User", "")) if isinstance(config, dict) else ""
-    image_uid = image_user.split(":", 1)[0].strip().lower()
-    image_user_is_root = image_uid in {"", "root"} or (
-        re.fullmatch(r"[0-9]+", image_uid) is not None and not image_uid.strip("0")
-    )
+    image_user_value = config.get("User") if isinstance(config, dict) else None
+    image_user = image_user_value if isinstance(image_user_value, str) else ""
     if (
         image_values.get("Id") != image_id
         or not isinstance(labels, dict)
         or labels.get("org.opencontainers.image.revision") != product_commit
-        or image_user_is_root
+        or not _image_user_is_nonroot(image_user)
     ):
         raise _reject("launch_image_mismatch", "Docker image does not match exact identity pins")
 

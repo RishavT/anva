@@ -456,8 +456,36 @@ def test_generator_fails_closed_for_service_image_runtime_and_bind_changes(
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("image_user", ["0:10001", "00:10001", "000"])
-def test_generator_rejects_root_image_default_user(tmp_path: Path, image_user: str) -> None:
+@pytest.mark.parametrize(
+    "image_user",
+    [
+        "0:10001",
+        "00:10001",
+        "000",
+        "+0",
+        "-0",
+        "+0:10001",
+        "-0:10001",
+        "+00:10001",
+        "-000",
+        "root",
+        "ROOT",
+        "toor",
+        "-1",
+        "2147483648",
+        " 10001",
+        "10001 ",
+        "anva:",
+        "anva:root",
+        "10001:0",
+        "10001:-0",
+        10001,
+        None,
+    ],
+)
+def test_generator_rejects_unsafe_or_invalid_image_default_user(
+    tmp_path: Path, image_user: object
+) -> None:
     resolved, inspect, provenance = _inputs(tmp_path)
     inspect.write_text(
         json.dumps(
@@ -487,6 +515,44 @@ def test_generator_rejects_root_image_default_user(tmp_path: Path, image_user: s
         )
 
     assert captured.value.reason_code == "launch_image_mismatch"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "image_user",
+    ["anva", "anva:anva", "10001", "+10001", "10001:10001", "10001:+10001"],
+)
+def test_generator_accepts_closed_nonroot_image_default_user(
+    tmp_path: Path, image_user: str
+) -> None:
+    resolved, inspect, provenance = _inputs(tmp_path)
+    inspect.write_text(
+        json.dumps(
+            [
+                {
+                    "Id": f"sha256:{IMAGE_SHA}",
+                    "Config": {
+                        "User": image_user,
+                        "Labels": {"org.opencontainers.image.revision": COMMIT},
+                    },
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = generate_launch_manifest(
+        resolved,
+        inspect,
+        build_provenance_path=provenance,
+        product_commit=COMMIT,
+        build_input_sha256=BUILD_INPUT,
+        product_image_sha256=IMAGE_SHA,
+        image_reference=IMAGE_REFERENCE,
+        launch_manifest_source=MANIFEST_PATH,
+    )
+
+    assert manifest["schema_version"] == 1
 
 
 @pytest.mark.unit

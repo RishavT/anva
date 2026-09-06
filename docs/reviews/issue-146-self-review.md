@@ -62,6 +62,13 @@ dependency images, closed runtime fields, backend networks, and mount inventorie
 `resolved_compose_sha256`. The established seven-service public field shape and prior valid v1
 manifests remain compatible.
 
+A third exact-head review reproduced Docker's signed-zero UID forms (`+0`, `-0`, and their
+`UID:GID` variants), which the leading-zero check did not cover. Image default identities now use
+a closed Docker-compatible parser: only the exact product account or an in-range decimal non-root
+UID is accepted, an explicit group must also be the product group or an in-range non-root numeric
+GID, and signed zero, negative/out-of-range IDs, whitespace, unknown names, and malformed forms
+fail closed.
+
 ## Verification
 
 - Exact host-resolved Make generation produced mode-`0444` output twice with identical SHA-256;
@@ -70,12 +77,12 @@ manifests remain compatible.
   `launch_manifest_missing` diagnostic. The generated manifest advanced past preflight.
 - The documented Compose/Make flow then completed real bootstrap, API, worker, and official MCP
   client operations through `AWAITING_EXTERNAL_REVIEW`; scoped services and volumes were removed.
-- Final-remediation launch/Compose/contract/runner tests passed 85 checks with four expected
+- Final-remediation launch/Compose/contract/runner tests passed 106 checks with four expected
   Docker-CLI-unavailable skips; both the base and optional-case real resolved Compose models passed
   the tightened generator.
 - Runner boundary, resume, and permission integrations passed 28 tests with one expected
   Docker-in-container skip.
-- The final-remediation unit marker passed 1,167 tests with five expected Docker-CLI-unavailable
+- The final-remediation unit marker passed 1,192 tests with five expected Docker-CLI-unavailable
   skips. The combined
   integration/contract/smoke gate passed 326 tests before exposing one stale artifact-count
   assertion; after changing 33 to 35, the exact failed contract and focused launch set passed.
