@@ -19,7 +19,6 @@ from anva.contracts.catalog import EXAMPLES
 from anva.core.exceptions import (
     IdempotencyConflictError,
     LeaseConflictError,
-    RequiredContextBudgetError,
     ResourceNotFoundError,
 )
 from anva.core.models import (
@@ -567,6 +566,7 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
     assert duplicate.evaluator_task.request_artifact.content_hash == (
         started.evaluator_task.request_artifact.content_hash
     )
+    monkeypatch.setattr(assurance_service, "build_context_packet", original_build_context_packet)
 
     packet = started.run.context_packet
     assert packet is not None
@@ -592,6 +592,27 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         ContextPacketItem.objects.filter(context_packet=packet).order_by("position")
     )
     artifact_items = cast(list[dict[str, object]], packet.artifact.payload["items"])
+    normalized_facets = cast(list[dict[str, object]], packet.normalized_request["retrieval_facets"])
+    represented_facet_labels = {
+        label
+        for item in artifact_items
+        for label in cast(
+            list[str], cast(dict[str, object], item["payload"]).get("retrieval_facets", [])
+        )
+    }
+    assert {cast(str, facet["label"]) for facet in normalized_facets} <= set(
+        represented_facet_labels
+    )
+    required_anchor_ids = {
+        cast(str, anchor["chunk_id"])
+        for anchor in cast(
+            list[dict[str, object]], packet.normalized_request.get("required_search_anchors", [])
+        )
+    }
+    assert required_anchor_ids <= {
+        cast(str, cast(dict[str, object], item["payload"]).get("chunk_id"))
+        for item in artifact_items
+    }
     assert [item.position for item in ordered_items] == list(range(1, len(ordered_items) + 1))
     assert [str(item.id) for item in ordered_items] == [item["item_id"] for item in artifact_items]
     assert [item.payload for item in ordered_items] == [item["payload"] for item in artifact_items]
@@ -858,6 +879,62 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
     assert changed.evaluator_task.state == changed.evaluator_task.State.CANCELLED
     assert changed.evaluator_task.failure_code == "STALE_CONTEXT"
 
+    # Block the real assertion-provenance hydration statement. The inner deadline
+    # wrapper must refresh PostgreSQL immediately before the substituted slow SQL.
+    packet_count = ContextPacketRecord.objects.count()
+    artifact_count = ImmutableArtifact.objects.count()
+    item_count = ContextPacketItem.objects.count()
+    citation_count = ContextPacketCitation.objects.count()
+    hydration_blocked = False
+
+    def block_provenance_hydration(
+        execute: Any,
+        sql: str,
+        params: object,
+        many: bool,
+        context: object,
+    ) -> Any:
+        nonlocal hydration_blocked
+        if not hydration_blocked and 'FROM "core_assertionprovenance"' in sql:
+            hydration_blocked = True
+            return execute("SELECT pg_sleep(%s)", (5,), False, context)
+        return execute(sql, params, many, context)
+
+    hydration_started = time.monotonic()
+    with connection.execute_wrapper(block_provenance_hydration):
+        hydration_timeout = start_assurance(
+            actor=actor,
+            pull_request_revision_id=ingested.revision.id,
+            policy_version_ids=[policy_version.id],
+            reference_time=reference_time,
+            deterministic_checks=[
+                {
+                    "code": "CONTACT_REDACTION_TEST",
+                    "status": "PASSED",
+                    "blocking": True,
+                    "summary": "Exact-head passenger contact redaction scenario passed.",
+                    "evidence_ids": [],
+                }
+            ],
+            work_item_revision_id=work.work_item_revision.id,
+        )
+    assert hydration_blocked is True
+    assert time.monotonic() - hydration_started < 5.0
+    assert hydration_timeout.run.state == AssuranceRun.State.FAILED
+    assert hydration_timeout.run.failure_code == "ASSURANCE_CONTEXT_INCOMPLETE"
+    assert hydration_timeout.evaluator_task is None
+    assert ContextPacketRecord.objects.count() == packet_count
+    assert ImmutableArtifact.objects.count() == artifact_count
+    assert ContextPacketItem.objects.count() == item_count
+    assert ContextPacketCitation.objects.count() == citation_count
+    invalidate_context_packets(
+        actor=actor,
+        organization_id=organization.id,
+        repository_id=repository.id,
+        reason="MANUAL",
+        details={"test": "separate-hydration-from-publication-timeout"},
+    )
+
     # A deadline exhausted after scopes/artifact/packet have begun publication rolls
     # the inner transaction back before the durable failed-run finalizer executes.
     packet_count = ContextPacketRecord.objects.count()
@@ -867,13 +944,16 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
     original_item_bulk_create = ContextPacketItem.objects.bulk_create
 
     def expire_at_item_publication(*_args: object, **_kwargs: object) -> object:
-        raise RequiredContextBudgetError("Context construction deadline exhausted")
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT pg_sleep(5)")
+        raise AssertionError("deadline statement timeout did not interrupt publication")
 
     monkeypatch.setattr(
         ContextPacketItem.objects,
         "bulk_create",
         expire_at_item_publication,
     )
+    tail_started = time.monotonic()
     tail_timeout = start_assurance(
         actor=actor,
         pull_request_revision_id=ingested.revision.id,
@@ -891,6 +971,7 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         work_item_revision_id=work.work_item_revision.id,
     )
     monkeypatch.setattr(ContextPacketItem.objects, "bulk_create", original_item_bulk_create)
+    assert time.monotonic() - tail_started < 5.0
     assert tail_timeout.run.state == AssuranceRun.State.FAILED
     assert tail_timeout.run.failure_code == "ASSURANCE_CONTEXT_INCOMPLETE"
     assert tail_timeout.evaluator_task is None
@@ -898,6 +979,13 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
     assert ImmutableArtifact.objects.count() == artifact_count
     assert ContextPacketItem.objects.count() == item_count
     assert ContextPacketCitation.objects.count() == citation_count
+    invalidate_context_packets(
+        actor=actor,
+        organization_id=organization.id,
+        repository_id=repository.id,
+        reason="MANUAL",
+        details={"test": "separate-row-cap-exhaustion-identity"},
+    )
 
     # Overall scan exhaustion is a durable, named non-ready assurance result,
     # never a context-build 409 and never an evaluator task over partial input.

@@ -6,6 +6,7 @@ import json
 import uuid
 from dataclasses import replace
 from pathlib import Path
+from time import monotonic
 from typing import Any, cast
 
 import pytest
@@ -65,6 +66,7 @@ from anva.core.services.context_packets import (
     RequiredSearchAnchor,
     RetrievalFacet,
     _chunk_candidate,
+    _deadline_statement_wrapper,
     _merge_candidates,
     _required_search_anchor_candidates,
     build_context_packet,
@@ -111,6 +113,41 @@ class _SqlCapture:
             self.sql = sql
             self.parameters = parameters
         return execute(sql, parameters, many, context)
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_deadline_wrapper_immediately_refreshes_and_shrinks_real_postgres_timeout() -> None:
+    events: list[tuple[str, Any]] = []
+    started = monotonic()
+    deadline = started + 0.25
+
+    with pytest.raises(DatabaseError), transaction.atomic():
+        with connection.cursor() as cursor:
+
+            def execute(
+                sql: str,
+                parameters: Any,
+                _many: bool,
+                _context: object,
+            ) -> object:
+                events.append((sql, parameters))
+                return cursor.execute(sql, parameters)
+
+            wrapped = _deadline_statement_wrapper(deadline)
+            wrapped(execute, "SELECT pg_sleep(%s)", (0.05,), False, {})
+            wrapped(execute, "SELECT pg_sleep(%s)", (5,), False, {})
+
+    assert monotonic() - started < 0.6
+    assert [sql for sql, _parameters in events] == [
+        "SET LOCAL statement_timeout = %s",
+        "SELECT pg_sleep(%s)",
+        "SET LOCAL statement_timeout = %s",
+        "SELECT pg_sleep(%s)",
+    ]
+    first_timeout = cast(tuple[int], events[0][1])[0]
+    second_timeout = cast(tuple[int], events[2][1])[0]
+    assert 1 <= second_timeout < first_timeout <= 250
 
 
 def _assert_explainable(capture: _SqlCapture) -> None:

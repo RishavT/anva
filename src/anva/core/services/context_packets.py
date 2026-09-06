@@ -7,6 +7,7 @@ import json
 import math
 import re
 import uuid
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from datetime import datetime
 from time import monotonic
@@ -79,6 +80,9 @@ CONTEXT_SCAN_MAX_OPERATIONS = 100_000
 # and publication reauthorization around this internal database scan.
 CONTEXT_SCAN_MAX_SECONDS = 4.0
 CONTEXT_STATEMENT_TIMEOUT_MS = 4_000
+_deadline_sql_wrapper_active: ContextVar[bool] = ContextVar(
+    "context_deadline_sql_wrapper_active", default=False
+)
 MAX_RETRIEVAL_FACETS = 8
 MAX_REQUIRED_SEARCH_ANCHORS = 50
 # One closed anchor is 373 canonical ASCII JSON bytes. The array adds 49 commas
@@ -1805,7 +1809,7 @@ def _require_context_deadline(deadline: float) -> None:
 
 def _set_remaining_statement_timeout(deadline: float) -> None:
     _require_context_deadline(deadline)
-    if connection.vendor != "postgresql":
+    if connection.vendor != "postgresql" or _deadline_sql_wrapper_active.get():
         return
     remaining_ms = max(
         1,
@@ -1813,6 +1817,26 @@ def _set_remaining_statement_timeout(deadline: float) -> None:
     )
     with connection.cursor() as cursor:
         cursor.execute("SET LOCAL statement_timeout = %s", (remaining_ms,))
+
+
+def _deadline_statement_wrapper(deadline: float) -> Any:
+    def wrapper(
+        execute: Any,
+        sql: str,
+        params: object,
+        many: bool,
+        context: object,
+    ) -> Any:
+        if not sql.lstrip().upper().startswith("SET LOCAL"):
+            _require_context_deadline(deadline)
+            remaining_ms = max(
+                1,
+                min(CONTEXT_STATEMENT_TIMEOUT_MS, int((deadline - monotonic()) * 1_000)),
+            )
+            execute("SET LOCAL statement_timeout = %s", (remaining_ms,), False, context)
+        return execute(sql, params, many, context)
+
+    return wrapper
 
 
 def _reauthorize_packet_current(
@@ -1993,8 +2017,7 @@ def _reauthorize_packet_current(
     return artifact
 
 
-@transaction.atomic
-def build_context_packet(
+def _build_context_packet_bounded(
     *,
     actor: ActorContext,
     repository_id: uuid.UUID,
@@ -2003,9 +2026,9 @@ def build_context_packet(
     budget: PacketBudget | None = None,
     retrieval_facets: tuple[RetrievalFacet, ...] | None = None,
     required_search_anchors: tuple[RequiredSearchAnchor, ...] | None = None,
+    deadline: float,
 ) -> tuple[ContextPacketRecord, bool]:
     """Build or reuse an exact immutable packet for one actor/repository snapshot."""
-    deadline = monotonic() + CONTEXT_SCAN_MAX_SECONDS
     normalized_task = " ".join(task.split())
     if not normalized_task or len(normalized_task) > 2_000:
         raise ValueError("task must contain between 1 and 2000 characters")
@@ -2096,6 +2119,18 @@ def build_context_packet(
         anchors=search_anchors,
         visible_scope_ids=visible_scopes,
     )
+    anchored_chunks = [
+        replace(
+            candidate,
+            matched_facets=_matching_facets(candidate.summary, facets),
+            required_context_facets=_required_matching_facets(
+                candidate.summary,
+                _matching_facets(candidate.summary, facets),
+                facets,
+            ),
+        )
+        for candidate in anchored_chunks
+    ]
 
     _set_remaining_statement_timeout(deadline)
     assertions = _assertion_candidates(
@@ -2114,7 +2149,12 @@ def build_context_packet(
     )
     chunks: list[PacketCandidate] = []
     per_facet_limit = min(100, max(25, budget.max_items))
+    represented_facets = {
+        label for candidate in anchored_chunks for label in candidate.matched_facets
+    }
     for facet_position, facet in enumerate(facets):
+        if change_aware and facet.label in represented_facets:
+            continue
         _set_remaining_statement_timeout(deadline)
         search_response = search_chunks(
             actor=actor,
@@ -2442,6 +2482,47 @@ def build_context_packet(
     )
     _require_context_deadline(deadline)
     return packet, True
+
+
+@transaction.atomic
+def build_context_packet(
+    *,
+    actor: ActorContext,
+    repository_id: uuid.UUID,
+    task: str,
+    phase: str,
+    budget: PacketBudget | None = None,
+    retrieval_facets: tuple[RetrievalFacet, ...] | None = None,
+    required_search_anchors: tuple[RequiredSearchAnchor, ...] | None = None,
+) -> tuple[ContextPacketRecord, bool]:
+    """Build or reuse an exact immutable packet under one database-enforced deadline."""
+    deadline = monotonic() + CONTEXT_SCAN_MAX_SECONDS
+    if connection.vendor != "postgresql":
+        return _build_context_packet_bounded(
+            actor=actor,
+            repository_id=repository_id,
+            task=task,
+            phase=phase,
+            budget=budget,
+            retrieval_facets=retrieval_facets,
+            required_search_anchors=required_search_anchors,
+            deadline=deadline,
+        )
+    token = _deadline_sql_wrapper_active.set(True)
+    try:
+        with connection.execute_wrapper(_deadline_statement_wrapper(deadline)):
+            return _build_context_packet_bounded(
+                actor=actor,
+                repository_id=repository_id,
+                task=task,
+                phase=phase,
+                budget=budget,
+                retrieval_facets=retrieval_facets,
+                required_search_anchors=required_search_anchors,
+                deadline=deadline,
+            )
+    finally:
+        _deadline_sql_wrapper_active.reset(token)
 
 
 def get_context_packet(
