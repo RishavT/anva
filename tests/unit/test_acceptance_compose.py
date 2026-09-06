@@ -142,7 +142,7 @@ def test_runtime_image_owns_fresh_canonical_volume_seed_path() -> None:
     assert "mkdir -p /app/acceptance/canonical" in dockerfile
     assert "chmod 01777 /app/acceptance/canonical" in dockerfile
     assert "chown -R anva:anva /app" in dockerfile
-    assert "USER anva" in dockerfile
+    assert dockerfile.count("USER 10001:10001") == 3
     assert services["acceptance-adapter"]["user"] == (
         "${ANVA_ACCEPTANCE_UID:-10001}:${ANVA_ACCEPTANCE_GID:-10001}"
     )
@@ -478,6 +478,8 @@ def test_resolved_acceptance_compose_enforces_edge_backend_separation() -> None:
     for name in phases:
         assert services[name]["user"] == "10001:10001"
         assert set(cast(dict[str, object], services[name]["networks"])) == {"acceptance-edge"}
+    for name in ("worker", "mcp", "migrate"):
+        assert services[name]["user"] == "10001:10001"
     for name in ("postgres", "minio", "worker", "migrate"):
         assert set(cast(dict[str, object], services[name]["networks"])) == {"acceptance-backend"}
     for name in ("api", "mcp"):

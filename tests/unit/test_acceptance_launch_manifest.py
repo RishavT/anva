@@ -151,6 +151,7 @@ def _compose(canary_value: str = "PRIVATE-CANARY") -> dict[str, object]:
             "depends_on": deepcopy(core_dependencies),
             "image": IMAGE_REFERENCE,
             "networks": {"acceptance-backend": None},
+            "user": "10001:10001",
             "volumes": [canonical],
         },
         "mcp": {
@@ -158,6 +159,7 @@ def _compose(canary_value: str = "PRIVATE-CANARY") -> dict[str, object]:
             "depends_on": deepcopy(core_dependencies),
             "image": IMAGE_REFERENCE,
             "networks": {"acceptance-backend": None, "acceptance-edge": None},
+            "user": "10001:10001",
             "volumes": [canonical],
         },
         "postgres": {
@@ -199,6 +201,7 @@ def _compose(canary_value: str = "PRIVATE-CANARY") -> dict[str, object]:
             "image": IMAGE_REFERENCE,
             "depends_on": {"postgres": {"condition": "service_healthy", "required": True}},
             "networks": {"acceptance-backend": None},
+            "user": "10001:10001",
         },
     }
     for name in REQUIRED_LAUNCH_SERVICES - {"api", "worker", "mcp"}:
@@ -240,7 +243,7 @@ def _inputs(tmp_path: Path, compose: dict[str, object] | None = None) -> tuple[P
                 {
                     "Id": f"sha256:{IMAGE_SHA}",
                     "Config": {
-                        "User": "anva",
+                        "User": "10001:10001",
                         "Labels": {"org.opencontainers.image.revision": COMMIT},
                     },
                 }
@@ -277,6 +280,12 @@ def test_generated_manifest_is_deterministic_schema_valid_secret_free_and_accept
         value.update({"name": f"other-project_{name}", "ipam": {}})
     for name, value in cast(dict[str, dict[str, object]], second_compose["volumes"]).items():
         value["name"] = f"other-project_{name}"
+    second_services = cast(dict[str, dict[str, object]], second_compose["services"])
+    for name in REQUIRED_LAUNCH_SERVICES | {"migrate"}:
+        second_services[name]["build"] = {
+            "context": f"/different/absolute/checkout/{name}",
+            "target": "runtime",
+        }
     second = _generate(second_root, second_compose)
 
     assert first == second
@@ -358,6 +367,24 @@ def test_schema_service_inventory_matches_runtime_and_old_valid_manifest_is_acce
                 dict[str, object],
                 cast(dict[str, object], value["services"])["acceptance-product-start"],
             ).__setitem__("user", "0:0"),
+            "launch_runtime_mismatch",
+        ),
+        (
+            lambda value: cast(
+                dict[str, object], cast(dict[str, object], value["services"])["worker"]
+            ).pop("user"),
+            "launch_runtime_mismatch",
+        ),
+        (
+            lambda value: cast(
+                dict[str, object], cast(dict[str, object], value["services"])["mcp"]
+            ).__setitem__("user", "anva:anva"),
+            "launch_runtime_mismatch",
+        ),
+        (
+            lambda value: cast(
+                dict[str, object], cast(dict[str, object], value["services"])["migrate"]
+            ).__setitem__("user", "2147483647"),
             "launch_runtime_mismatch",
         ),
         (
@@ -479,6 +506,13 @@ def test_generator_fails_closed_for_service_image_runtime_and_bind_changes(
         "anva:root",
         "10001:0",
         "10001:-0",
+        "anva",
+        "anva:anva",
+        "10001",
+        "+10001",
+        "2147483647",
+        "10001:+10001",
+        "10002:10002",
         10001,
         None,
     ],
@@ -518,39 +552,8 @@ def test_generator_rejects_unsafe_or_invalid_image_default_user(
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize(
-    "image_user",
-    ["anva", "anva:anva", "10001", "+10001", "10001:10001", "10001:+10001"],
-)
-def test_generator_accepts_closed_nonroot_image_default_user(
-    tmp_path: Path, image_user: str
-) -> None:
-    resolved, inspect, provenance = _inputs(tmp_path)
-    inspect.write_text(
-        json.dumps(
-            [
-                {
-                    "Id": f"sha256:{IMAGE_SHA}",
-                    "Config": {
-                        "User": image_user,
-                        "Labels": {"org.opencontainers.image.revision": COMMIT},
-                    },
-                }
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-    manifest = generate_launch_manifest(
-        resolved,
-        inspect,
-        build_provenance_path=provenance,
-        product_commit=COMMIT,
-        build_input_sha256=BUILD_INPUT,
-        product_image_sha256=IMAGE_SHA,
-        image_reference=IMAGE_REFERENCE,
-        launch_manifest_source=MANIFEST_PATH,
-    )
+def test_generator_accepts_exact_numeric_nonroot_image_default_user(tmp_path: Path) -> None:
+    manifest = _generate(tmp_path)
 
     assert manifest["schema_version"] == 1
 

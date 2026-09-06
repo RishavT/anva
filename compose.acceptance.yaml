@@ -44,6 +44,7 @@ services:
     networks: [acceptance-backend]
 
   migrate:
+    user: "10001:10001"
     networks: [acceptance-backend]
 
   acceptance-adapter:
@@ -120,6 +121,7 @@ services:
       - anva_bootstrap_secret
 
   worker:
+    user: "10001:10001"
     environment:
       ANVA_FILESYSTEM_ALLOWED_ROOTS: /app/acceptance/canonical/payload
     volumes:
@@ -127,6 +129,7 @@ services:
     networks: [acceptance-backend]
 
   mcp:
+    user: "10001:10001"
     environment:
       ANVA_FILESYSTEM_ALLOWED_ROOTS: /app/acceptance/canonical/payload
     volumes:

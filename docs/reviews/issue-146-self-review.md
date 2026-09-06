@@ -63,11 +63,14 @@ dependency images, closed runtime fields, backend networks, and mount inventorie
 manifests remain compatible.
 
 A third exact-head review reproduced Docker's signed-zero UID forms (`+0`, `-0`, and their
-`UID:GID` variants), which the leading-zero check did not cover. Image default identities now use
-a closed Docker-compatible parser: only the exact product account or an in-range decimal non-root
-UID is accepted, an explicit group must also be the product group or an in-range non-root numeric
-GID, and signed zero, negative/out-of-range IDs, whitespace, unknown names, and malformed forms
-fail closed.
+`UID:GID` variants), which the leading-zero check did not cover. The next review then showed that
+an unmapped bare numeric UID inherits GID 0 and that named users and groups cannot be proven
+non-root from image metadata alone. The runtime image now declares exact numeric default identity
+`10001:10001`; `worker`, `mcp`, and `migrate` also declare that pair explicitly. The generator
+requires the exact image default and an explicit in-range positive numeric `UID:GID` on every
+launched product service, rejecting bare IDs, names, zero groups, signed-zero, out-of-range,
+whitespace, non-string, and malformed forms. Absolute Compose build contexts remain outside the
+runtime identity hash because the launch uses the already digest-pinned image.
 
 ## Verification
 
@@ -77,12 +80,12 @@ fail closed.
   `launch_manifest_missing` diagnostic. The generated manifest advanced past preflight.
 - The documented Compose/Make flow then completed real bootstrap, API, worker, and official MCP
   client operations through `AWAITING_EXTERNAL_REVIEW`; scoped services and volumes were removed.
-- Final-remediation launch/Compose/contract/runner tests passed 106 checks with four expected
+- Final-remediation launch/Compose/contract/runner tests passed 111 checks with four expected
   Docker-CLI-unavailable skips; both the base and optional-case real resolved Compose models passed
   the tightened generator.
 - Runner boundary, resume, and permission integrations passed 28 tests with one expected
   Docker-in-container skip.
-- The final-remediation unit marker passed 1,192 tests with five expected Docker-CLI-unavailable
+- The final-remediation unit marker passed 1,197 tests with five expected Docker-CLI-unavailable
   skips. The combined
   integration/contract/smoke gate passed 326 tests before exposing one stale artifact-count
   assertion; after changing 33 to 35, the exact failed contract and focused launch set passed.

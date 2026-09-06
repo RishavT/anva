@@ -72,11 +72,12 @@ CORE_RUNTIME_KEYS = frozenset(
         "read_only",
         "security_opt",
         "tmpfs",
+        "user",
         "volumes",
     }
 )
 CORE_SERVICE_RUNTIME_KEYS = {
-    "api": CORE_RUNTIME_KEYS | {"secrets", "user"},
+    "api": CORE_RUNTIME_KEYS | {"secrets"},
     "worker": CORE_RUNTIME_KEYS,
     "mcp": CORE_RUNTIME_KEYS,
 }
@@ -226,18 +227,14 @@ def _docker_numeric_id(value: str) -> int | None:
     return int(digits)
 
 
-def _image_user_is_nonroot(image_user: str) -> bool:
-    """Accept only the product account or in-range numeric non-root UID/GID identities."""
-    if image_user != image_user.strip() or image_user.count(":") > 1:
+def _numeric_user_is_nonroot(user: object) -> bool:
+    """Return whether a Docker user is an explicit, in-range, positive numeric UID:GID."""
+    if not isinstance(user, str) or user != user.strip() or user.count(":") != 1:
         return False
-    user, separator, group = image_user.partition(":")
-    uid = _docker_numeric_id(user)
-    if user != "anva" and (uid is None or uid == 0):
-        return False
-    if not separator:
-        return True
+    uid_text, _, group = user.partition(":")
+    uid = _docker_numeric_id(uid_text)
     gid = _docker_numeric_id(group)
-    return group == "anva" or (gid is not None and gid > 0)
+    return uid is not None and uid > 0 and gid is not None and gid > 0
 
 
 def _canonical_bytes(value: object) -> bytes:
@@ -323,6 +320,8 @@ def _validate_dependency(name: str, service: Mapping[str, object], image_referen
         raise _reject("launch_service_set_mismatch", f"Dependency service {name} closure differs")
     if name == "migrate":
         _validate_closed_security(name, service)
+        if not _numeric_user_is_nonroot(service.get("user")):
+            raise _reject("launch_runtime_mismatch", "Dependency service migrate is not non-root")
 
 
 def _validate_closed_security(name: str, service: Mapping[str, object]) -> None:
@@ -473,8 +472,7 @@ def _validate_phase(
     *,
     launch_manifest_source: Path,
 ) -> None:
-    user = service.get("user")
-    if not isinstance(user, str) or re.fullmatch(r"[1-9][0-9]*:[1-9][0-9]*", user) is None:
+    if not _numeric_user_is_nonroot(service.get("user")):
         raise _reject("launch_runtime_mismatch", f"Launch service {name} is not non-root")
     expected_scalars: dict[str, object] = {
         "read_only": True,
@@ -557,7 +555,7 @@ def generate_launch_manifest(
         image_values.get("Id") != image_id
         or not isinstance(labels, dict)
         or labels.get("org.opencontainers.image.revision") != product_commit
-        or not _image_user_is_nonroot(image_user)
+        or image_user != "10001:10001"
     ):
         raise _reject("launch_image_mismatch", "Docker image does not match exact identity pins")
 
@@ -593,6 +591,8 @@ def generate_launch_manifest(
             _validate_phase(name, service, launch_manifest_source=launch_manifest_source)
         else:
             _validate_mounts(name, service, launch_manifest_source=launch_manifest_source)
+            if not _numeric_user_is_nonroot(service.get("user")):
+                raise _reject("launch_runtime_mismatch", f"Launch service {name} is not non-root")
             if name == "api":
                 if service.get("secrets") != [
                     {
@@ -601,12 +601,6 @@ def generate_launch_manifest(
                     }
                 ]:
                     raise _reject("launch_runtime_mismatch", "Launch service api secret differs")
-                user = service.get("user")
-                if (
-                    not isinstance(user, str)
-                    or re.fullmatch(r"[1-9][0-9]*:[1-9][0-9]*", user) is None
-                ):
-                    raise _reject("launch_runtime_mismatch", "Launch service api is not non-root")
         identity = _runtime_identity(service)
         runtime[name] = identity
         manifest_services[name] = {
