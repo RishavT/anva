@@ -105,7 +105,62 @@ case and must not be copied into a scenario bundle.
 ## Run the product acceptance phases
 
 Pre-create private host directories with mode `0700`, and preserve the exact product commit plus
-all three corpus pins outside the runner. `acceptance-start` bootstraps a distinct initiator and
+all three corpus pins outside the runner.
+
+### Generate the launch manifest
+
+The launch manifest is a required numeric-version-`1` public contract. Its closed schema is
+[`contracts/json-schema/v1/launch-manifest.schema.json`](../../contracts/json-schema/v1/launch-manifest.schema.json)
+and its shape is illustrated by
+[`contracts/examples/v1/launch-manifest.json`](../../contracts/examples/v1/launch-manifest.json).
+It binds the exact product commit, build input, installed package, Docker image ID/reference,
+required service inventory, and SHA-256 identities of the security-relevant resolved Compose
+model. The resolved-model identity includes the fixed `postgres`, `minio`, `minio-init`, and
+`migrate` dependency closure actually started for `api`, `worker`, and `mcp`, while the public
+service inventory remains the established exact seven product/phase services. It intentionally
+contains neither environment values, secret material, host paths, nor the resolved model itself.
+
+Use the supported generator; a raw `docker compose config` document is not a launch manifest.
+The host output path is required by every Make phase and must be absolute. Before every product
+phase, its Make target invokes `make acceptance-launch-manifest` automatically. This resolves the
+current Compose and image state and either creates the protected manifest or requires an exact byte
+match with it, so a resumed review or finalization cannot run after launch configuration drift. The
+explicit target is available for preflight or evidence collection:
+
+```sh
+export ANVA_REVISION=<exact-40-character-product-commit>
+export ANVA_BUILD_INPUT_SHA256=<exact-64-character-build-input-sha256>
+export ANVA_IMAGE_SHA256=<docker-image-id-without-the-sha256-prefix>
+export ANVA_ACCEPTANCE_LAUNCH_MANIFEST=/protected/path/launch-manifest.json
+export ANVA_ACCEPTANCE_STATE_DIR=/private/path/state
+
+make acceptance-launch-manifest
+```
+
+The target resolves the acceptance Compose model, inspects the pinned local image, and runs the
+generator from that exact image with no network, a read-only root, no capabilities, no privilege
+escalation, and the invoking non-root host identity. Generator inputs live only in a mode-`0700`
+temporary directory beneath the state directory and are removed. Before emitting deterministic
+JSON it verifies the exact seven product/phase services, their fixed four-service dependency
+closure, image identities, internal-only network topology, non-root acceptance phases, read-only
+roots, dropped capabilities, PID/memory ceilings, and every allowed bind's exact target/write mode
+and `create_host_path: false` setting. A
+missing or changed service/image/runtime/bind fails closed with a stable reason code.
+
+The generated file is mode `0444`. If the output already exists as a regular read-only file, the
+target preserves it only when a newly generated candidate for the current resolved configuration
+is byte-identical. Drift is rejected without changing the protected artifact. Move an obsolete
+manifest aside before intentionally generating a replacement. Symlinked or writable existing
+files are rejected. Interrupt and hangup signals terminate generation with a failing status and
+remove private inputs and any unpublished output temporary file.
+
+For direct CLI use, `--launch-manifest` is optional only because it defaults to the supported
+in-container path `/acceptance/launch/manifest.json`. The host-side Make variable
+`ANVA_ACCEPTANCE_LAUNCH_MANIFEST` is required because Compose must bind an explicit protected file
+to that default path. Omitting the CLI option never disables validation and there is no downgrade
+or bypass mode.
+
+`acceptance-start` bootstraps a distinct initiator and
 least-privilege reviewer, syncs the canonical source, exercises search/context through real MCP,
 queries Canvas through HTTP, imports work and policy, uploads verified evidence bytes, evaluates
 the case's exact pull request, and, when declared, proves that its independently numbered newer
@@ -114,6 +169,9 @@ journey. The runner then stops at `AWAITING_EXTERNAL_REVIEW`.
 
 ```sh
 export ANVA_REVISION=<exact-40-character-product-commit>
+export ANVA_BUILD_INPUT_SHA256=<exact-64-character-build-input-sha256>
+export ANVA_IMAGE_SHA256=<docker-image-id-without-the-sha256-prefix>
+export ANVA_ACCEPTANCE_LAUNCH_MANIFEST=/protected/path/launch-manifest.json
 export ANVA_ACCEPTANCE_STATE_DIR=/private/path/state
 export ANVA_ACCEPTANCE_CREDENTIAL_DIR=/private/path/credentials
 export ANVA_ACCEPTANCE_HANDOFF_DIR=/private/path/handoff
@@ -177,6 +235,15 @@ not retain response bodies, exception text, URLs, headers, or credentials. In pa
 operator actions while the command's public output remains deliberately non-oracular. Treat the
 file as the most recent start failure; copy it to operator-owned evidence before retrying if the
 failure record must be retained.
+
+Launch rejection occurs before a resume record exists, but it now writes the same private
+diagnostic with stage `launch_manifest_preflight`, run ID `unavailable`, and an allowlisted reason.
+`launch_manifest_missing` means run `make acceptance-launch-manifest`;
+`launch_manifest_permissions` means replace a symlink/special file or remove write permission;
+`launch_manifest_malformed` and `launch_manifest_schema` mean generate a fresh schema-valid file;
+the `*_mismatch` reasons name the stale product/build/package/image/service identity that must be
+rebuilt or regenerated. No exception text, manifest content, Compose content, host path, token, or
+secret is copied into the diagnostic or generic command response.
 
 ## Fail closed and clean up
 

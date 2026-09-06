@@ -78,7 +78,7 @@ RUN UV_COMPILE_BYTECODE=false uv pip install --no-cache --no-deps /dist/*.whl \
     && mkdir -p /app/acceptance/canonical \
     && chmod 01777 /app/acceptance/canonical \
     && chown -R anva:anva /app
-USER anva
+USER 10001:10001
 LABEL org.opencontainers.image.title="Anva" \
     org.opencontainers.image.version=${ANVA_VERSION} \
     org.opencontainers.image.revision=${ANVA_REVISION} \
@@ -103,7 +103,7 @@ RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen
 COPY tests ./tests
 RUN mkdir -p /app/staticfiles \
     && chown -R anva:anva /app
-USER anva
+USER 10001:10001
 CMD ["pytest"]
 
 FROM test AS browser-test
@@ -111,5 +111,5 @@ USER root
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends chromium chromium-driver \
     && rm -rf /var/lib/apt/lists/*
-USER anva
+USER 10001:10001
 CMD ["pytest", "-m", "browser"]

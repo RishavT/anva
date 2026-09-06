@@ -400,6 +400,19 @@ class AcceptanceRunner:
                 expected_commit=config.product_commit,
                 expected_build_input_sha256=config.build_input_sha256,
             )
+        except AcceptanceProvenanceError as error:
+            try:
+                _write_operator_diagnostic(
+                    config.state_path,
+                    run_id=self._diagnostic_run_id,
+                    stage="build_provenance_preflight",
+                    reason_code=error.reason_code,
+                    boundary_status=None,
+                )
+            except OSError:
+                pass
+            raise AcceptanceRunnerError(str(error), reason_code=error.reason_code) from error
+        try:
             launch_manifest_sha256 = attest_launch_manifest(
                 config.launch_manifest_path,
                 expected_commit=config.product_commit,
@@ -410,7 +423,17 @@ class AcceptanceRunner:
                 expected_service=config.launch_service,
             )
         except AcceptanceProvenanceError as error:
-            raise AcceptanceRunnerError(str(error)) from error
+            try:
+                _write_operator_diagnostic(
+                    config.state_path,
+                    run_id=self._diagnostic_run_id,
+                    stage="launch_manifest_preflight",
+                    reason_code=error.reason_code,
+                    boundary_status=None,
+                )
+            except OSError:
+                pass
+            raise AcceptanceRunnerError(str(error), reason_code=error.reason_code) from error
         self.product_package_sha256 = provenance["package_sha256"]
         self.launch_manifest_sha256 = launch_manifest_sha256
         self.corpus = verify_canonical_corpus(

@@ -2012,6 +2012,70 @@ ACCEPTANCE_CASE_SCHEMA["x-anva-input"] = {
     },
 }
 
+LAUNCH_SERVICE_SCHEMA: Final[dict[str, object]] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "config_sha256": SHA256_FIELD,
+        "engine_image_id": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+        "image_reference": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$",
+        },
+    },
+    "required": ["config_sha256", "engine_image_id", "image_reference"],
+}
+LAUNCH_SERVICE_NAMES: Final[tuple[str, ...]] = (
+    "api",
+    "worker",
+    "mcp",
+    "acceptance-product-start",
+    "acceptance-review-request",
+    "acceptance-review-submit",
+    "acceptance-product-finalize",
+)
+LAUNCH_MANIFEST_SCHEMA: Final[dict[str, object]] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": f"{SCHEMA_BASE_URI}/launch-manifest.schema.json",
+    "title": "Anva Docker Acceptance Launch Manifest",
+    "description": (
+        "Immutable, secret-free attestation of the exact image and security-relevant "
+        "resolved Compose model used by every public acceptance phase."
+    ),
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "schema_version": {"type": "integer", "const": 1},
+        "kind": {"type": "string", "const": "anva-docker-launch"},
+        "product_commit": COMMIT_FIELD,
+        "build_input_sha256": SHA256_FIELD,
+        "package_sha256": SHA256_FIELD,
+        "engine_image_id": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+        "image_reference": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$",
+        },
+        "resolved_compose_sha256": SHA256_FIELD,
+        "services": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {name: deepcopy(LAUNCH_SERVICE_SCHEMA) for name in LAUNCH_SERVICE_NAMES},
+            "required": list(LAUNCH_SERVICE_NAMES),
+        },
+    },
+    "required": [
+        "schema_version",
+        "kind",
+        "product_commit",
+        "build_input_sha256",
+        "package_sha256",
+        "engine_image_id",
+        "image_reference",
+        "resolved_compose_sha256",
+        "services",
+    ],
+}
+
 SCHEMAS: Final[dict[str, dict[str, object]]] = {
     "acceptance-case": ACCEPTANCE_CASE_SCHEMA,
     "acceptance-corpus": ACCEPTANCE_CORPUS_SCHEMA,
@@ -2026,6 +2090,7 @@ SCHEMAS: Final[dict[str, dict[str, object]]] = {
     "finding": FINDING_SCHEMA,
     "github-publication": GITHUB_PUBLICATION_SCHEMA,
     "knowledge-proposal": KNOWLEDGE_PROPOSAL_SCHEMA,
+    "launch-manifest": LAUNCH_MANIFEST_SCHEMA,
     "policy": POLICY_SCHEMA,
     "work-item-import": WORK_ITEM_IMPORT_SCHEMA,
 }
@@ -2280,6 +2345,24 @@ EXAMPLES: Final[dict[str, dict[str, object]]] = {
             "max_total_bytes": 10_485_760,
             "max_file_bytes": 1_048_576,
             "max_depth": 8,
+        },
+    },
+    "launch-manifest": {
+        "schema_version": 1,
+        "kind": "anva-docker-launch",
+        "product_commit": "d" * 40,
+        "build_input_sha256": "b" * 64,
+        "package_sha256": "c" * 64,
+        "engine_image_id": f"sha256:{'e' * 64}",
+        "image_reference": "anva:0.1.6",
+        "resolved_compose_sha256": "a" * 64,
+        "services": {
+            name: {
+                "config_sha256": "f" * 64,
+                "engine_image_id": f"sha256:{'e' * 64}",
+                "image_reference": "anva:0.1.6",
+            }
+            for name in LAUNCH_SERVICE_NAMES
         },
     },
     "acceptance-result": {

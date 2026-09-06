@@ -142,7 +142,7 @@ def test_runtime_image_owns_fresh_canonical_volume_seed_path() -> None:
     assert "mkdir -p /app/acceptance/canonical" in dockerfile
     assert "chmod 01777 /app/acceptance/canonical" in dockerfile
     assert "chown -R anva:anva /app" in dockerfile
-    assert "USER anva" in dockerfile
+    assert dockerfile.count("USER 10001:10001") == 3
     assert services["acceptance-adapter"]["user"] == (
         "${ANVA_ACCEPTANCE_UID:-10001}:${ANVA_ACCEPTANCE_GID:-10001}"
     )
@@ -319,7 +319,7 @@ def test_product_acceptance_make_targets_use_scoped_compose_services() -> None:
         ("acceptance-review-submit", "acceptance-review-submit"),
         ("acceptance-finalize", "acceptance-product-finalize"),
     ):
-        assert f"{target}: acceptance-identity-preflight" in makefile
+        assert f"{target}: acceptance-launch-manifest" in makefile
         body = makefile.split(f"\n{target}:", 1)[1].split("\n\n", 1)[0]
         assert f"run --rm --no-deps {service}" in body
         assert "prune" not in body
@@ -327,6 +327,210 @@ def test_product_acceptance_make_targets_use_scoped_compose_services() -> None:
         assert 'test -n "$(ANVA_IMAGE_SHA256)"' in body
         assert 'test -n "$(ANVA_BUILD_INPUT_SHA256)"' in body
         assert 'test -n "$(ANVA_ACCEPTANCE_LAUNCH_MANIFEST)"' in body
+
+
+@pytest.mark.unit
+def test_public_launch_manifest_make_path_is_hardened_and_start_uses_it() -> None:
+    makefile = Path("Makefile").read_text(encoding="utf-8")
+    body = makefile.split("\nacceptance-launch-manifest: acceptance-identity-preflight", 1)[
+        1
+    ].split("\n\nacceptance-start:", 1)[0]
+
+    assert "acceptance-start: acceptance-launch-manifest" in makefile
+    assert "ANVA_ACCEPTANCE_LAUNCH_MANIFEST is the required protected host output path" in body
+    assert "Reusing existing immutable launch manifest after exact" in body
+    assert "does not match the current resolved launch configuration" in body
+    assert "acceptance launch-manifest" in body
+    assert "--network none" in body
+    assert "--read-only" in body
+    assert "--cap-drop ALL" in body
+    assert "--security-opt no-new-privileges" in body
+    assert '--user "$$(id -u):$$(id -g)"' in body
+    assert 'test "$$(id -u)" -ne 0' in body
+    assert "readonly" in body
+    assert "chmod 0444" in body
+    assert "config --format json" in body
+    assert "docker image inspect" in body
+    assert "cmp --silent" in body
+    assert 'mktemp "$$(dirname "$$manifest")/.$$(basename "$$manifest").tmp.XXXXXX"' in body
+    assert 'ln "$$output_tmp" "$$manifest"' in body
+    assert "trap cleanup EXIT" in body
+    assert "trap 'trap - HUP INT TERM; exit 129' HUP" in body
+    assert "trap 'trap - HUP INT TERM; exit 130' INT" in body
+    assert "trap 'trap - HUP INT TERM; exit 143' TERM" in body
+    assert 'if test -d "$$input_dir"' in body
+    assert "trap cleanup EXIT HUP INT TERM" not in body
+    assert body.index("config --format json") < body.index("cmp --silent")
+    assert body.index("cmp --silent") < body.index("Reusing existing immutable launch manifest")
+    assert "prune" not in body
+
+
+@pytest.mark.unit
+def test_launch_manifest_make_reuses_only_exact_current_candidate(tmp_path: Path) -> None:
+    make = shutil.which("make")
+    if make is None:
+        pytest.skip("make is unavailable for launch manifest lifecycle validation")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text(
+        """#!/bin/sh
+if test "$1" = "compose"; then
+    printf '%s\n' '{"services":{}}'
+elif test "$1" = "image"; then
+    printf '%s\n' '[{}]'
+elif test "$1" = "run"; then
+    printf '%s\n' "$FAKE_MANIFEST_PAYLOAD"
+else
+    exit 64
+fi
+""",
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o755)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(mode=0o700)
+    manifest = tmp_path / "launch-manifest.json"
+    environment = os.environ.copy()
+    environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+    command = [
+        make,
+        "acceptance-launch-manifest",
+        f"ANVA_REVISION={'a' * 40}",
+        f"ANVA_IMAGE_SHA256={'b' * 64}",
+        f"ANVA_BUILD_INPUT_SHA256={'c' * 64}",
+        "ANVA_IMAGE_REPOSITORY=fake-anva",
+        "ANVA_VERSION=test",
+        f"ANVA_ACCEPTANCE_LAUNCH_MANIFEST={manifest}",
+        f"ANVA_ACCEPTANCE_STATE_DIR={state_dir}",
+    ]
+
+    environment["FAKE_MANIFEST_PAYLOAD"] = '{"identity":"current"}'
+    created = subprocess.run(  # noqa: S603 - executable resolved by shutil.which
+        command, check=False, capture_output=True, text=True, env=environment
+    )
+    assert created.returncode == 0, created.stderr
+    original = manifest.read_bytes()
+    assert original == b'{"identity":"current"}\n'
+    assert manifest.stat().st_mode & 0o777 == 0o444
+
+    tmp_path.chmod(0o555)
+    try:
+        reused = subprocess.run(  # noqa: S603 - executable resolved by shutil.which
+            command, check=False, capture_output=True, text=True, env=environment
+        )
+        assert reused.returncode == 0, reused.stderr
+        assert "after exact current-configuration comparison" in reused.stdout
+        assert manifest.read_bytes() == original
+
+        environment["FAKE_MANIFEST_PAYLOAD"] = '{"identity":"drifted"}'
+        rejected = subprocess.run(  # noqa: S603 - executable resolved by shutil.which
+            command, check=False, capture_output=True, text=True, env=environment
+        )
+        assert rejected.returncode == 2
+        assert "does not match the current resolved launch configuration" in rejected.stderr
+        assert manifest.read_bytes() == original
+    finally:
+        tmp_path.chmod(0o700)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("signal_name", ["HUP", "INT", "TERM"])
+def test_launch_manifest_make_signal_fails_closed_and_cleans_once(
+    tmp_path: Path, signal_name: str
+) -> None:
+    make = shutil.which("make")
+    if make is None:
+        pytest.skip("make is unavailable for launch manifest signal validation")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text(
+        """#!/bin/sh
+if test "$1" = "compose"; then
+    kill "-$FAKE_SIGNAL" "$PPID"
+    printf '%s\n' '{"services":{}}'
+    exit 0
+fi
+exit 64
+""",
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o755)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(mode=0o700)
+    manifest = tmp_path / "launch-manifest.json"
+    environment = os.environ.copy()
+    environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+    environment["FAKE_SIGNAL"] = signal_name
+    command = [
+        make,
+        "acceptance-launch-manifest",
+        f"ANVA_REVISION={'a' * 40}",
+        f"ANVA_IMAGE_SHA256={'b' * 64}",
+        f"ANVA_BUILD_INPUT_SHA256={'c' * 64}",
+        "ANVA_IMAGE_REPOSITORY=fake-anva",
+        "ANVA_VERSION=test",
+        f"ANVA_ACCEPTANCE_LAUNCH_MANIFEST={manifest}",
+        f"ANVA_ACCEPTANCE_STATE_DIR={state_dir}",
+    ]
+
+    interrupted = subprocess.run(  # noqa: S603 - executable resolved by shutil.which
+        command, check=False, capture_output=True, text=True, env=environment
+    )
+
+    assert interrupted.returncode != 0
+    assert not manifest.exists()
+    assert list(state_dir.iterdir()) == []
+    assert "No such file or directory" not in interrupted.stderr
+
+
+@pytest.mark.unit
+def test_cli_launch_manifest_option_is_explicitly_optional_with_supported_default(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from anva.entrypoints.cli import build_parser
+
+    parser = build_parser()
+    with pytest.raises(SystemExit) as captured:
+        parser.parse_args(["acceptance", "start", "--help"])
+    assert captured.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "Optional in-container manifest path" in help_text
+    assert "/acceptance/launch/manifest.json" in help_text
+    assert "ANVA_ACCEPTANCE_LAUNCH_MANIFEST" in help_text
+
+    arguments = parser.parse_args(
+        [
+            "acceptance",
+            "start",
+            "--canonical-root",
+            "/canonical",
+            "--state",
+            "/state/resume.json",
+            "--output",
+            "/output",
+            "--manifest-sha256",
+            "a" * 64,
+            "--source-fingerprint",
+            "b" * 64,
+            "--canonical-manifest-sha256",
+            "c" * 64,
+            "--product-commit",
+            "d" * 40,
+            "--product-image-sha256",
+            "e" * 64,
+            "--product-image-reference",
+            "anva:test",
+            "--build-input-sha256",
+            "f" * 64,
+            "--launch-service",
+            "acceptance-product-start",
+            "--credential-output",
+            "/credentials/credentials.json",
+        ]
+    )
+    assert arguments.launch_manifest == Path("/acceptance/launch/manifest.json")
 
 
 @pytest.mark.unit
@@ -346,6 +550,9 @@ def test_acceptance_identity_preflight_rejects_unpaired_or_unsafe_ids() -> None:
         {"ANVA_ACCEPTANCE_UID": "00", "ANVA_ACCEPTANCE_GID": "1000"},
         {"ANVA_ACCEPTANCE_UID": "1000:1000", "ANVA_ACCEPTANCE_GID": "1000"},
         {"ANVA_ACCEPTANCE_UID": "1000", "ANVA_ACCEPTANCE_GID": "not-a-gid"},
+        {"ANVA_ACCEPTANCE_UID": "2147483648", "ANVA_ACCEPTANCE_GID": "1000"},
+        {"ANVA_ACCEPTANCE_UID": "1000", "ANVA_ACCEPTANCE_GID": "2147483648"},
+        {"ANVA_ACCEPTANCE_UID": "999999999999999999999", "ANVA_ACCEPTANCE_GID": "1000"},
     ):
         environment = base_environment | overrides
         completed = subprocess.run(  # noqa: S603 - executable resolved by shutil.which
@@ -401,6 +608,8 @@ def test_resolved_acceptance_compose_enforces_edge_backend_separation() -> None:
     for name in phases:
         assert services[name]["user"] == "10001:10001"
         assert set(cast(dict[str, object], services[name]["networks"])) == {"acceptance-edge"}
+    for name in ("worker", "mcp", "migrate"):
+        assert services[name]["user"] == "10001:10001"
     for name in ("postgres", "minio", "worker", "migrate"):
         assert set(cast(dict[str, object], services[name]["networks"])) == {"acceptance-backend"}
     for name in ("api", "mcp"):

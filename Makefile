@@ -49,7 +49,7 @@ ANVA_DRILL_PRODUCT_SOURCE_COMMIT ?=
 DRILL_COMPOSE := docker compose -p $(DRILL_PROJECT) -f compose.yaml -f compose.drill.yaml
 DRILL_FAULT_COMPOSE := $(DRILL_COMPOSE) -f compose.drill.restore-fault.yaml
 
-.PHONY: help install-demo up up-exposed down uninstall uninstall-clean backup backup-verify restore migration-rehearsal rate-limit-cleanup decommission-cleanup-status drill-network-preflight drill-up drill-probes drill-evidence-template drill-evidence-record drill-evidence-decision-proposal drill-evidence-cleanup drill-evidence-provisional-validate drill-evidence-finalize drill-evidence-final-validate drill-restore-fault drill-storage-interrupt drill-storage-resume drill-decommission-retry drill-down release-image-build release-image-oci release-package-files release-build release-scan release-scan-gate release-manifest release-artifacts release-clean reset logs migrate migrations-check shell cli lock contracts contracts-check skills-render skills-package skills-check format format-check lint type unit integration acceptance-identity-preflight acceptance-canonicalize acceptance-verify acceptance-start acceptance-review-request acceptance-review-submit acceptance-finalize acceptance-down contract smoke browser coverage test test-down check ci
+.PHONY: help install-demo up up-exposed down uninstall uninstall-clean backup backup-verify restore migration-rehearsal rate-limit-cleanup decommission-cleanup-status drill-network-preflight drill-up drill-probes drill-evidence-template drill-evidence-record drill-evidence-decision-proposal drill-evidence-cleanup drill-evidence-provisional-validate drill-evidence-finalize drill-evidence-final-validate drill-restore-fault drill-storage-interrupt drill-storage-resume drill-decommission-retry drill-down release-image-build release-image-oci release-package-files release-build release-scan release-scan-gate release-manifest release-artifacts release-clean reset logs migrate migrations-check shell cli lock contracts contracts-check skills-render skills-package skills-check format format-check lint type unit integration acceptance-identity-preflight acceptance-canonicalize acceptance-verify acceptance-launch-manifest acceptance-start acceptance-review-request acceptance-review-submit acceptance-finalize acceptance-down contract smoke browser coverage test test-down check ci
 
 help:
 	@echo "Anva development commands (all application tooling runs in Compose)"
@@ -73,7 +73,8 @@ help:
 	@echo "  make browser       Run the browser-native product journey in Chromium"
 	@echo "  make acceptance-canonicalize  Copy one pinned public corpus into an isolated volume"
 	@echo "  make acceptance-verify  Verify the canonical corpus without the raw mount"
-	@echo "  make acceptance-start  Run product acceptance until independent review"
+	@echo "  make acceptance-launch-manifest  Generate the required immutable Docker launch contract"
+	@echo "  make acceptance-start  Generate/reuse the launch contract, then run until review"
 	@echo "  make acceptance-review-request  Seal an independent evaluator handoff"
 	@echo "  make acceptance-review-submit  Submit an externally authored evaluator result"
 	@echo "  make acceptance-finalize  Atomically seal public deterministic results"
@@ -591,11 +592,15 @@ acceptance-identity-preflight:
 	fi; \
 	if test -n "$$uid"; then \
 		case "$$uid" in *[!0-9]*|0*) \
-			echo "ANVA_ACCEPTANCE_UID and ANVA_ACCEPTANCE_GID must be positive numeric IDs" >&2; exit 2 ;; \
+			echo "ANVA_ACCEPTANCE_UID and ANVA_ACCEPTANCE_GID must be positive numeric IDs in Docker's 1..2147483647 range" >&2; exit 2 ;; \
 		esac; \
 		case "$$gid" in *[!0-9]*|0*) \
-			echo "ANVA_ACCEPTANCE_UID and ANVA_ACCEPTANCE_GID must be positive numeric IDs" >&2; exit 2 ;; \
+			echo "ANVA_ACCEPTANCE_UID and ANVA_ACCEPTANCE_GID must be positive numeric IDs in Docker's 1..2147483647 range" >&2; exit 2 ;; \
 		esac; \
+		if test "$${#uid}" -gt 10 || { test "$${#uid}" -eq 10 && test "$$uid" -gt 2147483647; } || \
+		   test "$${#gid}" -gt 10 || { test "$${#gid}" -eq 10 && test "$$gid" -gt 2147483647; }; then \
+			echo "ANVA_ACCEPTANCE_UID and ANVA_ACCEPTANCE_GID must be positive numeric IDs in Docker's 1..2147483647 range" >&2; exit 2; \
+		fi; \
 	fi
 
 acceptance-canonicalize: acceptance-identity-preflight
@@ -607,7 +612,72 @@ acceptance-verify: acceptance-identity-preflight
 	@test -n "$(ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256)" || { echo "ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256 is required"; exit 2; }
 	$(ACCEPTANCE_COMPOSE) --profile acceptance run --rm acceptance-runner
 
-acceptance-start: acceptance-identity-preflight
+acceptance-launch-manifest: acceptance-identity-preflight
+	@test -n "$(ANVA_REVISION)" || { echo "ANVA_REVISION is required"; exit 2; }
+	@test -n "$(ANVA_IMAGE_SHA256)" || { echo "ANVA_IMAGE_SHA256 is required"; exit 2; }
+	@test -n "$(ANVA_BUILD_INPUT_SHA256)" || { echo "ANVA_BUILD_INPUT_SHA256 is required"; exit 2; }
+	@test -n "$(ANVA_ACCEPTANCE_LAUNCH_MANIFEST)" || { echo "ANVA_ACCEPTANCE_LAUNCH_MANIFEST is the required protected host output path"; exit 2; }
+	@test -n "$(ANVA_ACCEPTANCE_STATE_DIR)" || { echo "ANVA_ACCEPTANCE_STATE_DIR is required for protected generator inputs"; exit 2; }
+	@set -eu; \
+	manifest="$(ANVA_ACCEPTANCE_LAUNCH_MANIFEST)"; \
+	case "$$manifest" in /*) ;; *) echo "ANVA_ACCEPTANCE_LAUNCH_MANIFEST must be an absolute path" >&2; exit 2 ;; esac; \
+	manifest_exists=0; \
+	if test -e "$$manifest" || test -L "$$manifest"; then \
+		test -f "$$manifest" && test ! -L "$$manifest" || { echo "Existing launch manifest must be a regular non-symlink file" >&2; exit 2; }; \
+		test -z "$$(find "$$manifest" -maxdepth 0 -perm /222 -print -quit)" || { echo "Existing launch manifest must be read-only; run chmod a-w" >&2; exit 2; }; \
+		manifest_exists=1; \
+	fi; \
+	state_dir="$(ANVA_ACCEPTANCE_STATE_DIR)"; \
+	test "$$(id -u)" -ne 0 || { echo "Launch manifest generation must run as a non-root host user" >&2; exit 2; }; \
+	test -d "$$state_dir" && test ! -L "$$state_dir" || { echo "ANVA_ACCEPTANCE_STATE_DIR must be a pre-created private directory" >&2; exit 2; }; \
+	test -z "$$(find "$$state_dir" -maxdepth 0 -perm /077 -print -quit)" || { echo "ANVA_ACCEPTANCE_STATE_DIR must not grant group/other permissions (use chmod 0700)" >&2; exit 2; }; \
+	if test "$$manifest_exists" -eq 0; then \
+		test -w "$$(dirname "$$manifest")" || { echo "Launch manifest parent directory must be writable" >&2; exit 2; }; \
+	fi; \
+	input_dir=$$(mktemp -d "$$state_dir/.launch-manifest-input.XXXXXX"); \
+	candidate="$$input_dir/candidate.json"; \
+	output_tmp=""; \
+	if test "$$manifest_exists" -eq 0; then \
+		output_tmp=$$(mktemp "$$(dirname "$$manifest")/.$$(basename "$$manifest").tmp.XXXXXX"); \
+	fi; \
+	cleanup() { \
+		status=$$?; \
+		trap - EXIT HUP INT TERM; \
+		if test -n "$$output_tmp"; then rm -f "$$output_tmp" || :; fi; \
+		if test -d "$$input_dir"; then rm -r "$$input_dir" || :; fi; \
+		exit "$$status"; \
+	}; \
+	trap cleanup EXIT; \
+	trap 'trap - HUP INT TERM; exit 129' HUP; \
+	trap 'trap - HUP INT TERM; exit 130' INT; \
+	trap 'trap - HUP INT TERM; exit 143' TERM; \
+	$(ACCEPTANCE_COMPOSE) --profile acceptance config --format json > "$$input_dir/resolved-compose.json"; \
+	docker image inspect "$(ANVA_IMAGE_REF)" > "$$input_dir/image-inspect.json"; \
+	docker run --rm --network none --read-only --cap-drop ALL \
+		--security-opt no-new-privileges --user "$$(id -u):$$(id -g)" \
+		--mount "type=bind,src=$$input_dir,dst=/acceptance/launch-input,readonly" \
+		--entrypoint anva "sha256:$(ANVA_IMAGE_SHA256)" acceptance launch-manifest \
+		--resolved-compose /acceptance/launch-input/resolved-compose.json \
+		--image-inspect /acceptance/launch-input/image-inspect.json \
+		--product-commit "$(ANVA_REVISION)" \
+		--product-image-sha256 "$(ANVA_IMAGE_SHA256)" \
+		--product-image-reference "$(ANVA_IMAGE_REF)" \
+		--build-input-sha256 "$(ANVA_BUILD_INPUT_SHA256)" \
+		--launch-manifest-source "$$manifest" > "$$candidate"; \
+	chmod 0444 "$$candidate"; \
+	if test "$$manifest_exists" -eq 1; then \
+		cmp --silent "$$manifest" "$$candidate" || { echo "Existing immutable launch manifest does not match the current resolved launch configuration" >&2; exit 2; }; \
+		echo "Reusing existing immutable launch manifest after exact current-configuration comparison"; \
+		exit 0; \
+	fi; \
+	cp "$$candidate" "$$output_tmp"; \
+	chmod 0444 "$$output_tmp"; \
+	ln "$$output_tmp" "$$manifest"; \
+	rm -f "$$output_tmp"; \
+	output_tmp=""; \
+	echo "Generated immutable launch manifest at $$manifest"
+
+acceptance-start: acceptance-launch-manifest
 	@test -n "$(ANVA_REVISION)" || { echo "ANVA_REVISION is required"; exit 2; }
 	@test -n "$(ANVA_IMAGE_SHA256)" || { echo "ANVA_IMAGE_SHA256 is required"; exit 2; }
 	@test -n "$(ANVA_BUILD_INPUT_SHA256)" || { echo "ANVA_BUILD_INPUT_SHA256 is required"; exit 2; }
@@ -620,7 +690,7 @@ acceptance-start: acceptance-identity-preflight
 	$(ACCEPTANCE_COMPOSE) up -d --wait api worker mcp
 	$(ACCEPTANCE_COMPOSE) --profile acceptance run --rm --no-deps acceptance-product-start
 
-acceptance-review-request: acceptance-identity-preflight
+acceptance-review-request: acceptance-launch-manifest
 	@test -n "$(ANVA_REVISION)" || { echo "ANVA_REVISION is required"; exit 2; }
 	@test -n "$(ANVA_IMAGE_SHA256)" || { echo "ANVA_IMAGE_SHA256 is required"; exit 2; }
 	@test -n "$(ANVA_BUILD_INPUT_SHA256)" || { echo "ANVA_BUILD_INPUT_SHA256 is required"; exit 2; }
@@ -629,7 +699,7 @@ acceptance-review-request: acceptance-identity-preflight
 	@test -n "$(ANVA_ACCEPTANCE_HANDOFF_DIR)" || { echo "ANVA_ACCEPTANCE_HANDOFF_DIR is required"; exit 2; }
 	$(ACCEPTANCE_COMPOSE) --profile acceptance run --rm --no-deps acceptance-review-request
 
-acceptance-review-submit: acceptance-identity-preflight
+acceptance-review-submit: acceptance-launch-manifest
 	@test -n "$(ANVA_REVISION)" || { echo "ANVA_REVISION is required"; exit 2; }
 	@test -n "$(ANVA_IMAGE_SHA256)" || { echo "ANVA_IMAGE_SHA256 is required"; exit 2; }
 	@test -n "$(ANVA_BUILD_INPUT_SHA256)" || { echo "ANVA_BUILD_INPUT_SHA256 is required"; exit 2; }
@@ -638,7 +708,7 @@ acceptance-review-submit: acceptance-identity-preflight
 	@test -n "$(ANVA_ACCEPTANCE_REVIEW_RESULT_DIR)" || { echo "ANVA_ACCEPTANCE_REVIEW_RESULT_DIR is required"; exit 2; }
 	$(ACCEPTANCE_COMPOSE) --profile acceptance run --rm --no-deps acceptance-review-submit
 
-acceptance-finalize: acceptance-identity-preflight
+acceptance-finalize: acceptance-launch-manifest
 	@test -n "$(ANVA_REVISION)" || { echo "ANVA_REVISION is required"; exit 2; }
 	@test -n "$(ANVA_IMAGE_SHA256)" || { echo "ANVA_IMAGE_SHA256 is required"; exit 2; }
 	@test -n "$(ANVA_BUILD_INPUT_SHA256)" || { echo "ANVA_BUILD_INPUT_SHA256 is required"; exit 2; }
