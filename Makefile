@@ -49,13 +49,14 @@ ANVA_DRILL_PRODUCT_SOURCE_COMMIT ?=
 DRILL_COMPOSE := docker compose -p $(DRILL_PROJECT) -f compose.yaml -f compose.drill.yaml
 DRILL_FAULT_COMPOSE := $(DRILL_COMPOSE) -f compose.drill.restore-fault.yaml
 
-.PHONY: help install-demo up up-exposed down uninstall uninstall-clean backup backup-verify restore migration-rehearsal rate-limit-cleanup decommission-cleanup-status drill-network-preflight drill-up drill-probes drill-evidence-template drill-evidence-record drill-evidence-decision-proposal drill-evidence-cleanup drill-evidence-provisional-validate drill-evidence-finalize drill-evidence-final-validate drill-restore-fault drill-storage-interrupt drill-storage-resume drill-decommission-retry drill-down release-image-build release-image-oci release-package-files release-build release-scan release-scan-gate release-manifest release-artifacts release-clean reset logs migrate migrations-check shell cli lock contracts contracts-check skills-render skills-package skills-check format format-check lint type unit integration acceptance-identity-preflight acceptance-canonicalize acceptance-verify acceptance-launch-manifest acceptance-start acceptance-review-request acceptance-review-submit acceptance-finalize acceptance-down contract smoke browser coverage test test-down check ci
+.PHONY: help install-demo up up-exposed down uninstall uninstall-clean backup backup-verify restore migration-rehearsal rate-limit-cleanup decommission-cleanup-status drill-network-preflight drill-up drill-probes drill-evidence-template drill-evidence-record drill-evidence-decision-proposal drill-evidence-cleanup drill-evidence-provisional-validate drill-evidence-finalize drill-evidence-final-validate drill-restore-fault drill-storage-interrupt drill-storage-resume drill-decommission-retry drill-down release-image-build release-image-oci release-package-files release-build release-scan release-scan-gate release-manifest release-artifacts release-clean reset logs migrate migrations-check shell cli lock contracts contracts-check skills-render skills-package skills-check format format-check lint type unit integration acceptance-identity-preflight acceptance-case-validate acceptance-canonicalize acceptance-verify acceptance-launch-manifest acceptance-start acceptance-review-request acceptance-review-submit acceptance-finalize acceptance-down contract smoke browser coverage test test-down check ci
 
 help:
 	@echo "Anva development commands (all application tooling runs in Compose)"
 	@echo "  make up            Build and start the internal-only stack"
 	@echo "  make install-demo  Install, migrate, and seed a local demo with one command"
 	@echo "  make up-exposed    Build and start with documented host ports"
+	@echo "  make acceptance-case-validate  Validate a public case structurally and semantically"
 	@echo "  make backup        Quiesce writers and back up PostgreSQL plus object storage"
 	@echo "  make restore       Verify and restore a backup, then migrate"
 	@echo "  make rate-limit-cleanup Delete one bounded batch of expired pre-auth counters"
@@ -603,6 +604,20 @@ acceptance-identity-preflight:
 		fi; \
 	fi
 
+acceptance-case-validate: acceptance-identity-preflight
+	@if test -n "$(ANVA_ACCEPTANCE_CASE_FILE)"; then \
+		case_file="$(ANVA_ACCEPTANCE_CASE_FILE)"; \
+		case "$$case_file" in /*) ;; *) echo "ANVA_ACCEPTANCE_CASE_FILE must be an absolute path" >&2; exit 2 ;; esac; \
+		test -f "$$case_file" && test ! -L "$$case_file" || { echo "ANVA_ACCEPTANCE_CASE_FILE must be a regular non-symlink file" >&2; exit 2; }; \
+		docker run --rm --network none --read-only --cap-drop ALL \
+			--security-opt no-new-privileges --pids-limit 64 --memory 256m \
+			--mount type=bind,source="$$case_file",target=/acceptance-case.json,readonly \
+			"$(ANVA_IMAGE_REPOSITORY):$(ANVA_VERSION)" \
+			anva acceptance case-validate --case /acceptance-case.json; \
+	else \
+		echo '{"status":"legacy-default","message":"No public acceptance case was supplied"}'; \
+	fi
+
 acceptance-canonicalize: acceptance-identity-preflight
 	$(ACCEPTANCE_COMPOSE) --profile acceptance run --rm --build acceptance-adapter
 
@@ -612,7 +627,7 @@ acceptance-verify: acceptance-identity-preflight
 	@test -n "$(ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256)" || { echo "ANVA_ACCEPTANCE_CANONICAL_MANIFEST_SHA256 is required"; exit 2; }
 	$(ACCEPTANCE_COMPOSE) --profile acceptance run --rm acceptance-runner
 
-acceptance-launch-manifest: acceptance-identity-preflight
+acceptance-launch-manifest: acceptance-identity-preflight acceptance-case-validate
 	@test -n "$(ANVA_REVISION)" || { echo "ANVA_REVISION is required"; exit 2; }
 	@test -n "$(ANVA_IMAGE_SHA256)" || { echo "ANVA_IMAGE_SHA256 is required"; exit 2; }
 	@test -n "$(ANVA_BUILD_INPUT_SHA256)" || { echo "ANVA_BUILD_INPUT_SHA256 is required"; exit 2; }

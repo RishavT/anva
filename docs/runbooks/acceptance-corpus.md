@@ -83,6 +83,20 @@ Start from the public shape in
 [`contracts/examples/v1/acceptance-case.json`](../../contracts/examples/v1/acceptance-case.json),
 then replace every scenario-specific value rather than deleting scope fields.
 
+JSON Schema validation proves only the document's structural shape. It cannot validate references
+between independently nested arrays. Before starting services, run the supported full semantic
+preflight (the `acceptance-start` target runs it automatically):
+
+```sh
+ANVA_ACCEPTANCE_CASE_FILE=/absolute/path/case.json make acceptance-case-validate
+```
+
+The generated schema's `x-anva-semantic-validation` annotation publishes the same three rules used
+by the preflight and fail-closed runtime: every evidence criterion code must name a work acceptance
+criterion, and every deterministic-check code must name both a policy requirement and a work
+acceptance criterion. A structurally valid document is not a valid acceptance case until this
+semantic preflight reports both `schema_valid` and `semantic_valid` as true.
+
 The closed `organization.bootstrap_scope` object explicitly requests one repository, one human
 membership with the least-privilege `VIEWER` role, and exactly two named service identities. The
 initiator has only the actions needed by the acceptance journey (`artifact.create`, `artifact.view`,

@@ -35,6 +35,19 @@ def _case() -> dict[str, object]:
     return deepcopy(EXAMPLES["acceptance-case"])
 
 
+def _set_check_code(case: dict[str, object], code: str) -> None:
+    assurance = cast(dict[str, object], case["assurance"])
+    checks = cast(list[dict[str, object]], assurance["deterministic_checks"])
+    checks[0]["code"] = code
+
+
+def _add_policy_only_check(case: dict[str, object]) -> None:
+    policy = cast(dict[str, object], case["policy"])
+    requirements = cast(list[dict[str, object]], policy["requirements"])
+    requirements.append({**requirements[0], "code": "POLICY_ONLY"})
+    _set_check_code(case, "POLICY_ONLY")
+
+
 @pytest.mark.unit
 def test_case_declares_exact_acceptance_principal_actions() -> None:
     case = _case()
@@ -111,6 +124,89 @@ def test_case_rejects_unknown_or_cross_pinned_material(
     mutation(case)
 
     with pytest.raises((AcceptanceCaseError, ContractValidationError)):
+        acceptance_case(case)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("mutate", "code", "path", "reference"),
+    [
+        (
+            lambda case: cast(dict[str, object], case["evidence"]).update(
+                {"criterion_codes": ["ORPHAN_EVIDENCE"]}
+            ),
+            "acceptance_evidence_criterion_not_governed",
+            "evidence.criterion_codes",
+            "work_item.acceptance_criteria[].code",
+        ),
+        (
+            lambda case: _set_check_code(case, "ORPHAN_CHECK"),
+            "acceptance_check_policy_not_governed",
+            "assurance.deterministic_checks[].code",
+            "policy.requirements[].code",
+        ),
+        (
+            _add_policy_only_check,
+            "acceptance_check_criterion_not_governed",
+            "assurance.deterministic_checks[].code",
+            "work_item.acceptance_criteria[].code",
+        ),
+    ],
+)
+def test_case_governance_diagnostics_identify_each_cross_section_failure(
+    mutate: Callable[[dict[str, object]], object],
+    code: str,
+    path: str,
+    reference: str,
+) -> None:
+    case = _case()
+    mutate(case)
+
+    with pytest.raises(AcceptanceCaseError) as captured:
+        acceptance_case(case)
+
+    assert captured.value.diagnostic() == {
+        "code": code,
+        "message": str(captured.value),
+        "path": path,
+        "reference": reference,
+    }
+
+
+@pytest.mark.unit
+def test_case_accepts_codes_governed_by_both_work_and_policy() -> None:
+    validated = acceptance_case(_case())
+
+    assert validated.case_id == "tst-009.scn-ember"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("section", "field", "message"),
+    [
+        ("work_item", "requirements", "requirement codes must be unique"),
+        ("work_item", "acceptance_criteria", "criterion codes must be unique"),
+        ("policy", "requirements", "policy requirement codes must be unique"),
+    ],
+)
+def test_case_rejects_duplicate_governance_codes(section: str, field: str, message: str) -> None:
+    case = _case()
+    container = cast(dict[str, object], case[section])
+    entries = cast(list[dict[str, object]], container[field])
+    entries.append({**entries[0]})
+
+    with pytest.raises(AcceptanceCaseError, match=message):
+        acceptance_case(case)
+
+
+@pytest.mark.unit
+def test_case_rejects_orphaned_work_requirement_reference() -> None:
+    case = _case()
+    work = cast(dict[str, object], case["work_item"])
+    criteria = cast(list[dict[str, object]], work["acceptance_criteria"])
+    criteria[0]["requirement_code"] = "MISSING_REQUIREMENT"
+
+    with pytest.raises(AcceptanceCaseError, match="unknown requirement"):
         acceptance_case(case)
 
 
