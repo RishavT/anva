@@ -137,6 +137,23 @@ def test_acceptance_case_validate_distinguishes_structural_invalidity(
 
 
 @pytest.mark.unit
+def test_acceptance_case_validate_marks_other_semantic_failures_as_schema_valid(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    case = deepcopy(EXAMPLES["acceptance-case"])
+    work = cast(dict[str, object], case["work_item"])
+    criteria = cast(list[dict[str, object]], work["acceptance_criteria"])
+    criteria.append({**criteria[0]})
+    path = tmp_path / "case.json"
+    path.write_text(json.dumps(case), encoding="utf-8")
+
+    assert main(["acceptance", "case-validate", "--case", str(path)]) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["schema_valid"] is True
+    assert payload["semantic_valid"] is False
+
+
+@pytest.mark.unit
 def test_acceptance_cli_canonicalizes_without_initializing_django(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

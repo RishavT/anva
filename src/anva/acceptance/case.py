@@ -59,11 +59,13 @@ class AcceptanceCaseError(ValueError):
         code: str = "acceptance_case_invalid",
         path: str | None = None,
         reference: str | None = None,
+        schema_valid: bool | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.path = path
         self.reference = reference
+        self.schema_valid = schema_valid
 
     def diagnostic(self) -> dict[str, str]:
         """Return a stable, public operator diagnostic without case contents."""
@@ -246,7 +248,11 @@ def _validate_cross_section(payload: dict[str, object]) -> bytes:
 def acceptance_case(payload: dict[str, object]) -> AcceptanceCase:
     """Validate an already-decoded public case and derive its immutable identity."""
     validate_payload("acceptance-case", payload)
-    evidence_bytes = _validate_cross_section(payload)
+    try:
+        evidence_bytes = _validate_cross_section(payload)
+    except AcceptanceCaseError as error:
+        error.schema_valid = True
+        raise
     rendered = canonical_case_bytes(payload)
     return AcceptanceCase(
         payload=deepcopy_case(payload),

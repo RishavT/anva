@@ -1275,9 +1275,12 @@ def _acceptance_request(arguments: argparse.Namespace) -> int:
         is_case_preflight = arguments.acceptance_command == "case-validate"
         if is_case_preflight and isinstance(error, AcceptanceCaseError):
             diagnostic: dict[str, object] = dict(error.diagnostic())
-            schema_valid = True if error.code.endswith("_not_governed") else None
             diagnostic.update(
-                {"schema_valid": schema_valid, "semantic_valid": False, "status": "invalid"}
+                {
+                    "schema_valid": error.schema_valid,
+                    "semantic_valid": False,
+                    "status": "invalid",
+                }
             )
             print(json.dumps(diagnostic, sort_keys=True))
             return 2
