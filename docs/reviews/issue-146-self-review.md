@@ -80,6 +80,12 @@ a securely created same-directory temporary file and atomic no-replace publicati
 identity preflight also enforces
 Docker's inclusive upper UID/GID bound of `2147483647` before any container launch.
 
+The next exact-head review found that signal handlers cleaned temporary inputs but continued the
+recipe, and that only the start phase refreshed the current candidate. Cleanup is now idempotent
+and status-preserving, with HUP, INT, and TERM terminating as 129, 130, and 143. Start, review
+request, review submission, and finalization all depend on the generator/comparison target before
+launching their phase service, so configuration drift cannot cross a resume boundary.
+
 ## Verification
 
 - Exact host-resolved Make generation produced mode-`0444` output twice with identical SHA-256;
@@ -91,9 +97,11 @@ Docker's inclusive upper UID/GID bound of `2147483647` before any container laun
 - Final-remediation launch/Compose/contract/runner tests passed 112 checks with four expected
   Docker-CLI-unavailable skips; both the base and optional-case real resolved Compose models passed
   the tightened generator.
+- Executable Make regressions passed creation, exact reuse, drift preservation, and fail-closed
+  HUP/INT/TERM cleanup; dry-runs resolved the current candidate before every product phase.
 - Runner boundary, resume, and permission integrations passed 28 tests with one expected
   Docker-in-container skip.
-- The final-remediation unit marker passed 1,198 tests with five expected Docker-CLI-unavailable
+- The final-remediation unit marker passed 1,201 tests with five expected Docker-CLI-unavailable
   skips. The combined
   integration/contract/smoke gate passed 326 tests before exposing one stale artifact-count
   assertion; after changing 33 to 35, the exact failed contract and focused launch set passed.

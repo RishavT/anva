@@ -121,9 +121,11 @@ service inventory remains the established exact seven product/phase services. It
 contains neither environment values, secret material, host paths, nor the resolved model itself.
 
 Use the supported generator; a raw `docker compose config` document is not a launch manifest.
-The host output path is required by every Make phase and must be absolute. On a clean start,
-`make acceptance-start` invokes `make acceptance-launch-manifest` automatically. The explicit
-target is available for preflight or evidence collection:
+The host output path is required by every Make phase and must be absolute. Before every product
+phase, its Make target invokes `make acceptance-launch-manifest` automatically. This resolves the
+current Compose and image state and either creates the protected manifest or requires an exact byte
+match with it, so a resumed review or finalization cannot run after launch configuration drift. The
+explicit target is available for preflight or evidence collection:
 
 ```sh
 export ANVA_REVISION=<exact-40-character-product-commit>
@@ -146,9 +148,11 @@ and `create_host_path: false` setting. A
 missing or changed service/image/runtime/bind fails closed with a stable reason code.
 
 The generated file is mode `0444`. If the output already exists as a regular read-only file, the
-target preserves it so an existing valid v1 run can resume with the original byte hash; the
-in-container preflight still validates its schema and exact pins. Move an obsolete manifest aside
-before intentionally generating a replacement. Symlinked or writable existing files are rejected.
+target preserves it only when a newly generated candidate for the current resolved configuration
+is byte-identical. Drift is rejected without changing the protected artifact. Move an obsolete
+manifest aside before intentionally generating a replacement. Symlinked or writable existing
+files are rejected. Interrupt and hangup signals terminate generation with a failing status and
+remove private inputs and any unpublished output temporary file.
 
 For direct CLI use, `--launch-manifest` is optional only because it defaults to the supported
 in-container path `/acceptance/launch/manifest.json`. The host-side Make variable

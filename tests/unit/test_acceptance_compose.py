@@ -319,12 +319,7 @@ def test_product_acceptance_make_targets_use_scoped_compose_services() -> None:
         ("acceptance-review-submit", "acceptance-review-submit"),
         ("acceptance-finalize", "acceptance-product-finalize"),
     ):
-        dependency = (
-            "acceptance-launch-manifest"
-            if target == "acceptance-start"
-            else "acceptance-identity-preflight"
-        )
-        assert f"{target}: {dependency}" in makefile
+        assert f"{target}: acceptance-launch-manifest" in makefile
         body = makefile.split(f"\n{target}:", 1)[1].split("\n\n", 1)[0]
         assert f"run --rm --no-deps {service}" in body
         assert "prune" not in body
@@ -359,6 +354,12 @@ def test_public_launch_manifest_make_path_is_hardened_and_start_uses_it() -> Non
     assert "cmp --silent" in body
     assert 'mktemp "$$(dirname "$$manifest")/.$$(basename "$$manifest").tmp.XXXXXX"' in body
     assert 'ln "$$output_tmp" "$$manifest"' in body
+    assert "trap cleanup EXIT" in body
+    assert "trap 'trap - HUP INT TERM; exit 129' HUP" in body
+    assert "trap 'trap - HUP INT TERM; exit 130' INT" in body
+    assert "trap 'trap - HUP INT TERM; exit 143' TERM" in body
+    assert 'if test -d "$$input_dir"' in body
+    assert "trap cleanup EXIT HUP INT TERM" not in body
     assert body.index("config --format json") < body.index("cmp --silent")
     assert body.index("cmp --silent") < body.index("Reusing existing immutable launch manifest")
     assert "prune" not in body
@@ -431,6 +432,57 @@ fi
         assert manifest.read_bytes() == original
     finally:
         tmp_path.chmod(0o700)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("signal_name", ["HUP", "INT", "TERM"])
+def test_launch_manifest_make_signal_fails_closed_and_cleans_once(
+    tmp_path: Path, signal_name: str
+) -> None:
+    make = shutil.which("make")
+    if make is None:
+        pytest.skip("make is unavailable for launch manifest signal validation")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text(
+        """#!/bin/sh
+if test "$1" = "compose"; then
+    kill "-$FAKE_SIGNAL" "$PPID"
+    printf '%s\n' '{"services":{}}'
+    exit 0
+fi
+exit 64
+""",
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o755)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(mode=0o700)
+    manifest = tmp_path / "launch-manifest.json"
+    environment = os.environ.copy()
+    environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+    environment["FAKE_SIGNAL"] = signal_name
+    command = [
+        make,
+        "acceptance-launch-manifest",
+        f"ANVA_REVISION={'a' * 40}",
+        f"ANVA_IMAGE_SHA256={'b' * 64}",
+        f"ANVA_BUILD_INPUT_SHA256={'c' * 64}",
+        "ANVA_IMAGE_REPOSITORY=fake-anva",
+        "ANVA_VERSION=test",
+        f"ANVA_ACCEPTANCE_LAUNCH_MANIFEST={manifest}",
+        f"ANVA_ACCEPTANCE_STATE_DIR={state_dir}",
+    ]
+
+    interrupted = subprocess.run(  # noqa: S603 - executable resolved by shutil.which
+        command, check=False, capture_output=True, text=True, env=environment
+    )
+
+    assert interrupted.returncode != 0
+    assert not manifest.exists()
+    assert list(state_dir.iterdir()) == []
+    assert "No such file or directory" not in interrupted.stderr
 
 
 @pytest.mark.unit

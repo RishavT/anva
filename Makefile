@@ -640,8 +640,17 @@ acceptance-launch-manifest: acceptance-identity-preflight
 	if test "$$manifest_exists" -eq 0; then \
 		output_tmp=$$(mktemp "$$(dirname "$$manifest")/.$$(basename "$$manifest").tmp.XXXXXX"); \
 	fi; \
-	cleanup() { if test -n "$$output_tmp"; then rm -f "$$output_tmp"; fi; rm -r "$$input_dir"; }; \
-	trap cleanup EXIT HUP INT TERM; \
+	cleanup() { \
+		status=$$?; \
+		trap - EXIT HUP INT TERM; \
+		if test -n "$$output_tmp"; then rm -f "$$output_tmp" || :; fi; \
+		if test -d "$$input_dir"; then rm -r "$$input_dir" || :; fi; \
+		exit "$$status"; \
+	}; \
+	trap cleanup EXIT; \
+	trap 'trap - HUP INT TERM; exit 129' HUP; \
+	trap 'trap - HUP INT TERM; exit 130' INT; \
+	trap 'trap - HUP INT TERM; exit 143' TERM; \
 	$(ACCEPTANCE_COMPOSE) --profile acceptance config --format json > "$$input_dir/resolved-compose.json"; \
 	docker image inspect "$(ANVA_IMAGE_REF)" > "$$input_dir/image-inspect.json"; \
 	docker run --rm --network none --read-only --cap-drop ALL \
@@ -681,7 +690,7 @@ acceptance-start: acceptance-launch-manifest
 	$(ACCEPTANCE_COMPOSE) up -d --wait api worker mcp
 	$(ACCEPTANCE_COMPOSE) --profile acceptance run --rm --no-deps acceptance-product-start
 
-acceptance-review-request: acceptance-identity-preflight
+acceptance-review-request: acceptance-launch-manifest
 	@test -n "$(ANVA_REVISION)" || { echo "ANVA_REVISION is required"; exit 2; }
 	@test -n "$(ANVA_IMAGE_SHA256)" || { echo "ANVA_IMAGE_SHA256 is required"; exit 2; }
 	@test -n "$(ANVA_BUILD_INPUT_SHA256)" || { echo "ANVA_BUILD_INPUT_SHA256 is required"; exit 2; }
@@ -690,7 +699,7 @@ acceptance-review-request: acceptance-identity-preflight
 	@test -n "$(ANVA_ACCEPTANCE_HANDOFF_DIR)" || { echo "ANVA_ACCEPTANCE_HANDOFF_DIR is required"; exit 2; }
 	$(ACCEPTANCE_COMPOSE) --profile acceptance run --rm --no-deps acceptance-review-request
 
-acceptance-review-submit: acceptance-identity-preflight
+acceptance-review-submit: acceptance-launch-manifest
 	@test -n "$(ANVA_REVISION)" || { echo "ANVA_REVISION is required"; exit 2; }
 	@test -n "$(ANVA_IMAGE_SHA256)" || { echo "ANVA_IMAGE_SHA256 is required"; exit 2; }
 	@test -n "$(ANVA_BUILD_INPUT_SHA256)" || { echo "ANVA_BUILD_INPUT_SHA256 is required"; exit 2; }
@@ -699,7 +708,7 @@ acceptance-review-submit: acceptance-identity-preflight
 	@test -n "$(ANVA_ACCEPTANCE_REVIEW_RESULT_DIR)" || { echo "ANVA_ACCEPTANCE_REVIEW_RESULT_DIR is required"; exit 2; }
 	$(ACCEPTANCE_COMPOSE) --profile acceptance run --rm --no-deps acceptance-review-submit
 
-acceptance-finalize: acceptance-identity-preflight
+acceptance-finalize: acceptance-launch-manifest
 	@test -n "$(ANVA_REVISION)" || { echo "ANVA_REVISION is required"; exit 2; }
 	@test -n "$(ANVA_IMAGE_SHA256)" || { echo "ANVA_IMAGE_SHA256 is required"; exit 2; }
 	@test -n "$(ANVA_BUILD_INPUT_SHA256)" || { echo "ANVA_BUILD_INPUT_SHA256 is required"; exit 2; }
