@@ -1672,6 +1672,15 @@ def start_assurance(
             ),
         },
     )
+    completeness = cast(dict[str, object], packet.artifact.payload).get("completeness")
+    if isinstance(completeness, dict) and completeness.get("complete") is False:
+        _finalize_evaluator_failure(
+            actor=actor,
+            task=task,
+            failure_code="ASSURANCE_CONTEXT_INCOMPLETE",
+        )
+        run.refresh_from_db()
+        task.refresh_from_db()
     return AssuranceStartResult(run, task, True)
 
 

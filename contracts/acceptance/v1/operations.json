@@ -13986,6 +13986,90 @@
                     ],
                     "type": "object"
                   },
+                  "completeness": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "bindings": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "authorization_hash": {
+                            "pattern": "^[a-f0-9]{64}$",
+                            "type": "string"
+                          },
+                          "organization_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "query_version": {
+                            "maxLength": 100,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "repository_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "retrieval_watermark": {
+                            "minimum": 1,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "organization_id",
+                          "repository_id",
+                          "authorization_hash",
+                          "retrieval_watermark",
+                          "query_version"
+                        ],
+                        "type": "object"
+                      },
+                      "complete": {
+                        "type": "boolean"
+                      },
+                      "digest": {
+                        "pattern": "^[a-f0-9]{64}$",
+                        "type": "string"
+                      },
+                      "eligible_assertions": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "eligible_conflicts": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "ordering": {
+                        "const": "kind,id",
+                        "type": "string"
+                      },
+                      "page_size": {
+                        "maximum": 1000,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "processed_rows": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "version": {
+                        "maxLength": 100,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "version",
+                      "ordering",
+                      "eligible_assertions",
+                      "eligible_conflicts",
+                      "processed_rows",
+                      "digest",
+                      "complete",
+                      "page_size",
+                      "bindings"
+                    ],
+                    "type": "object"
+                  },
                   "content_hash": {
                     "pattern": "^[a-f0-9]{64}$",
                     "type": "string"
@@ -15450,6 +15534,10 @@
                           "max_citations"
                         ],
                         "type": "object"
+                      },
+                      "context_scan_version": {
+                        "const": "authorized-conflict-scan-v1",
+                        "type": "string"
                       },
                       "phase": {
                         "enum": [

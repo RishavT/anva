@@ -6,13 +6,14 @@ import hashlib
 import json
 import math
 import re
+import time
 import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, NoReturn, cast
 
 from django.db import connection, transaction
-from django.db.models import Case, F, Q, QuerySet, TextField, Value, When
+from django.db.models import Case, F, Q, QuerySet, Subquery, TextField, Value, When
 from django.db.models.functions import Cast, Concat
 from django.utils import timezone
 
@@ -67,7 +68,13 @@ from anva.core.services.search_index import EMBEDDING_VERSION, INDEX_VERSION
 
 MAX_ASSERTION_CANDIDATES = 500
 MAX_RELATIONSHIP_CANDIDATES = 200
-MAX_CONFLICT_CANDIDATES = 500
+CONTEXT_SCAN_VERSION = "authorized-conflict-scan-v1"
+CONTEXT_SCAN_PAGE_SIZE = 200
+CONTEXT_SCAN_MAX_ROWS = 50_000
+CONTEXT_SCAN_MAX_OPERATIONS = 100_000
+# Leave one second of the v3 five-second context target for ranking, sealing,
+# and publication reauthorization around this internal database scan.
+CONTEXT_SCAN_MAX_SECONDS = 4.0
 MAX_RETRIEVAL_FACETS = 8
 MAX_REQUIRED_SEARCH_ANCHORS = 50
 # One closed anchor is 373 canonical ASCII JSON bytes. The array adds 49 commas
@@ -244,6 +251,39 @@ class PacketSelection:
     selected_bytes: int
     selected_citations: int
     limitations: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ContextCompleteness:
+    """Bounded internal scan accounting; never a public continuation cursor."""
+
+    assertion_count: int
+    conflict_count: int
+    processed_count: int
+    digest: str
+    complete: bool = True
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "version": CONTEXT_SCAN_VERSION,
+            "ordering": "kind,id",
+            "eligible_assertions": self.assertion_count,
+            "eligible_conflicts": self.conflict_count,
+            "processed_rows": self.processed_count,
+            "digest": self.digest,
+            "complete": self.complete,
+            "page_size": CONTEXT_SCAN_PAGE_SIZE,
+        }
+
+
+class ScannedCandidates(list[PacketCandidate]):
+    """Candidate list carrying internal completeness without changing public models."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.complete = True
+        self.eligible_assertion_ids: set[uuid.UUID] = set()
+        self.processed_count = 0
 
 
 def normalize_required_search_anchors(
@@ -486,7 +526,7 @@ def _authorized_provenance_for_authorization(
     *,
     actor: ActorContext,
     authorization: AuthorizedRepositoryScopes,
-    assertion_ids: list[uuid.UUID] | set[uuid.UUID],
+    assertion_ids: list[uuid.UUID] | set[uuid.UUID] | None,
 ) -> QuerySet[AssertionProvenance]:
     """Apply the relational repository/scope boundary to current provenance."""
     if not authorization.repository_ids_for(Action.SEARCH) or not authorization.scope_ids_for(
@@ -496,7 +536,6 @@ def _authorized_provenance_for_authorization(
     queryset = (
         AssertionProvenance.objects.filter(
             organization_id=actor.organization_id,
-            assertion_id__in=assertion_ids,
             access_snapshot__revoked_at__isnull=True,
             access_snapshot__source_connection_id=F(
                 "source_observation__source_document__source_container__source_connection_id"
@@ -556,6 +595,8 @@ def _authorized_provenance_for_authorization(
         .order_by("assertion_id", "observed_at", "id")
         .distinct()
     )
+    if assertion_ids is not None:
+        queryset = queryset.filter(assertion_id__in=assertion_ids)
     return queryset
 
 
@@ -727,102 +768,137 @@ def _assertion_candidates(
     facets: tuple[RetrievalFacet, ...],
     change_aware: bool,
 ) -> list[PacketCandidate]:
-    assertions = list(
+    authorization = resolve_authorized_repository_scopes(
+        actor=actor,
+        actions=(Action.SEARCH,),
+        required_action=Action.SEARCH,
+        repository_ids=(repository_id,),
+        repository_limit=1,
+    )
+    current_provenance = _authorized_provenance_for_authorization(
+        actor=actor,
+        authorization=authorization,
+        assertion_ids=None,
+    )
+    eligible = (
         authorized_assertions(
             actor=actor,
             repository_id=repository_id,
             action=Action.SEARCH,
         )
+        .filter(id__in=Subquery(current_provenance.order_by().values("assertion_id")))
         .select_related("access_scope")
-        .order_by("id")[:MAX_ASSERTION_CANDIDATES]
+        .order_by("id")
+        .distinct()
     )
-    provenance_by_assertion: dict[uuid.UUID, tuple[CitationCandidate, ...]] = {}
-    provenance_rows = _authorized_provenance(
-        actor=actor,
-        repository_id=repository_id,
-        assertion_ids=[assertion.id for assertion in assertions],
-    )
-    for provenance in provenance_rows:
-        existing = provenance_by_assertion.get(provenance.assertion_id, ())
-        provenance_by_assertion[provenance.assertion_id] = (
-            *existing,
-            _citation_from_provenance(provenance),
-        )
 
-    candidates: list[PacketCandidate] = []
-    for assertion in assertions:
-        citations = provenance_by_assertion.get(assertion.id, ())
-        if not citations or assertion.access_scope_id is None:
-            continue
-        summary = _assertion_summary(assertion)
-        required = _required_policy(assertion)
-        matched_facets = _matching_facets(summary, facets)
-        required_facets = _required_matching_facets(summary, matched_facets, facets)
-        matches = bool(matched_facets)
-        kind = _assertion_kind(assertion)
-        if not matches and kind not in {
-            ContextPacketItem.Kind.POLICY,
-            ContextPacketItem.Kind.DECISION,
-            ContextPacketItem.Kind.INCIDENT,
-        }:
-            continue
-        if required and _freshness(assertion) == ContextPacketItem.Freshness.CURRENT:
-            tier = 0
-            reason = "Applicable required current policy"
-        elif change_aware and required_facets:
-            tier = 1
-            reason = f"Change-aware assurance anchored match: {', '.join(required_facets)}"
-        elif change_aware and matches:
-            tier = 3
-            reason = f"Change-aware assurance lexical fallback: {', '.join(matched_facets)}"
-        elif kind == ContextPacketItem.Kind.POLICY:
-            tier = 6 if change_aware else 3
-            reason = "Governed policy fallback"
-        elif kind == ContextPacketItem.Kind.DECISION:
-            tier = 7 if change_aware else 5
-            reason = "Relevant decision"
-        elif kind == ContextPacketItem.Kind.INCIDENT:
-            tier = 8 if change_aware else 6
-            reason = "Relevant risk or incident"
-        else:
-            tier = 2
-            reason = "Phase-relevant governed assertion"
-        payload = {
-            "assertion_id": str(assertion.id),
-            "subject_key": assertion.subject_key,
-            "predicate": assertion.predicate,
-            "value": assertion.value,
-            "review_state": assertion.review_state,
-            "staleness_state": assertion.staleness_state,
-            "confidence": assertion.confidence,
-        }
-        candidates.append(
-            PacketCandidate(
-                item_id=uuid.uuid4(),
-                kind=kind,
-                item_key=f"assertion:{assertion.id}",
-                summary=summary,
-                freshness=_freshness(assertion),
-                is_inferred=assertion.is_inferred,
-                selection_reason=reason,
-                rank_score=max(0.0, assertion.confidence),
-                tier=tier,
-                required_policy=required,
-                payload=payload,
-                contributing_scope_ids=tuple(
-                    sorted(
-                        {
-                            assertion.access_scope_id,
-                            *(citation.access_scope_id for citation in citations),
-                        }
-                    )
-                ),
-                citations=citations,
-                matched_facets=matched_facets,
-                required_context_facets=required_facets,
-                source_assertion_id=assertion.id,
-            )
+    candidates = ScannedCandidates()
+    last_id: uuid.UUID | None = None
+    scanned = 0
+    started = time.monotonic()
+    while True:
+        page_query = eligible
+        if last_id is not None:
+            page_query = page_query.filter(id__gt=last_id)
+        assertions = list(page_query[:CONTEXT_SCAN_PAGE_SIZE])
+        if not assertions:
+            break
+        scanned += len(assertions)
+        candidates.processed_count = scanned
+        if (
+            scanned > CONTEXT_SCAN_MAX_ROWS
+            or scanned * 2 > CONTEXT_SCAN_MAX_OPERATIONS
+            or time.monotonic() - started > CONTEXT_SCAN_MAX_SECONDS
+        ):
+            candidates.complete = False
+            break
+        last_id = assertions[-1].id
+        provenance_by_assertion: dict[uuid.UUID, tuple[CitationCandidate, ...]] = {}
+        provenance_rows = _authorized_provenance_for_authorization(
+            actor=actor,
+            authorization=authorization,
+            assertion_ids={assertion.id for assertion in assertions},
         )
+        for provenance in provenance_rows:
+            existing = provenance_by_assertion.get(provenance.assertion_id, ())
+            provenance_by_assertion[provenance.assertion_id] = (
+                *existing,
+                _citation_from_provenance(provenance),
+            )
+        for assertion in assertions:
+            citations = provenance_by_assertion.get(assertion.id, ())
+            if not citations or assertion.access_scope_id is None:
+                continue
+            candidates.eligible_assertion_ids.add(assertion.id)
+            summary = _assertion_summary(assertion)
+            required = _required_policy(assertion)
+            matched_facets = _matching_facets(summary, facets)
+            required_facets = _required_matching_facets(summary, matched_facets, facets)
+            matches = bool(matched_facets)
+            kind = _assertion_kind(assertion)
+            if not matches and kind not in {
+                ContextPacketItem.Kind.POLICY,
+                ContextPacketItem.Kind.DECISION,
+                ContextPacketItem.Kind.INCIDENT,
+            }:
+                continue
+            if required and _freshness(assertion) == ContextPacketItem.Freshness.CURRENT:
+                tier = 0
+                reason = "Applicable required current policy"
+            elif change_aware and required_facets:
+                tier = 1
+                reason = f"Change-aware assurance anchored match: {', '.join(required_facets)}"
+            elif change_aware and matches:
+                tier = 3
+                reason = f"Change-aware assurance lexical fallback: {', '.join(matched_facets)}"
+            elif kind == ContextPacketItem.Kind.POLICY:
+                tier = 6 if change_aware else 3
+                reason = "Governed policy fallback"
+            elif kind == ContextPacketItem.Kind.DECISION:
+                tier = 7 if change_aware else 5
+                reason = "Relevant decision"
+            elif kind == ContextPacketItem.Kind.INCIDENT:
+                tier = 8 if change_aware else 6
+                reason = "Relevant risk or incident"
+            else:
+                tier = 2
+                reason = "Phase-relevant governed assertion"
+            payload = {
+                "assertion_id": str(assertion.id),
+                "subject_key": assertion.subject_key,
+                "predicate": assertion.predicate,
+                "value": assertion.value,
+                "review_state": assertion.review_state,
+                "staleness_state": assertion.staleness_state,
+                "confidence": assertion.confidence,
+            }
+            candidates.append(
+                PacketCandidate(
+                    item_id=uuid.uuid4(),
+                    kind=kind,
+                    item_key=f"assertion:{assertion.id}",
+                    summary=summary,
+                    freshness=_freshness(assertion),
+                    is_inferred=assertion.is_inferred,
+                    selection_reason=reason,
+                    rank_score=max(0.0, assertion.confidence),
+                    tier=tier,
+                    required_policy=required,
+                    payload=payload,
+                    contributing_scope_ids=tuple(
+                        sorted(
+                            {
+                                assertion.access_scope_id,
+                                *(citation.access_scope_id for citation in citations),
+                            }
+                        )
+                    ),
+                    citations=citations,
+                    matched_facets=matched_facets,
+                    required_context_facets=required_facets,
+                    source_assertion_id=assertion.id,
+                )
+            )
     return candidates
 
 
@@ -1200,23 +1276,48 @@ def _conflict_candidates(
             Q(left_assertion_id__in=relevant_assertion_ids)
             | Q(right_assertion_id__in=relevant_assertion_ids)
         )
-    bounded_conflicts = list(
-        conflict_queryset.select_related("left_assertion", "right_assertion").order_by("id")[
-            : MAX_CONFLICT_CANDIDATES + 1
-        ]
-    )
-    if len(bounded_conflicts) > MAX_CONFLICT_CANDIDATES:
-        raise RequiredContextBudgetError(
-            "Conflict candidate retrieval exceeded its deterministic bound"
-        )
-    candidates: list[PacketCandidate] = []
+    ordered_conflicts = conflict_queryset.select_related(
+        "left_assertion", "right_assertion"
+    ).order_by("id")
+    bounded_conflicts: list[AssertionConflict] = []
+    scan_complete = True
+    last_id: uuid.UUID | None = None
+    started = time.monotonic()
+    while True:
+        page_query = ordered_conflicts
+        if last_id is not None:
+            page_query = page_query.filter(id__gt=last_id)
+        page = list(page_query[:CONTEXT_SCAN_PAGE_SIZE])
+        if not page:
+            break
+        bounded_conflicts.extend(page)
+        if (
+            len(bounded_conflicts) + len(selected_assertion_ids) > CONTEXT_SCAN_MAX_ROWS
+            or (len(bounded_conflicts) + len(selected_assertion_ids)) * 2
+            > CONTEXT_SCAN_MAX_OPERATIONS
+            or time.monotonic() - started > CONTEXT_SCAN_MAX_SECONDS
+        ):
+            scan_complete = False
+            break
+        last_id = page[-1].id
+    candidates = ScannedCandidates()
+    candidates.complete = scan_complete
+    candidates.processed_count = len(bounded_conflicts)
     provenance_by_assertion: dict[uuid.UUID, AssertionProvenance] = {}
-    for provenance in _authorized_provenance(
-        actor=actor,
-        repository_id=repository_id,
-        assertion_ids=selected_assertion_ids,
-    ):
-        provenance_by_assertion.setdefault(provenance.assertion_id, provenance)
+    conflict_endpoint_ids = {
+        assertion_id
+        for conflict in bounded_conflicts
+        for assertion_id in (conflict.left_assertion_id, conflict.right_assertion_id)
+    }
+    ordered_endpoint_ids = sorted(conflict_endpoint_ids, key=str)
+    for offset in range(0, len(ordered_endpoint_ids), CONTEXT_SCAN_PAGE_SIZE * 2):
+        endpoint_page = set(ordered_endpoint_ids[offset : offset + CONTEXT_SCAN_PAGE_SIZE * 2])
+        for provenance in _authorized_provenance(
+            actor=actor,
+            repository_id=repository_id,
+            assertion_ids=endpoint_page,
+        ):
+            provenance_by_assertion.setdefault(provenance.assertion_id, provenance)
     for conflict in bounded_conflicts:
         matched_facets = tuple(
             sorted(
@@ -1618,7 +1719,9 @@ def _watermark(
         id=repository_id,
         organization_id=actor.organization_id,
     )
-    watermark, _created = RetrievalWatermark.objects.get_or_create(
+    # This row is the scan's internal snapshot fence. All supported provenance,
+    # authorization, and ingestion mutations advance it under the same row lock.
+    watermark, _created = RetrievalWatermark.objects.select_for_update().get_or_create(
         organization_id=actor.organization_id,
         repository=repository,
     )
@@ -1824,6 +1927,7 @@ def build_context_packet(
         "task": normalized_task,
         "phase": normalized_phase,
         "budget": budget.as_dict(),
+        "context_scan_version": CONTEXT_SCAN_VERSION,
     }
     if change_aware:
         normalized_request["retrieval_facets"] = [
@@ -1911,7 +2015,7 @@ def build_context_packet(
             )
             for position, result in enumerate(search_response.results, start=1)
         )
-    selected_assertions = {
+    relevant_assertions = {
         candidate.source_assertion_id
         for candidate in assertions
         if candidate.source_assertion_id is not None
@@ -1919,13 +2023,44 @@ def build_context_packet(
     conflicts = _conflict_candidates(
         actor=actor,
         repository_id=repository_id,
-        selected_assertion_ids=selected_assertions,
+        selected_assertion_ids=set(
+            getattr(assertions, "eligible_assertion_ids", relevant_assertions)
+        ),
         relevant_assertion_facets={
             candidate.source_assertion_id: candidate.matched_facets
             for candidate in assertions
             if candidate.source_assertion_id is not None and candidate.matched_facets
         },
         change_aware=change_aware,
+    )
+    completeness_payload = [
+        {
+            "kind": "assertion",
+            "id": str(candidate.source_assertion_id),
+            "payload": candidate.payload,
+            "citations": [citation.as_dict() for citation in candidate.citations],
+        }
+        for candidate in assertions
+    ] + [
+        {
+            "kind": "conflict",
+            "id": str(candidate.source_conflict_id),
+            "payload": candidate.payload,
+            "citations": [citation.as_dict() for citation in candidate.citations],
+        }
+        for candidate in conflicts
+    ]
+    completeness = ContextCompleteness(
+        assertion_count=len(assertions),
+        conflict_count=len(conflicts),
+        processed_count=(
+            int(getattr(assertions, "processed_count", len(assertions)))
+            + int(getattr(conflicts, "processed_count", len(conflicts)))
+        ),
+        digest=_json_hash(completeness_payload),
+        complete=bool(
+            getattr(assertions, "complete", True) and getattr(conflicts, "complete", True)
+        ),
     )
     if change_aware and conflicts:
         conflict_assertion_ids = {
@@ -1989,6 +2124,41 @@ def build_context_packet(
             facet.label for facet in facets if facet.coverage_incomplete
         ),
     )
+    selected_conflicts = sum(
+        candidate.source_conflict_id is not None for candidate in selection.candidates
+    )
+    if conflicts and selected_conflicts < len(conflicts):
+        selection = replace(
+            selection,
+            limitations=(
+                *selection.limitations,
+                f"{len(conflicts) - selected_conflicts} conflict details omitted by report budget; "
+                f"complete scan digest {completeness.digest}",
+            ),
+        )
+    if not completeness.complete:
+        selection = replace(
+            selection,
+            limitations=(
+                *selection.limitations,
+                "Required assurance context was discovered but could not fit the authorized "
+                "bounded packet: ASSURANCE_CONTEXT_INCOMPLETE",
+            ),
+        )
+
+    # Publication is a separate security boundary: a revocation, scope change, or
+    # ingestion watermark movement during scanning invalidates this result.
+    current_scopes, current_authorization_hash = _authorization_snapshot(
+        actor=actor,
+        repository_id=repository_id,
+    )
+    current_watermark = _watermark(actor=actor, repository_id=repository_id)
+    if (
+        current_scopes != visible_scopes
+        or current_authorization_hash != authorization_hash
+        or current_watermark.value != watermark.value
+    ):
+        raise RequiredContextBudgetError("ASSURANCE_CONTEXT_INCOMPLETE")
     selection_hash = _json_hash([candidate.as_dict() for candidate in selection.candidates])
     packet_id = uuid.uuid4()
     generated_at = timezone.now()
@@ -2009,6 +2179,16 @@ def build_context_packet(
         "retrieval_algorithm_version": RETRIEVAL_ALGORITHM_VERSION,
         "index_version": INDEX_VERSION,
         "embedding_version": EMBEDDING_VERSION,
+        "completeness": {
+            **completeness.as_dict(),
+            "bindings": {
+                "organization_id": str(actor.organization_id),
+                "repository_id": str(repository_id),
+                "authorization_hash": authorization_hash,
+                "retrieval_watermark": watermark.value,
+                "query_version": CONTEXT_SCAN_VERSION,
+            },
+        },
         "budget": {
             **budget.as_dict(),
             "selected_items": len(selection.candidates),

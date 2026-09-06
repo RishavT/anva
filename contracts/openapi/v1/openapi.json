@@ -7881,6 +7881,57 @@
             ],
             "type": "object"
           },
+          "completeness": {
+            "additionalProperties": false,
+            "properties": {
+              "bindings": {
+                "type": "object"
+              },
+              "complete": {
+                "type": "boolean"
+              },
+              "digest": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "eligible_assertions": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "eligible_conflicts": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "ordering": {
+                "const": "kind,id",
+                "type": "string"
+              },
+              "page_size": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "processed_rows": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "version": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "version",
+              "ordering",
+              "eligible_assertions",
+              "eligible_conflicts",
+              "processed_rows",
+              "digest",
+              "complete",
+              "page_size",
+              "bindings"
+            ],
+            "type": "object"
+          },
           "content_hash": {
             "pattern": "^[a-f0-9]{64}$",
             "type": "string"
