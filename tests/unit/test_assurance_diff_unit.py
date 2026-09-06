@@ -311,6 +311,28 @@ def test_manual_diff_parser_uses_secret_environment_before_django_configuration(
 
 
 @pytest.mark.unit
+def test_manual_diff_parser_uses_bootstrap_secret_file_before_django_configuration(
+    tmp_path: Path,
+) -> None:
+    credential_marker = "file-backed-runtime-literal-without-a-token-pattern"
+    secret_file = tmp_path / "bootstrap-secret"
+    secret_file.write_text(credential_marker, encoding="utf-8")
+    secret_file.chmod(0o400)
+    candidate = VALID_DIFF.replace("+new", f"+{credential_marker}")
+    with (
+        patch("anva.core.logging.settings") as unconfigured,
+        patch.dict(
+            os.environ,
+            {"ANVA_BOOTSTRAP_SECRET_FILE": str(secret_file)},
+            clear=False,
+        ),
+    ):
+        unconfigured.configured = False
+        with pytest.raises(ValueError, match="credential material"):
+            parse_unified_diff(candidate)
+
+
+@pytest.mark.unit
 def test_fake_evaluator_emits_observations_not_readiness() -> None:
     request = deepcopy(EXAMPLES["evaluator-request"])
     result = FakeEvaluator(FakeScenario.SUCCESS_WITH_BLOCKING).evaluate(request)

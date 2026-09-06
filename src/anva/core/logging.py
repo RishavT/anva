@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import stat
 from datetime import UTC, datetime
 
 from django.conf import settings
@@ -57,6 +58,36 @@ SECRET_PATTERNS = (
 )
 
 
+def _unconfigured_secret_file_value() -> str:
+    """Read the bounded bootstrap secret policy without initializing Django."""
+    raw_path = os.environ.get("ANVA_BOOTSTRAP_SECRET_FILE", "")
+    if not raw_path:
+        return ""
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(raw_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        info = os.fstat(descriptor)
+        mode = stat.S_IMODE(info.st_mode)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_nlink != 1
+            or mode not in {0o400, 0o440, 0o444, 0o600}
+            or (mode == 0o600 and info.st_uid != os.geteuid())
+            or not 1 <= info.st_size <= 4096
+        ):
+            return ""
+        value = os.read(descriptor, 4097)
+        if len(value) != info.st_size or b"\n" in value or b"\r" in value:
+            return ""
+        decoded = value.decode("utf-8")
+        return decoded if decoded and decoded == decoded.strip() else ""
+    except (OSError, UnicodeError):
+        return ""
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def redact_text(value: object) -> str:
     """Remove bearer formats, sensitive headers, and configured secret literals."""
     result = str(value)
@@ -76,6 +107,7 @@ def redact_text(value: object) -> str:
             os.environ.get("ANVA_SECRET_KEY", ""),
             os.environ.get("ANVA_TOKEN_PEPPER", ""),
             os.environ.get("ANVA_BOOTSTRAP_SECRET", ""),
+            _unconfigured_secret_file_value(),
             os.environ.get("ANVA_METRICS_TOKEN", ""),
             os.environ.get("ANVA_OBJECT_STORAGE_SECRET_KEY", ""),
             *os.environ.get("ANVA_GITHUB_WEBHOOK_SECRETS", "").split(","),
