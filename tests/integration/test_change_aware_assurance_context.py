@@ -56,7 +56,9 @@ from anva.core.services.authorization import Action, resolve_authorized_reposito
 from anva.core.services.context import ActorContext
 from anva.core.services.context_packets import (
     _authorized_provenance_for_authorization,
+    _conflict_candidates,
     _eligible_assertions_for_authorization,
+    _open_conflicts_for_assertions,
     invalidate_context_packets,
 )
 from anva.core.services.evaluators import FakeEvaluator
@@ -229,6 +231,113 @@ def _policy_assertion(
         observed_from=visibility.observed_at,
     )
     return assertion
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+def test_conflict_scan_uses_bounded_array_parameters_at_declared_cap() -> None:
+    organization = Organization.objects.create(
+        slug=f"conflict-boundary-{uuid.uuid4()}",
+        name="Conflict parameter boundary",
+    )
+    actor = ActorContext(
+        organization_id=organization.id,
+        actor_type="USER",
+        actor_id=str(uuid.uuid4()),
+        authorization_path="conflict-boundary-regression",
+        request_id=uuid.uuid4(),
+    )
+    left, right, excluded = [
+        KnowledgeAssertion.objects.create(
+            organization=organization,
+            subject_key=f"boundary:{name}",
+            predicate="owner",
+            value=name,
+            provenance=[{"source_id": name}],
+        )
+        for name in ("left", "right", "excluded")
+    ]
+    included_conflict = AssertionConflict.objects.create(
+        organization=organization,
+        left_assertion=left,
+        right_assertion=right,
+        predicate="owner",
+    )
+    AssertionConflict.objects.create(
+        organization=organization,
+        left_assertion=left,
+        right_assertion=excluded,
+        predicate="owner",
+    )
+    assert list(
+        _open_conflicts_for_assertions(
+            actor=actor,
+            selected_assertion_ids={left.id, right.id},
+            relevant_assertion_ids={left.id},
+            change_aware=True,
+        ).values_list("id", flat=True)
+    ) == [included_conflict.id]
+    assert not _open_conflicts_for_assertions(
+        actor=actor,
+        selected_assertion_ids={left.id, right.id},
+        relevant_assertion_ids={excluded.id},
+        change_aware=True,
+    ).exists()
+    assert not _open_conflicts_for_assertions(
+        actor=actor,
+        selected_assertion_ids={left.id, right.id},
+        relevant_assertion_ids=set(),
+        change_aware=True,
+    ).exists()
+    assert (
+        _conflict_candidates(
+            actor=actor,
+            repository_id=uuid.uuid4(),
+            selected_assertion_ids=set(),
+            relevant_assertion_facets={},
+            change_aware=True,
+        )
+        == []
+    )
+    selected_ids = {uuid.UUID(int=index + 1) for index in range(50_000)}
+    relevant_facets: dict[uuid.UUID, tuple[str, ...]] = dict.fromkeys(selected_ids, ("task",))
+    captured_parameters: list[tuple[object, ...]] = []
+
+    def capture_conflict_query(
+        execute: Any,
+        sql: str,
+        params: object,
+        many: bool,
+        context: object,
+    ) -> Any:
+        if "core_assertionconflict" in sql and params is not None:
+            captured_parameters.append(cast(tuple[object, ...], params))
+        return execute(sql, params, many, context)
+
+    started = time.monotonic()
+    with connection.execute_wrapper(capture_conflict_query):
+        candidates = _conflict_candidates(
+            actor=actor,
+            repository_id=uuid.uuid4(),
+            selected_assertion_ids=selected_ids,
+            relevant_assertion_facets=relevant_facets,
+            change_aware=True,
+            deadline=started + 4.0,
+        )
+
+    assert time.monotonic() - started < 4.0
+    assert candidates == []
+    assert cast(Any, candidates).complete is True
+    assert captured_parameters
+    assert {len(params) for params in captured_parameters} == {7}
+    array_parameters = [
+        parameter
+        for params in captured_parameters
+        for parameter in params
+        if isinstance(parameter, list)
+    ]
+    assert len(array_parameters) == 4
+    assert all(len(parameter) == 50_000 for parameter in array_parameters)
 
 
 @pytest.mark.integration

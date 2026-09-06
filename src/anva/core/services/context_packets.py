@@ -14,7 +14,8 @@ from time import monotonic
 from typing import Any, NoReturn, cast
 
 from django.db import connection, transaction
-from django.db.models import Case, F, Q, QuerySet, Subquery, TextField, Value, When
+from django.db.models import BooleanField, Case, F, Q, QuerySet, Subquery, TextField, Value, When
+from django.db.models.expressions import RawSQL
 from django.db.models.functions import Cast, Concat
 from django.utils import timezone
 
@@ -1309,6 +1310,37 @@ def _required_search_anchor_candidates(
     return candidates
 
 
+def _open_conflicts_for_assertions(
+    *,
+    actor: ActorContext,
+    selected_assertion_ids: set[uuid.UUID],
+    relevant_assertion_ids: set[uuid.UUID],
+    change_aware: bool,
+) -> QuerySet[AssertionConflict]:
+    """Keep large assertion memberships in bounded PostgreSQL UUID-array binds."""
+    ordered_selected_ids = sorted(selected_assertion_ids, key=str)
+    queryset = AssertionConflict.objects.filter(
+        organization_id=actor.organization_id,
+        status=AssertionConflict.Status.OPEN,
+    ).filter(
+        RawSQL(
+            "left_assertion_id = ANY(%s::uuid[]) AND right_assertion_id = ANY(%s::uuid[])",
+            (ordered_selected_ids, ordered_selected_ids),
+            output_field=BooleanField(),
+        )
+    )
+    if not change_aware:
+        return queryset
+    ordered_relevant_ids = sorted(relevant_assertion_ids, key=str)
+    return queryset.filter(
+        RawSQL(
+            "left_assertion_id = ANY(%s::uuid[]) OR right_assertion_id = ANY(%s::uuid[])",
+            (ordered_relevant_ids, ordered_relevant_ids),
+            output_field=BooleanField(),
+        )
+    )
+
+
 def _conflict_candidates(
     *,
     actor: ActorContext,
@@ -1320,18 +1352,12 @@ def _conflict_candidates(
 ) -> list[PacketCandidate]:
     if not selected_assertion_ids:
         return []
-    conflict_queryset = AssertionConflict.objects.filter(
-        organization_id=actor.organization_id,
-        status=AssertionConflict.Status.OPEN,
-        left_assertion_id__in=selected_assertion_ids,
-        right_assertion_id__in=selected_assertion_ids,
+    conflict_queryset = _open_conflicts_for_assertions(
+        actor=actor,
+        selected_assertion_ids=selected_assertion_ids,
+        relevant_assertion_ids=set(relevant_assertion_facets),
+        change_aware=change_aware,
     )
-    if change_aware:
-        relevant_assertion_ids = set(relevant_assertion_facets)
-        conflict_queryset = conflict_queryset.filter(
-            Q(left_assertion_id__in=relevant_assertion_ids)
-            | Q(right_assertion_id__in=relevant_assertion_ids)
-        )
     ordered_conflicts = conflict_queryset.select_related(
         "left_assertion", "right_assertion"
     ).order_by("id")

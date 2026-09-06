@@ -714,14 +714,13 @@ def test_conflict_retrieval_keyset_scans_legacy_boundary(row_count: int) -> None
     selected = MagicMock()
     selected.order_by.return_value = ordered
     queryset = MagicMock()
-    queryset.filter.return_value = queryset
     queryset.select_related.return_value = selected
 
     with (
         patch(
-            "anva.core.services.context_packets.AssertionConflict.objects.filter",
+            "anva.core.services.context_packets._open_conflicts_for_assertions",
             return_value=queryset,
-        ) as manager_filter,
+        ) as open_conflicts,
         patch("anva.core.services.context_packets._authorized_provenance") as provenance,
     ):
         candidates = _conflict_candidates(
@@ -736,10 +735,10 @@ def test_conflict_retrieval_keyset_scans_legacy_boundary(row_count: int) -> None
         assert cast(Any, candidates).complete is True
 
     provenance.assert_called_once()
-    assert manager_filter.call_args.kwargs["organization_id"] is not None
-    assert manager_filter.call_args.kwargs["left_assertion_id__in"] == {assertion_id}
-    assert manager_filter.call_args.kwargs["right_assertion_id__in"] == {assertion_id}
-    queryset.filter.assert_called_once()
+    open_conflicts.assert_called_once()
+    assert open_conflicts.call_args.kwargs["selected_assertion_ids"] == {assertion_id}
+    assert open_conflicts.call_args.kwargs["relevant_assertion_ids"] == {assertion_id}
+    assert open_conflicts.call_args.kwargs["change_aware"] is True
     selected.order_by.assert_called_once_with("id")
     assert ordered.__getitem__.call_count == len(pages) + 1
     assert all(
@@ -779,7 +778,7 @@ def test_conflict_scan_cap_boundary_with_non_aligned_remainder(
         patch("anva.core.services.context_packets.CONTEXT_SCAN_MAX_OPERATIONS", 12),
         patch("anva.core.services.context_packets.CONTEXT_SCAN_PAGE_SIZE", 3),
         patch(
-            "anva.core.services.context_packets.AssertionConflict.objects.filter",
+            "anva.core.services.context_packets._open_conflicts_for_assertions",
             return_value=conflicts,
         ),
         patch(
@@ -825,14 +824,12 @@ def test_change_aware_conflicts_prefilter_irrelevant_rows_before_bound() -> None
     selected.order_by.return_value = ordered
     relevant_queryset = MagicMock()
     relevant_queryset.select_related.return_value = selected
-    queryset = MagicMock()
-    queryset.filter.return_value = relevant_queryset
     assertion_id = uuid.uuid4()
 
     with (
         patch(
-            "anva.core.services.context_packets.AssertionConflict.objects.filter",
-            return_value=queryset,
+            "anva.core.services.context_packets._open_conflicts_for_assertions",
+            return_value=relevant_queryset,
         ),
         patch(
             "anva.core.services.context_packets._authorized_provenance",
@@ -850,7 +847,6 @@ def test_change_aware_conflicts_prefilter_irrelevant_rows_before_bound() -> None
             == []
         )
 
-    queryset.filter.assert_called_once()
     relevant_queryset.select_related.assert_called_once_with("left_assertion", "right_assertion")
     assert ordered.__getitem__.call_args.args[0] == slice(None, CONTEXT_SCAN_PAGE_SIZE, None)
 
