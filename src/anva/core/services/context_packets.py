@@ -75,6 +75,7 @@ CONTEXT_SCAN_MAX_OPERATIONS = 100_000
 # Leave one second of the v3 five-second context target for ranking, sealing,
 # and publication reauthorization around this internal database scan.
 CONTEXT_SCAN_MAX_SECONDS = 4.0
+CONTEXT_STATEMENT_TIMEOUT_MS = 4_000
 MAX_RETRIEVAL_FACETS = 8
 MAX_REQUIRED_SEARCH_ANCHORS = 50
 # One closed anchor is 373 canonical ASCII JSON bytes. The array adds 49 commas
@@ -1952,7 +1953,7 @@ def build_context_packet(
     watermark = _watermark(actor=actor, repository_id=repository_id)
     if connection.vendor == "postgresql":
         with connection.cursor() as cursor:
-            cursor.execute("SET LOCAL statement_timeout = %s", (4_000,))
+            cursor.execute("SET LOCAL statement_timeout = %s", (CONTEXT_STATEMENT_TIMEOUT_MS,))
             cursor.execute("SET LOCAL lock_timeout = %s", (1_000,))
             cursor.execute("SET LOCAL idle_in_transaction_session_timeout = %s", (5_000,))
     normalized_request: dict[str, object] = {

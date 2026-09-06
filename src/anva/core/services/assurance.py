@@ -1372,7 +1372,7 @@ def start_assurance(
         )
     try:
         with transaction.atomic():
-            result = _start_assurance_bound(
+            return _start_assurance_bound(
                 provisional_run=provisional_run,
                 actor=actor,
                 pull_request_revision_id=pull_request_revision_id,
@@ -1386,11 +1386,6 @@ def start_assurance(
                 reviewer_service_identity_id=reviewer_service_identity_id,
                 reviewer_token_id=reviewer_token_id,
             )
-        if result.evaluator_task is None:
-            task = EvaluatorTask.objects.filter(assurance_run=result.run).first()
-            if task is not None:
-                return AssuranceStartResult(result.run, task, result.created)
-        return result
     except (AuthenticationError, ResourceNotFoundError):
         _finalize_incomplete_context_start(run=provisional_run)
         raise
@@ -1622,15 +1617,10 @@ def _start_assurance_bound(
         .first()
     )
     if existing is not None:
-        task_query = EvaluatorTask.objects.filter(
+        task = EvaluatorTask.objects.filter(
             organization_id=actor.organization_id,
             assurance_run=existing,
-        )
-        task = (
-            task_query.get()
-            if existing.state == AssuranceRun.State.MODEL_REVIEW
-            else task_query.first()
-        )
+        ).first()
         if task is not None and (
             task.reviewer_service_identity_id != bound_reviewer_id
             or task.reviewer_token_id != bound_reviewer_token_id
@@ -1720,12 +1710,7 @@ def _start_assurance_bound(
             head_commit=revision.head_commit,
             input_hash=input_digest,
         )
-        task_query = EvaluatorTask.objects.filter(assurance_run=existing)
-        task = (
-            task_query.get()
-            if existing.state == AssuranceRun.State.MODEL_REVIEW
-            else task_query.first()
-        )
+        task = EvaluatorTask.objects.filter(assurance_run=existing).first()
         run.refresh_from_db()
         run.state = AssuranceRun.State.CANCELLED
         run.input_hash = content_hash(

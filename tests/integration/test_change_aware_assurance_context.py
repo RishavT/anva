@@ -226,6 +226,8 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr("anva.core.services.context_packets.CONTEXT_SCAN_MAX_SECONDS", 30.0)
+    monkeypatch.setattr("anva.core.services.context_packets.CONTEXT_STATEMENT_TIMEOUT_MS", 30_000)
     organization, repository, scope, membership, actor = _tenant()
     corpus = tmp_path / "public"
     corpus.mkdir()
@@ -502,6 +504,14 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
     )
     context_elapsed = time.monotonic() - context_started
     assert context_elapsed < 15.0
+    assert started.evaluator_task is not None, (
+        started.run.state,
+        started.run.failure_code,
+        started.run.limitations,
+        started.run.context_artifact.payload.get("completeness")
+        if started.run.context_artifact is not None
+        else None,
+    )
     duplicate = start_assurance(
         actor=actor,
         pull_request_revision_id=ingested.revision.id,
@@ -867,7 +877,7 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         reason="MANUAL",
         details={"test": "force-wall-budget"},
     )
-    ticks = chain([0.0, 5.0], repeat(5.0))
+    ticks = chain([0.0, 31.0], repeat(31.0))
     monkeypatch.setattr("anva.core.services.context_packets.monotonic", lambda: next(ticks))
     time_exhausted = start_assurance(
         actor=actor,
