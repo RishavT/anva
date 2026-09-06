@@ -131,6 +131,156 @@ def test_real_mcp_client_contract_auth_read_only_revocation_and_http_parity() ->
                     assert parity.status_code == 200, parity.text
                     assert parity.json() == mcp_result.structuredContent
 
+                    source = await http_client.post(
+                        f"{api_url}/api/v1/source-connections/filesystem",
+                        headers={"X-Correlation-ID": str(uuid.uuid4())},
+                        json={
+                            "repository_id": repository_id,
+                            "access_scope_id": credential["access_scope_id"],
+                            "external_key": f"mcp-compose-{run_id}:anchor",
+                            "display_name": "MCP required anchor corpus",
+                            "root": "/fixtures/acceptance-public/payload",
+                        },
+                    )
+                    assert source.status_code == 201, source.text
+                    source_id = source.json()["id"]
+                    sync = await http_client.post(
+                        f"{api_url}/api/v1/source-connections/{source_id}/sync",
+                        headers={"X-Correlation-ID": str(uuid.uuid4())},
+                        json={"scan_mode": "FULL"},
+                    )
+                    assert sync.status_code == 202, sync.text
+                    sync_id = sync.json()["id"]
+                    sync_state = "REQUESTED"
+                    for _ in range(120):
+                        runs = await http_client.get(
+                            f"{api_url}/api/v1/source-connections/{source_id}/sync-runs",
+                            headers={"X-Correlation-ID": str(uuid.uuid4())},
+                        )
+                        assert runs.status_code == 200, runs.text
+                        matching = [run for run in runs.json()["sync_runs"] if run["id"] == sync_id]
+                        assert matching
+                        sync_state = matching[0]["state"]
+                        if sync_state in {"COMPLETED", "PARTIALLY_COMPLETED", "FAILED"}:
+                            break
+                        await asyncio.sleep(0.25)
+                    assert sync_state == "COMPLETED"
+
+                    search = await session.call_tool(
+                        "anva.search",
+                        arguments={
+                            "contract_version": "1",
+                            "repository_id": repository_id,
+                            "query": "Payments Platform owns checkout",
+                            "phase": "ASSURANCE",
+                            "limit": 10,
+                        },
+                    )
+                    assert not search.isError
+                    assert search.structuredContent is not None
+                    search_results = search.structuredContent["data"]["results"]
+                    assert len(search_results) == 1
+                    hit = search_results[0]
+                    anchor = {
+                        key: hit[key]
+                        for key in (
+                            "chunk_id",
+                            "content_hash",
+                            "access_scope_id",
+                            "source_location_id",
+                            "source_observation_id",
+                            "access_snapshot_id",
+                        )
+                    }
+                    context_arguments = {
+                        "contract_version": "1",
+                        "repository_id": repository_id,
+                        "task": "Preserve the exact checkout ownership search result",
+                        "phase": "ASSURANCE",
+                        "budget": {
+                            "max_items": 1,
+                            "max_tokens": 8_000,
+                            "max_bytes": 100_000,
+                            "max_citations": 1,
+                        },
+                        "required_search_anchors": [anchor],
+                    }
+                    anchored = await session.call_tool(
+                        "anva.get_context_packet",
+                        arguments=context_arguments,
+                    )
+                    assert not anchored.isError
+                    assert anchored.structuredContent is not None
+                    anchored_data = anchored.structuredContent["data"]
+                    assert anchored_data["created"] is True
+                    anchored_packet = anchored_data["packet"]
+                    assert anchored_packet["items"][0]["item_key"] == f"chunk:{hit['chunk_id']}"
+                    assert (
+                        anchored_packet["items"][0]["payload"]["content_hash"]
+                        == hit["content_hash"]
+                    )
+                    assert anchored_packet["items"][0]["payload"]["required_search_anchor"] is True
+                    assert (
+                        anchored_packet["items"][0]["anva_sources"][0]["access_snapshot_id"]
+                        == hit["access_snapshot_id"]
+                    )
+                    rest_context = await http_client.post(
+                        f"{api_url}/api/v1/context-packets",
+                        headers={"X-Correlation-ID": str(uuid.uuid4())},
+                        json={
+                            key: ([anchor, anchor] if key == "required_search_anchors" else value)
+                            for key, value in context_arguments.items()
+                            if key != "contract_version"
+                        },
+                    )
+                    assert rest_context.status_code == 200, rest_context.text
+                    rest_context_data = rest_context.json()
+                    assert rest_context_data["created"] is False
+                    assert rest_context_data["packet_id"] == anchored_data["packet_id"]
+                    assert (
+                        rest_context_data["packet"]["content_hash"]
+                        == anchored_packet["content_hash"]
+                    )
+                    assert rest_context_data["packet"] == anchored_packet
+
+                    unavailable_anchor = {
+                        "chunk_id": str(uuid.uuid4()),
+                        "content_hash": "a" * 64,
+                        "access_scope_id": str(uuid.uuid4()),
+                        "source_location_id": str(uuid.uuid4()),
+                        "source_observation_id": str(uuid.uuid4()),
+                        "access_snapshot_id": str(uuid.uuid4()),
+                    }
+                    anchor_arguments = {
+                        "contract_version": "1",
+                        "repository_id": repository_id,
+                        "task": "Require one exact prior search result",
+                        "phase": "ASSURANCE",
+                        "required_search_anchors": [unavailable_anchor],
+                    }
+                    anchor_rejected = await session.call_tool(
+                        "anva.get_context_packet",
+                        arguments=anchor_arguments,
+                    )
+                    assert anchor_rejected.isError
+                    anchor_content = anchor_rejected.content[0]
+                    assert isinstance(anchor_content, TextContent)
+                    mcp_anchor_error = json.loads(anchor_content.text)
+                    assert mcp_anchor_error["code"] == "required_search_anchor_unavailable"
+                    rest_anchor = await http_client.post(
+                        f"{api_url}/api/v1/context-packets",
+                        headers={"X-Correlation-ID": str(uuid.uuid4())},
+                        json={
+                            key: value
+                            for key, value in anchor_arguments.items()
+                            if key != "contract_version"
+                        },
+                    )
+                    assert rest_anchor.status_code == 409
+                    rest_anchor_error = rest_anchor.json()
+                    assert rest_anchor_error["code"] == mcp_anchor_error["code"]
+                    assert rest_anchor_error["message"] == mcp_anchor_error["message"]
+
                     secret = f"ghp_{'A' * 36}"
                     secret_rejected = await session.call_tool(
                         "anva.search",

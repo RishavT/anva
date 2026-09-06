@@ -73,6 +73,7 @@ from anva.core.services.context_packets import (
     PacketBudget,
     build_context_packet,
     get_context_packet,
+    parse_required_search_anchors,
 )
 from anva.core.services.evidence import (
     map_criterion_evidence,
@@ -1333,6 +1334,9 @@ def context_packets(request: HttpRequest) -> JsonResponse:
         task=_string(payload, "task"),
         phase=_string(payload, "phase"),
         budget=budget,
+        required_search_anchors=parse_required_search_anchors(
+            payload.get("required_search_anchors")
+        ),
     )
     return JsonResponse(
         {

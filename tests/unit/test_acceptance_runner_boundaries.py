@@ -8,6 +8,7 @@ import io
 import json
 import os
 import shutil
+import uuid
 from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import replace
@@ -52,6 +53,36 @@ SOURCE_NORMALIZED_SHA256 = hashlib.sha256(SOURCE_NORMALIZED.encode()).hexdigest(
 
 def _id(number: int) -> str:
     return f"00000000-0000-4000-8000-{number:012d}"
+
+
+@pytest.mark.unit
+def test_runner_preserves_all_fifty_schema_valid_required_source_hits() -> None:
+    runner = object.__new__(AcceptanceRunner)
+    expected_sources: list[tuple[str, str, str]] = []
+    results: list[dict[str, str]] = []
+    for index in range(50):
+        relative = f"organization/required-{index:02d}.md"
+        text = f"required source {index:02d}"
+        content_hash = hashlib.sha256(text.encode()).hexdigest()
+        expected_sources.append((relative, content_hash, text))
+        results.append(
+            {
+                "chunk_id": str(uuid.UUID(int=index * 6 + 1)),
+                "content_hash": content_hash,
+                "canonical_url": f"file:///canonical/{relative}",
+                "text": text,
+                "access_scope_id": str(uuid.UUID(int=index * 6 + 2)),
+                "source_location_id": str(uuid.UUID(int=index * 6 + 3)),
+                "source_observation_id": str(uuid.UUID(int=index * 6 + 4)),
+                "access_snapshot_id": str(uuid.UUID(int=index * 6 + 5)),
+            }
+        )
+    runner.expected_sources = tuple(expected_sources)
+
+    anchors = runner._required_search_anchors({"data": {"results": results}})
+
+    assert len(anchors) == 50
+    assert [anchor["chunk_id"] for anchor in anchors] == [result["chunk_id"] for result in results]
 
 
 def _evidence_bytes(head_commit: str, *, check_name: str = "TESTS_PASS") -> bytes:
@@ -351,6 +382,10 @@ class FakeMCP:
                             "pointer": "/",
                             "canonical_url": "file:///canonical/organization/decision.md",
                             "text": SOURCE_NORMALIZED,
+                            "access_scope_id": _id(3),
+                            "source_location_id": _id(44),
+                            "source_observation_id": _id(45),
+                            "access_snapshot_id": _id(46),
                         }
                     ]
                 },
@@ -728,6 +763,16 @@ def test_finalize_reuses_case_retrieval_canvas_and_all_public_operations(
     assert context_calls[-1]["task"] == retrieval["context_task"]
     assert context_calls[-1]["phase"] == retrieval["context_phase"]
     assert context_calls[-1]["budget"] == retrieval["budget"]
+    assert context_calls[-1]["required_search_anchors"] == [
+        {
+            "chunk_id": _id(42),
+            "content_hash": SOURCE_NORMALIZED_SHA256,
+            "access_scope_id": _id(3),
+            "source_location_id": _id(44),
+            "source_observation_id": _id(45),
+            "access_snapshot_id": _id(46),
+        }
+    ]
     canvas_payloads = [
         payload
         for method, path, _token, payload in product.calls

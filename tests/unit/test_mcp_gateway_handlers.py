@@ -165,11 +165,21 @@ def test_read_handlers_share_bounded_helpers(monkeypatch: pytest.MonkeyPatch) ->
         "packet": {"packet": "exact"},
     }
     record = SimpleNamespace(id=uuid.uuid4(), artifact=SimpleNamespace(payload={"items": []}))
-    monkeypatch.setattr(
-        mcp_gateway,
-        "build_context_packet",
-        lambda **_kwargs: (record, True),
-    )
+    build_arguments: dict[str, object] = {}
+
+    def build_packet(**kwargs: object) -> tuple[SimpleNamespace, bool]:
+        build_arguments.update(kwargs)
+        return record, True
+
+    monkeypatch.setattr(mcp_gateway, "build_context_packet", build_packet)
+    anchor = {
+        "chunk_id": str(uuid.uuid4()),
+        "content_hash": "a" * 64,
+        "access_scope_id": str(uuid.uuid4()),
+        "source_location_id": str(uuid.uuid4()),
+        "source_observation_id": str(uuid.uuid4()),
+        "access_snapshot_id": str(uuid.uuid4()),
+    }
     built = mcp_gateway._context_packet(
         actor,
         {
@@ -177,9 +187,12 @@ def test_read_handlers_share_bounded_helpers(monkeypatch: pytest.MonkeyPatch) ->
             "task": "Implement MCP",
             "phase": "BUILD",
             "budget": {"max_items": 5},
+            "required_search_anchors": [anchor],
         },
     )
     assert built["created"] is True
+    required_anchors = cast(tuple[Any, ...], build_arguments["required_search_anchors"])
+    assert [item.as_dict() for item in required_anchors] == [anchor]
 
     results = [
         SimpleNamespace(

@@ -72,6 +72,12 @@ class RequiredContextBudgetError(DomainOperationError):
     code = "required_context_budget_exceeded"
 
 
+class RequiredSearchAnchorUnavailableError(DomainOperationError):
+    """A caller-required search result is not currently usable for this packet."""
+
+    code = "required_search_anchor_unavailable"
+
+
 class RateLimitExceededError(DomainOperationError):
     """The authenticated principal exhausted a bounded request window."""
 

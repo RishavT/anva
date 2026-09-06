@@ -32,9 +32,51 @@ from anva.mcp.contracts import (
     RELATIONSHIP_PACKET_PAYLOAD,
     RESOURCE_CONTRACTS,
     SOURCE_PACKET_PAYLOAD,
+    TOOL_BY_NAME,
     TOOL_CONTRACTS,
     validate_tool_output,
 )
+
+
+def _search_anchor(index: int = 0) -> dict[str, str]:
+    return {
+        "chunk_id": str(uuid.UUID(int=index * 6 + 1)),
+        "content_hash": f"{index + 1:064x}",
+        "access_scope_id": str(uuid.UUID(int=index * 6 + 2)),
+        "source_location_id": str(uuid.UUID(int=index * 6 + 3)),
+        "source_observation_id": str(uuid.UUID(int=index * 6 + 4)),
+        "access_snapshot_id": str(uuid.UUID(int=index * 6 + 5)),
+    }
+
+
+@pytest.mark.unit
+def test_context_input_contract_closes_and_bounds_required_search_anchors() -> None:
+    schema = TOOL_BY_NAME["anva.get_context_packet"]["input_schema"]
+    validator = Draft202012Validator(schema)
+    request: dict[str, object] = {
+        "contract_version": "1",
+        "repository_id": str(uuid.uuid4()),
+        "task": "preserve search result",
+        "phase": "ASSURANCE",
+        "required_search_anchors": [_search_anchor(index) for index in range(50)],
+    }
+    assert not list(validator.iter_errors(request))
+
+    too_many = deepcopy(request)
+    cast(list[dict[str, str]], too_many["required_search_anchors"]).append(_search_anchor(50))
+    assert list(validator.iter_errors(too_many))
+
+    unknown = deepcopy(request)
+    cast(list[dict[str, str]], unknown["required_search_anchors"])[0]["unknown"] = "hidden"
+    assert list(validator.iter_errors(unknown))
+
+    packet_lookup = {
+        "contract_version": "1",
+        "repository_id": str(uuid.uuid4()),
+        "packet_id": str(uuid.uuid4()),
+        "required_search_anchors": [_search_anchor()],
+    }
+    assert list(validator.iter_errors(packet_lookup))
 
 
 def _context_response_parts(
@@ -215,6 +257,7 @@ def test_context_packet_contract_accepts_only_bounded_facet_metadata() -> None:
                 "retrieval_facet",
                 "retrieval_facet_position",
                 "retrieval_match",
+                "required_search_anchor",
                 "retrieval_facets",
                 "required_context_facets",
             },
