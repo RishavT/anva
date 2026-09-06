@@ -1617,10 +1617,15 @@ def _start_assurance_bound(
         .first()
     )
     if existing is not None:
-        task = EvaluatorTask.objects.filter(
+        task_query = EvaluatorTask.objects.filter(
             organization_id=actor.organization_id,
             assurance_run=existing,
-        ).first()
+        )
+        task = (
+            task_query.get()
+            if existing.state == AssuranceRun.State.MODEL_REVIEW
+            else task_query.first()
+        )
         if task is not None and (
             task.reviewer_service_identity_id != bound_reviewer_id
             or task.reviewer_token_id != bound_reviewer_token_id
@@ -1710,7 +1715,12 @@ def _start_assurance_bound(
             head_commit=revision.head_commit,
             input_hash=input_digest,
         )
-        task = EvaluatorTask.objects.filter(assurance_run=existing).first()
+        task_query = EvaluatorTask.objects.filter(assurance_run=existing)
+        task = (
+            task_query.get()
+            if existing.state == AssuranceRun.State.MODEL_REVIEW
+            else task_query.first()
+        )
         run.refresh_from_db()
         run.state = AssuranceRun.State.CANCELLED
         run.input_hash = content_hash(
