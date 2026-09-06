@@ -19,6 +19,7 @@ from django.utils import timezone
 
 from anva.contracts import validate_knowledge_changes, validate_payload
 from anva.core.exceptions import (
+    AuthenticationError,
     DomainOperationError,
     IdempotencyConflictError,
     LeaseConflictError,
@@ -1257,6 +1258,7 @@ def _advance_to_model_review(*, actor: ActorContext, run: AssuranceRun) -> Assur
     return run
 
 
+@transaction.atomic
 def _finalize_incomplete_context_start(*, run: AssuranceRun) -> AssuranceStartResult:
     """Durably close a request-bound run when preparation cannot safely complete."""
     blockers = (
@@ -1298,7 +1300,6 @@ def _finalize_incomplete_context_start(*, run: AssuranceRun) -> AssuranceStartRe
     return AssuranceStartResult(run, cast(EvaluatorTask, None), True)
 
 
-@transaction.atomic
 def start_assurance(
     *,
     actor: ActorContext,
@@ -1349,25 +1350,26 @@ def start_assurance(
             "reviewer_token_id": str(reviewer_token_id) if reviewer_token_id else None,
         }
     )
-    provisional_run, provisional_created = AssuranceRun.objects.get_or_create(
-        organization_id=actor.organization_id,
-        repository_external_id=revision.pull_request.repository.external_id,
-        pull_request_number=revision.pull_request.number,
-        head_commit=revision.head_commit,
-        input_hash=provisional_digest,
-        defaults={
-            "initiated_by_actor_type": actor.actor_type,
-            "initiated_by_actor_id": actor.actor_id,
-            "initiated_by_credential_id": actor.credential_id,
-            "repository": revision.pull_request.repository,
-            "pull_request_revision": revision,
-            "policy_version": 1,
-            "diff_artifact": revision.diff_artifact,
-            "trigger_key": trigger_key,
-            "evaluator_version": evaluator_version,
-            "prompt_version": prompt_version,
-        },
-    )
+    with transaction.atomic():
+        provisional_run, provisional_created = AssuranceRun.objects.get_or_create(
+            organization_id=actor.organization_id,
+            repository_external_id=revision.pull_request.repository.external_id,
+            pull_request_number=revision.pull_request.number,
+            head_commit=revision.head_commit,
+            input_hash=provisional_digest,
+            defaults={
+                "initiated_by_actor_type": actor.actor_type,
+                "initiated_by_actor_id": actor.actor_id,
+                "initiated_by_credential_id": actor.credential_id,
+                "repository": revision.pull_request.repository,
+                "pull_request_revision": revision,
+                "policy_version": 1,
+                "diff_artifact": revision.diff_artifact,
+                "trigger_key": trigger_key,
+                "evaluator_version": evaluator_version,
+                "prompt_version": prompt_version,
+            },
+        )
     if not provisional_created:
         task = EvaluatorTask.objects.filter(assurance_run=provisional_run).first()
         return AssuranceStartResult(provisional_run, cast(EvaluatorTask, task), False)
@@ -1387,6 +1389,9 @@ def start_assurance(
                 reviewer_service_identity_id=reviewer_service_identity_id,
                 reviewer_token_id=reviewer_token_id,
             )
+    except (AuthenticationError, ResourceNotFoundError):
+        _finalize_incomplete_context_start(run=provisional_run)
+        raise
     except (DomainOperationError, DatabaseError):
         return _finalize_incomplete_context_start(run=provisional_run)
 
@@ -1746,6 +1751,8 @@ def _start_assurance_bound(
                 repository_id=repository.id,
                 access_scope_id=access_scope_id,
             )
+    except (AuthenticationError, ResourceNotFoundError):
+        raise
     except (DomainOperationError, DatabaseError):
         blockers = (
             f"{REQUIRED_ASSURANCE_CONTEXT_LIMITATION_PREFIX} "

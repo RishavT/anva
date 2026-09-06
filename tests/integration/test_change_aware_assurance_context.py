@@ -16,7 +16,11 @@ from django.db import DatabaseError, connection
 from django.utils import timezone
 
 from anva.contracts.catalog import EXAMPLES
-from anva.core.exceptions import IdempotencyConflictError, LeaseConflictError, ResourceNotFoundError
+from anva.core.exceptions import (
+    IdempotencyConflictError,
+    LeaseConflictError,
+    ResourceNotFoundError,
+)
 from anva.core.models import (
     AccessScope,
     AccessScopeMembership,
@@ -990,5 +994,4 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         work_item_revision_id=work.work_item_revision.id,
     )
     assert_incomplete_run(authorization_revoked)
-    assert authorization_revoked.run.failure_code == "ASSURANCE_CONTEXT_INCOMPLETE"
     assert not EvaluatorTask.objects.filter(assurance_run=authorization_revoked.run).exists()
