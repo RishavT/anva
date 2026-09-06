@@ -125,6 +125,11 @@ def build_parser() -> argparse.ArgumentParser:
     acceptance_canonicalize.add_argument("--max-total-bytes", type=int, default=1_073_741_824)
     acceptance_canonicalize.add_argument("--max-file-bytes", type=int, default=268_435_456)
     acceptance_canonicalize.add_argument("--max-depth", type=int, default=32)
+    acceptance_case_validate = acceptance_commands.add_parser(
+        "case-validate",
+        help="Validate both the JSON Schema shape and semantic cross-section case governance",
+    )
+    acceptance_case_validate.add_argument("--case", required=True, type=Path)
     acceptance_verify = acceptance_commands.add_parser("verify")
     acceptance_verify.add_argument("--canonical-root", required=True, type=Path)
     acceptance_verify.add_argument("--manifest-sha256", required=True)
@@ -1128,7 +1133,18 @@ def _acceptance_request(arguments: argparse.Namespace) -> int:
     )
 
     try:
-        if arguments.acceptance_command == "canonicalize":
+        if arguments.acceptance_command == "case-validate":
+            from anva.acceptance.case import load_acceptance_case
+
+            validated = load_acceptance_case(arguments.case)
+            payload = {
+                "case_id": validated.case_id,
+                "schema_valid": True,
+                "semantic_valid": True,
+                "sha256": validated.sha256,
+                "status": "valid",
+            }
+        elif arguments.acceptance_command == "canonicalize":
             result = canonicalize_corpus(
                 raw_root=arguments.raw_root,
                 canonical_root=arguments.canonical_root,
@@ -1252,7 +1268,29 @@ def _acceptance_request(arguments: argparse.Namespace) -> int:
             )
         )
         return 2
-    except (json.JSONDecodeError, ValueError):
+    except ValueError as error:
+        from anva.acceptance.case import AcceptanceCaseError
+        from anva.contracts.validation import ContractValidationError
+
+        is_case_preflight = arguments.acceptance_command == "case-validate"
+        if is_case_preflight and isinstance(error, AcceptanceCaseError):
+            diagnostic: dict[str, object] = dict(error.diagnostic())
+            schema_valid = True if error.code.endswith("_not_governed") else None
+            diagnostic.update(
+                {"schema_valid": schema_valid, "semantic_valid": False, "status": "invalid"}
+            )
+            print(json.dumps(diagnostic, sort_keys=True))
+            return 2
+        if is_case_preflight and isinstance(error, ContractValidationError):
+            diagnostic = {
+                "code": "acceptance_case_schema_invalid",
+                "message": str(error),
+                "schema_valid": False,
+                "semantic_valid": False,
+                "status": "invalid",
+            }
+            print(json.dumps(diagnostic, sort_keys=True))
+            return 2
         print(
             json.dumps(
                 {

@@ -16,6 +16,7 @@ from anva.contract_limits import (
     MAX_CANVAS_QUERY_EDGES,
     MAX_CANVAS_QUERY_NODES,
 )
+from anva.contracts.acceptance_case_semantics import ACCEPTANCE_CASE_GOVERNANCE_RULES
 from anva.contracts.bootstrap_scope import (
     BOOTSTRAP_SCOPE_SCHEMA,
     acceptance_bootstrap_scope_payload,
@@ -2016,6 +2017,15 @@ ACCEPTANCE_CASE_SCHEMA = versioned_schema(
         },
     },
 )
+
+# Draft 2020-12 validates the document shape, but cannot express joins between
+# independently nested arrays. This public annotation is generated with the schema and
+# identifies the additional rules enforced by `anva acceptance case-validate` and runtime.
+ACCEPTANCE_CASE_SCHEMA["x-anva-semantic-validation"] = {
+    "command": "anva acceptance case-validate --case <path>",
+    "required": True,
+    "rules": [rule.contract() for rule in ACCEPTANCE_CASE_GOVERNANCE_RULES],
+}
 ACCEPTANCE_CASE_SCHEMA["x-anva-input"] = {
     "media_type": ACCEPTANCE_CASE_MEDIA_TYPE,
     "encoding": ACCEPTANCE_CASE_ENCODING,

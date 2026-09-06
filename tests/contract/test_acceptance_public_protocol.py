@@ -225,6 +225,27 @@ def _mcp_input_examples() -> dict[str, dict[str, object]]:
 @pytest.mark.contract
 def test_acceptance_case_is_closed_public_only_and_has_two_distinct_valid_cases() -> None:
     schema = SCHEMAS["acceptance-case"]
+    assert schema["x-anva-semantic-validation"] == {
+        "command": "anva acceptance case-validate --case <path>",
+        "required": True,
+        "rules": [
+            {
+                "code": "acceptance_evidence_criterion_not_governed",
+                "from": "evidence.criterion_codes[]",
+                "mustReference": "work_item.acceptance_criteria[].code",
+            },
+            {
+                "code": "acceptance_check_policy_not_governed",
+                "from": "assurance.deterministic_checks[].code",
+                "mustReference": "policy.requirements[].code",
+            },
+            {
+                "code": "acceptance_check_criterion_not_governed",
+                "from": "assurance.deterministic_checks[].code",
+                "mustReference": "work_item.acceptance_criteria[].code",
+            },
+        ],
+    }
     first = EXAMPLES["acceptance-case"]
     second = deepcopy(first)
     second["case_id"] = "tst-009.scn-lantern"

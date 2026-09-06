@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import cast
 
 from anva.contract_limits import ACCEPTANCE_CASE_ENCODING
+from anva.contracts.acceptance_case_semantics import ACCEPTANCE_CASE_GOVERNANCE_RULES
 from anva.contracts.bootstrap_scope import (
     BootstrapScopeError,
     acceptance_bootstrap_scope_payload,
@@ -50,6 +51,28 @@ FORBIDDEN_PRIVATE_MARKERS = (
 
 class AcceptanceCaseError(ValueError):
     """A public case was unsafe, ambiguous, or internally inconsistent."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "acceptance_case_invalid",
+        path: str | None = None,
+        reference: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.path = path
+        self.reference = reference
+
+    def diagnostic(self) -> dict[str, str]:
+        """Return a stable, public operator diagnostic without case contents."""
+        result = {"code": self.code, "message": str(self)}
+        if self.path is not None:
+            result["path"] = self.path
+        if self.reference is not None:
+            result["reference"] = self.reference
+        return result
 
 
 def canonical_case_bytes(payload: dict[str, object]) -> bytes:
@@ -170,12 +193,25 @@ def _validate_cross_section(payload: dict[str, object]) -> bytes:
     check_codes = {
         _string(cast(dict[str, object], item), "code") for item in checks if isinstance(item, dict)
     }
-    if (
-        not evidence_codes <= criterion_codes
-        or not check_codes <= policy_codes
-        or not check_codes <= criterion_codes
-    ):
-        raise AcceptanceCaseError("Acceptance evidence/check codes are not governed")
+    code_sets = {
+        "evidence.criterion_codes[]": evidence_codes,
+        "assurance.deterministic_checks[].code": check_codes,
+        "policy.requirements[].code": policy_codes,
+        "work_item.acceptance_criteria[].code": criterion_codes,
+    }
+    for rule in ACCEPTANCE_CASE_GOVERNANCE_RULES:
+        supplied = code_sets[rule.source]
+        governed = code_sets[rule.reference]
+        unknown = sorted(supplied - governed)
+        if unknown:
+            path = rule.source.removesuffix("[]")
+            raise AcceptanceCaseError(
+                "Acceptance evidence/check codes are not governed: "
+                f"{path} contains {unknown[0]!r}, which is absent from {rule.reference}",
+                code=rule.code,
+                path=path,
+                reference=rule.reference,
+            )
     evidence_kind = _string(evidence, "kind")
     for raw in criteria:
         criterion = cast(dict[str, object], raw)

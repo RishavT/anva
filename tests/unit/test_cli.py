@@ -6,15 +6,18 @@ import hashlib
 import json
 import os
 import uuid
+from copy import deepcopy
 from email.message import Message
 from io import BytesIO
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
 import pytest
 
 from anva import __version__
+from anva.contracts.catalog import EXAMPLES
 from anva.entrypoints.cli import main
 from anva.entrypoints.decommission_retry import DecommissionCleanupStatus
 from anva.foundation.services import DependencyStatus, ReadinessStatus
@@ -75,6 +78,62 @@ def _write_acceptance_bundle(raw: Path) -> str:
     manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
     (raw / "acceptance-corpus.json").write_bytes(manifest_bytes)
     return hashlib.sha256(manifest_bytes).hexdigest()
+
+
+@pytest.mark.unit
+def test_acceptance_case_validate_reports_full_semantic_validity(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "case.json"
+    path.write_text(json.dumps(EXAMPLES["acceptance-case"]), encoding="utf-8")
+
+    assert main(["acceptance", "case-validate", "--case", str(path)]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "valid"
+    assert payload["schema_valid"] is True
+    assert payload["semantic_valid"] is True
+
+
+@pytest.mark.unit
+def test_acceptance_case_validate_reports_actionable_cross_governance_failure(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    case = deepcopy(EXAMPLES["acceptance-case"])
+    cast(dict[str, object], case["evidence"])["criterion_codes"] = ["OUTBOX_RETRY_REVIEW"]
+    path = tmp_path / "case.json"
+    path.write_text(json.dumps(case), encoding="utf-8")
+
+    assert main(["acceptance", "case-validate", "--case", str(path)]) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "code": "acceptance_evidence_criterion_not_governed",
+        "message": (
+            "Acceptance evidence/check codes are not governed: evidence.criterion_codes "
+            "contains 'OUTBOX_RETRY_REVIEW', which is absent from "
+            "work_item.acceptance_criteria[].code"
+        ),
+        "path": "evidence.criterion_codes",
+        "reference": "work_item.acceptance_criteria[].code",
+        "schema_valid": True,
+        "semantic_valid": False,
+        "status": "invalid",
+    }
+
+
+@pytest.mark.unit
+def test_acceptance_case_validate_distinguishes_structural_invalidity(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    case = deepcopy(EXAMPLES["acceptance-case"])
+    case.pop("evidence")
+    path = tmp_path / "case.json"
+    path.write_text(json.dumps(case), encoding="utf-8")
+
+    assert main(["acceptance", "case-validate", "--case", str(path)]) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["code"] == "acceptance_case_schema_invalid"
+    assert payload["schema_valid"] is False
+    assert payload["semantic_valid"] is False
 
 
 @pytest.mark.unit

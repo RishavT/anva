@@ -1319,5 +1319,26 @@
     "encoding": "utf-8",
     "media_type": "application/json",
     "serialization": "json-text"
+  },
+  "x-anva-semantic-validation": {
+    "command": "anva acceptance case-validate --case <path>",
+    "required": true,
+    "rules": [
+      {
+        "code": "acceptance_evidence_criterion_not_governed",
+        "from": "evidence.criterion_codes[]",
+        "mustReference": "work_item.acceptance_criteria[].code"
+      },
+      {
+        "code": "acceptance_check_policy_not_governed",
+        "from": "assurance.deterministic_checks[].code",
+        "mustReference": "policy.requirements[].code"
+      },
+      {
+        "code": "acceptance_check_criterion_not_governed",
+        "from": "assurance.deterministic_checks[].code",
+        "mustReference": "work_item.acceptance_criteria[].code"
+      }
+    ]
   }
 }

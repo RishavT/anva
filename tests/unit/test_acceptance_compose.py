@@ -330,6 +330,33 @@ def test_product_acceptance_make_targets_use_scoped_compose_services() -> None:
 
 
 @pytest.mark.unit
+def test_acceptance_case_preflight_is_hardened_and_precedes_launch() -> None:
+    makefile = Path("Makefile").read_text(encoding="utf-8")
+    body = makefile.split("\nacceptance-case-validate: acceptance-identity-preflight", 1)[1].split(
+        "\n\nacceptance-canonicalize:", 1
+    )[0]
+
+    assert (
+        "acceptance-launch-manifest: acceptance-identity-preflight acceptance-case-validate"
+        in makefile
+    )
+    assert "ANVA_ACCEPTANCE_CASE_FILE must be an absolute path" in body
+    assert "regular non-symlink file" in body
+    for option in (
+        "--rm",
+        "--network none",
+        "--read-only",
+        "--cap-drop ALL",
+        "--security-opt no-new-privileges",
+        "--pids-limit 64",
+        "--memory 256m",
+        "readonly",
+    ):
+        assert option in body
+    assert "anva acceptance case-validate --case /acceptance-case.json" in body
+
+
+@pytest.mark.unit
 def test_public_launch_manifest_make_path_is_hardened_and_start_uses_it() -> None:
     makefile = Path("Makefile").read_text(encoding="utf-8")
     body = makefile.split("\nacceptance-launch-manifest: acceptance-identity-preflight", 1)[
