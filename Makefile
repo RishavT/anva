@@ -609,8 +609,28 @@ acceptance-case-validate: acceptance-identity-preflight
 		case_file="$(ANVA_ACCEPTANCE_CASE_FILE)"; \
 		case "$$case_file" in /*) ;; *) echo "ANVA_ACCEPTANCE_CASE_FILE must be an absolute path" >&2; exit 2 ;; esac; \
 		test -f "$$case_file" && test ! -L "$$case_file" || { echo "ANVA_ACCEPTANCE_CASE_FILE must be a regular non-symlink file" >&2; exit 2; }; \
-		docker run --rm --network none --read-only --cap-drop ALL \
+		acceptance_uid="$${ANVA_ACCEPTANCE_UID:-10001}"; acceptance_gid="$${ANVA_ACCEPTANCE_GID:-10001}"; \
+		set -- docker run --rm --network none --read-only --cap-drop ALL \
 			--security-opt no-new-privileges --pids-limit 64 --memory 256m \
+			--user "$$acceptance_uid:$$acceptance_gid"; \
+		bootstrap_secret_file="$${ANVA_TST009_BOOTSTRAP_SECRET_FILE:-}"; \
+		if test -n "$$bootstrap_secret_file"; then \
+			case "$$bootstrap_secret_file" in /*) ;; *) echo "ANVA_TST009_BOOTSTRAP_SECRET_FILE must be an absolute path" >&2; exit 2 ;; esac; \
+			test -f "$$bootstrap_secret_file" && test ! -L "$$bootstrap_secret_file" || { echo "ANVA_TST009_BOOTSTRAP_SECRET_FILE must be a regular non-symlink file" >&2; exit 2; }; \
+			ANVA_BOOTSTRAP_SECRET_FILE=/run/secrets/anva_bootstrap_secret; \
+			ANVA_BOOTSTRAP_SECRET=""; \
+			export ANVA_BOOTSTRAP_SECRET ANVA_BOOTSTRAP_SECRET_FILE; \
+			set -- "$$@" --env ANVA_BOOTSTRAP_SECRET_FILE \
+				--mount type=bind,source="$$bootstrap_secret_file",target=/run/secrets/anva_bootstrap_secret,readonly; \
+		fi; \
+		ANVA_SECRET_KEY="$${ANVA_SECRET_KEY:-local-only-change-me}" \
+		ANVA_TOKEN_PEPPER="$${ANVA_TOKEN_PEPPER:-local-only-token-pepper}" \
+		ANVA_OBJECT_STORAGE_SECRET_KEY="$${ANVA_OBJECT_STORAGE_SECRET_KEY:-anva-local-only}" \
+		ANVA_GITHUB_WEBHOOK_SECRETS="$${ANVA_GITHUB_WEBHOOK_SECRETS:-local-only-github-webhook-secret}" \
+		"$$@" \
+			--env ANVA_SECRET_KEY --env ANVA_TOKEN_PEPPER --env ANVA_BOOTSTRAP_SECRET \
+			--env ANVA_METRICS_TOKEN --env ANVA_OBJECT_STORAGE_SECRET_KEY \
+			--env ANVA_GITHUB_WEBHOOK_SECRETS \
 			--mount type=bind,source="$$case_file",target=/acceptance-case.json,readonly \
 			"$(ANVA_IMAGE_REPOSITORY):$(ANVA_VERSION)" \
 			anva acceptance case-validate --case /acceptance-case.json; \

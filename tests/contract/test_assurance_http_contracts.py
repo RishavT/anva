@@ -15,6 +15,7 @@ from django.test import Client
 from anva.contracts.acceptance import validate_acceptance_http_response
 from anva.contracts.catalog import EXAMPLES
 from anva.core.models import AssuranceRun, Finding, content_hash
+from anva.core.services.diffs import parse_unified_diff
 
 
 @pytest.mark.contract
@@ -117,6 +118,44 @@ def test_manual_diff_http_adapter_rejects_non_boolean_and_extra_fields(client: C
     assert non_boolean.status_code == 400
     assert unknown.status_code == 400
     ingest.assert_not_called()
+
+
+@pytest.mark.contract
+@pytest.mark.django_db
+def test_live_manual_diff_boundary_and_public_parser_reject_same_hunk_mismatch(
+    client: Client,
+) -> None:
+    repository_id = uuid.uuid4()
+    invalid_diff = (
+        "diff --git a/private-name.py b/private-name.py\n"
+        "--- a/private-name.py\n"
+        "+++ b/private-name.py\n"
+        "@@ -18,7 +18,9 @@\n"
+        + "".join(f" line {index}\n" for index in range(13))
+        + "+extra one\n+extra two\n"
+    )
+    payload = {
+        "access_scope_id": str(uuid.uuid4()),
+        "base_commit": "a" * 40,
+        "head_commit": "b" * 40,
+        "title": "Change",
+        "description": "",
+        "target_branch": "main",
+        "is_draft": False,
+        "state": "OPEN",
+        "unified_diff": invalid_diff,
+    }
+    url = f"/api/v1/repositories/{repository_id}/pull-requests/7/manual-diff"
+
+    with pytest.raises(ValueError) as parser_error:
+        parse_unified_diff(invalid_diff)
+    with patch("anva.core.views._actor", return_value=object()):
+        response = client.post(url, data=json.dumps(payload), content_type="application/json")
+
+    assert str(parser_error.value) == "Diff hunk line counts do not match its header"
+    assert response.status_code == 400
+    assert response.json()["code"] == "invalid_request"
+    assert "private-name" not in response.content.decode()
 
 
 @pytest.mark.contract

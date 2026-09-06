@@ -1277,11 +1277,14 @@ def _acceptance_request(arguments: argparse.Namespace) -> int:
             diagnostic: dict[str, object] = dict(error.diagnostic())
             diagnostic.update(
                 {
+                    "diff_valid": False if error.code == "acceptance_case_diff_invalid" else None,
                     "schema_valid": error.schema_valid,
                     "semantic_valid": False,
                     "status": "invalid",
                 }
             )
+            if diagnostic["diff_valid"] is None:
+                del diagnostic["diff_valid"]
             print(json.dumps(diagnostic, sort_keys=True))
             return 2
         if is_case_preflight and isinstance(error, ContractValidationError):

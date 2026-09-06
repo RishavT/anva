@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
@@ -19,10 +20,15 @@ MAX_CHUNK_CHARS = 100_000
 
 _FILE_HEADER = re.compile(r"^diff --git a/(.+) b/(.+)\n$")
 _HUNK_HEADER = re.compile(
-    r"^@@ -(?P<old_start>\d+)(?:,(?P<old_count>\d+))? "
-    r"\+(?P<new_start>\d+)(?:,(?P<new_count>\d+))? @@(?: .*)?\n$"
+    r"^@@ -(?P<old_start>[0-9]{1,10})(?:,(?P<old_count>[0-9]{1,10}))? "
+    r"\+(?P<new_start>[0-9]{1,10})(?:,(?P<new_count>[0-9]{1,10}))? @@(?: .*)?\n$"
 )
 _WINDOWS_DRIVE_PATH = re.compile(r"^[A-Za-z]:")
+_INDEX_METADATA = re.compile(r"^index [0-9a-f]{7,64}\.\.[0-9a-f]{7,64}(?: [0-7]{6})?\n$")
+_FILE_MODE_METADATA = re.compile(r"^(?:new file mode|deleted file mode) [0-7]{6}\n$")
+_MODE_METADATA = re.compile(r"^(?:old mode|new mode) [0-7]{6}\n$")
+_SIMILARITY_METADATA = re.compile(r"^(?:dis)?similarity index (?:100|[0-9]{1,2})%\n$")
+_EOF_MARKER = "\\ No newline at end of file\n"
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,27 +191,46 @@ def _validate_hunk_counts(
 ) -> None:
     actual_old = 0
     actual_new = 0
+    has_effective_change = False
+    previous_was_content = False
     for line in lines[1:]:
-        if line.startswith("\\ No newline at end of file"):
+        if line == _EOF_MARKER:
+            if not previous_was_content:
+                raise ValueError("Diff EOF marker is misplaced or duplicated")
+            previous_was_content = False
             continue
         if not line or line[0] not in {" ", "+", "-"}:
             raise ValueError("Diff hunk contains an invalid line prefix")
+        previous_was_content = True
         if line[0] in {" ", "-"}:
             actual_old += 1
         if line[0] in {" ", "+"}:
             actual_new += 1
+        if line[0] in {"+", "-"}:
+            has_effective_change = True
     if actual_old != old_count or actual_new != new_count:
         raise ValueError("Diff hunk line counts do not match its header")
+    if not has_effective_change:
+        raise ValueError("Diff hunk must contain an effective change")
 
 
 def parse_unified_diff(unified_diff: str) -> ParsedDiff:
     """Parse a strict Git unified diff without executing, fetching, or applying it."""
     if not isinstance(unified_diff, str):
         raise ValueError("unified_diff must be text")
-    encoded = unified_diff.encode()
+    try:
+        encoded = unified_diff.encode()
+    except UnicodeEncodeError as error:
+        raise ValueError("unified_diff must be valid UTF-8 text") from error
     if not encoded or len(encoded) > MAX_DIFF_BYTES:
         raise ValueError("unified_diff must contain between 1 byte and 1,000,000 bytes")
-    if "\x00" in unified_diff or "\r" in unified_diff:
+    if (
+        any(
+            character not in {"\n", "\t"} and unicodedata.category(character) in {"Cc", "Cf", "Cs"}
+            for character in unified_diff
+        )
+        or "\r" in unified_diff
+    ):
         raise ValueError("unified_diff contains unsupported control characters")
     if redact_text(unified_diff) != unified_diff:
         raise ValueError("unified_diff contains credential material")
@@ -229,6 +254,8 @@ def parse_unified_diff(unified_diff: str) -> ParsedDiff:
     rename_from: str | None = None
     rename_to: str | None = None
     current_has_hunk = False
+    seen_file_headers: set[tuple[str, str]] = set()
+    seen_metadata: set[str] = set()
     index = 0
     while index < len(lines):
         line = lines[index]
@@ -241,6 +268,10 @@ def parse_unified_diff(unified_diff: str) -> ParsedDiff:
             old_path, new_path = file_match.groups()
             _validate_path(old_path)
             _validate_path(new_path)
+            file_identity = (old_path, new_path)
+            if file_identity in seen_file_headers:
+                raise ValueError("Diff Git file header is duplicated")
+            seen_file_headers.add(file_identity)
             current_old_path = old_path
             current_new_path = new_path
             old_path_header = None
@@ -250,6 +281,7 @@ def parse_unified_diff(unified_diff: str) -> ParsedDiff:
             rename_to = None
             current_has_hunk = False
             current_path = None
+            seen_metadata = set()
             index += 1
             continue
         if line.startswith(("new file mode ", "deleted file mode ")):
@@ -259,7 +291,24 @@ def parse_unified_diff(unified_diff: str) -> ParsedDiff:
                 or declared_file_kind is not None
             ):
                 raise ValueError("Diff file-mode metadata is duplicated or misplaced")
+            if _FILE_MODE_METADATA.fullmatch(line) is None:
+                raise ValueError("Diff file-mode metadata is invalid")
             declared_file_kind = "ADD" if line.startswith("new file mode ") else "DELETE"
+            index += 1
+            continue
+        if (
+            _INDEX_METADATA.fullmatch(line)
+            or _MODE_METADATA.fullmatch(line)
+            or _SIMILARITY_METADATA.fullmatch(line)
+        ):
+            if current_old_path is None or old_path_header is not None:
+                raise ValueError("Diff metadata is misplaced")
+            metadata_kind = line.split(" ", 1)[0]
+            if line.startswith(("old mode ", "new mode ", "similarity ", "dissimilarity ")):
+                metadata_kind = line.rsplit(" ", 1)[0]
+            if metadata_kind in seen_metadata:
+                raise ValueError("Diff metadata is duplicated")
+            seen_metadata.add(metadata_kind)
             index += 1
             continue
         if line.startswith(("rename from ", "rename to ")):
@@ -280,6 +329,8 @@ def parse_unified_diff(unified_diff: str) -> ParsedDiff:
         if line.startswith("--- "):
             if current_old_path is None or old_path_header is not None:
                 raise ValueError("Old diff path header is missing, duplicated, or misplaced")
+            if ("old mode" in seen_metadata) != ("new mode" in seen_metadata):
+                raise ValueError("Diff mode metadata must contain both old and new modes")
             old_path_header = line.removeprefix("--- ").removesuffix("\n")
             index += 1
             continue
@@ -306,8 +357,9 @@ def parse_unified_diff(unified_diff: str) -> ParsedDiff:
                 rename_from=rename_from,
                 rename_to=rename_to,
             )
-            if current_path not in paths:
-                paths.append(current_path)
+            if current_path in paths:
+                raise ValueError("Diff changed path is duplicated")
+            paths.append(current_path)
             if len(paths) > MAX_CHANGED_PATHS:
                 raise ValueError("unified_diff exceeds the changed-path limit")
             index += 1
@@ -331,6 +383,8 @@ def parse_unified_diff(unified_diff: str) -> ParsedDiff:
             new_count = int(hunk_match.group("new_count") or "1")
             old_start = int(hunk_match.group("old_start"))
             new_start = int(hunk_match.group("new_start"))
+            if (old_count > 0 and old_start < 1) or (new_count > 0 and new_start < 1):
+                raise ValueError("Diff hunk range start is invalid")
             if old_path_header == "/dev/null" and (old_start != 0 or old_count != 0):
                 raise ValueError("New-file diff hunks must have an empty old range")
             if new_path_header == "/dev/null" and (new_start != 0 or new_count != 0):
@@ -361,7 +415,7 @@ def parse_unified_diff(unified_diff: str) -> ParsedDiff:
             continue
         if line.startswith("diff --"):
             raise ValueError("Only Git unified diffs are supported")
-        index += 1
+        raise ValueError("Diff contains unsupported or misplaced metadata")
 
     if current_old_path is not None and (
         old_path_header is None or new_path_header is None or not current_has_hunk

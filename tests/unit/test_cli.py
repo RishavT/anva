@@ -121,6 +121,39 @@ def test_acceptance_case_validate_reports_actionable_cross_governance_failure(
 
 
 @pytest.mark.unit
+def test_acceptance_case_validate_reports_hunk_count_failure_without_case_content(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    case = deepcopy(EXAMPLES["acceptance-case"])
+    cast(dict[str, object], case["change"])["unified_diff"] = (
+        "diff --git a/private-name.py b/private-name.py\n"
+        "--- a/private-name.py\n"
+        "+++ b/private-name.py\n"
+        "@@ -18,7 +18,9 @@ def deliver(row, gateway, store, now):\n"
+        + "".join(f" line {index}\n" for index in range(13))
+        + "+extra one\n+extra two\n"
+    )
+    path = tmp_path / "case.json"
+    path.write_text(json.dumps(case), encoding="utf-8")
+
+    assert main(["acceptance", "case-validate", "--case", str(path)]) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "code": "acceptance_case_diff_invalid",
+        "diff_valid": False,
+        "message": (
+            "Acceptance case unified diff is invalid: Diff hunk line counts do not match its header"
+        ),
+        "path": "change.unified_diff",
+        "reference": "manual-diff ingestion",
+        "schema_valid": True,
+        "semantic_valid": False,
+        "status": "invalid",
+    }
+    assert "private-name" not in json.dumps(payload)
+
+
+@pytest.mark.unit
 def test_acceptance_case_validate_distinguishes_structural_invalidity(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from copy import deepcopy
 from datetime import UTC, datetime
@@ -211,6 +212,124 @@ def test_manual_diff_enforces_configured_size_and_count_bounds() -> None:
 def test_manual_diff_rejects_unsafe_or_unverifiable_input(hostile: str) -> None:
     with pytest.raises(ValueError):
         parse_unified_diff(hostile)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("invalid", "message"),
+    [
+        (
+            "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n"
+            "@@ -1 +1 @@\n-old\n+new\n"
+            "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n"
+            "@@ -2 +2 @@\n-old\n+new\n",
+            "duplicated",
+        ),
+        (
+            "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-old\n+new\u000b\n",
+            "control",
+        ),
+        (
+            "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n"
+            "@@ -1 +1 @@\n-old\n+new\n\\ No newline at end of file trailing\n",
+            "prefix",
+        ),
+        (
+            "diff --git a/a.py b/a.py\nunsupported metadata\n"
+            "--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-old\n+new\n",
+            "metadata",
+        ),
+        (
+            "diff --git a/a.py b/a.py\nnew file mode executable\n"
+            "--- /dev/null\n+++ b/a.py\n@@ -0,0 +1 @@\n+new\n",
+            "file-mode metadata is invalid",
+        ),
+        (
+            "diff --git a/a.py b/a.py\nold mode 100644\n"
+            "--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-old\n+new\n",
+            "both old and new modes",
+        ),
+        (
+            "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n unchanged\n",
+            "effective change",
+        ),
+        (
+            "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -0 +1 @@\n-old\n+new\n",
+            "range start",
+        ),
+    ],
+)
+def test_manual_diff_rejects_ambiguous_or_ineffective_constructs(
+    invalid: str, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        parse_unified_diff(invalid)
+
+
+@pytest.mark.unit
+def test_manual_diff_accepts_multiple_hunks_files_and_exact_eof_markers() -> None:
+    parsed = parse_unified_diff(
+        "diff --git a/a.py b/a.py\n"
+        "index 1111111..2222222 100644\n"
+        "--- a/a.py\n"
+        "+++ b/a.py\n"
+        "@@ -1 +1 @@\n-old\n\\ No newline at end of file\n+new\n\\ No newline at end of file\n"
+        "@@ -10,2 +10,3 @@\n keep\n-old\n+new\n+extra\n"
+        "diff --git a/b.py b/c.py\n"
+        "similarity index 90%\n"
+        "rename from b.py\n"
+        "rename to c.py\n"
+        "--- a/b.py\n"
+        "+++ b/c.py\n"
+        "@@ -1 +1 @@\n-old\n+new\n"
+    )
+
+    assert parsed.changed_paths == ("a.py", "c.py")
+    assert len(parsed.chunks) == 3
+
+
+@pytest.mark.unit
+def test_manual_diff_parser_is_safe_before_django_settings_are_configured() -> None:
+    with patch("anva.core.logging.settings") as unconfigured:
+        unconfigured.configured = False
+        parsed = parse_unified_diff(VALID_DIFF)
+
+    assert parsed.changed_paths == ("src/auth/service.py", "tests/test_service.py")
+
+
+@pytest.mark.unit
+def test_manual_diff_parser_uses_secret_environment_before_django_configuration() -> None:
+    credential_marker = "runtime-literal-that-is-not-a-known-token-pattern"
+    candidate = VALID_DIFF.replace("+new", f"+{credential_marker}")
+    with (
+        patch("anva.core.logging.settings") as unconfigured,
+        patch.dict(os.environ, {"ANVA_SECRET_KEY": credential_marker}, clear=False),
+    ):
+        unconfigured.configured = False
+        with pytest.raises(ValueError, match="credential material"):
+            parse_unified_diff(candidate)
+
+
+@pytest.mark.unit
+def test_manual_diff_parser_uses_bootstrap_secret_file_before_django_configuration(
+    tmp_path: Path,
+) -> None:
+    credential_marker = "file-backed-runtime-literal-without-a-token-pattern"
+    secret_file = tmp_path / "bootstrap-secret"
+    secret_file.write_text(credential_marker, encoding="utf-8")
+    secret_file.chmod(0o400)
+    candidate = VALID_DIFF.replace("+new", f"+{credential_marker}")
+    with (
+        patch("anva.core.logging.settings") as unconfigured,
+        patch.dict(
+            os.environ,
+            {"ANVA_BOOTSTRAP_SECRET_FILE": str(secret_file)},
+            clear=False,
+        ),
+    ):
+        unconfigured.configured = False
+        with pytest.raises(ValueError, match="credential material"):
+            parse_unified_diff(candidate)
 
 
 @pytest.mark.unit

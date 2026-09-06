@@ -1338,6 +1338,11 @@
         "code": "acceptance_check_criterion_not_governed",
         "from": "assurance.deterministic_checks[].code",
         "mustReference": "work_item.acceptance_criteria[].code"
+      },
+      {
+        "code": "acceptance_case_diff_invalid",
+        "from": "change.unified_diff",
+        "mustSatisfy": "manual-diff ingestion parser"
       }
     ]
   }
