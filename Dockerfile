@@ -4,12 +4,26 @@ FROM ghcr.io/astral-sh/uv:0.8.13@sha256:4de5495181a281bc744845b9579acf7b221d6791
 FROM python:3.12-slim-trixie@sha256:7a8b475003c4fe15a2cd4e55e5cfc2f3560bdc9333d624f24cdd6d4340fd7a17 AS base
 
 ARG SOURCE_DATE_EPOCH=1756684800
+ARG DEBIAN_SNAPSHOT=20260827T000000Z
+ARG OPENSSL_DEBIAN_VERSION=3.5.7-1~deb13u2
 
-RUN apt-get update \
+RUN printf '%s\n' \
+       "deb [check-valid-until=no signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] https://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}/ trixie main" \
+       "deb [check-valid-until=no signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] https://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}/ trixie-security main" \
+       > /etc/apt/sources.list.d/debian.sources.list \
+    && rm -f /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+    && for package in libssl3t64 openssl openssl-provider-legacy; do \
+         apt-cache madison "${package}" | awk '{print $3}' \
+           | grep --fixed-strings --line-regexp "${OPENSSL_DEBIAN_VERSION}"; \
+       done \
     && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
-       libssl3t64=3.5.7-1~deb13u2 \
-       openssl=3.5.7-1~deb13u2 \
-       openssl-provider-legacy=3.5.7-1~deb13u2 \
+       "libssl3t64=${OPENSSL_DEBIAN_VERSION}" \
+       "openssl=${OPENSSL_DEBIAN_VERSION}" \
+       "openssl-provider-legacy=${OPENSSL_DEBIAN_VERSION}" \
+    && for package in libssl3t64 openssl openssl-provider-legacy; do \
+         test "$(dpkg-query -W -f='${Version}' "${package}")" = "${OPENSSL_DEBIAN_VERSION}"; \
+       done \
     && rm -rf /var/lib/apt/lists/* \
        /var/cache/ldconfig/aux-cache \
        /var/log/apt/history.log \
