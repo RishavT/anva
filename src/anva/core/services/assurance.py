@@ -1372,7 +1372,7 @@ def start_assurance(
         )
     try:
         with transaction.atomic():
-            return _start_assurance_bound(
+            result = _start_assurance_bound(
                 provisional_run=provisional_run,
                 actor=actor,
                 pull_request_revision_id=pull_request_revision_id,
@@ -1386,6 +1386,11 @@ def start_assurance(
                 reviewer_service_identity_id=reviewer_service_identity_id,
                 reviewer_token_id=reviewer_token_id,
             )
+        if result.evaluator_task is None:
+            task = EvaluatorTask.objects.filter(assurance_run=result.run).first()
+            if task is not None:
+                return AssuranceStartResult(result.run, task, result.created)
+        return result
     except (AuthenticationError, ResourceNotFoundError):
         _finalize_incomplete_context_start(run=provisional_run)
         raise
