@@ -9,6 +9,7 @@ from datetime import datetime
 from django.conf import settings
 from django.db import connection
 
+from anva.contract_limits import MAX_CANVAS_QUERY_EDGES
 from anva.core.exceptions import ResourceNotFoundError
 from anva.core.services.authorization import (
     NOT_FOUND_MESSAGE,
@@ -21,7 +22,7 @@ from anva.core.services.context import ActorContext
 MAX_GRAPH_DEPTH = 4
 MAX_GRAPH_DEGREE = 100
 MAX_GRAPH_EDGES = 500
-MAX_CANVAS_GRAPH_EDGES = 600
+MAX_CANVAS_GRAPH_EDGES = MAX_CANVAS_QUERY_EDGES
 
 _GRAPH_SQL = """
 WITH RECURSIVE
@@ -1008,7 +1009,7 @@ def authorized_graph_edges(
 ) -> tuple[tuple[GraphEdge, ...], bool]:
     """List one repository's fully authorized edges using the traversal's exact CTE."""
     if edge_limit < 1 or edge_limit > MAX_CANVAS_GRAPH_EDGES:
-        raise ValueError("Canvas edge_limit must be between 1 and 600")
+        raise ValueError(f"Canvas edge_limit must be between 1 and {MAX_CANVAS_GRAPH_EDGES}")
     authorize_action(
         actor=actor,
         repository_id=repository_id,
@@ -1042,7 +1043,7 @@ def authorized_incident_graph_edges(
 ) -> tuple[tuple[GraphEdge, ...], bool]:
     """List strict authorized edges incident to one entity before applying its local cap."""
     if edge_limit < 1 or edge_limit > MAX_CANVAS_GRAPH_EDGES:
-        raise ValueError("Canvas edge_limit must be between 1 and 600")
+        raise ValueError(f"Canvas edge_limit must be between 1 and {MAX_CANVAS_GRAPH_EDGES}")
     authorize_action(
         actor=actor,
         repository_id=repository_id,
@@ -1092,7 +1093,7 @@ def authorized_incident_graph_edges_batch(
     if not ordered_repository_ids or len(ordered_repository_ids) > 100:
         raise ValueError("repository_ids must contain between 1 and 100 repositories")
     if edge_limit < 1 or edge_limit > MAX_CANVAS_GRAPH_EDGES:
-        raise ValueError("Canvas edge_limit must be between 1 and 600")
+        raise ValueError(f"Canvas edge_limit must be between 1 and {MAX_CANVAS_GRAPH_EDGES}")
     if any(not value or len(value) > 100 for value in related_entity_types):
         raise ValueError("related entity types must be non-empty bounded strings")
     if len(related_entity_types) > 20:

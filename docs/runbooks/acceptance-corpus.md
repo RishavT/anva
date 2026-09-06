@@ -261,3 +261,14 @@ make acceptance-down
 
 This removes the `anva-acceptance` project's containers, network, and canonical volume. Never use
 an engine-wide prune for this workflow.
+
+## Canvas query bounds
+
+Acceptance cases use the same Canvas query resource envelope as the live
+`POST /api/v1/canvas/query` boundary: depth `1..4`, node limit `1..300`, and
+edge limit `1..600`. These are query limits, distinct from the Canvas path
+endpoint's six-hop explanation limit. The 300-node ceiling is the v3 product
+performance target and, together with the 600-edge and 750 KiB response caps,
+bounds graph traversal, serialization, and client rendering. Cases outside
+this envelope are rejected during case loading, before an acceptance run can
+create persistent product state.

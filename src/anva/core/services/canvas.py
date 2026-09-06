@@ -17,6 +17,11 @@ from django.db import connection, transaction
 from django.db.models import Exists, F, OuterRef, Q
 from django.utils import timezone
 
+from anva.contract_limits import (
+    MAX_CANVAS_QUERY_DEPTH,
+    MAX_CANVAS_QUERY_EDGES,
+    MAX_CANVAS_QUERY_NODES,
+)
 from anva.core.exceptions import (
     IdempotencyConflictError,
     OptimisticConcurrencyError,
@@ -72,8 +77,8 @@ from anva.core.services.graph import (
 )
 from anva.core.services.retrieval import authorized_assertions, authorized_entities
 
-CANVAS_NODE_LIMIT = 300
-CANVAS_EDGE_LIMIT = 600
+CANVAS_NODE_LIMIT = MAX_CANVAS_QUERY_NODES
+CANVAS_EDGE_LIMIT = MAX_CANVAS_QUERY_EDGES
 CANVAS_REPOSITORY_LIMIT = 100
 CANVAS_PATH_DEPTH = 6
 CANVAS_PAYLOAD_LIMIT_BYTES = 750 * 1024
@@ -723,12 +728,12 @@ class CanvasQuery:
             raise ValueError("Unknown freshness state")
         if self.as_of is not None and self.as_of.tzinfo is None:
             raise ValueError("Canvas as-of time must be timezone-aware")
-        if self.depth is not None and not 1 <= self.depth <= 4:
-            raise ValueError("Canvas depth must be between 1 and 4")
+        if self.depth is not None and not 1 <= self.depth <= MAX_CANVAS_QUERY_DEPTH:
+            raise ValueError(f"Canvas depth must be between 1 and {MAX_CANVAS_QUERY_DEPTH}")
         if not 1 <= self.node_limit <= CANVAS_NODE_LIMIT:
-            raise ValueError("Canvas node limit must be between 1 and 300")
+            raise ValueError(f"Canvas node limit must be between 1 and {CANVAS_NODE_LIMIT}")
         if not 1 <= self.edge_limit <= CANVAS_EDGE_LIMIT:
-            raise ValueError("Canvas edge limit must be between 1 and 600")
+            raise ValueError(f"Canvas edge limit must be between 1 and {CANVAS_EDGE_LIMIT}")
         for value in (self.owner, self.status, self.risk, self.search):
             _safe_text(value, maximum=500)
         if self.view_revision is not None and self.view_revision < 1:
@@ -2275,7 +2280,10 @@ def _normalized_semantic_query(value: dict[str, object]) -> dict[str, object]:
         rendered["as_of"] = _as_of_datetime(value["as_of"]).isoformat()
     if "depth" in value:
         rendered["depth"] = _bounded_integer(
-            value["depth"], name="Canvas depth", minimum=1, maximum=4
+            value["depth"],
+            name="Canvas depth",
+            minimum=1,
+            maximum=MAX_CANVAS_QUERY_DEPTH,
         )
     if len(str(rendered)) > 20_000:
         raise ValueError("Canvas semantic query exceeds its size budget")

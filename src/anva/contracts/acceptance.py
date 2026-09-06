@@ -12,6 +12,11 @@ from typing import Final, cast
 from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import ValidationError
 
+from anva.contract_limits import (
+    MAX_CANVAS_QUERY_DEPTH,
+    MAX_CANVAS_QUERY_EDGES,
+    MAX_CANVAS_QUERY_NODES,
+)
 from anva.contracts.bootstrap_scope import (
     BOOTSTRAP_SCOPE_SCHEMA,
     acceptance_bootstrap_scope_payload,
@@ -661,7 +666,7 @@ CANVAS_SEMANTIC_QUERY: Final[dict[str, object]] = _closed(
             "maxItems": 5,
             "uniqueItems": True,
         },
-        "depth": {"type": "integer", "minimum": 1, "maximum": 4},
+        "depth": {"type": "integer", "minimum": 1, "maximum": MAX_CANVAS_QUERY_DEPTH},
     },
     (),
 )
@@ -697,21 +702,49 @@ CANVAS_RESPONSE: Final[dict[str, object]] = _closed(
             ),
             "maxItems": 100,
         },
-        "nodes": {"type": "array", "items": CANVAS_NODE, "maxItems": 500},
-        "edges": {"type": "array", "items": CANVAS_EDGE, "maxItems": 1_000},
+        "nodes": {
+            "type": "array",
+            "items": CANVAS_NODE,
+            "maxItems": MAX_CANVAS_QUERY_NODES,
+        },
+        "edges": {
+            "type": "array",
+            "items": CANVAS_EDGE,
+            "maxItems": MAX_CANVAS_QUERY_EDGES,
+        },
         "annotations": {"type": "array", "items": CANVAS_ANNOTATION, "maxItems": 100},
         "counts": _closed(
             {
-                "nodes": {"type": "integer", "minimum": 0, "maximum": 500},
-                "edges": {"type": "integer", "minimum": 0, "maximum": 1_000},
+                "nodes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": MAX_CANVAS_QUERY_NODES,
+                },
+                "edges": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": MAX_CANVAS_QUERY_EDGES,
+                },
             },
             ("nodes", "edges"),
         ),
         "limits": _closed(
             {
-                "nodes": {"type": "integer", "minimum": 1, "maximum": 500},
-                "edges": {"type": "integer", "minimum": 1, "maximum": 1_000},
-                "depth": {"type": "integer", "minimum": 1, "maximum": 6},
+                "nodes": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_CANVAS_QUERY_NODES,
+                },
+                "edges": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_CANVAS_QUERY_EDGES,
+                },
+                "depth": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_CANVAS_QUERY_DEPTH,
+                },
                 "repositories": {"type": "integer", "minimum": 1, "maximum": 100},
                 "payload_bytes": {"type": "integer", "minimum": 1, "maximum": 768_000},
             },

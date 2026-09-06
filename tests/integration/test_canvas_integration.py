@@ -21,6 +21,11 @@ from django.test import Client
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
+from anva.contract_limits import (
+    MAX_CANVAS_QUERY_DEPTH,
+    MAX_CANVAS_QUERY_EDGES,
+    MAX_CANVAS_QUERY_NODES,
+)
 from anva.contracts.acceptance import validate_acceptance_http_response
 from anva.core.exceptions import (
     IdempotencyConflictError,
@@ -3147,6 +3152,15 @@ def test_canvas_api_is_bearer_authenticated_and_closed() -> None:
     assert invalid.status_code == 400
     invalid_api_query_payloads: tuple[dict[str, object], ...] = (
         {"node_limit": "300"},
+        {"depth": -1},
+        {"depth": 0},
+        {"depth": MAX_CANVAS_QUERY_DEPTH + 1},
+        {"node_limit": -1},
+        {"node_limit": 0},
+        {"node_limit": MAX_CANVAS_QUERY_NODES + 1},
+        {"edge_limit": -1},
+        {"edge_limit": 0},
+        {"edge_limit": MAX_CANVAS_QUERY_EDGES + 1},
         {"depth": None},
         {"anchor_id": True},
         {"view_id": None},
@@ -3175,6 +3189,22 @@ def test_canvas_api_is_bearer_authenticated_and_closed() -> None:
         str(target.id),
     }
     validate_acceptance_http_response("queryOrganizationalCanvas", 200, allowed.json())
+
+    boundary = client.post(
+        "/api/v1/canvas/query",
+        data=json.dumps(
+            {
+                "repository_ids": [str(repository.id)],
+                "depth": MAX_CANVAS_QUERY_DEPTH,
+                "node_limit": MAX_CANVAS_QUERY_NODES,
+                "edge_limit": MAX_CANVAS_QUERY_EDGES,
+            }
+        ),
+        content_type="application/json",
+        HTTP_AUTHORIZATION=f"Bearer {issued.plaintext}",
+    )
+    assert boundary.status_code == 200
+    validate_acceptance_http_response("queryOrganizationalCanvas", 200, boundary.json())
 
     authorization = f"Bearer {issued.plaintext}"
     cleared_api = client.post(

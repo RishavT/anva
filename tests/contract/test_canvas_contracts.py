@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import cast
 
 import pytest
 from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError
 
+from anva.contract_limits import (
+    MAX_CANVAS_QUERY_DEPTH,
+    MAX_CANVAS_QUERY_EDGES,
+    MAX_CANVAS_QUERY_NODES,
+)
+from anva.contracts.catalog import EXAMPLES, SCHEMAS
 from anva.contracts.generate import openapi_document
 
 
@@ -34,13 +42,14 @@ def test_canvas_openapi_surfaces_are_authenticated_bounded_and_closed() -> None:
     assert cast(dict[str, object], query_schema["properties"])["node_limit"] == {
         "type": "integer",
         "minimum": 1,
-        "maximum": 300,
+        "maximum": MAX_CANVAS_QUERY_NODES,
     }
     assert cast(dict[str, object], query_schema["properties"])["edge_limit"] == {
         "type": "integer",
         "minimum": 1,
-        "maximum": 600,
+        "maximum": MAX_CANVAS_QUERY_EDGES,
     }
+
     assert cast(dict[str, object], query_schema["properties"])["as_of"] == {
         "oneOf": [
             {"type": "string", "format": "date-time"},
@@ -75,6 +84,58 @@ def test_canvas_openapi_surfaces_are_authenticated_bounded_and_closed() -> None:
     assert "never writes a canonical edge" in cast(
         str, cast(dict[str, object], proposal)["description"]
     )
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize(
+    ("field", "maximum"),
+    [
+        ("depth", MAX_CANVAS_QUERY_DEPTH),
+        ("node_limit", MAX_CANVAS_QUERY_NODES),
+        ("edge_limit", MAX_CANVAS_QUERY_EDGES),
+    ],
+)
+def test_acceptance_canvas_bounds_exactly_match_live_query_contract(
+    field: str, maximum: int
+) -> None:
+    acceptance_canvas = cast(
+        dict[str, object],
+        cast(dict[str, object], SCHEMAS["acceptance-case"]["properties"])["canvas"],
+    )
+    acceptance_property = cast(
+        dict[str, object], cast(dict[str, object], acceptance_canvas["properties"])[field]
+    )
+    paths = cast(dict[str, object], openapi_document()["paths"])
+    operation = cast(dict[str, object], cast(dict[str, object], paths["/canvas/query"])["post"])
+    request_body = cast(dict[str, object], operation["requestBody"])
+    media = cast(
+        dict[str, object],
+        cast(dict[str, object], request_body["content"])["application/json"],
+    )
+    live_property = cast(dict[str, object], cast(dict[str, object], media["schema"])["properties"])[
+        field
+    ]
+
+    assert (
+        acceptance_property
+        == live_property
+        == {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": maximum,
+        }
+    )
+
+    validator = Draft202012Validator(SCHEMAS["acceptance-case"])
+    for accepted in (1, maximum):
+        case = deepcopy(EXAMPLES["acceptance-case"])
+        cast(dict[str, object], case["canvas"])[field] = accepted
+        validator.validate(case)
+    for rejected in (-1, 0, maximum + 1):
+        case = deepcopy(EXAMPLES["acceptance-case"])
+        cast(dict[str, object], case["canvas"])[field] = rejected
+        with pytest.raises(ValidationError):
+            validator.validate(case)
 
 
 @pytest.mark.contract

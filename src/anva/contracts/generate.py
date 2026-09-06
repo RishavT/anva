@@ -11,6 +11,11 @@ from typing import cast
 
 from jsonschema import Draft202012Validator
 
+from anva.contract_limits import (
+    MAX_CANVAS_QUERY_DEPTH,
+    MAX_CANVAS_QUERY_EDGES,
+    MAX_CANVAS_QUERY_NODES,
+)
 from anva.contracts.acceptance import (
     BOOTSTRAP_REQUEST,
     EVIDENCE_UPLOAD_AUTHORIZATION_RESPONSE,
@@ -668,7 +673,7 @@ def openapi_document() -> dict[str, object]:
             "maxItems": 5,
             "uniqueItems": True,
         },
-        "depth": {"type": "integer", "minimum": 1, "maximum": 4},
+        "depth": {"type": "integer", "minimum": 1, "maximum": MAX_CANVAS_QUERY_DEPTH},
     }
     canvas_query_request = {
         "type": "object",
@@ -693,8 +698,16 @@ def openapi_document() -> dict[str, object]:
                     {"type": "null"},
                 ]
             },
-            "node_limit": {"type": "integer", "minimum": 1, "maximum": 300},
-            "edge_limit": {"type": "integer", "minimum": 1, "maximum": 600},
+            "node_limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_CANVAS_QUERY_NODES,
+            },
+            "edge_limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_CANVAS_QUERY_EDGES,
+            },
         },
     }
     canvas_path_request = {
