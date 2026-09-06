@@ -67,7 +67,7 @@ from anva.core.services.retrieval import (
     authorized_source_chunks,
     get_authorized_artifact,
 )
-from anva.core.services.search import SearchResult, search_chunks
+from anva.core.services.search import SearchResult, search_chunks_batch
 from anva.core.services.search_index import EMBEDDING_VERSION, INDEX_VERSION
 
 MAX_ASSERTION_CANDIDATES = 500
@@ -640,6 +640,25 @@ def _authorized_provenance(
     )
 
 
+def _eligible_assertions_for_authorization(
+    *,
+    actor: ActorContext,
+    authorization: AuthorizedRepositoryScopes,
+    current_provenance: QuerySet[AssertionProvenance],
+) -> QuerySet[KnowledgeAssertion]:
+    """Select current assertions whose current provenance is authorized."""
+    return (
+        KnowledgeAssertion.objects.filter(
+            organization_id=actor.organization_id,
+            access_scope_id__in=authorization.scope_ids_for(Action.SEARCH),
+            valid_until__isnull=True,
+            id__in=Subquery(current_provenance.order_by().values("assertion_id")),
+        )
+        .select_related("access_scope")
+        .order_by("id")
+    )
+
+
 def _citation_from_provenance(
     provenance: AssertionProvenance,
 ) -> CitationCandidate:
@@ -800,16 +819,10 @@ def _assertion_candidates(
         authorization=authorization,
         assertion_ids=None,
     )
-    eligible = (
-        authorized_assertions(
-            actor=actor,
-            repository_id=repository_id,
-            action=Action.SEARCH,
-        )
-        .filter(id__in=Subquery(current_provenance.order_by().values("assertion_id")))
-        .select_related("access_scope")
-        .order_by("id")
-        .distinct()
+    eligible = _eligible_assertions_for_authorization(
+        actor=actor,
+        authorization=authorization,
+        current_provenance=current_provenance,
     )
 
     candidates = ScannedCandidates()
@@ -2119,18 +2132,6 @@ def _build_context_packet_bounded(
         anchors=search_anchors,
         visible_scope_ids=visible_scopes,
     )
-    anchored_chunks = [
-        replace(
-            candidate,
-            matched_facets=_matching_facets(candidate.summary, facets),
-            required_context_facets=_required_matching_facets(
-                candidate.summary,
-                _matching_facets(candidate.summary, facets),
-                facets,
-            ),
-        )
-        for candidate in anchored_chunks
-    ]
 
     _set_remaining_statement_timeout(deadline)
     assertions = _assertion_candidates(
@@ -2149,20 +2150,17 @@ def _build_context_packet_bounded(
     )
     chunks: list[PacketCandidate] = []
     per_facet_limit = min(100, max(25, budget.max_items))
-    represented_facets = {
-        label for candidate in anchored_chunks for label in candidate.matched_facets
-    }
-    for facet_position, facet in enumerate(facets):
-        if change_aware and facet.label in represented_facets:
-            continue
-        _set_remaining_statement_timeout(deadline)
-        search_response = search_chunks(
-            actor=actor,
-            repository_id=repository_id,
-            query=facet.query,
-            phase=normalized_phase,
-            limit=per_facet_limit,
-        )
+    _set_remaining_statement_timeout(deadline)
+    search_responses = search_chunks_batch(
+        actor=actor,
+        repository_id=repository_id,
+        queries=tuple(facet.query for facet in facets),
+        phase=normalized_phase,
+        limit=per_facet_limit,
+    )
+    for facet_position, (facet, search_response) in enumerate(
+        zip(facets, search_responses, strict=True)
+    ):
         chunks.extend(
             _chunk_candidate(
                 result,

@@ -13,6 +13,7 @@ from typing import Any, cast
 
 import pytest
 from django.db import DatabaseError, connection
+from django.db.models import Subquery
 from django.utils import timezone
 
 from anva.contracts.catalog import EXAMPLES
@@ -51,8 +52,13 @@ from anva.core.services.assurance import (
     start_assurance,
     submit_evaluator_result,
 )
+from anva.core.services.authorization import Action, resolve_authorized_repository_scopes
 from anva.core.services.context import ActorContext
-from anva.core.services.context_packets import invalidate_context_packets
+from anva.core.services.context_packets import (
+    _authorized_provenance_for_authorization,
+    _eligible_assertions_for_authorization,
+    invalidate_context_packets,
+)
 from anva.core.services.evaluators import FakeEvaluator
 from anva.core.services.evidence import submit_evidence_manifest
 from anva.core.services.ingestion import (
@@ -64,6 +70,7 @@ from anva.core.services.intent import import_work_item
 from anva.core.services.jobs import claim_next_job, complete_job
 from anva.core.services.mcp_gateway import dispatch_tool
 from anva.core.services.policies import import_policy
+from anva.core.services.retrieval import authorized_assertions
 from anva.mcp.contracts import validate_tool_output
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "assurance-broad-context.json"
@@ -365,6 +372,122 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
             for assertion in noise_assertions
         ]
     )
+    second_lineage = (
+        SourceChunkVisibility.objects.filter(
+            organization=organization,
+            access_scope=scope,
+        )
+        .exclude(source_location=lineage.source_location)
+        .select_related("source_location", "source_observation__source_document", "access_snapshot")
+        .order_by("id")
+        .first()
+    )
+    assert second_lineage is not None
+    AssertionProvenance.objects.create(
+        organization=organization,
+        assertion=noise_assertions[0],
+        source_location=second_lineage.source_location,
+        source_observation=second_lineage.source_observation,
+        access_snapshot=second_lineage.access_snapshot,
+        extraction_class=KnowledgeAssertion.ExtractionClass.HUMAN,
+        extraction_method="issue-156-multi-provenance-regression",
+        confidence=1.0,
+        observed_at=second_lineage.observed_at,
+    )
+    AssertionValidityInterval.objects.create(
+        organization=organization,
+        assertion=noise_assertions[0],
+        source_document=second_lineage.source_observation.source_document,
+        source_observation=second_lineage.source_observation,
+        valid_from=second_lineage.observed_at,
+        observed_from=second_lineage.observed_at,
+    )
+    no_normalized_provenance = KnowledgeAssertion.objects.create(
+        organization=organization,
+        access_scope=scope,
+        subject_key="excluded:no-normalized-provenance",
+        predicate="owner",
+        value="nobody",
+        provenance=[{"source_id": "not-normalized"}],
+        confidence=1.0,
+    )
+    expired_assertion = _policy_assertion(
+        organization=organization,
+        path="current-policy.md",
+        subject_key="excluded:expired-assertion",
+        value="This expired assertion must not be eligible.",
+        review_state=KnowledgeAssertion.ReviewState.UNREVIEWED,
+        staleness_state=KnowledgeAssertion.StalenessState.FRESH,
+    )
+    KnowledgeAssertion.objects.filter(id=expired_assertion.id).update(
+        valid_until=expired_assertion.valid_from + timedelta(seconds=1)
+    )
+    expired_provenance = _policy_assertion(
+        organization=organization,
+        path="current-policy.md",
+        subject_key="excluded:expired-provenance",
+        value="This closed validity interval must not be eligible.",
+        review_state=KnowledgeAssertion.ReviewState.UNREVIEWED,
+        staleness_state=KnowledgeAssertion.StalenessState.FRESH,
+    )
+    AssertionValidityInterval.objects.filter(assertion=expired_provenance).update(
+        valid_until=lineage.observed_at + timedelta(seconds=1),
+        observed_until=lineage.observed_at + timedelta(seconds=1),
+    )
+    hidden_assertion = _policy_assertion(
+        organization=organization,
+        path="contact-redaction.md",
+        subject_key="excluded:hidden-scope",
+        value="The visible actor must not receive this assertion.",
+        review_state=KnowledgeAssertion.ReviewState.UNREVIEWED,
+        staleness_state=KnowledgeAssertion.StalenessState.FRESH,
+    )
+    assert hidden_assertion.access_scope_id == hidden_scope.id
+    foreign_assertion = _policy_assertion(
+        organization=foreign_org,
+        path="contact-redaction.md",
+        subject_key="excluded:foreign-organization",
+        value="A foreign assertion must not cross the tenant boundary.",
+        review_state=KnowledgeAssertion.ReviewState.UNREVIEWED,
+        staleness_state=KnowledgeAssertion.StalenessState.FRESH,
+    )
+
+    authorization = resolve_authorized_repository_scopes(
+        actor=actor,
+        actions=(Action.SEARCH,),
+        required_action=Action.SEARCH,
+        repository_ids=(repository.id,),
+        repository_limit=1,
+    )
+    current_provenance = _authorized_provenance_for_authorization(
+        actor=actor,
+        authorization=authorization,
+        assertion_ids=None,
+    )
+    optimized_ids = list(
+        _eligible_assertions_for_authorization(
+            actor=actor,
+            authorization=authorization,
+            current_provenance=current_provenance,
+        ).values_list("id", flat=True)
+    )
+    reference_ids = list(
+        authorized_assertions(actor=actor, repository_id=repository.id, action=Action.SEARCH)
+        .filter(id__in=Subquery(current_provenance.order_by().values("assertion_id")))
+        .order_by("id")
+        .values_list("id", flat=True)
+        .distinct()
+    )
+    assert optimized_ids == reference_ids
+    assert len(optimized_ids) == len(set(optimized_ids))
+    assert noise_assertions[0].id in optimized_ids
+    assert {
+        no_normalized_provenance.id,
+        expired_assertion.id,
+        expired_provenance.id,
+        hidden_assertion.id,
+        foreign_assertion.id,
+    }.isdisjoint(optimized_ids)
     AssertionConflict.objects.bulk_create(
         [
             AssertionConflict(
@@ -489,6 +612,7 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
     reference_time = timezone.now() + timedelta(seconds=5)
     context_started = time.monotonic()
     captured_query_counts: list[int] = []
+    last_context_statement: list[str] = []
     original_build_context_packet = cast(Any, assurance_service).build_context_packet
 
     def measured_build_context_packet(**kwargs: Any) -> Any:
@@ -503,6 +627,7 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         ) -> Any:
             nonlocal query_count
             query_count += 1
+            last_context_statement[:] = [" ".join(sql.split())[:240]]
             return execute(sql, params, many, context)
 
         try:
@@ -530,11 +655,18 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         work_item_revision_id=work.work_item_revision.id,
     )
     context_elapsed = time.monotonic() - context_started
-    assert context_elapsed < 5.0, (context_elapsed, captured_query_counts)
+    assert context_elapsed < 5.0, (
+        context_elapsed,
+        captured_query_counts,
+        last_context_statement,
+    )
     assert len(captured_query_counts) == 1, (
         started.run.state,
         started.run.failure_code,
         started.run.limitations,
+        context_elapsed,
+        captured_query_counts,
+        last_context_statement,
     )
     assert captured_query_counts[0] < 200
     assert started.evaluator_task is not None, (
@@ -828,6 +960,7 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
             claim_token=claim.claim_token,
             result=result,
         )
+    changed_started = time.monotonic()
     changed = start_assurance(
         actor=actor,
         pull_request_revision_id=ingested.revision.id,
@@ -844,6 +977,7 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         ],
         work_item_revision_id=work.work_item_revision.id,
     )
+    assert time.monotonic() - changed_started < 5.0
     started.run.refresh_from_db()
     assert started.run.state == AssuranceRun.State.STALE
     assert changed.created is True
@@ -1018,11 +1152,12 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         "CONFLICT_REVIEW_REQUIRED",
         "ASSURANCE_CONTEXT_INCOMPLETE",
     ]
-    completeness = cast(dict[str, object], exhausted.run.context_artifact.payload["completeness"])
-    assert completeness["complete"] is False
-    assert "partial_retained_assertions" in completeness
-    assert "partial_digest" in completeness
-    assert "exact_eligible_assertions" not in completeness
+    assert exhausted.run.context_artifact is None
+    assert exhausted.run.context_packet is None
+    assert any(
+        limitation.startswith(REQUIRED_ASSURANCE_CONTEXT_LIMITATION_PREFIX)
+        for limitation in exhausted.run.limitations
+    )
     exhausted_retry = start_assurance(
         actor=actor,
         pull_request_revision_id=ingested.revision.id,

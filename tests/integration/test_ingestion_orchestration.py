@@ -86,7 +86,7 @@ from anva.core.services.retrieval import (
     authorized_source_chunks,
 )
 from anva.core.services.scopes import revoke_source_connection
-from anva.core.services.search import search_chunks
+from anva.core.services.search import search_chunks, search_chunks_batch
 from anva.ingestion.errors import IngestionError
 from anva.ingestion.filesystem import FilesystemConnector
 from anva.ingestion.limits import IngestionLimits
@@ -340,6 +340,23 @@ def test_required_search_anchor_survives_dense_context_and_fails_closed(
         limit=50,
     )
     assert search.results
+    comparison_query = "dense common retry context"
+    batch = search_chunks_batch(
+        actor=actor,
+        repository_id=repository_id,
+        queries=("distinctive capped retry anchor six attempts", comparison_query),
+        phase="ASSURANCE",
+        limit=50,
+    )
+    comparison = search_chunks(
+        actor=actor,
+        repository_id=repository_id,
+        query=comparison_query,
+        phase="ASSURANCE",
+        limit=50,
+    )
+    assert batch[0].as_dict() == search.as_dict()
+    assert batch[1].as_dict() == comparison.as_dict()
     target = search.results[0]
     anchor = _required_anchor(target)
     budget = PacketBudget(max_items=1, max_tokens=8_000, max_bytes=100_000, max_citations=1)

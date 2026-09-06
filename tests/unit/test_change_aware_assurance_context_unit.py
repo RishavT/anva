@@ -113,9 +113,6 @@ def test_assertion_scan_finds_relevance_after_legacy_uuid_prefix() -> None:
     ordered = MagicMock()
     ordered.__getitem__.side_effect = [assertions[:200], assertions[200:400], assertions[400:], []]
     ordered.filter.return_value = ordered
-    base = MagicMock()
-    selected = base.filter.return_value.select_related.return_value
-    selected.order_by.return_value.distinct.return_value = ordered
     initial_provenance = MagicMock()
     initial_provenance.order_by.return_value.values.return_value = MagicMock()
 
@@ -140,7 +137,10 @@ def test_assertion_scan_finds_relevance_after_legacy_uuid_prefix() -> None:
                 provenance_page(assertions[400:]),
             ],
         ),
-        patch("anva.core.services.context_packets.authorized_assertions", return_value=base),
+        patch(
+            "anva.core.services.context_packets._eligible_assertions_for_authorization",
+            return_value=ordered,
+        ),
         patch(
             "anva.core.services.context_packets._citation_from_provenance",
             return_value=_citation(),
@@ -228,7 +228,10 @@ def test_assertion_scan_cap_boundary(row_count: int, complete: bool) -> None:
             "anva.core.services.context_packets._authorized_provenance_for_authorization",
             side_effect=provenance,
         ),
-        patch("anva.core.services.context_packets.authorized_assertions", return_value=eligible),
+        patch(
+            "anva.core.services.context_packets._eligible_assertions_for_authorization",
+            return_value=eligible,
+        ),
         patch(
             "anva.core.services.context_packets._citation_from_provenance", return_value=_citation()
         ),
