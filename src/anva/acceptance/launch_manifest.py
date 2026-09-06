@@ -29,6 +29,33 @@ LAUNCH_PHASES = frozenset(
 LAUNCH_MANIFEST_TARGET = "/acceptance/launch/manifest.json"
 CANONICAL_ROOT_TARGET = "/app/acceptance/canonical"
 CASE_TARGET = "/acceptance/case/case.json"
+DEPENDENCY_SERVICES = frozenset({"postgres", "minio", "minio-init", "migrate"})
+DEPENDENCY_IMAGES = {
+    "postgres": (
+        "pgvector/pgvector:pg16@sha256:"
+        "a36250871de0833b8757561c72f2477ef1ddd1101afa4e617fb552e0de514c6b"
+    ),
+    "minio": (
+        "minio/minio:RELEASE.2025-07-23T15-54-02Z@sha256:"
+        "d249d1fb6966de4d8ad26c04754b545205ff15a62e4fd19ebd0f26fa5baacbc0"
+    ),
+    "minio-init": (
+        "minio/mc:RELEASE.2025-07-21T05-28-08Z@sha256:"
+        "fb8f773eac8ef9d6da0486d5dec2f42f219358bcb8de579d1623d518c9ebd4cc"
+    ),
+}
+CORE_DEPENDENCIES: dict[str, dict[str, object]] = {
+    "migrate": {"condition": "service_completed_successfully", "required": True},
+    "minio": {"condition": "service_healthy", "required": True},
+    "minio-init": {"condition": "service_completed_successfully", "required": True},
+    "postgres": {"condition": "service_healthy", "required": True},
+}
+DEPENDENCY_CLOSURE = {
+    "postgres": {},
+    "minio": {},
+    "minio-init": {"minio": {"condition": "service_healthy", "required": True}},
+    "migrate": {"postgres": {"condition": "service_healthy", "required": True}},
+}
 CORE_RUNTIME_KEYS = frozenset(
     {
         "build",
@@ -74,6 +101,45 @@ PHASE_RUNTIME_KEYS = frozenset(
         "volumes",
     }
 )
+DEPENDENCY_RUNTIME_KEYS = {
+    "postgres": frozenset(
+        {
+            "command",
+            "entrypoint",
+            "environment",
+            "healthcheck",
+            "image",
+            "logging",
+            "networks",
+            "volumes",
+        }
+    ),
+    "minio": frozenset(
+        {
+            "command",
+            "entrypoint",
+            "environment",
+            "healthcheck",
+            "image",
+            "logging",
+            "networks",
+            "volumes",
+        }
+    ),
+    "minio-init": frozenset(
+        {
+            "command",
+            "depends_on",
+            "entrypoint",
+            "environment",
+            "image",
+            "logging",
+            "networks",
+            "restart",
+        }
+    ),
+    "migrate": CORE_RUNTIME_KEYS | {"restart"},
+}
 PHASE_MOUNT_RULES: dict[str, dict[str, tuple[str, bool]]] = {
     "acceptance-product-start": {
         CANONICAL_ROOT_TARGET: ("volume", True),
@@ -101,9 +167,21 @@ PHASE_MOUNT_RULES: dict[str, dict[str, tuple[str, bool]]] = {
         LAUNCH_MANIFEST_TARGET: ("bind", True),
     },
 }
+DEPENDENCY_MOUNT_RULES: dict[str, dict[str, tuple[str, bool]]] = {
+    "postgres": {"/var/lib/postgresql/data": ("volume", False)},
+    "minio": {"/data": ("volume", False)},
+    "minio-init": {},
+    "migrate": {},
+}
+NAMED_VOLUME_SOURCES = {
+    CANONICAL_ROOT_TARGET: "acceptance-canonical",
+    "/var/lib/postgresql/data": "postgres-data",
+    "/data": "minio-data",
+}
 SAFE_RUNTIME_KEYS = (
     "cap_drop",
     "command",
+    "depends_on",
     "entrypoint",
     "healthcheck",
     "image",
@@ -206,16 +284,50 @@ def _validate_closed_runtime(name: str, service: Mapping[str, object]) -> None:
         raise _reject("launch_runtime_mismatch", f"Launch service {name} tmpfs inventory differs")
 
 
+def _validate_dependency(name: str, service: Mapping[str, object], image_reference: str) -> None:
+    if set(service) - DEPENDENCY_RUNTIME_KEYS[name]:
+        raise _reject("launch_runtime_mismatch", f"Dependency service {name} runtime fields differ")
+    if service.get("networks") != {"acceptance-backend": None}:
+        raise _reject("launch_runtime_mismatch", f"Dependency service {name} network differs")
+    expected_image = image_reference if name == "migrate" else DEPENDENCY_IMAGES[name]
+    if service.get("image") != expected_image:
+        raise _reject("launch_image_reference_mismatch", f"Dependency service {name} image differs")
+    depends_on = service.get("depends_on", {})
+    if depends_on != DEPENDENCY_CLOSURE[name]:
+        raise _reject("launch_service_set_mismatch", f"Dependency service {name} closure differs")
+    if name == "migrate":
+        _validate_closed_security(name, service)
+
+
+def _validate_closed_security(name: str, service: Mapping[str, object]) -> None:
+    if (
+        service.get("read_only") is not True
+        or service.get("cap_drop") != ["ALL"]
+        or service.get("security_opt") != ["no-new-privileges:true"]
+    ):
+        raise _reject("launch_runtime_mismatch", f"Launch service {name} security posture differs")
+    tmpfs = service.get("tmpfs")
+    if (
+        not isinstance(tmpfs, list)
+        or len(tmpfs) != 2
+        or {str(item).split(":", 1)[0] for item in tmpfs} != {"/tmp", "/app/run"}  # noqa: S108
+    ):
+        raise _reject("launch_runtime_mismatch", f"Launch service {name} tmpfs inventory differs")
+
+
 def _validate_mounts(
     name: str,
     service: Mapping[str, object],
     *,
     launch_manifest_source: Path,
 ) -> None:
-    volumes = service.get("volumes")
+    volumes = service.get("volumes", [])
     if not isinstance(volumes, list):
         raise _reject("launch_bind_mismatch", f"Launch service {name} mounts are invalid")
-    expected = dict(PHASE_MOUNT_RULES.get(name, {CANONICAL_ROOT_TARGET: ("volume", True)}))
+    if name in DEPENDENCY_SERVICES:
+        expected = dict(DEPENDENCY_MOUNT_RULES[name])
+    else:
+        expected = dict(PHASE_MOUNT_RULES.get(name, {CANONICAL_ROOT_TARGET: ("volume", True)}))
     command = service.get("command")
     has_case_argument = (
         isinstance(command, list)
@@ -242,9 +354,12 @@ def _validate_mounts(
             raise _reject("launch_bind_mismatch", f"Launch service {name} mount mode differs")
         source = volume.get("source")
         if expected_type == "volume":
+            expected_fields = {"type", "source", "target", "volume"}
+            if expected_read_only:
+                expected_fields.add("read_only")
             if (
-                set(volume) != {"type", "source", "target", "read_only", "volume"}
-                or source != "acceptance-canonical"
+                set(volume) != expected_fields
+                or source != NAMED_VOLUME_SOURCES[target]
                 or volume.get("volume") != {}
             ):
                 raise _reject("launch_bind_mismatch", f"Launch service {name} volume differs")
@@ -293,6 +408,37 @@ def _validate_networks(compose: Mapping[str, object], services: Mapping[str, obj
         service_networks = _service_dict(services, name).get("networks")
         if not isinstance(service_networks, dict) or set(service_networks) != expected_networks:
             raise _reject("launch_runtime_mismatch", f"Launch service {name} networks differ")
+
+
+def _validate_topology_resources(compose: Mapping[str, object]) -> None:
+    networks = compose.get("networks")
+    assert isinstance(networks, dict)
+    for logical_name in ("acceptance-backend", "acceptance-edge"):
+        network = networks[logical_name]
+        assert isinstance(network, dict)
+        if set(network) - {"internal", "ipam", "name"} or network.get("ipam", {}) != {}:
+            raise _reject("launch_runtime_mismatch", f"Acceptance network {logical_name} differs")
+        engine_name = network.get("name")
+        if engine_name is not None and (
+            not isinstance(engine_name, str) or not engine_name.endswith(f"_{logical_name}")
+        ):
+            raise _reject("launch_runtime_mismatch", f"Acceptance network {logical_name} differs")
+    volumes = compose.get("volumes")
+    if not isinstance(volumes, dict) or not {
+        "acceptance-canonical",
+        "postgres-data",
+        "minio-data",
+    }.issubset(volumes):
+        raise _reject("launch_bind_mismatch", "Acceptance named volumes are absent")
+    for logical_name in ("acceptance-canonical", "postgres-data", "minio-data"):
+        volume = volumes[logical_name]
+        if not isinstance(volume, dict) or set(volume) - {"name"}:
+            raise _reject("launch_bind_mismatch", f"Acceptance volume {logical_name} differs")
+        engine_name = volume.get("name")
+        if engine_name is not None and (
+            not isinstance(engine_name, str) or not engine_name.endswith(f"_{logical_name}")
+        ):
+            raise _reject("launch_bind_mismatch", f"Acceptance volume {logical_name} differs")
 
 
 def _validate_phase(
@@ -380,12 +526,15 @@ def generate_launch_manifest(
     config = image_values.get("Config")
     labels = config.get("Labels") if isinstance(config, dict) else None
     image_user = str(config.get("User", "")) if isinstance(config, dict) else ""
-    image_uid = image_user.split(":", 1)[0].lower()
+    image_uid = image_user.split(":", 1)[0].strip().lower()
+    image_user_is_root = image_uid in {"", "root"} or (
+        re.fullmatch(r"[0-9]+", image_uid) is not None and not image_uid.strip("0")
+    )
     if (
         image_values.get("Id") != image_id
         or not isinstance(labels, dict)
         or labels.get("org.opencontainers.image.revision") != product_commit
-        or image_uid in {"", "0", "root"}
+        or image_user_is_root
     ):
         raise _reject("launch_image_mismatch", "Docker image does not match exact identity pins")
 
@@ -403,13 +552,18 @@ def generate_launch_manifest(
     services = cast(dict[str, object], services_value)
     if not REQUIRED_LAUNCH_SERVICES.issubset(services):
         raise _reject("launch_service_set_mismatch", "Resolved Compose lacks required services")
+    if not DEPENDENCY_SERVICES.issubset(services):
+        raise _reject("launch_service_set_mismatch", "Resolved Compose lacks launch dependencies")
     _validate_networks(compose, services)
+    _validate_topology_resources(compose)
 
     runtime: dict[str, object] = {}
     manifest_services: dict[str, object] = {}
     for name in sorted(REQUIRED_LAUNCH_SERVICES):
         service = _service_dict(services, name)
         _validate_closed_runtime(name, service)
+        if name in {"api", "worker", "mcp"} and service.get("depends_on") != CORE_DEPENDENCIES:
+            raise _reject("launch_service_set_mismatch", f"Launch service {name} closure differs")
         if service.get("image") != image_reference:
             raise _reject("launch_image_reference_mismatch", f"Launch service {name} image differs")
         if name in LAUNCH_PHASES:
@@ -437,10 +591,17 @@ def generate_launch_manifest(
             "engine_image_id": image_id,
             "image_reference": image_reference,
         }
+    dependency_runtime: dict[str, object] = {}
+    for name in sorted(DEPENDENCY_SERVICES):
+        service = _service_dict(services, name)
+        _validate_dependency(name, service, image_reference)
+        _validate_mounts(name, service, launch_manifest_source=launch_manifest_source)
+        dependency_runtime[name] = _runtime_identity(service)
     resolved_identity = {
         "networks": {
             name: {"internal": True} for name in ("acceptance-backend", "acceptance-edge")
         },
+        "dependencies": dependency_runtime,
         "services": runtime,
     }
     return {

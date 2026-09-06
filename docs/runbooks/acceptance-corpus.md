@@ -115,8 +115,10 @@ and its shape is illustrated by
 [`contracts/examples/v1/launch-manifest.json`](../../contracts/examples/v1/launch-manifest.json).
 It binds the exact product commit, build input, installed package, Docker image ID/reference,
 required service inventory, and SHA-256 identities of the security-relevant resolved Compose
-model. It intentionally contains neither environment values, secret material, host paths, nor the
-resolved model itself.
+model. The resolved-model identity includes the fixed `postgres`, `minio`, `minio-init`, and
+`migrate` dependency closure actually started for `api`, `worker`, and `mcp`, while the public
+service inventory remains the established exact seven product/phase services. It intentionally
+contains neither environment values, secret material, host paths, nor the resolved model itself.
 
 Use the supported generator; a raw `docker compose config` document is not a launch manifest.
 The host output path is required by every Make phase and must be absolute. On a clean start,
@@ -137,9 +139,10 @@ The target resolves the acceptance Compose model, inspects the pinned local imag
 generator from that exact image with no network, a read-only root, no capabilities, no privilege
 escalation, and the invoking non-root host identity. Generator inputs live only in a mode-`0700`
 temporary directory beneath the state directory and are removed. Before emitting deterministic
-JSON it verifies the exact seven runtime services, common image identity, internal-only network
-topology, non-root acceptance phases, read-only roots, dropped capabilities, PID/memory ceilings,
-and every protected launch-manifest bind (`read_only: true` and `create_host_path: false`). A
+JSON it verifies the exact seven product/phase services, their fixed four-service dependency
+closure, image identities, internal-only network topology, non-root acceptance phases, read-only
+roots, dropped capabilities, PID/memory ceilings, and every allowed bind's exact target/write mode
+and `create_host_path: false` setting. A
 missing or changed service/image/runtime/bind fails closed with a stable reason code.
 
 The generated file is mode `0444`. If the output already exists as a regular read-only file, the

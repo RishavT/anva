@@ -54,6 +54,14 @@ provenance boundary. Every metadata `OSError` is now converted to a path-free st
 reason, allowing the runner to write its private pre-state diagnostic and retaining generic public
 CLI output. Regression tests reproduce both reviewer findings.
 
+A second exact-head review then identified Docker's acceptance of leading-zero root UID strings
+and the missing `api`/`worker`/`mcp` dependency closure. Numeric image users now reject every
+all-zero UID spelling. The generator requires the exact dependency graph and conditions, pinned
+dependency images, closed runtime fields, backend networks, and mount inventories for `postgres`,
+`minio`, `minio-init`, and `migrate`; their redacted identities participate in
+`resolved_compose_sha256`. The established seven-service public field shape and prior valid v1
+manifests remain compatible.
+
 ## Verification
 
 - Exact host-resolved Make generation produced mode-`0444` output twice with identical SHA-256;
@@ -62,12 +70,12 @@ CLI output. Regression tests reproduce both reviewer findings.
   `launch_manifest_missing` diagnostic. The generated manifest advanced past preflight.
 - The documented Compose/Make flow then completed real bootstrap, API, worker, and official MCP
   client operations through `AWAITING_EXTERNAL_REVIEW`; scoped services and volumes were removed.
-- Post-remediation launch/Compose/contract/runner tests passed 79 checks with four expected
+- Final-remediation launch/Compose/contract/runner tests passed 85 checks with four expected
   Docker-CLI-unavailable skips; both the base and optional-case real resolved Compose models passed
   the tightened generator.
 - Runner boundary, resume, and permission integrations passed 28 tests with one expected
   Docker-in-container skip.
-- The post-remediation unit marker passed 1,161 tests with five expected Docker-CLI-unavailable
+- The final-remediation unit marker passed 1,167 tests with five expected Docker-CLI-unavailable
   skips. The combined
   integration/contract/smoke gate passed 326 tests before exposing one stale artifact-count
   assertion; after changing 33 to 35, the exact failed contract and focused launch set passed.

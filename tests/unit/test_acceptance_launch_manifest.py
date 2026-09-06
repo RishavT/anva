@@ -125,9 +125,16 @@ def _compose(canary_value: str = "PRIVATE-CANARY") -> dict[str, object]:
             "/app/run:size=16m,mode=0700",
         ],
     }
+    core_dependencies = {
+        "migrate": {"condition": "service_completed_successfully", "required": True},
+        "minio": {"condition": "service_healthy", "required": True},
+        "minio-init": {"condition": "service_completed_successfully", "required": True},
+        "postgres": {"condition": "service_healthy", "required": True},
+    }
     services: dict[str, object] = {
         "api": {
             **core_security,
+            "depends_on": deepcopy(core_dependencies),
             "image": IMAGE_REFERENCE,
             "networks": {"acceptance-backend": None, "acceptance-edge": None},
             "user": "10001:10001",
@@ -141,15 +148,57 @@ def _compose(canary_value: str = "PRIVATE-CANARY") -> dict[str, object]:
         },
         "worker": {
             **core_security,
+            "depends_on": deepcopy(core_dependencies),
             "image": IMAGE_REFERENCE,
             "networks": {"acceptance-backend": None},
             "volumes": [canonical],
         },
         "mcp": {
             **core_security,
+            "depends_on": deepcopy(core_dependencies),
             "image": IMAGE_REFERENCE,
             "networks": {"acceptance-backend": None, "acceptance-edge": None},
             "volumes": [canonical],
+        },
+        "postgres": {
+            "image": (
+                "pgvector/pgvector:pg16@sha256:"
+                "a36250871de0833b8757561c72f2477ef1ddd1101afa4e617fb552e0de514c6b"
+            ),
+            "environment": {"POSTGRES_PASSWORD": canary_value},
+            "networks": {"acceptance-backend": None},
+            "volumes": [
+                {
+                    "type": "volume",
+                    "source": "postgres-data",
+                    "target": "/var/lib/postgresql/data",
+                    "volume": {},
+                }
+            ],
+        },
+        "minio": {
+            "image": (
+                "minio/minio:RELEASE.2025-07-23T15-54-02Z@sha256:"
+                "d249d1fb6966de4d8ad26c04754b545205ff15a62e4fd19ebd0f26fa5baacbc0"
+            ),
+            "networks": {"acceptance-backend": None},
+            "volumes": [
+                {"type": "volume", "source": "minio-data", "target": "/data", "volume": {}}
+            ],
+        },
+        "minio-init": {
+            "image": (
+                "minio/mc:RELEASE.2025-07-21T05-28-08Z@sha256:"
+                "fb8f773eac8ef9d6da0486d5dec2f42f219358bcb8de579d1623d518c9ebd4cc"
+            ),
+            "depends_on": {"minio": {"condition": "service_healthy", "required": True}},
+            "networks": {"acceptance-backend": None},
+        },
+        "migrate": {
+            **core_security,
+            "image": IMAGE_REFERENCE,
+            "depends_on": {"postgres": {"condition": "service_healthy", "required": True}},
+            "networks": {"acceptance-backend": None},
         },
     }
     for name in REQUIRED_LAUNCH_SERVICES - {"api", "worker", "mcp"}:
@@ -161,6 +210,7 @@ def _compose(canary_value: str = "PRIVATE-CANARY") -> dict[str, object]:
             "acceptance-backend": {"internal": True},
             "acceptance-edge": {"internal": True},
         },
+        "volumes": {"acceptance-canonical": {}, "postgres-data": {}, "minio-data": {}},
         "secrets": {"bootstrap": {"file": "/PRIVATE/PATH/bootstrap-secret"}},
     }
 
@@ -222,7 +272,12 @@ def test_generated_manifest_is_deterministic_schema_valid_secret_free_and_accept
     first = _generate(tmp_path / "first")
     second_root = tmp_path / "second"
     second_root.mkdir()
-    second = _generate(second_root, _compose("DIFFERENT-PRIVATE-CANARY"))
+    second_compose = _compose("DIFFERENT-PRIVATE-CANARY")
+    for name, value in cast(dict[str, dict[str, object]], second_compose["networks"]).items():
+        value.update({"name": f"other-project_{name}", "ipam": {}})
+    for name, value in cast(dict[str, dict[str, object]], second_compose["volumes"]).items():
+        value["name"] = f"other-project_{name}"
+    second = _generate(second_root, second_compose)
 
     assert first == second
     validate_payload("launch-manifest", first)
@@ -246,6 +301,18 @@ def test_generated_manifest_is_deterministic_schema_valid_secret_free_and_accept
         )
         == hashlib.sha256(encoded).hexdigest()
     )
+
+
+@pytest.mark.unit
+def test_dependency_closure_changes_resolved_identity(tmp_path: Path) -> None:
+    first = _generate(tmp_path / "first")
+    compose = _compose()
+    minio = cast(dict[str, object], cast(dict[str, object], compose["services"])["minio"])
+    minio["command"] = ["server", "/data", "--console-address", ":9002"]
+    second = _generate(tmp_path / "second", compose)
+
+    assert first["services"] == second["services"]
+    assert first["resolved_compose_sha256"] != second["resolved_compose_sha256"]
 
 
 @pytest.mark.unit
@@ -353,6 +420,27 @@ def test_schema_service_inventory_matches_runtime_and_old_valid_manifest_is_acce
             ).append(_bind("/private/oracle")),
             "launch_bind_mismatch",
         ),
+        (
+            lambda value: cast(
+                dict[str, object], cast(dict[str, object], value["services"])["postgres"]
+            ).__setitem__("privileged", True),
+            "launch_runtime_mismatch",
+        ),
+        (
+            lambda value: cast(
+                dict[str, object], cast(dict[str, object], value["services"])["minio"]
+            ).__setitem__("ports", [{"published": "9000", "target": 9000}]),
+            "launch_runtime_mismatch",
+        ),
+        (
+            lambda value: cast(
+                list[dict[str, object]],
+                cast(dict[str, object], cast(dict[str, object], value["services"])["postgres"])[
+                    "volumes"
+                ],
+            ).append(_bind("/var/run/docker.sock")),
+            "launch_bind_mismatch",
+        ),
     ],
 )
 def test_generator_fails_closed_for_service_image_runtime_and_bind_changes(
@@ -368,7 +456,8 @@ def test_generator_fails_closed_for_service_image_runtime_and_bind_changes(
 
 
 @pytest.mark.unit
-def test_generator_rejects_root_image_default_user(tmp_path: Path) -> None:
+@pytest.mark.parametrize("image_user", ["0:10001", "00:10001", "000"])
+def test_generator_rejects_root_image_default_user(tmp_path: Path, image_user: str) -> None:
     resolved, inspect, provenance = _inputs(tmp_path)
     inspect.write_text(
         json.dumps(
@@ -376,7 +465,7 @@ def test_generator_rejects_root_image_default_user(tmp_path: Path) -> None:
                 {
                     "Id": f"sha256:{IMAGE_SHA}",
                     "Config": {
-                        "User": "0:10001",
+                        "User": image_user,
                         "Labels": {"org.opencontainers.image.revision": COMMIT},
                     },
                 }
