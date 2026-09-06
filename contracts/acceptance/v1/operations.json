@@ -9253,8 +9253,15 @@
                     "type": "boolean"
                   },
                   "evaluator_task_id": {
-                    "format": "uuid",
-                    "type": "string"
+                    "oneOf": [
+                      {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   "head_commit": {
                     "pattern": "^[a-f0-9]{40}$",
@@ -9307,8 +9314,15 @@
                     "type": "boolean"
                   },
                   "evaluator_task_id": {
-                    "format": "uuid",
-                    "type": "string"
+                    "oneOf": [
+                      {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   "head_commit": {
                     "pattern": "^[a-f0-9]{40}$",

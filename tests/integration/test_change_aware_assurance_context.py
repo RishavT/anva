@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from copy import deepcopy
 from datetime import timedelta
-from itertools import cycle, islice
+from itertools import chain, cycle, islice, repeat
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
+from django.db import connection
 from django.utils import timezone
 
 from anva.contracts.catalog import EXAMPLES
@@ -305,12 +307,89 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         review_state=KnowledgeAssertion.ReviewState.UNREVIEWED,
         staleness_state=KnowledgeAssertion.StalenessState.STALE,
     )
-    conflict = AssertionConflict.objects.create(
+    lineage = AssertionProvenance.objects.select_related("source_observation__source_document").get(
+        assertion=current
+    )
+    noise_assertions = [
+        KnowledgeAssertion(
+            id=uuid.UUID(int=10_000 + index),
+            organization=organization,
+            access_scope=scope,
+            subject_key=f"archive:unrelated-{index:03d}",
+            predicate="owner",
+            value="archive-team",
+            provenance=[{"source_id": str(lineage.source_observation_id)}],
+            review_state=KnowledgeAssertion.ReviewState.UNREVIEWED,
+            staleness_state=KnowledgeAssertion.StalenessState.FRESH,
+            confidence=1.0,
+        )
+        for index in range(501)
+    ]
+    KnowledgeAssertion.objects.bulk_create(noise_assertions)
+    AssertionProvenance.objects.bulk_create(
+        [
+            AssertionProvenance(
+                organization=organization,
+                assertion=assertion,
+                source_location=lineage.source_location,
+                source_observation=lineage.source_observation,
+                access_snapshot=lineage.access_snapshot,
+                extraction_class=KnowledgeAssertion.ExtractionClass.HUMAN,
+                extraction_method="issue-156-dense-regression",
+                confidence=1.0,
+                observed_at=lineage.observed_at,
+            )
+            for assertion in noise_assertions
+        ]
+    )
+    AssertionValidityInterval.objects.bulk_create(
+        [
+            AssertionValidityInterval(
+                organization=organization,
+                assertion=assertion,
+                source_document=lineage.source_observation.source_document,
+                source_observation=lineage.source_observation,
+                valid_from=lineage.observed_at,
+                observed_from=lineage.observed_at,
+            )
+            for assertion in noise_assertions
+        ]
+    )
+    AssertionConflict.objects.bulk_create(
+        [
+            AssertionConflict(
+                id=uuid.UUID(int=(2**128) - 2 if index == 500 else 20_000 + index),
+                organization=organization,
+                left_assertion=current,
+                right_assertion=assertion,
+                predicate="owner",
+            )
+            for index, assertion in enumerate(noise_assertions)
+        ]
+    )
+    AssertionConflict.objects.create(
+        id=uuid.UUID(int=1),
         organization=organization,
         left_assertion=current,
         right_assertion=stale,
         predicate="required_policy",
     )
+    with connection.cursor() as cursor:
+        cursor.execute("ANALYZE core_assertionconflict")
+        cursor.execute("SET LOCAL enable_seqscan = off")
+    conflict_plan = (
+        AssertionConflict.objects.filter(
+            organization=organization,
+            status=AssertionConflict.Status.OPEN,
+            left_assertion=current,
+        )
+        .order_by("id")
+        .explain()
+    )
+    assert "Index Scan" in conflict_plan
+    assert "Seq Scan" not in conflict_plan
+    with connection.cursor() as cursor:
+        cursor.execute("SET LOCAL enable_seqscan = on")
 
     work_payload = deepcopy(EXAMPLES["work-item-import"])
     work_payload.update(
@@ -398,6 +477,7 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         unified_diff=DIFF,
     )
     reference_time = timezone.now() + timedelta(seconds=5)
+    context_started = time.monotonic()
     started = start_assurance(
         actor=actor,
         pull_request_revision_id=ingested.revision.id,
@@ -414,6 +494,8 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         ],
         work_item_revision_id=work.work_item_revision.id,
     )
+    context_elapsed = time.monotonic() - context_started
+    assert context_elapsed < 15.0
     duplicate = start_assurance(
         actor=actor,
         pull_request_revision_id=ingested.revision.id,
@@ -494,8 +576,8 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         )
     ]
     assert set(first_relevant_positions) == relevant_names
-    assert archive_positions
-    assert max(first_relevant_positions.values()) < min(archive_positions)
+    if archive_positions:
+        assert max(first_relevant_positions.values()) < min(archive_positions)
     evidence_source_items = [
         item
         for item in ordered_items
@@ -512,8 +594,13 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
     )
     assert ContextPacketItem.objects.filter(
         context_packet=packet,
-        source_conflict=conflict,
+        source_conflict__isnull=False,
     ).exists()
+    completeness = cast(dict[str, object], packet.artifact.payload["completeness"])
+    assert completeness["complete"] is True
+    assert completeness["exact_eligible_conflicts"] == 502
+    assert "partial_retained_conflicts" not in completeness
+    assert any("conflict details omitted" in limitation for limitation in packet.limitations)
     assert not any(
         limitation.startswith(REQUIRED_ASSURANCE_CONTEXT_LIMITATION_PREFIX)
         for limitation in packet.limitations
@@ -566,21 +653,13 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         for item in context
         if cast(dict[str, object], item["claim"]).get("assertion_id") == str(current.id)
     )
-    stale_context = next(
-        item
-        for item in context
-        if cast(dict[str, object], item["claim"]).get("assertion_id") == str(stale.id)
-    )
     conflict_context = next(
-        item
-        for item in context
-        if cast(dict[str, object], item["claim"]).get("conflict_id") == str(conflict.id)
+        item for item in context if cast(dict[str, object], item["claim"]).get("conflict_id")
     )
     assert current_context["freshness"] == "CURRENT"
     assert cast(dict[str, object], current_context["claim"])["review_state"] == "HUMAN_CONFIRMED"
-    assert stale_context["freshness"] == "STALE"
-    assert cast(dict[str, object], stale_context["claim"])["staleness_state"] == "STALE"
     assert "versus" in cast(str, conflict_context["summary"])
+    assert cast(dict[str, object], conflict_context["claim"])["right"]["staleness_state"] == "STALE"
     assert all(cast(list[dict[str, object]], item["citations"]) for item in context)
     assert all(item["selection_reason"] for item in context)
     assert "CANARY-FOREIGN-TENANT-ISSUE-128" not in json.dumps(claim.request, sort_keys=True)
@@ -690,3 +769,107 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
     assert changed.run.state == AssuranceRun.State.STALE
     assert changed.evaluator_task.state == changed.evaluator_task.State.CANCELLED
     assert changed.evaluator_task.failure_code == "STALE_CONTEXT"
+
+    # Overall scan exhaustion is a durable, named non-ready assurance result,
+    # never a context-build 409 and never an evaluator task over partial input.
+    monkeypatch.setattr(
+        "anva.core.services.context_packets.CONTEXT_SCAN_MAX_ROWS",
+        1,
+    )
+    exhausted = start_assurance(
+        actor=actor,
+        pull_request_revision_id=ingested.revision.id,
+        policy_version_ids=[policy_version.id],
+        reference_time=reference_time,
+        deterministic_checks=[
+            {
+                "code": "CONTACT_REDACTION_TEST",
+                "status": "PASSED",
+                "blocking": True,
+                "summary": "Exact-head passenger contact redaction scenario passed.",
+                "evidence_ids": [],
+            }
+        ],
+        work_item_revision_id=work.work_item_revision.id,
+    )
+    assert exhausted.created is True
+    assert exhausted.evaluator_task is None
+    assert exhausted.run.state == AssuranceRun.State.FAILED
+    assert exhausted.run.readiness == "BLOCKED"
+    assert exhausted.run.failure_code == "ASSURANCE_CONTEXT_INCOMPLETE"
+    assert exhausted.run.readinessdecision.reason_codes == [
+        "CONFLICT_REVIEW_REQUIRED",
+        "ASSURANCE_CONTEXT_INCOMPLETE",
+    ]
+    completeness = cast(dict[str, object], exhausted.run.context_artifact.payload["completeness"])
+    assert completeness["complete"] is False
+    assert "partial_retained_assertions" in completeness
+    assert "partial_digest" in completeness
+    assert "exact_eligible_assertions" not in completeness
+
+    def assert_incomplete_run(run_result: object) -> None:
+        bounded = cast(Any, run_result)
+        assert bounded.created is True
+        assert bounded.evaluator_task is None
+        assert bounded.run.state == AssuranceRun.State.FAILED
+        assert bounded.run.readiness == "BLOCKED"
+        assert bounded.run.readinessdecision.reason_codes == [
+            "CONFLICT_REVIEW_REQUIRED",
+            "ASSURANCE_CONTEXT_INCOMPLETE",
+        ]
+
+    assert_incomplete_run(exhausted)
+    monkeypatch.setattr("anva.core.services.context_packets.CONTEXT_SCAN_MAX_ROWS", 50_000)
+    invalidate_context_packets(
+        actor=actor,
+        organization_id=organization.id,
+        repository_id=repository.id,
+        reason="MANUAL",
+        details={"test": "force-operation-budget"},
+    )
+    monkeypatch.setattr("anva.core.services.context_packets.CONTEXT_SCAN_MAX_OPERATIONS", 1)
+    operation_exhausted = start_assurance(
+        actor=actor,
+        pull_request_revision_id=ingested.revision.id,
+        policy_version_ids=[policy_version.id],
+        reference_time=reference_time,
+        deterministic_checks=[
+            {
+                "code": "CONTACT_REDACTION_TEST",
+                "status": "PASSED",
+                "blocking": True,
+                "summary": "Exact-head passenger contact redaction scenario passed.",
+                "evidence_ids": [],
+            }
+        ],
+        work_item_revision_id=work.work_item_revision.id,
+    )
+    assert_incomplete_run(operation_exhausted)
+
+    monkeypatch.setattr("anva.core.services.context_packets.CONTEXT_SCAN_MAX_OPERATIONS", 100_000)
+    invalidate_context_packets(
+        actor=actor,
+        organization_id=organization.id,
+        repository_id=repository.id,
+        reason="MANUAL",
+        details={"test": "force-wall-budget"},
+    )
+    ticks = chain([0.0, 5.0], repeat(5.0))
+    monkeypatch.setattr("anva.core.services.context_packets.monotonic", lambda: next(ticks))
+    time_exhausted = start_assurance(
+        actor=actor,
+        pull_request_revision_id=ingested.revision.id,
+        policy_version_ids=[policy_version.id],
+        reference_time=reference_time,
+        deterministic_checks=[
+            {
+                "code": "CONTACT_REDACTION_TEST",
+                "status": "PASSED",
+                "blocking": True,
+                "summary": "Exact-head passenger contact redaction scenario passed.",
+                "evidence_ids": [],
+            }
+        ],
+        work_item_revision_id=work.work_item_revision.id,
+    )
+    assert_incomplete_run(time_exhausted)

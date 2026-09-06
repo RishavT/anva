@@ -6,10 +6,10 @@ import hashlib
 import json
 import math
 import re
-import time
 import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime
+from time import monotonic
 from typing import Any, NoReturn, cast
 
 from django.db import connection, transaction
@@ -806,7 +806,7 @@ def _assertion_candidates(
     candidates = ScannedCandidates()
     last_id: uuid.UUID | None = None
     scanned = 0
-    started = time.monotonic()
+    started = monotonic()
     while True:
         page_query = eligible
         if last_id is not None:
@@ -823,7 +823,7 @@ def _assertion_candidates(
         if (
             scanned > CONTEXT_SCAN_MAX_ROWS
             or scanned * 2 > CONTEXT_SCAN_MAX_OPERATIONS
-            or time.monotonic() - started > CONTEXT_SCAN_MAX_SECONDS
+            or monotonic() - started > CONTEXT_SCAN_MAX_SECONDS
         ):
             candidates.complete = False
             break
@@ -1301,7 +1301,7 @@ def _conflict_candidates(
     bounded_conflicts: list[AssertionConflict] = []
     scan_complete = True
     last_id: uuid.UUID | None = None
-    started = time.monotonic()
+    started = monotonic()
     while True:
         page_query = ordered_conflicts
         if last_id is not None:
@@ -1318,7 +1318,7 @@ def _conflict_candidates(
             len(bounded_conflicts) + len(selected_assertion_ids) > CONTEXT_SCAN_MAX_ROWS
             or (len(bounded_conflicts) + len(selected_assertion_ids)) * 2
             > CONTEXT_SCAN_MAX_OPERATIONS
-            or time.monotonic() - started > CONTEXT_SCAN_MAX_SECONDS
+            or monotonic() - started > CONTEXT_SCAN_MAX_SECONDS
         ):
             scan_complete = False
             break

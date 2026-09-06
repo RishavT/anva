@@ -1600,6 +1600,39 @@ def start_assurance(
         required=required_run_limitations,
     )
     run.save(update_fields=["context_packet", "context_artifact", "limitations", "updated_at"])
+    completeness = cast(dict[str, object], packet.artifact.payload).get("completeness")
+    if isinstance(completeness, dict) and completeness.get("complete") is False:
+        blockers = (
+            f"{REQUIRED_ASSURANCE_CONTEXT_LIMITATION_PREFIX} "
+            "CONFLICT_REVIEW_REQUIRED / ASSURANCE_CONTEXT_INCOMPLETE"
+        )
+        ReadinessDecision.objects.create(
+            organization=organization,
+            assurance_run=run,
+            status=ReadinessDecision.Status.BLOCKED,
+            reason_codes=["CONFLICT_REVIEW_REQUIRED", "ASSURANCE_CONTEXT_INCOMPLETE"],
+            input_hash=content_hash(
+                {"run_input_hash": run.input_hash, "reason": "ASSURANCE_CONTEXT_INCOMPLETE"}
+            ),
+        )
+        run.failure_code = "ASSURANCE_CONTEXT_INCOMPLETE"
+        run.readiness = ReadinessDecision.Status.BLOCKED
+        run.limitations = _bounded_limitations(cast(list[str], run.limitations), [blockers])
+        run.completed_at = timezone.now()
+        run.state = AssuranceRun.State.FAILED
+        run.revision += 1
+        run.save(
+            update_fields=[
+                "failure_code",
+                "readiness",
+                "limitations",
+                "completed_at",
+                "state",
+                "revision",
+                "updated_at",
+            ]
+        )
+        return AssuranceStartResult(run, None, True)
     check_rows: list[AssuranceCheck] = []
     for position, check in enumerate(checks, start=1):
         check_hash = content_hash(
@@ -1724,15 +1757,6 @@ def start_assurance(
             ),
         },
     )
-    completeness = cast(dict[str, object], packet.artifact.payload).get("completeness")
-    if isinstance(completeness, dict) and completeness.get("complete") is False:
-        _finalize_evaluator_failure(
-            actor=actor,
-            task=task,
-            failure_code="ASSURANCE_CONTEXT_INCOMPLETE",
-        )
-        run.refresh_from_db()
-        task.refresh_from_db()
     return AssuranceStartResult(run, task, True)
 
 

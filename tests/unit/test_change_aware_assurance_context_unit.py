@@ -40,6 +40,7 @@ from anva.core.services.context_packets import (
     PacketCandidate,
     RequiredSearchAnchor,
     RetrievalFacet,
+    _assertion_candidates,
     _conflict_candidates,
     _merge_candidates,
     _normalized_facets,
@@ -89,6 +90,70 @@ def _candidate(
         required_context_facets=(facet,) if facet else (),
         required_search_anchor=required_search_anchor,
     )
+
+
+@pytest.mark.unit
+def test_assertion_scan_finds_relevance_after_legacy_uuid_prefix() -> None:
+    assertions = [
+        SimpleNamespace(
+            id=uuid.UUID(int=index + 1),
+            access_scope_id=uuid.uuid4(),
+            subject_key=("late-anchor" if index == 500 else f"noise-{index}"),
+            predicate="owner",
+            value="platform",
+            review_state="UNREVIEWED",
+            staleness_state="FRESH",
+            confidence=1.0,
+            is_inferred=False,
+        )
+        for index in range(501)
+    ]
+    ordered = MagicMock()
+    ordered.__getitem__.side_effect = [assertions[:200], assertions[200:400], assertions[400:], []]
+    ordered.filter.return_value = ordered
+    base = MagicMock()
+    selected = base.filter.return_value.select_related.return_value
+    selected.order_by.return_value.distinct.return_value = ordered
+    initial_provenance = MagicMock()
+    initial_provenance.order_by.return_value.values.return_value = MagicMock()
+
+    def provenance_page(page: list[SimpleNamespace]) -> MagicMock:
+        query = MagicMock()
+        query.order_by.return_value.distinct.return_value = [
+            SimpleNamespace(assertion_id=assertion.id) for assertion in page
+        ]
+        return query
+
+    with (
+        patch(
+            "anva.core.services.context_packets.resolve_authorized_repository_scopes",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "anva.core.services.context_packets._authorized_provenance_for_authorization",
+            side_effect=[
+                initial_provenance,
+                provenance_page(assertions[:200]),
+                provenance_page(assertions[200:400]),
+                provenance_page(assertions[400:]),
+            ],
+        ),
+        patch("anva.core.services.context_packets.authorized_assertions", return_value=base),
+        patch(
+            "anva.core.services.context_packets._citation_from_provenance",
+            return_value=_citation(),
+        ),
+    ):
+        candidates = _assertion_candidates(
+            actor=cast(Any, SimpleNamespace()),
+            repository_id=uuid.uuid4(),
+            facets=(RetrievalFacet("task", "late-anchor", ("late-anchor",)),),
+            change_aware=True,
+        )
+
+    assert [candidate.source_assertion_id for candidate in candidates] == [assertions[-1].id]
+    assert candidates.processed_count == 501
+    assert candidates.complete is True
 
 
 def _search_anchor(seed: int = 0) -> RequiredSearchAnchor:
@@ -519,7 +584,8 @@ def test_required_packing_fails_stably_at_candidate_and_operation_bounds() -> No
 
 
 @pytest.mark.unit
-def test_conflict_retrieval_keyset_scans_beyond_legacy_bound() -> None:
+@pytest.mark.parametrize("row_count", [500, 501])
+def test_conflict_retrieval_keyset_scans_legacy_boundary(row_count: int) -> None:
     ordered = MagicMock()
     assertion_id = uuid.uuid4()
     rows = [
@@ -528,9 +594,10 @@ def test_conflict_retrieval_keyset_scans_beyond_legacy_bound() -> None:
             left_assertion_id=assertion_id,
             right_assertion_id=assertion_id,
         )
-        for index in range(501)
+        for index in range(row_count)
     ]
-    ordered.__getitem__.side_effect = [rows[:200], rows[200:400], rows[400:], []]
+    pages = [rows[offset : offset + 200] for offset in range(0, row_count, 200)]
+    ordered.__getitem__.side_effect = [*pages, []]
     ordered.filter.return_value = ordered
     selected = MagicMock()
     selected.order_by.return_value = ordered
@@ -562,7 +629,7 @@ def test_conflict_retrieval_keyset_scans_beyond_legacy_bound() -> None:
     assert manager_filter.call_args.kwargs["right_assertion_id__in"] == {assertion_id}
     queryset.filter.assert_called_once()
     selected.order_by.assert_called_once_with("id")
-    assert ordered.__getitem__.call_count == 4
+    assert ordered.__getitem__.call_count == len(pages) + 1
     assert all(
         call.args[0] == slice(None, CONTEXT_SCAN_PAGE_SIZE, None)
         for call in ordered.__getitem__.call_args_list
