@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from copy import deepcopy
 from datetime import UTC, datetime
@@ -294,6 +295,19 @@ def test_manual_diff_parser_is_safe_before_django_settings_are_configured() -> N
         parsed = parse_unified_diff(VALID_DIFF)
 
     assert parsed.changed_paths == ("src/auth/service.py", "tests/test_service.py")
+
+
+@pytest.mark.unit
+def test_manual_diff_parser_uses_secret_environment_before_django_configuration() -> None:
+    credential_marker = "runtime-literal-that-is-not-a-known-token-pattern"
+    candidate = VALID_DIFF.replace("+new", f"+{credential_marker}")
+    with (
+        patch("anva.core.logging.settings") as unconfigured,
+        patch.dict(os.environ, {"ANVA_SECRET_KEY": credential_marker}, clear=False),
+    ):
+        unconfigured.configured = False
+        with pytest.raises(ValueError, match="credential material"):
+            parse_unified_diff(candidate)
 
 
 @pytest.mark.unit

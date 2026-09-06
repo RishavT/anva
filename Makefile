@@ -609,8 +609,15 @@ acceptance-case-validate: acceptance-identity-preflight
 		case_file="$(ANVA_ACCEPTANCE_CASE_FILE)"; \
 		case "$$case_file" in /*) ;; *) echo "ANVA_ACCEPTANCE_CASE_FILE must be an absolute path" >&2; exit 2 ;; esac; \
 		test -f "$$case_file" && test ! -L "$$case_file" || { echo "ANVA_ACCEPTANCE_CASE_FILE must be a regular non-symlink file" >&2; exit 2; }; \
+		ANVA_SECRET_KEY="$${ANVA_SECRET_KEY:-local-only-change-me}" \
+		ANVA_TOKEN_PEPPER="$${ANVA_TOKEN_PEPPER:-local-only-token-pepper}" \
+		ANVA_OBJECT_STORAGE_SECRET_KEY="$${ANVA_OBJECT_STORAGE_SECRET_KEY:-anva-local-only}" \
+		ANVA_GITHUB_WEBHOOK_SECRETS="$${ANVA_GITHUB_WEBHOOK_SECRETS:-local-only-github-webhook-secret}" \
 		docker run --rm --network none --read-only --cap-drop ALL \
 			--security-opt no-new-privileges --pids-limit 64 --memory 256m \
+			--env ANVA_SECRET_KEY --env ANVA_TOKEN_PEPPER --env ANVA_BOOTSTRAP_SECRET \
+			--env ANVA_METRICS_TOKEN --env ANVA_OBJECT_STORAGE_SECRET_KEY \
+			--env ANVA_GITHUB_WEBHOOK_SECRETS \
 			--mount type=bind,source="$$case_file",target=/acceptance-case.json,readonly \
 			"$(ANVA_IMAGE_REPOSITORY):$(ANVA_VERSION)" \
 			anva acceptance case-validate --case /acceptance-case.json; \

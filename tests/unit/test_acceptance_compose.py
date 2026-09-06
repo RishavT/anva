@@ -351,6 +351,12 @@ def test_acceptance_case_preflight_is_hardened_and_precedes_launch() -> None:
         "--pids-limit 64",
         "--memory 256m",
         "readonly",
+        "--env ANVA_SECRET_KEY",
+        "--env ANVA_TOKEN_PEPPER",
+        "--env ANVA_BOOTSTRAP_SECRET",
+        "--env ANVA_METRICS_TOKEN",
+        "--env ANVA_OBJECT_STORAGE_SECRET_KEY",
+        "--env ANVA_GITHUB_WEBHOOK_SECRETS",
     ):
         assert option in body
     assert "anva acceptance case-validate --case /acceptance-case.json" in body

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from datetime import UTC, datetime
 
@@ -61,7 +62,7 @@ def redact_text(value: object) -> str:
     result = str(value)
     for pattern in SECRET_PATTERNS:
         result = pattern.sub(REDACTED, result)
-    configured_secrets = (
+    configured_secrets: set[str] = (
         {
             str(settings.SECRET_KEY),
             str(settings.TOKEN_PEPPER),
@@ -71,7 +72,14 @@ def redact_text(value: object) -> str:
             *(str(secret) for secret in settings.ANVA_GITHUB_WEBHOOK_SECRETS),
         }
         if settings.configured
-        else set()
+        else {
+            os.environ.get("ANVA_SECRET_KEY", ""),
+            os.environ.get("ANVA_TOKEN_PEPPER", ""),
+            os.environ.get("ANVA_BOOTSTRAP_SECRET", ""),
+            os.environ.get("ANVA_METRICS_TOKEN", ""),
+            os.environ.get("ANVA_OBJECT_STORAGE_SECRET_KEY", ""),
+            *os.environ.get("ANVA_GITHUB_WEBHOOK_SECRETS", "").split(","),
+        }
     )
     for secret in configured_secrets:
         if secret:
