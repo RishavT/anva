@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections.abc import Callable
 from copy import deepcopy
-from pathlib import Path
+from dataclasses import replace
+from pathlib import Path, PosixPath
 from typing import cast
 
 import pytest
@@ -29,7 +31,51 @@ IMAGE_REFERENCE = "anva:0.1.6"
 MANIFEST_PATH = Path("/protected/acceptance/launch-manifest.json")
 
 
+class _PermissionDeniedPath(PosixPath):
+    def lstat(self) -> os.stat_result:
+        raise PermissionError("blocked private path: /PRIVATE/HOST/PATH/manifest.json")
+
+
+def _bind(target: str, *, read_only: bool = False) -> dict[str, object]:
+    value: dict[str, object] = {
+        "type": "bind",
+        "source": f"/protected{target}",
+        "target": target,
+        "bind": {"create_host_path": False},
+    }
+    if read_only:
+        value["read_only"] = True
+    return value
+
+
 def _phase(name: str, canary_value: str) -> dict[str, object]:
+    writable_targets = {
+        "acceptance-product-start": ["/acceptance/state", "/acceptance/credentials"],
+        "acceptance-review-request": ["/acceptance/state", "/acceptance/handoff"],
+        "acceptance-review-submit": ["/acceptance/state", "/acceptance/handoff"],
+        "acceptance-product-finalize": ["/acceptance/state", "/acceptance/results"],
+    }
+    volumes = [
+        {
+            "type": "volume",
+            "source": "acceptance-canonical",
+            "target": "/app/acceptance/canonical",
+            "read_only": True,
+            "volume": {},
+        },
+        *[_bind(target) for target in writable_targets[name]],
+    ]
+    if name == "acceptance-review-submit":
+        volumes.append(_bind("/acceptance/reviewer", read_only=True))
+    volumes.append(
+        {
+            "type": "bind",
+            "source": str(MANIFEST_PATH),
+            "target": "/acceptance/launch/manifest.json",
+            "read_only": True,
+            "bind": {"create_host_path": False},
+        }
+    )
     return {
         "image": IMAGE_REFERENCE,
         "user": "10001:10001",
@@ -45,7 +91,10 @@ def _phase(name: str, canary_value: str) -> dict[str, object]:
             "ANVA_ACCEPTANCE_TOKEN": canary_value,
             "ANVA_API_URL": "http://api:8000",
         },
-        "tmpfs": ["/tmp:size=32m,mode=1777,noexec,nosuid,nodev"],  # noqa: S108
+        "tmpfs": [
+            "/tmp:size=32m,mode=1777,noexec,nosuid,nodev",  # noqa: S108
+            "/app/run:size=8m,mode=0700,uid=10001,gid=10001,noexec,nosuid,nodev",
+        ],
         "command": [
             "anva",
             "acceptance",
@@ -55,22 +104,7 @@ def _phase(name: str, canary_value: str) -> dict[str, object]:
             "--launch-service",
             name,
         ],
-        "volumes": [
-            {
-                "type": "volume",
-                "source": "acceptance-canonical",
-                "target": "/app/acceptance/canonical",
-                "read_only": True,
-                "volume": {},
-            },
-            {
-                "type": "bind",
-                "source": str(MANIFEST_PATH),
-                "target": "/acceptance/launch/manifest.json",
-                "read_only": True,
-                "bind": {"create_host_path": False},
-            },
-        ],
+        "volumes": volumes,
     }
 
 
@@ -82,23 +116,39 @@ def _compose(canary_value: str = "PRIVATE-CANARY") -> dict[str, object]:
         "read_only": True,
         "volume": {},
     }
+    core_security = {
+        "read_only": True,
+        "cap_drop": ["ALL"],
+        "security_opt": ["no-new-privileges:true"],
+        "tmpfs": [
+            "/tmp:size=64m,mode=1777",  # noqa: S108
+            "/app/run:size=16m,mode=0700",
+        ],
+    }
     services: dict[str, object] = {
         "api": {
+            **core_security,
             "image": IMAGE_REFERENCE,
             "networks": {"acceptance-backend": None, "acceptance-edge": None},
-            "read_only": True,
+            "user": "10001:10001",
+            "secrets": [
+                {
+                    "source": "anva_bootstrap_secret",
+                    "target": "/run/secrets/anva_bootstrap_secret",
+                }
+            ],
             "volumes": [canonical],
         },
         "worker": {
+            **core_security,
             "image": IMAGE_REFERENCE,
             "networks": {"acceptance-backend": None},
-            "read_only": True,
             "volumes": [canonical],
         },
         "mcp": {
+            **core_security,
             "image": IMAGE_REFERENCE,
             "networks": {"acceptance-backend": None, "acceptance-edge": None},
-            "read_only": True,
             "volumes": [canonical],
         },
     }
@@ -139,7 +189,10 @@ def _inputs(tmp_path: Path, compose: dict[str, object] | None = None) -> tuple[P
             [
                 {
                     "Id": f"sha256:{IMAGE_SHA}",
-                    "Config": {"Labels": {"org.opencontainers.image.revision": COMMIT}},
+                    "Config": {
+                        "User": "anva",
+                        "Labels": {"org.opencontainers.image.revision": COMMIT},
+                    },
                 }
             ]
         ),
@@ -247,7 +300,7 @@ def test_schema_service_inventory_matches_runtime_and_old_valid_manifest_is_acce
                     dict[str, object],
                     cast(dict[str, object], value["services"])["acceptance-product-start"],
                 )["volumes"],
-            )[1].__setitem__("read_only", False),
+            )[-1].__setitem__("read_only", False),
             "launch_bind_mismatch",
         ),
         (
@@ -259,8 +312,45 @@ def test_schema_service_inventory_matches_runtime_and_old_valid_manifest_is_acce
                         dict[str, object],
                         cast(dict[str, object], value["services"])["acceptance-product-start"],
                     )["volumes"],
-                )[1]["bind"],
+                )[-1]["bind"],
             ).__setitem__("create_host_path", True),
+            "launch_bind_mismatch",
+        ),
+        (
+            lambda value: cast(
+                dict[str, object], cast(dict[str, object], value["services"])["api"]
+            ).__setitem__("privileged", True),
+            "launch_runtime_mismatch",
+        ),
+        (
+            lambda value: cast(
+                dict[str, object], cast(dict[str, object], value["services"])["api"]
+            ).__setitem__("cap_add", ["SYS_ADMIN"]),
+            "launch_runtime_mismatch",
+        ),
+        (
+            lambda value: cast(
+                dict[str, object], cast(dict[str, object], value["services"])["api"]
+            ).__setitem__("devices", ["/dev/sda:/dev/sda"]),
+            "launch_runtime_mismatch",
+        ),
+        (
+            lambda value: cast(
+                list[dict[str, object]],
+                cast(dict[str, object], cast(dict[str, object], value["services"])["api"])[
+                    "volumes"
+                ],
+            ).append(_bind("/var/run/docker.sock")),
+            "launch_bind_mismatch",
+        ),
+        (
+            lambda value: cast(
+                list[dict[str, object]],
+                cast(
+                    dict[str, object],
+                    cast(dict[str, object], value["services"])["acceptance-product-start"],
+                )["volumes"],
+            ).append(_bind("/private/oracle")),
             "launch_bind_mismatch",
         ),
     ],
@@ -275,6 +365,39 @@ def test_generator_fails_closed_for_service_image_runtime_and_bind_changes(
     with pytest.raises(AcceptanceProvenanceError) as captured:
         _generate(tmp_path, compose)
     assert captured.value.reason_code == reason_code
+
+
+@pytest.mark.unit
+def test_generator_rejects_root_image_default_user(tmp_path: Path) -> None:
+    resolved, inspect, provenance = _inputs(tmp_path)
+    inspect.write_text(
+        json.dumps(
+            [
+                {
+                    "Id": f"sha256:{IMAGE_SHA}",
+                    "Config": {
+                        "User": "0:10001",
+                        "Labels": {"org.opencontainers.image.revision": COMMIT},
+                    },
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AcceptanceProvenanceError) as captured:
+        generate_launch_manifest(
+            resolved,
+            inspect,
+            build_provenance_path=provenance,
+            product_commit=COMMIT,
+            build_input_sha256=BUILD_INPUT,
+            product_image_sha256=IMAGE_SHA,
+            image_reference=IMAGE_REFERENCE,
+            launch_manifest_source=MANIFEST_PATH,
+        )
+
+    assert captured.value.reason_code == "launch_image_mismatch"
 
 
 @pytest.mark.unit
@@ -424,3 +547,13 @@ def test_missing_and_mutable_manifest_emit_private_pre_state_diagnostic(tmp_path
             expected_service="acceptance-product-start",
         )
     assert captured.value.reason_code == "launch_manifest_permissions"
+
+    inaccessible = _PermissionDeniedPath("/PRIVATE/HOST/PATH/manifest.json")
+    with pytest.raises(AcceptanceRunnerError) as inaccessible_error:
+        AcceptanceRunner(replace(config, launch_manifest_path=inaccessible))
+    assert inaccessible_error.value.reason_code == "launch_manifest_permissions"
+    assert "PRIVATE" not in str(inaccessible_error.value)
+    diagnostic = json.loads((state / "operator-diagnostic.json").read_bytes())
+    assert diagnostic["stage"] == "launch_manifest_preflight"
+    assert diagnostic["reason_code"] == "launch_manifest_permissions"
+    assert "PRIVATE" not in json.dumps(diagnostic)

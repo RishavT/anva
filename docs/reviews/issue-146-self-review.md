@@ -40,6 +40,20 @@ CLI rejection.
   stable `launch_manifest_preflight` stage and allowlisted reason code.
 - No database model, migration, HTTP request, MCP request, or authorization behavior changes.
 
+## Independent-review remediation
+
+The first exact-head reviewer blocked the change after proving that an `api` service with
+privileged/Docker-socket access and an acceptance phase with an added writable oracle bind could
+still generate a manifest. The generator now uses closed service-field allowlists and exact
+per-service mount inventories across all seven services. Unknown privilege, capability, device,
+network, or mount fields fail closed; expected binds have exact target/type/write-mode rules; the
+canonical volume and API bootstrap secret are exact; Docker-socket sources are forbidden.
+
+The same review found that `PermissionError` during manifest metadata inspection escaped the
+provenance boundary. Every metadata `OSError` is now converted to a path-free stable permissions
+reason, allowing the runner to write its private pre-state diagnostic and retaining generic public
+CLI output. Regression tests reproduce both reviewer findings.
+
 ## Verification
 
 - Exact host-resolved Make generation produced mode-`0444` output twice with identical SHA-256;
@@ -48,10 +62,13 @@ CLI rejection.
   `launch_manifest_missing` diagnostic. The generated manifest advanced past preflight.
 - The documented Compose/Make flow then completed real bootstrap, API, worker, and official MCP
   client operations through `AWAITING_EXTERNAL_REVIEW`; scoped services and volumes were removed.
-- Focused launch/Compose/contract tests passed (42 plus the later 24-test tamper/count rerun).
+- Post-remediation launch/Compose/contract/runner tests passed 79 checks with four expected
+  Docker-CLI-unavailable skips; both the base and optional-case real resolved Compose models passed
+  the tightened generator.
 - Runner boundary, resume, and permission integrations passed 28 tests with one expected
   Docker-in-container skip.
-- The unit marker passed 1,150 tests with five expected Docker-CLI-unavailable skips. The combined
+- The post-remediation unit marker passed 1,161 tests with five expected Docker-CLI-unavailable
+  skips. The combined
   integration/contract/smoke gate passed 326 tests before exposing one stale artifact-count
   assertion; after changing 33 to 35, the exact failed contract and focused launch set passed.
 - Ruff passed across `src` and `tests`; strict mypy passed across 211 source files; all 35 generated

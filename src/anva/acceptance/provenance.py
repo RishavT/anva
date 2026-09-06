@@ -112,6 +112,11 @@ def attest_launch_manifest(
             "Anva launch manifest is missing; run `make acceptance-launch-manifest`",
             reason_code="launch_manifest_missing",
         ) from error
+    except OSError as error:
+        raise AcceptanceProvenanceError(
+            "Anva launch manifest metadata cannot be read",
+            reason_code="launch_manifest_permissions",
+        ) from error
     if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
         raise AcceptanceProvenanceError(
             "Anva launch manifest must be a regular non-symlink file",

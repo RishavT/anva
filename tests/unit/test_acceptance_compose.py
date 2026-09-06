@@ -350,6 +350,7 @@ def test_public_launch_manifest_make_path_is_hardened_and_start_uses_it() -> Non
     assert "--cap-drop ALL" in body
     assert "--security-opt no-new-privileges" in body
     assert '--user "$$(id -u):$$(id -g)"' in body
+    assert 'test "$$(id -u)" -ne 0' in body
     assert "readonly" in body
     assert "chmod 0444" in body
     assert "config --format json" in body

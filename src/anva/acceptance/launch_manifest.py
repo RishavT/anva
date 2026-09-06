@@ -28,6 +28,79 @@ LAUNCH_PHASES = frozenset(
 )
 LAUNCH_MANIFEST_TARGET = "/acceptance/launch/manifest.json"
 CANONICAL_ROOT_TARGET = "/app/acceptance/canonical"
+CASE_TARGET = "/acceptance/case/case.json"
+CORE_RUNTIME_KEYS = frozenset(
+    {
+        "build",
+        "cap_drop",
+        "command",
+        "depends_on",
+        "entrypoint",
+        "environment",
+        "healthcheck",
+        "image",
+        "logging",
+        "networks",
+        "read_only",
+        "security_opt",
+        "tmpfs",
+        "volumes",
+    }
+)
+CORE_SERVICE_RUNTIME_KEYS = {
+    "api": CORE_RUNTIME_KEYS | {"secrets", "user"},
+    "worker": CORE_RUNTIME_KEYS,
+    "mcp": CORE_RUNTIME_KEYS,
+}
+PHASE_RUNTIME_KEYS = frozenset(
+    {
+        "build",
+        "cap_drop",
+        "command",
+        "entrypoint",
+        "environment",
+        "image",
+        "logging",
+        "mem_limit",
+        "memswap_limit",
+        "networks",
+        "pids_limit",
+        "profiles",
+        "read_only",
+        "restart",
+        "security_opt",
+        "tmpfs",
+        "user",
+        "volumes",
+    }
+)
+PHASE_MOUNT_RULES: dict[str, dict[str, tuple[str, bool]]] = {
+    "acceptance-product-start": {
+        CANONICAL_ROOT_TARGET: ("volume", True),
+        "/acceptance/state": ("bind", False),
+        "/acceptance/credentials": ("bind", False),
+        LAUNCH_MANIFEST_TARGET: ("bind", True),
+    },
+    "acceptance-review-request": {
+        CANONICAL_ROOT_TARGET: ("volume", True),
+        "/acceptance/state": ("bind", False),
+        "/acceptance/handoff": ("bind", False),
+        LAUNCH_MANIFEST_TARGET: ("bind", True),
+    },
+    "acceptance-review-submit": {
+        CANONICAL_ROOT_TARGET: ("volume", True),
+        "/acceptance/state": ("bind", False),
+        "/acceptance/handoff": ("bind", False),
+        "/acceptance/reviewer": ("bind", True),
+        LAUNCH_MANIFEST_TARGET: ("bind", True),
+    },
+    "acceptance-product-finalize": {
+        CANONICAL_ROOT_TARGET: ("volume", True),
+        "/acceptance/state": ("bind", False),
+        "/acceptance/results": ("bind", False),
+        LAUNCH_MANIFEST_TARGET: ("bind", True),
+    },
+}
 SAFE_RUNTIME_KEYS = (
     "cap_drop",
     "command",
@@ -113,6 +186,96 @@ def _service_dict(services: Mapping[str, object], name: str) -> dict[str, object
     return cast(dict[str, object], value)
 
 
+def _validate_closed_runtime(name: str, service: Mapping[str, object]) -> None:
+    allowed = PHASE_RUNTIME_KEYS if name in LAUNCH_PHASES else CORE_SERVICE_RUNTIME_KEYS[name]
+    unknown = set(service) - allowed
+    if unknown:
+        raise _reject("launch_runtime_mismatch", f"Launch service {name} runtime fields differ")
+    if (
+        service.get("read_only") is not True
+        or service.get("cap_drop") != ["ALL"]
+        or service.get("security_opt") != ["no-new-privileges:true"]
+    ):
+        raise _reject("launch_runtime_mismatch", f"Launch service {name} security posture differs")
+    tmpfs = service.get("tmpfs")
+    if (
+        not isinstance(tmpfs, list)
+        or len(tmpfs) != 2
+        or {str(item).split(":", 1)[0] for item in tmpfs} != {"/tmp", "/app/run"}  # noqa: S108
+    ):
+        raise _reject("launch_runtime_mismatch", f"Launch service {name} tmpfs inventory differs")
+
+
+def _validate_mounts(
+    name: str,
+    service: Mapping[str, object],
+    *,
+    launch_manifest_source: Path,
+) -> None:
+    volumes = service.get("volumes")
+    if not isinstance(volumes, list):
+        raise _reject("launch_bind_mismatch", f"Launch service {name} mounts are invalid")
+    expected = dict(PHASE_MOUNT_RULES.get(name, {CANONICAL_ROOT_TARGET: ("volume", True)}))
+    command = service.get("command")
+    has_case_argument = (
+        isinstance(command, list)
+        and "--case" in command
+        and command.index("--case") + 1 < len(command)
+        and command[command.index("--case") + 1] == CASE_TARGET
+    )
+    if has_case_argument:
+        expected[CASE_TARGET] = ("bind", True)
+    observed: set[str] = set()
+    for value in volumes:
+        if not isinstance(value, dict):
+            raise _reject("launch_bind_mismatch", f"Launch service {name} mount is invalid")
+        volume = cast(dict[str, object], value)
+        target = volume.get("target")
+        if not isinstance(target, str) or target in observed or target not in expected:
+            raise _reject("launch_bind_mismatch", f"Launch service {name} mount inventory differs")
+        observed.add(target)
+        expected_type, expected_read_only = expected[target]
+        if (
+            volume.get("type") != expected_type
+            or (volume.get("read_only", False) is True) is not expected_read_only
+        ):
+            raise _reject("launch_bind_mismatch", f"Launch service {name} mount mode differs")
+        source = volume.get("source")
+        if expected_type == "volume":
+            if (
+                set(volume) != {"type", "source", "target", "read_only", "volume"}
+                or source != "acceptance-canonical"
+                or volume.get("volume") != {}
+            ):
+                raise _reject("launch_bind_mismatch", f"Launch service {name} volume differs")
+            continue
+        if set(volume) - {"type", "source", "target", "read_only", "bind"}:
+            raise _reject("launch_bind_mismatch", f"Launch service {name} bind fields differ")
+        bind = volume.get("bind")
+        if (
+            not isinstance(source, str)
+            or not Path(source).is_absolute()
+            or "docker.sock" in source
+            or not isinstance(bind, dict)
+            or bind != {"create_host_path": False}
+        ):
+            raise _reject("launch_bind_mismatch", f"Launch service {name} bind differs")
+        if target == LAUNCH_MANIFEST_TARGET:
+            try:
+                source_path = Path(source).resolve(strict=False)
+                expected_path = launch_manifest_source.resolve(strict=False)
+            except OSError as error:
+                raise _reject(
+                    "launch_bind_mismatch", f"Launch service {name} manifest bind is invalid"
+                ) from error
+            if source_path != expected_path:
+                raise _reject(
+                    "launch_bind_mismatch", f"Launch service {name} manifest bind differs"
+                )
+    if observed != set(expected):
+        raise _reject("launch_bind_mismatch", f"Launch service {name} mount inventory differs")
+
+
 def _validate_networks(compose: Mapping[str, object], services: Mapping[str, object]) -> None:
     networks = compose.get("networks")
     if not isinstance(networks, dict):
@@ -178,47 +341,7 @@ def _validate_phase(
             ) from error
         if index + 1 >= len(command) or command[index + 1] != expected:
             raise _reject("launch_service_mismatch", f"Launch service {name} {flag} differs")
-    volumes = service.get("volumes")
-    if not isinstance(volumes, list):
-        raise _reject("launch_bind_mismatch", f"Launch service {name} mounts are invalid")
-    manifest_mounts: list[dict[str, object]] = []
-    canonical_mount = False
-    for value in volumes:
-        if not isinstance(value, dict):
-            raise _reject("launch_bind_mismatch", f"Launch service {name} mount is invalid")
-        volume = cast(dict[str, object], value)
-        source = str(volume.get("source", ""))
-        target = volume.get("target")
-        if "docker.sock" in source or "docker.sock" in str(target):
-            raise _reject("launch_bind_mismatch", f"Launch service {name} exposes Docker")
-        if volume.get("type") == "bind":
-            bind = volume.get("bind")
-            if not isinstance(bind, dict) or bind.get("create_host_path") is not False:
-                raise _reject("launch_bind_mismatch", f"Launch service {name} bind may be created")
-        if target == LAUNCH_MANIFEST_TARGET:
-            manifest_mounts.append(volume)
-        if (
-            target == CANONICAL_ROOT_TARGET
-            and volume.get("type") == "volume"
-            and volume.get("read_only") is True
-        ):
-            canonical_mount = True
-    if len(manifest_mounts) != 1 or not canonical_mount:
-        raise _reject("launch_bind_mismatch", f"Launch service {name} protected mounts differ")
-    manifest_mount = manifest_mounts[0]
-    try:
-        source_path = Path(str(manifest_mount.get("source", ""))).resolve(strict=False)
-        expected_path = launch_manifest_source.resolve(strict=False)
-    except OSError as error:
-        raise _reject(
-            "launch_bind_mismatch", f"Launch service {name} manifest bind is invalid"
-        ) from error
-    if (
-        manifest_mount.get("type") != "bind"
-        or manifest_mount.get("read_only") is not True
-        or source_path != expected_path
-    ):
-        raise _reject("launch_bind_mismatch", f"Launch service {name} manifest bind differs")
+    _validate_mounts(name, service, launch_manifest_source=launch_manifest_source)
 
 
 def generate_launch_manifest(
@@ -256,10 +379,13 @@ def generate_launch_manifest(
     image_id = f"sha256:{product_image_sha256}"
     config = image_values.get("Config")
     labels = config.get("Labels") if isinstance(config, dict) else None
+    image_user = str(config.get("User", "")) if isinstance(config, dict) else ""
+    image_uid = image_user.split(":", 1)[0].lower()
     if (
         image_values.get("Id") != image_id
         or not isinstance(labels, dict)
         or labels.get("org.opencontainers.image.revision") != product_commit
+        or image_uid in {"", "0", "root"}
     ):
         raise _reject("launch_image_mismatch", "Docker image does not match exact identity pins")
 
@@ -283,22 +409,27 @@ def generate_launch_manifest(
     manifest_services: dict[str, object] = {}
     for name in sorted(REQUIRED_LAUNCH_SERVICES):
         service = _service_dict(services, name)
+        _validate_closed_runtime(name, service)
         if service.get("image") != image_reference:
             raise _reject("launch_image_reference_mismatch", f"Launch service {name} image differs")
-        if service.get("ports"):
-            raise _reject("launch_runtime_mismatch", f"Launch service {name} publishes ports")
-        volumes = service.get("volumes", [])
-        if not isinstance(volumes, list) or not any(
-            isinstance(value, dict)
-            and value.get("target") == CANONICAL_ROOT_TARGET
-            and value.get("read_only") is True
-            for value in volumes
-        ):
-            raise _reject(
-                "launch_bind_mismatch", f"Launch service {name} lacks canonical read-only data"
-            )
         if name in LAUNCH_PHASES:
             _validate_phase(name, service, launch_manifest_source=launch_manifest_source)
+        else:
+            _validate_mounts(name, service, launch_manifest_source=launch_manifest_source)
+            if name == "api":
+                if service.get("secrets") != [
+                    {
+                        "source": "anva_bootstrap_secret",
+                        "target": "/run/secrets/anva_bootstrap_secret",
+                    }
+                ]:
+                    raise _reject("launch_runtime_mismatch", "Launch service api secret differs")
+                user = service.get("user")
+                if (
+                    not isinstance(user, str)
+                    or re.fullmatch(r"[1-9][0-9]*:[1-9][0-9]*", user) is None
+                ):
+                    raise _reject("launch_runtime_mismatch", "Launch service api is not non-root")
         identity = _runtime_identity(service)
         runtime[name] = identity
         manifest_services[name] = {

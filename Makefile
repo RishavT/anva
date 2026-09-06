@@ -624,6 +624,7 @@ acceptance-launch-manifest: acceptance-identity-preflight
 		exit 0; \
 	fi; \
 	state_dir="$(ANVA_ACCEPTANCE_STATE_DIR)"; \
+	test "$$(id -u)" -ne 0 || { echo "Launch manifest generation must run as a non-root host user" >&2; exit 2; }; \
 	test -d "$$state_dir" && test ! -L "$$state_dir" || { echo "ANVA_ACCEPTANCE_STATE_DIR must be a pre-created private directory" >&2; exit 2; }; \
 	test -z "$$(find "$$state_dir" -maxdepth 0 -perm /077 -print -quit)" || { echo "ANVA_ACCEPTANCE_STATE_DIR must not grant group/other permissions (use chmod 0700)" >&2; exit 2; }; \
 	test -w "$$(dirname "$$manifest")" || { echo "Launch manifest parent directory must be writable" >&2; exit 2; }; \
