@@ -264,16 +264,27 @@ class ContextCompleteness:
     complete: bool = True
 
     def as_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "version": CONTEXT_SCAN_VERSION,
             "ordering": "kind,id",
-            "eligible_assertions": self.assertion_count,
-            "eligible_conflicts": self.conflict_count,
             "processed_rows": self.processed_count,
             "digest": self.digest,
             "complete": self.complete,
             "page_size": CONTEXT_SCAN_PAGE_SIZE,
         }
+        if self.complete:
+            payload.update(
+                exact_eligible_assertions=self.assertion_count,
+                exact_eligible_conflicts=self.conflict_count,
+                exact_digest=self.digest,
+            )
+        else:
+            payload.update(
+                partial_retained_assertions=self.assertion_count,
+                partial_retained_conflicts=self.conflict_count,
+                partial_digest=self.digest,
+            )
+        return payload
 
 
 class ScannedCandidates(list[PacketCandidate]):
@@ -800,7 +811,11 @@ def _assertion_candidates(
         page_query = eligible
         if last_id is not None:
             page_query = page_query.filter(id__gt=last_id)
-        assertions = list(page_query[:CONTEXT_SCAN_PAGE_SIZE])
+        remaining = CONTEXT_SCAN_MAX_ROWS - scanned
+        if remaining <= 0:
+            candidates.complete = False
+            break
+        assertions = list(page_query[: min(CONTEXT_SCAN_PAGE_SIZE, remaining + 1)])
         if not assertions:
             break
         scanned += len(assertions)
@@ -814,10 +829,14 @@ def _assertion_candidates(
             break
         last_id = assertions[-1].id
         provenance_by_assertion: dict[uuid.UUID, tuple[CitationCandidate, ...]] = {}
-        provenance_rows = _authorized_provenance_for_authorization(
-            actor=actor,
-            authorization=authorization,
-            assertion_ids={assertion.id for assertion in assertions},
+        provenance_rows = (
+            _authorized_provenance_for_authorization(
+                actor=actor,
+                authorization=authorization,
+                assertion_ids={assertion.id for assertion in assertions},
+            )
+            .order_by("assertion_id", "observed_at", "id")
+            .distinct("assertion_id")
         )
         for provenance in provenance_rows:
             existing = provenance_by_assertion.get(provenance.assertion_id, ())
@@ -1287,7 +1306,11 @@ def _conflict_candidates(
         page_query = ordered_conflicts
         if last_id is not None:
             page_query = page_query.filter(id__gt=last_id)
-        page = list(page_query[:CONTEXT_SCAN_PAGE_SIZE])
+        remaining = CONTEXT_SCAN_MAX_ROWS - len(selected_assertion_ids) - len(bounded_conflicts)
+        if remaining <= 0:
+            scan_complete = False
+            break
+        page = list(page_query[: min(CONTEXT_SCAN_PAGE_SIZE, remaining + 1)])
         if not page:
             break
         bounded_conflicts.extend(page)
@@ -1312,11 +1335,16 @@ def _conflict_candidates(
     ordered_endpoint_ids = sorted(conflict_endpoint_ids, key=str)
     for offset in range(0, len(ordered_endpoint_ids), CONTEXT_SCAN_PAGE_SIZE * 2):
         endpoint_page = set(ordered_endpoint_ids[offset : offset + CONTEXT_SCAN_PAGE_SIZE * 2])
-        for provenance in _authorized_provenance(
-            actor=actor,
-            repository_id=repository_id,
-            assertion_ids=endpoint_page,
-        ):
+        provenance_rows = (
+            _authorized_provenance(
+                actor=actor,
+                repository_id=repository_id,
+                assertion_ids=endpoint_page,
+            )
+            .order_by("assertion_id", "observed_at", "id")
+            .distinct("assertion_id")
+        )
+        for provenance in provenance_rows:
             provenance_by_assertion.setdefault(provenance.assertion_id, provenance)
     for conflict in bounded_conflicts:
         matched_facets = tuple(
@@ -1923,6 +1951,11 @@ def build_context_packet(
         repository_id=repository_id,
     )
     watermark = _watermark(actor=actor, repository_id=repository_id)
+    if connection.vendor == "postgresql":
+        with connection.cursor() as cursor:
+            cursor.execute("SET LOCAL statement_timeout = %s", (4_000,))
+            cursor.execute("SET LOCAL lock_timeout = %s", (1_000,))
+            cursor.execute("SET LOCAL idle_in_transaction_session_timeout = %s", (5_000,))
     normalized_request: dict[str, object] = {
         "task": normalized_task,
         "phase": normalized_phase,

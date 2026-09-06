@@ -902,10 +902,14 @@ CONTEXT_PACKET: Final[dict[str, object]] = _closed(
             {
                 "version": {"type": "string", "minLength": 1, "maxLength": 100},
                 "ordering": {"type": "string", "const": "kind,id"},
-                "eligible_assertions": {"type": "integer", "minimum": 0},
-                "eligible_conflicts": {"type": "integer", "minimum": 0},
+                "exact_eligible_assertions": {"type": "integer", "minimum": 0},
+                "exact_eligible_conflicts": {"type": "integer", "minimum": 0},
+                "partial_retained_assertions": {"type": "integer", "minimum": 0},
+                "partial_retained_conflicts": {"type": "integer", "minimum": 0},
                 "processed_rows": {"type": "integer", "minimum": 0},
                 "digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+                "exact_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+                "partial_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
                 "complete": {"type": "boolean"},
                 "page_size": {"type": "integer", "minimum": 1, "maximum": 1_000},
                 "bindings": _closed(
@@ -928,8 +932,6 @@ CONTEXT_PACKET: Final[dict[str, object]] = _closed(
             (
                 "version",
                 "ordering",
-                "eligible_assertions",
-                "eligible_conflicts",
                 "processed_rows",
                 "digest",
                 "complete",

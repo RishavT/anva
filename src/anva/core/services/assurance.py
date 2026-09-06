@@ -13,12 +13,13 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import cast
 
-from django.db import transaction
+from django.db import DatabaseError, transaction
 from django.db.models import F, Q
 from django.utils import timezone
 
 from anva.contracts import validate_knowledge_changes, validate_payload
 from anva.core.exceptions import (
+    DomainOperationError,
     IdempotencyConflictError,
     LeaseConflictError,
     ResourceNotFoundError,
@@ -66,8 +67,11 @@ from anva.core.services.authorization import (
 )
 from anva.core.services.context import ActorContext
 from anva.core.services.context_packets import (
+    CONTEXT_SCAN_VERSION,
     PacketBudget,
     RetrievalFacet,
+    _authorization_snapshot,
+    _watermark,
     build_context_packet,
     seal_actor_scope,
 )
@@ -207,7 +211,7 @@ class DiffIngestionResult:
 @dataclass(frozen=True, slots=True)
 class AssuranceStartResult:
     run: AssuranceRun
-    evaluator_task: EvaluatorTask
+    evaluator_task: EvaluatorTask | None
     created: bool
 
 
@@ -1403,14 +1407,10 @@ def start_assurance(
         f"Independent assurance for pull request {revision.pull_request.number}. "
         f"Server-derived change facets: {', '.join(facet.label for facet in retrieval_facets)}."
     )
-    packet, _ = build_context_packet(
-        actor=actor,
-        repository_id=repository.id,
-        task=context_task,
-        phase="ASSURANCE",
-        budget=PacketBudget(max_items=50, max_tokens=8_000, max_bytes=100_000),
-        retrieval_facets=retrieval_facets,
+    _context_scopes, context_authorization_hash = _authorization_snapshot(
+        actor=actor, repository_id=repository.id
     )
+    context_watermark = _watermark(actor=actor, repository_id=repository.id)
     requirements_hash = content_hash(requirements)
     policy_bundle_hash = content_hash(
         {
@@ -1432,12 +1432,20 @@ def start_assurance(
         "policy_evaluation_input_hash": policy_evaluation.input_hash,
         "policy_evaluation_output_hash": policy_evaluation.output_hash,
         "evidence_bundle_hash": evidence_bundle_hash,
-        "context_artifact_hash": packet.artifact.content_hash,
-        "context_versions": {
-            "retrieval": packet.retrieval_algorithm_version,
-            "index": packet.index_version,
-            "embedding": packet.embedding_version,
-        },
+        "context_request": context_task,
+        "context_authorization_hash": context_authorization_hash,
+        "context_watermark": context_watermark.value,
+        "context_query_version": CONTEXT_SCAN_VERSION,
+        "context_facets": [
+            {
+                "label": facet.label,
+                "query": facet.query,
+                "anchors": facet.anchors,
+                "required_if_matched": facet.required_if_matched,
+                "coverage_incomplete": facet.coverage_incomplete,
+            }
+            for facet in retrieval_facets
+        ],
         "deterministic_checks": checks,
         "reference_time": reference_time.isoformat(),
         "diff_parser_version": PARSER_VERSION,
@@ -1463,11 +1471,11 @@ def start_assurance(
         .first()
     )
     if existing is not None:
-        task = EvaluatorTask.objects.get(
+        task = EvaluatorTask.objects.filter(
             organization_id=actor.organization_id,
             assurance_run=existing,
-        )
-        if (
+        ).first()
+        if task is not None and (
             task.reviewer_service_identity_id != bound_reviewer_id
             or task.reviewer_token_id != bound_reviewer_token_id
         ):
@@ -1500,12 +1508,6 @@ def start_assurance(
         cast(dict[str, object], policy_evaluation.input_payload)["policy_versions"],
     )
     scalar_policy_version = max(cast(int, item["version"]) for item in policy_versions)
-    packet_limitations = cast(list[str], packet.limitations)
-    required_run_limitations = (
-        *((REQUIREMENT_TRACEABILITY_LIMITATION,) if work_revision is None else ()),
-        *_required_context_limitations(packet_limitations),
-        *_packet_accounting_limitations(packet_limitations),
-    )
     run = AssuranceRun.objects.create(
         organization=organization,
         initiated_by_actor_type=actor.actor_type,
@@ -1519,8 +1521,6 @@ def start_assurance(
         head_commit=revision.head_commit,
         policy_version=scalar_policy_version,
         diff_artifact=revision.diff_artifact,
-        context_packet=packet,
-        context_artifact=packet.artifact,
         policy_evaluation=policy_evaluation,
         trigger_key=trigger_key,
         input_hash=input_digest,
@@ -1529,13 +1529,8 @@ def start_assurance(
         evidence_bundle_hash=evidence_bundle_hash,
         evaluator_version=evaluator_version,
         prompt_version=prompt_version,
-        limitations=_bounded_limitations(
-            _project_external_limitations(
-                cast(list[str], revision.limitations),
-                prefix=REVISION_LIMITATION_PREFIX,
-            ),
-            packet_limitations,
-            required=required_run_limitations,
+        limitations=_project_external_limitations(
+            cast(list[str], revision.limitations), prefix=REVISION_LIMITATION_PREFIX
         ),
     )
     record_transition(
@@ -1548,6 +1543,63 @@ def start_assurance(
         revision=run.revision,
         metadata={"head_commit": run.head_commit},
     )
+    try:
+        with transaction.atomic():
+            packet, _ = build_context_packet(
+                actor=actor,
+                repository_id=repository.id,
+                task=context_task,
+                phase="ASSURANCE",
+                budget=PacketBudget(max_items=50, max_tokens=8_000, max_bytes=100_000),
+                retrieval_facets=retrieval_facets,
+            )
+    except (DomainOperationError, DatabaseError):
+        blockers = (
+            f"{REQUIRED_ASSURANCE_CONTEXT_LIMITATION_PREFIX} "
+            "CONFLICT_REVIEW_REQUIRED / ASSURANCE_CONTEXT_INCOMPLETE"
+        )
+        ReadinessDecision.objects.create(
+            organization=organization,
+            assurance_run=run,
+            status=ReadinessDecision.Status.BLOCKED,
+            reason_codes=["CONFLICT_REVIEW_REQUIRED", "ASSURANCE_CONTEXT_INCOMPLETE"],
+            input_hash=content_hash(
+                {"run_input_hash": run.input_hash, "reason": "ASSURANCE_CONTEXT_INCOMPLETE"}
+            ),
+        )
+        run.failure_code = "ASSURANCE_CONTEXT_INCOMPLETE"
+        run.readiness = ReadinessDecision.Status.BLOCKED
+        run.limitations = _bounded_limitations(cast(list[str], run.limitations), [blockers])
+        run.completed_at = timezone.now()
+        run.state = AssuranceRun.State.FAILED
+        run.revision += 1
+        run.save(
+            update_fields=[
+                "failure_code",
+                "readiness",
+                "limitations",
+                "completed_at",
+                "state",
+                "revision",
+                "updated_at",
+            ]
+        )
+        return AssuranceStartResult(run, None, True)
+
+    packet_limitations = cast(list[str], packet.limitations)
+    required_run_limitations = (
+        *((REQUIREMENT_TRACEABILITY_LIMITATION,) if work_revision is None else ()),
+        *_required_context_limitations(packet_limitations),
+        *_packet_accounting_limitations(packet_limitations),
+    )
+    run.context_packet = packet
+    run.context_artifact = packet.artifact
+    run.limitations = _bounded_limitations(
+        cast(list[str], run.limitations),
+        packet_limitations,
+        required=required_run_limitations,
+    )
+    run.save(update_fields=["context_packet", "context_artifact", "limitations", "updated_at"])
     check_rows: list[AssuranceCheck] = []
     for position, check in enumerate(checks, start=1):
         check_hash = content_hash(
@@ -2787,6 +2839,16 @@ def _finalize_evaluator_failure(
 ) -> None:
     """Persist a terminal evaluator failure without inventing model observations."""
     run = task.assurance_run
+    failure_status = (
+        ReadinessDecision.Status.BLOCKED
+        if failure_code == "ASSURANCE_CONTEXT_INCOMPLETE"
+        else ReadinessDecision.Status.FAILED
+    )
+    reason_codes = (
+        ["CONFLICT_REVIEW_REQUIRED", "ASSURANCE_CONTEXT_INCOMPLETE"]
+        if failure_code == "ASSURANCE_CONTEXT_INCOMPLETE"
+        else [failure_code]
+    )
     if run.state in {
         AssuranceRun.State.STALE,
         AssuranceRun.State.CANCELLED,
@@ -2803,8 +2865,8 @@ def _finalize_evaluator_failure(
         organization=run.organization,
         assurance_run=run,
         defaults={
-            "status": ReadinessDecision.Status.FAILED,
-            "reason_codes": [failure_code],
+            "status": failure_status,
+            "reason_codes": reason_codes,
             "input_hash": content_hash(failure_input),
         },
     )
@@ -2819,8 +2881,8 @@ def _finalize_evaluator_failure(
     )
     markdown, rendered_html, limitations = _render_report(
         run=run,
-        status=ReadinessDecision.Status.FAILED,
-        reasons=[failure_code],
+        status=failure_status,
+        reasons=reason_codes,
         findings=(),
         limitations=limitations,
     )
@@ -2836,8 +2898,8 @@ def _finalize_evaluator_failure(
         "repository_id": str(run.repository_id),
         "pull_request_revision_id": str(run.pull_request_revision_id),
         "head_commit": run.head_commit,
-        "readiness": ReadinessDecision.Status.FAILED,
-        "reason_codes": [failure_code],
+        "readiness": failure_status,
+        "reason_codes": reason_codes,
         "finding_fingerprints": [],
         "versions": {
             "diff": run.diff_artifact.content_hash if run.diff_artifact else "0" * 64,
@@ -2903,7 +2965,7 @@ def _finalize_evaluator_failure(
         ]
     )
     run.failure_code = failure_code
-    run.readiness = ReadinessDecision.Status.FAILED
+    run.readiness = failure_status
     run.limitations = limitations
     run.save(
         update_fields=["failure_code", "readiness", "limitations", "updated_at"],

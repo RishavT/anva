@@ -7894,11 +7894,15 @@
                 "pattern": "^[a-f0-9]{64}$",
                 "type": "string"
               },
-              "eligible_assertions": {
+              "exact_digest": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "exact_eligible_assertions": {
                 "minimum": 0,
                 "type": "integer"
               },
-              "eligible_conflicts": {
+              "exact_eligible_conflicts": {
                 "minimum": 0,
                 "type": "integer"
               },
@@ -7908,6 +7912,18 @@
               },
               "page_size": {
                 "minimum": 1,
+                "type": "integer"
+              },
+              "partial_digest": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "partial_retained_assertions": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "partial_retained_conflicts": {
+                "minimum": 0,
                 "type": "integer"
               },
               "processed_rows": {
@@ -7922,8 +7938,6 @@
             "required": [
               "version",
               "ordering",
-              "eligible_assertions",
-              "eligible_conflicts",
               "processed_rows",
               "digest",
               "complete",
