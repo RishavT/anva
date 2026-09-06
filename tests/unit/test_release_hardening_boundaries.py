@@ -274,6 +274,50 @@ def test_gnu_make_is_pinned_to_test_stage_only() -> None:
 
 
 @pytest.mark.unit
+def test_runtime_debian_packages_use_a_signed_immutable_snapshot_and_verify_install() -> None:
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+    base = dockerfile.split("FROM python:3.12-slim-trixie", 1)[1].split(
+        "ENV PYTHONDONTWRITEBYTECODE", 1
+    )[0]
+
+    assert "ARG DEBIAN_SNAPSHOT=20260827T000000Z" in base
+    assert "ARG OPENSSL_DEBIAN_VERSION=3.5.7-1~deb13u2" in base
+    assert "snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}/" in base
+    assert "snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}/" in base
+    assert base.count("check-valid-until=no") == 2
+    assert base.count("signed-by=/usr/share/keyrings/debian-archive-keyring.gpg") == 2
+    assert "Acquire::Check-Valid-Until" not in dockerfile
+    assert "/etc/apt/apt.conf.d/99snapshot" not in dockerfile
+    assert "trusted=yes" not in base
+    assert "apt-get upgrade" not in base
+    for package in ("libssl3t64", "openssl", "openssl-provider-legacy"):
+        assert f'"{package}=${{OPENSSL_DEBIAN_VERSION}}"' in base
+    assert 'apt-cache madison "${package}"' in base
+    assert "grep --fixed-strings --line-regexp" in base
+    assert "dpkg-query -W -f='${Version}'" in base
+    assert '"${package}")" = "${OPENSSL_DEBIAN_VERSION}"' in base
+
+
+@pytest.mark.unit
+def test_snapshot_pin_update_workflow_preserves_reproducibility_and_signatures() -> None:
+    guidance = " ".join(
+        Path("docs/releases/release-manifest.md").read_text(encoding="utf-8").split()
+    )
+
+    for requirement in (
+        "DEBIAN_SNAPSHOT",
+        "OPENSSL_DEBIAN_VERSION",
+        "change `DEBIAN_SNAPSHOT` and `OPENSSL_DEBIAN_VERSION` together",
+        "build from an empty project cache",
+        "OCI/build-input provenance",
+        "vulnerability scan",
+        "Never move only the snapshot timestamp",
+        "trusted=yes",
+    ):
+        assert requirement in guidance
+
+
+@pytest.mark.unit
 def test_release_builder_locks_build_backends_and_packages_offline() -> None:
     project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     build_requires = cast(list[str], project["build-system"]["requires"])

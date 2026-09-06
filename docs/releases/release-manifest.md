@@ -44,6 +44,16 @@ retaining them would make identical source builds produce different layer DiffID
 Changing the source revision or another declared build input must still change the
 image identity.
 
+The runtime's exact Debian packages are resolved from a timestamped Debian snapshot,
+not the moving distribution mirrors. APT continues to verify Debian's signed archive
+metadata; only the snapshot's inevitably expired `Valid-Until` timestamp is disabled.
+The build verifies every installed package version with `dpkg-query` before removing
+APT metadata. To update the pins, select a snapshot timestamp at or after the desired
+package first appeared, change `DEBIAN_SNAPSHOT` and `OPENSSL_DEBIAN_VERSION` together,
+build from an empty project cache, and retain the successful build transcript plus the
+resulting OCI/build-input provenance and vulnerability scan. Never move only the
+snapshot timestamp or replace signature verification with `trusted=yes`.
+
 Schema-v1 manifests remain useful only as historical evidence. They are intentionally
 rejected by the release verifier and must be regenerated as schema v2 from the exact
 candidate; editing or copying an old manifest is not a supported migration path.
