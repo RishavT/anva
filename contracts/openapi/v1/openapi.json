@@ -12680,7 +12680,7 @@
                       ],
                       "type": "object"
                     },
-                    "maxItems": 16,
+                    "maxItems": 50,
                     "type": "array"
                   },
                   "task": {
@@ -13721,7 +13721,7 @@
                           ],
                           "type": "object"
                         },
-                        "maxItems": 16,
+                        "maxItems": 50,
                         "type": "array"
                       },
                       "task": {

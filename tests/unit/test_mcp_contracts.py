@@ -58,12 +58,12 @@ def test_context_input_contract_closes_and_bounds_required_search_anchors() -> N
         "repository_id": str(uuid.uuid4()),
         "task": "preserve search result",
         "phase": "ASSURANCE",
-        "required_search_anchors": [_search_anchor(index) for index in range(16)],
+        "required_search_anchors": [_search_anchor(index) for index in range(50)],
     }
     assert not list(validator.iter_errors(request))
 
     too_many = deepcopy(request)
-    cast(list[dict[str, str]], too_many["required_search_anchors"]).append(_search_anchor(16))
+    cast(list[dict[str, str]], too_many["required_search_anchors"]).append(_search_anchor(50))
     assert list(validator.iter_errors(too_many))
 
     unknown = deepcopy(request)

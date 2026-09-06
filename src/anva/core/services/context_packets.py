@@ -69,8 +69,10 @@ MAX_ASSERTION_CANDIDATES = 500
 MAX_RELATIONSHIP_CANDIDATES = 200
 MAX_CONFLICT_CANDIDATES = 500
 MAX_RETRIEVAL_FACETS = 8
-MAX_REQUIRED_SEARCH_ANCHORS = 16
-MAX_REQUIRED_SEARCH_ANCHORS_BYTES = 16_384
+MAX_REQUIRED_SEARCH_ANCHORS = 50
+# One closed anchor is 373 canonical ASCII JSON bytes. The array adds 49 commas
+# and two brackets, so this is the smallest ceiling that admits 50 maximum values.
+MAX_REQUIRED_SEARCH_ANCHORS_BYTES = 18_701
 MAX_REQUIRED_PACKING_CANDIDATES = 10_000
 MAX_REQUIRED_PACKING_STATES = 50_000
 MAX_REQUIRED_PACKING_OPERATIONS = 1_000_000
@@ -410,7 +412,8 @@ def _merge_candidates(candidates: list[PacketCandidate]) -> list[PacketCandidate
     merged: list[PacketCandidate] = []
     for item_key in sorted(grouped):
         variants = grouped[item_key]
-        best = min(variants, key=_candidate_order)
+        anchored = [item for item in variants if item.required_search_anchor]
+        best = min(anchored or variants, key=_candidate_order)
         matched = tuple(sorted({label for item in variants for label in item.matched_facets}))
         required = tuple(
             sorted({label for item in variants for label in item.required_context_facets})
@@ -420,7 +423,7 @@ def _merge_candidates(candidates: list[PacketCandidate]) -> list[PacketCandidate
                 best,
                 matched_facets=matched,
                 required_context_facets=required,
-                required_search_anchor=any(item.required_search_anchor for item in variants),
+                required_search_anchor=bool(anchored),
             )
         )
     return merged

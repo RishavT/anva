@@ -525,7 +525,7 @@ class AcceptanceRunner:
                     continue
                 anchors.append({key: cast(str, item[key]) for key in identity_keys})
                 break
-        if len(anchors) > 16:
+        if len(anchors) > 50:
             raise AcceptanceRunnerError("Required search anchors exceed the public context bound")
         return anchors
 

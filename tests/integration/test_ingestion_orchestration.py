@@ -61,6 +61,9 @@ from anva.core.services.context import ActorContext
 from anva.core.services.context_packets import (
     PacketBudget,
     RequiredSearchAnchor,
+    RetrievalFacet,
+    _chunk_candidate,
+    _merge_candidates,
     _required_search_anchor_candidates,
     build_context_packet,
     get_context_packet,
@@ -311,7 +314,7 @@ def test_required_search_anchor_survives_dense_context_and_fails_closed(
         )
     assert len(resolver_queries) == 1
     assert len(resolved_anchors) == 1
-    assert len(resolved_anchors) <= 16
+    assert len(resolved_anchors) <= 50
 
     with CaptureQueriesContext(connection) as anchor_queries:
         packet, created = build_context_packet(
@@ -503,6 +506,65 @@ def test_required_search_anchor_survives_dense_context_and_fails_closed(
         required_search_anchors=(),
     )
     assert "required_search_anchors" not in zero_anchor_packet.normalized_request
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_required_anchor_provenance_wins_concurrent_unchanged_reobservation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    phrase = "checkout ownership remains payments platform"
+    (tmp_path / "ownership.json").write_text(json.dumps({"decision": phrase}))
+    actor, source = _source_setup(tmp_path, monkeypatch, slug="anchor-a-to-a")
+    _execute_requested(actor, source)
+    repository_id = cast(uuid.UUID, source.repository_id)
+    first = search_chunks(
+        actor=actor,
+        repository_id=repository_id,
+        query=phrase,
+        phase="ASSURANCE",
+    ).results[0]
+    anchor = _required_anchor(first)
+    anchored_candidate = _required_search_anchor_candidates(
+        actor=actor,
+        repository_id=repository_id,
+        anchors=(anchor,),
+        visible_scope_ids=(anchor.access_scope_id,),
+    )[0]
+
+    _execute_requested(actor, source)
+    current = search_chunks(
+        actor=actor,
+        repository_id=repository_id,
+        query=phrase,
+        phase="ASSURANCE",
+    ).results[0]
+    assert current.chunk_id == first.chunk_id
+    assert current.source_observation_id != first.source_observation_id
+    facet_candidate = _chunk_candidate(
+        current,
+        1,
+        facet=RetrievalFacet(
+            label="changed_paths",
+            query=phrase,
+            anchors=(phrase,),
+            required_if_matched=True,
+        ),
+        facet_position=0,
+        change_aware=True,
+    )
+    assert facet_candidate.citations != anchored_candidate.citations
+
+    forward = _merge_candidates([facet_candidate, anchored_candidate])[0]
+    reverse = _merge_candidates([anchored_candidate, facet_candidate])[0]
+
+    assert forward.as_dict() == reverse.as_dict()
+    assert forward.payload == anchored_candidate.payload
+    assert forward.citations == anchored_candidate.citations
+    assert forward.contributing_scope_ids == anchored_candidate.contributing_scope_ids
+    assert forward.required_search_anchor is True
+    assert forward.required_context_facets == ("changed_paths",)
 
 
 @pytest.mark.integration

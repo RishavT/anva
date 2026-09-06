@@ -346,7 +346,7 @@ REQUIRED_SEARCH_ANCHOR: Final[dict[str, object]] = _closed(
 REQUIRED_SEARCH_ANCHORS: Final[dict[str, object]] = {
     "type": "array",
     "items": REQUIRED_SEARCH_ANCHOR,
-    "maxItems": 16,
+    "maxItems": 50,
 }
 PUBLIC_SCALAR_VARIANTS: Final[list[dict[str, object]]] = [
     {"type": "string", "maxLength": 10_000},
