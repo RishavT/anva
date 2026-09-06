@@ -350,6 +350,7 @@ def test_acceptance_case_preflight_is_hardened_and_precedes_launch() -> None:
         "--security-opt no-new-privileges",
         "--pids-limit 64",
         "--memory 256m",
+        '--user "$$acceptance_uid:$$acceptance_gid"',
         "readonly",
         "--env ANVA_SECRET_KEY",
         "--env ANVA_TOKEN_PEPPER",

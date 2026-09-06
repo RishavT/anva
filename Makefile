@@ -609,8 +609,10 @@ acceptance-case-validate: acceptance-identity-preflight
 		case_file="$(ANVA_ACCEPTANCE_CASE_FILE)"; \
 		case "$$case_file" in /*) ;; *) echo "ANVA_ACCEPTANCE_CASE_FILE must be an absolute path" >&2; exit 2 ;; esac; \
 		test -f "$$case_file" && test ! -L "$$case_file" || { echo "ANVA_ACCEPTANCE_CASE_FILE must be a regular non-symlink file" >&2; exit 2; }; \
+		acceptance_uid="$${ANVA_ACCEPTANCE_UID:-10001}"; acceptance_gid="$${ANVA_ACCEPTANCE_GID:-10001}"; \
 		set -- docker run --rm --network none --read-only --cap-drop ALL \
-			--security-opt no-new-privileges --pids-limit 64 --memory 256m; \
+			--security-opt no-new-privileges --pids-limit 64 --memory 256m \
+			--user "$$acceptance_uid:$$acceptance_gid"; \
 		bootstrap_secret_file="$${ANVA_TST009_BOOTSTRAP_SECRET_FILE:-}"; \
 		if test -n "$$bootstrap_secret_file"; then \
 			case "$$bootstrap_secret_file" in /*) ;; *) echo "ANVA_TST009_BOOTSTRAP_SECRET_FILE must be an absolute path" >&2; exit 2 ;; esac; \
