@@ -343,7 +343,8 @@ def test_public_launch_manifest_make_path_is_hardened_and_start_uses_it() -> Non
 
     assert "acceptance-start: acceptance-launch-manifest" in makefile
     assert "ANVA_ACCEPTANCE_LAUNCH_MANIFEST is the required protected host output path" in body
-    assert "Reusing existing immutable launch manifest" in body
+    assert "Reusing existing immutable launch manifest after exact" in body
+    assert "does not match the current resolved launch configuration" in body
     assert "acceptance launch-manifest" in body
     assert "--network none" in body
     assert "--read-only" in body
@@ -355,7 +356,81 @@ def test_public_launch_manifest_make_path_is_hardened_and_start_uses_it() -> Non
     assert "chmod 0444" in body
     assert "config --format json" in body
     assert "docker image inspect" in body
+    assert "cmp --silent" in body
+    assert 'mktemp "$$(dirname "$$manifest")/.$$(basename "$$manifest").tmp.XXXXXX"' in body
+    assert 'ln "$$output_tmp" "$$manifest"' in body
+    assert body.index("config --format json") < body.index("cmp --silent")
+    assert body.index("cmp --silent") < body.index("Reusing existing immutable launch manifest")
     assert "prune" not in body
+
+
+@pytest.mark.unit
+def test_launch_manifest_make_reuses_only_exact_current_candidate(tmp_path: Path) -> None:
+    make = shutil.which("make")
+    if make is None:
+        pytest.skip("make is unavailable for launch manifest lifecycle validation")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text(
+        """#!/bin/sh
+if test "$1" = "compose"; then
+    printf '%s\n' '{"services":{}}'
+elif test "$1" = "image"; then
+    printf '%s\n' '[{}]'
+elif test "$1" = "run"; then
+    printf '%s\n' "$FAKE_MANIFEST_PAYLOAD"
+else
+    exit 64
+fi
+""",
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o755)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(mode=0o700)
+    manifest = tmp_path / "launch-manifest.json"
+    environment = os.environ.copy()
+    environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+    command = [
+        make,
+        "acceptance-launch-manifest",
+        f"ANVA_REVISION={'a' * 40}",
+        f"ANVA_IMAGE_SHA256={'b' * 64}",
+        f"ANVA_BUILD_INPUT_SHA256={'c' * 64}",
+        "ANVA_IMAGE_REPOSITORY=fake-anva",
+        "ANVA_VERSION=test",
+        f"ANVA_ACCEPTANCE_LAUNCH_MANIFEST={manifest}",
+        f"ANVA_ACCEPTANCE_STATE_DIR={state_dir}",
+    ]
+
+    environment["FAKE_MANIFEST_PAYLOAD"] = '{"identity":"current"}'
+    created = subprocess.run(  # noqa: S603 - executable resolved by shutil.which
+        command, check=False, capture_output=True, text=True, env=environment
+    )
+    assert created.returncode == 0, created.stderr
+    original = manifest.read_bytes()
+    assert original == b'{"identity":"current"}\n'
+    assert manifest.stat().st_mode & 0o777 == 0o444
+
+    tmp_path.chmod(0o555)
+    try:
+        reused = subprocess.run(  # noqa: S603 - executable resolved by shutil.which
+            command, check=False, capture_output=True, text=True, env=environment
+        )
+        assert reused.returncode == 0, reused.stderr
+        assert "after exact current-configuration comparison" in reused.stdout
+        assert manifest.read_bytes() == original
+
+        environment["FAKE_MANIFEST_PAYLOAD"] = '{"identity":"drifted"}'
+        rejected = subprocess.run(  # noqa: S603 - executable resolved by shutil.which
+            command, check=False, capture_output=True, text=True, env=environment
+        )
+        assert rejected.returncode == 2
+        assert "does not match the current resolved launch configuration" in rejected.stderr
+        assert manifest.read_bytes() == original
+    finally:
+        tmp_path.chmod(0o700)
 
 
 @pytest.mark.unit
@@ -423,6 +498,9 @@ def test_acceptance_identity_preflight_rejects_unpaired_or_unsafe_ids() -> None:
         {"ANVA_ACCEPTANCE_UID": "00", "ANVA_ACCEPTANCE_GID": "1000"},
         {"ANVA_ACCEPTANCE_UID": "1000:1000", "ANVA_ACCEPTANCE_GID": "1000"},
         {"ANVA_ACCEPTANCE_UID": "1000", "ANVA_ACCEPTANCE_GID": "not-a-gid"},
+        {"ANVA_ACCEPTANCE_UID": "2147483648", "ANVA_ACCEPTANCE_GID": "1000"},
+        {"ANVA_ACCEPTANCE_UID": "1000", "ANVA_ACCEPTANCE_GID": "2147483648"},
+        {"ANVA_ACCEPTANCE_UID": "999999999999999999999", "ANVA_ACCEPTANCE_GID": "1000"},
     ):
         environment = base_environment | overrides
         completed = subprocess.run(  # noqa: S603 - executable resolved by shutil.which

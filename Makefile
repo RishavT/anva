@@ -592,11 +592,15 @@ acceptance-identity-preflight:
 	fi; \
 	if test -n "$$uid"; then \
 		case "$$uid" in *[!0-9]*|0*) \
-			echo "ANVA_ACCEPTANCE_UID and ANVA_ACCEPTANCE_GID must be positive numeric IDs" >&2; exit 2 ;; \
+			echo "ANVA_ACCEPTANCE_UID and ANVA_ACCEPTANCE_GID must be positive numeric IDs in Docker's 1..2147483647 range" >&2; exit 2 ;; \
 		esac; \
 		case "$$gid" in *[!0-9]*|0*) \
-			echo "ANVA_ACCEPTANCE_UID and ANVA_ACCEPTANCE_GID must be positive numeric IDs" >&2; exit 2 ;; \
+			echo "ANVA_ACCEPTANCE_UID and ANVA_ACCEPTANCE_GID must be positive numeric IDs in Docker's 1..2147483647 range" >&2; exit 2 ;; \
 		esac; \
+		if test "$${#uid}" -gt 10 || { test "$${#uid}" -eq 10 && test "$$uid" -gt 2147483647; } || \
+		   test "$${#gid}" -gt 10 || { test "$${#gid}" -eq 10 && test "$$gid" -gt 2147483647; }; then \
+			echo "ANVA_ACCEPTANCE_UID and ANVA_ACCEPTANCE_GID must be positive numeric IDs in Docker's 1..2147483647 range" >&2; exit 2; \
+		fi; \
 	fi
 
 acceptance-canonicalize: acceptance-identity-preflight
@@ -617,20 +621,26 @@ acceptance-launch-manifest: acceptance-identity-preflight
 	@set -eu; \
 	manifest="$(ANVA_ACCEPTANCE_LAUNCH_MANIFEST)"; \
 	case "$$manifest" in /*) ;; *) echo "ANVA_ACCEPTANCE_LAUNCH_MANIFEST must be an absolute path" >&2; exit 2 ;; esac; \
+	manifest_exists=0; \
 	if test -e "$$manifest" || test -L "$$manifest"; then \
 		test -f "$$manifest" && test ! -L "$$manifest" || { echo "Existing launch manifest must be a regular non-symlink file" >&2; exit 2; }; \
 		test -z "$$(find "$$manifest" -maxdepth 0 -perm /222 -print -quit)" || { echo "Existing launch manifest must be read-only; run chmod a-w" >&2; exit 2; }; \
-		echo "Reusing existing immutable launch manifest; the acceptance preflight will validate it"; \
-		exit 0; \
+		manifest_exists=1; \
 	fi; \
 	state_dir="$(ANVA_ACCEPTANCE_STATE_DIR)"; \
 	test "$$(id -u)" -ne 0 || { echo "Launch manifest generation must run as a non-root host user" >&2; exit 2; }; \
 	test -d "$$state_dir" && test ! -L "$$state_dir" || { echo "ANVA_ACCEPTANCE_STATE_DIR must be a pre-created private directory" >&2; exit 2; }; \
 	test -z "$$(find "$$state_dir" -maxdepth 0 -perm /077 -print -quit)" || { echo "ANVA_ACCEPTANCE_STATE_DIR must not grant group/other permissions (use chmod 0700)" >&2; exit 2; }; \
-	test -w "$$(dirname "$$manifest")" || { echo "Launch manifest parent directory must be writable" >&2; exit 2; }; \
+	if test "$$manifest_exists" -eq 0; then \
+		test -w "$$(dirname "$$manifest")" || { echo "Launch manifest parent directory must be writable" >&2; exit 2; }; \
+	fi; \
 	input_dir=$$(mktemp -d "$$state_dir/.launch-manifest-input.XXXXXX"); \
-	output_tmp="$$(dirname "$$manifest")/.$$(basename "$$manifest").tmp.$$$$"; \
-	cleanup() { rm -f "$$output_tmp"; rm -r "$$input_dir"; }; \
+	candidate="$$input_dir/candidate.json"; \
+	output_tmp=""; \
+	if test "$$manifest_exists" -eq 0; then \
+		output_tmp=$$(mktemp "$$(dirname "$$manifest")/.$$(basename "$$manifest").tmp.XXXXXX"); \
+	fi; \
+	cleanup() { if test -n "$$output_tmp"; then rm -f "$$output_tmp"; fi; rm -r "$$input_dir"; }; \
 	trap cleanup EXIT HUP INT TERM; \
 	$(ACCEPTANCE_COMPOSE) --profile acceptance config --format json > "$$input_dir/resolved-compose.json"; \
 	docker image inspect "$(ANVA_IMAGE_REF)" > "$$input_dir/image-inspect.json"; \
@@ -644,9 +654,18 @@ acceptance-launch-manifest: acceptance-identity-preflight
 		--product-image-sha256 "$(ANVA_IMAGE_SHA256)" \
 		--product-image-reference "$(ANVA_IMAGE_REF)" \
 		--build-input-sha256 "$(ANVA_BUILD_INPUT_SHA256)" \
-		--launch-manifest-source "$$manifest" > "$$output_tmp"; \
+		--launch-manifest-source "$$manifest" > "$$candidate"; \
+	chmod 0444 "$$candidate"; \
+	if test "$$manifest_exists" -eq 1; then \
+		cmp --silent "$$manifest" "$$candidate" || { echo "Existing immutable launch manifest does not match the current resolved launch configuration" >&2; exit 2; }; \
+		echo "Reusing existing immutable launch manifest after exact current-configuration comparison"; \
+		exit 0; \
+	fi; \
+	cp "$$candidate" "$$output_tmp"; \
 	chmod 0444 "$$output_tmp"; \
-	mv "$$output_tmp" "$$manifest"; \
+	ln "$$output_tmp" "$$manifest"; \
+	rm -f "$$output_tmp"; \
+	output_tmp=""; \
 	echo "Generated immutable launch manifest at $$manifest"
 
 acceptance-start: acceptance-launch-manifest

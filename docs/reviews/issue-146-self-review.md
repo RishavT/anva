@@ -72,6 +72,14 @@ launched product service, rejecting bare IDs, names, zero groups, signed-zero, o
 whitespace, non-string, and malformed forms. Absolute Compose build contexts remain outside the
 runtime identity hash because the launch uses the already digest-pinned image.
 
+A further exact-head review demonstrated that the original immutable-file fast path could reuse a
+manifest after the current resolved Compose identity changed. The Make target now always generates
+a private current candidate, compares an existing read-only manifest byte-for-byte, reuses only an
+exact match, and rejects drift without overwriting the protected artifact. New artifacts still use
+a securely created same-directory temporary file and atomic no-replace publication. The host
+identity preflight also enforces
+Docker's inclusive upper UID/GID bound of `2147483647` before any container launch.
+
 ## Verification
 
 - Exact host-resolved Make generation produced mode-`0444` output twice with identical SHA-256;
@@ -80,12 +88,12 @@ runtime identity hash because the launch uses the already digest-pinned image.
   `launch_manifest_missing` diagnostic. The generated manifest advanced past preflight.
 - The documented Compose/Make flow then completed real bootstrap, API, worker, and official MCP
   client operations through `AWAITING_EXTERNAL_REVIEW`; scoped services and volumes were removed.
-- Final-remediation launch/Compose/contract/runner tests passed 111 checks with four expected
+- Final-remediation launch/Compose/contract/runner tests passed 112 checks with four expected
   Docker-CLI-unavailable skips; both the base and optional-case real resolved Compose models passed
   the tightened generator.
 - Runner boundary, resume, and permission integrations passed 28 tests with one expected
   Docker-in-container skip.
-- The final-remediation unit marker passed 1,197 tests with five expected Docker-CLI-unavailable
+- The final-remediation unit marker passed 1,198 tests with five expected Docker-CLI-unavailable
   skips. The combined
   integration/contract/smoke gate passed 326 tests before exposing one stale artifact-count
   assertion; after changing 33 to 35, the exact failed contract and focused launch set passed.
