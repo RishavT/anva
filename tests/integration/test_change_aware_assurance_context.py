@@ -25,6 +25,7 @@ from anva.core.models import (
     AssertionValidityInterval,
     AssuranceRun,
     ContextPacketItem,
+    EvaluatorTask,
     KnowledgeAssertion,
     Membership,
     Organization,
@@ -34,6 +35,7 @@ from anva.core.models import (
     SourceConnection,
     User,
 )
+from anva.core.services import assurance as assurance_service
 from anva.core.services.assurance import (
     REQUIRED_ASSURANCE_CONTEXT_LIMITATION_PREFIX,
     claim_evaluator_task,
@@ -220,7 +222,7 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    organization, repository, scope, _membership, actor = _tenant()
+    organization, repository, scope, membership, actor = _tenant()
     corpus = tmp_path / "public"
     corpus.mkdir()
     _materialize_corpus(corpus)
@@ -520,6 +522,12 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
 
     packet = started.run.context_packet
     assert packet is not None
+    duplicate_packet = duplicate.run.context_packet
+    assert duplicate_packet is not None
+    assert (
+        duplicate_packet.artifact.payload["completeness"] == packet.artifact.payload["completeness"]
+    )
+    assert duplicate_packet.artifact.payload["items"] == packet.artifact.payload["items"]
     selected_paths = {
         citation.canonical_url.rsplit("/", 1)[-1]
         for item in ContextPacketItem.objects.filter(context_packet=packet)
@@ -659,7 +667,8 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
     assert current_context["freshness"] == "CURRENT"
     assert cast(dict[str, object], current_context["claim"])["review_state"] == "HUMAN_CONFIRMED"
     assert "versus" in cast(str, conflict_context["summary"])
-    assert cast(dict[str, object], conflict_context["claim"])["right"]["staleness_state"] == "STALE"
+    conflict_claim = cast(dict[str, object], conflict_context["claim"])
+    assert cast(dict[str, object], conflict_claim["right"])["staleness_state"] == "STALE"
     assert all(cast(list[dict[str, object]], item["citations"]) for item in context)
     assert all(item["selection_reason"] for item in context)
     assert "CANARY-FOREIGN-TENANT-ISSUE-128" not in json.dumps(claim.request, sort_keys=True)
@@ -873,3 +882,71 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         work_item_revision_id=work.work_item_revision.id,
     )
     assert_incomplete_run(time_exhausted)
+
+    monkeypatch.setattr("anva.core.services.context_packets.monotonic", time.monotonic)
+    invalidate_context_packets(
+        actor=actor,
+        organization_id=organization.id,
+        repository_id=repository.id,
+        reason="MANUAL",
+        details={"test": "mutate-head-during-context-build"},
+    )
+    original_build_context_packet = assurance_service.build_context_packet
+
+    def build_then_mutate_head(**kwargs: Any) -> Any:
+        result = original_build_context_packet(**kwargs)
+        ingested.pull_request.__class__.objects.filter(id=ingested.pull_request.id).update(
+            current_head_commit="f" * 40
+        )
+        return result
+
+    monkeypatch.setattr(assurance_service, "build_context_packet", build_then_mutate_head)
+    head_changed = start_assurance(
+        actor=actor,
+        pull_request_revision_id=ingested.revision.id,
+        policy_version_ids=[policy_version.id],
+        reference_time=reference_time,
+        deterministic_checks=[],
+        work_item_revision_id=work.work_item_revision.id,
+    )
+    assert_incomplete_run(head_changed)
+    assert head_changed.run.failure_code == "ASSURANCE_CONTEXT_INCOMPLETE"
+    assert not EvaluatorTask.objects.filter(assurance_run=head_changed.run).exists()
+
+    ingested.pull_request.__class__.objects.filter(id=ingested.pull_request.id).update(
+        current_head_commit=HEAD
+    )
+    monkeypatch.setattr(assurance_service, "build_context_packet", original_build_context_packet)
+    invalidate_context_packets(
+        actor=actor,
+        organization_id=organization.id,
+        repository_id=repository.id,
+        reason="MANUAL",
+        details={"test": "revoke-caller-during-context-build"},
+    )
+
+    def build_then_revoke_actor(**kwargs: Any) -> Any:
+        result = original_build_context_packet(**kwargs)
+        Membership.objects.filter(id=membership.id).delete()
+        return result
+
+    monkeypatch.setattr(assurance_service, "build_context_packet", build_then_revoke_actor)
+    authorization_revoked = start_assurance(
+        actor=actor,
+        pull_request_revision_id=ingested.revision.id,
+        policy_version_ids=[policy_version.id],
+        reference_time=reference_time,
+        deterministic_checks=[
+            {
+                "code": "AUTHORIZATION_STILL_CURRENT",
+                "status": "PASSED",
+                "blocking": True,
+                "summary": "Caller authorization remained current through publication.",
+                "evidence_ids": [],
+            }
+        ],
+        work_item_revision_id=work.work_item_revision.id,
+    )
+    assert_incomplete_run(authorization_revoked)
+    assert authorization_revoked.run.failure_code == "ASSURANCE_CONTEXT_INCOMPLETE"
+    assert not EvaluatorTask.objects.filter(assurance_run=authorization_revoked.run).exists()

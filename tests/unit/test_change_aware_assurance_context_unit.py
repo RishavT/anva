@@ -152,8 +152,8 @@ def test_assertion_scan_finds_relevance_after_legacy_uuid_prefix() -> None:
         )
 
     assert [candidate.source_assertion_id for candidate in candidates] == [assertions[-1].id]
-    assert candidates.processed_count == 501
-    assert candidates.complete is True
+    assert cast(Any, candidates).processed_count == 501
+    assert cast(Any, candidates).complete is True
 
 
 def _search_anchor(seed: int = 0) -> RequiredSearchAnchor:
@@ -612,16 +612,16 @@ def test_conflict_retrieval_keyset_scans_legacy_boundary(row_count: int) -> None
         ) as manager_filter,
         patch("anva.core.services.context_packets._authorized_provenance") as provenance,
     ):
-        assert (
-            _conflict_candidates(
-                actor=cast(Any, SimpleNamespace(organization_id=uuid.uuid4())),
-                repository_id=uuid.uuid4(),
-                selected_assertion_ids={assertion_id},
-                relevant_assertion_facets={assertion_id: ("task",)},
-                change_aware=True,
-            )
-            == []
+        candidates = _conflict_candidates(
+            actor=cast(Any, SimpleNamespace(organization_id=uuid.uuid4())),
+            repository_id=uuid.uuid4(),
+            selected_assertion_ids={assertion_id},
+            relevant_assertion_facets={assertion_id: ("task",)},
+            change_aware=True,
         )
+        assert candidates == []
+        assert cast(Any, candidates).processed_count == row_count
+        assert cast(Any, candidates).complete is True
 
     provenance.assert_called_once()
     assert manager_filter.call_args.kwargs["organization_id"] is not None

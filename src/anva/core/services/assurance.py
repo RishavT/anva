@@ -211,7 +211,7 @@ class DiffIngestionResult:
 @dataclass(frozen=True, slots=True)
 class AssuranceStartResult:
     run: AssuranceRun
-    evaluator_task: EvaluatorTask | None
+    evaluator_task: EvaluatorTask
     created: bool
 
 
@@ -1482,7 +1482,7 @@ def start_assurance(
             raise IdempotencyConflictError(
                 "Assurance run is bound to a different evaluator reviewer"
             )
-        return AssuranceStartResult(existing, task, False)
+        return AssuranceStartResult(existing, cast(EvaluatorTask, task), False)
 
     older_runs = list(
         AssuranceRun.objects.select_for_update()
@@ -1553,6 +1553,22 @@ def start_assurance(
                 budget=PacketBudget(max_items=50, max_tokens=8_000, max_bytes=100_000),
                 retrieval_facets=retrieval_facets,
             )
+            current_pull_request = PullRequest.objects.only(
+                "current_head_commit",
+                "current_revision_number",
+            ).get(id=revision.pull_request_id)
+            if (
+                current_pull_request.current_head_commit != revision.head_commit
+                or current_pull_request.current_revision_number != revision.revision
+            ):
+                raise IdempotencyConflictError(
+                    "Pull request head changed while assurance context was being built"
+                )
+            actor = _authorize_assurance(
+                actor=actor,
+                repository_id=repository.id,
+                access_scope_id=access_scope_id,
+            )
     except (DomainOperationError, DatabaseError):
         blockers = (
             f"{REQUIRED_ASSURANCE_CONTEXT_LIMITATION_PREFIX} "
@@ -1584,7 +1600,7 @@ def start_assurance(
                 "updated_at",
             ]
         )
-        return AssuranceStartResult(run, None, True)
+        return AssuranceStartResult(run, cast(EvaluatorTask, None), True)
 
     packet_limitations = cast(list[str], packet.limitations)
     required_run_limitations = (
@@ -1632,7 +1648,7 @@ def start_assurance(
                 "updated_at",
             ]
         )
-        return AssuranceStartResult(run, None, True)
+        return AssuranceStartResult(run, cast(EvaluatorTask, None), True)
     check_rows: list[AssuranceCheck] = []
     for position, check in enumerate(checks, start=1):
         check_hash = content_hash(
