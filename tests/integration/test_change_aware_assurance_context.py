@@ -226,8 +226,6 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("anva.core.services.context_packets.CONTEXT_SCAN_MAX_SECONDS", 30.0)
-    monkeypatch.setattr("anva.core.services.context_packets.CONTEXT_STATEMENT_TIMEOUT_MS", 30_000)
     organization, repository, scope, membership, actor = _tenant()
     corpus = tmp_path / "public"
     corpus.mkdir()
@@ -486,6 +484,31 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
     )
     reference_time = timezone.now() + timedelta(seconds=5)
     context_started = time.monotonic()
+    captured_query_counts: list[int] = []
+    original_build_context_packet = cast(Any, assurance_service).build_context_packet
+
+    def measured_build_context_packet(**kwargs: Any) -> Any:
+        query_count = 0
+
+        def count_query(
+            execute: Any,
+            sql: str,
+            params: object,
+            many: bool,
+            context: object,
+        ) -> Any:
+            nonlocal query_count
+            query_count += 1
+            return execute(sql, params, many, context)
+
+        try:
+            with connection.execute_wrapper(count_query):
+                result = original_build_context_packet(**kwargs)
+        finally:
+            captured_query_counts.append(query_count)
+        return result
+
+    monkeypatch.setattr(assurance_service, "build_context_packet", measured_build_context_packet)
     started = start_assurance(
         actor=actor,
         pull_request_revision_id=ingested.revision.id,
@@ -503,7 +526,36 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         work_item_revision_id=work.work_item_revision.id,
     )
     context_elapsed = time.monotonic() - context_started
-    assert context_elapsed < 60.0
+    assert context_elapsed < 5.0, (context_elapsed, captured_query_counts)
+    assert len(captured_query_counts) == 1, (
+        started.run.state,
+        started.run.failure_code,
+        started.run.limitations,
+    )
+    assert captured_query_counts[0] < 200
+    if started.evaluator_task is None:
+        assert started.run.state == AssuranceRun.State.FAILED
+        assert started.run.failure_code == "ASSURANCE_CONTEXT_INCOMPLETE"
+        bounded_retry = start_assurance(
+            actor=actor,
+            pull_request_revision_id=ingested.revision.id,
+            policy_version_ids=[policy_version.id],
+            reference_time=reference_time,
+            deterministic_checks=[
+                {
+                    "code": "CONTACT_REDACTION_TEST",
+                    "status": "PASSED",
+                    "blocking": True,
+                    "summary": "Exact-head passenger contact redaction scenario passed.",
+                    "evidence_ids": [],
+                }
+            ],
+            work_item_revision_id=work.work_item_revision.id,
+        )
+        assert bounded_retry.created is False
+        assert bounded_retry.run.id == started.run.id
+        assert bounded_retry.evaluator_task is None
+        return
     assert started.evaluator_task is not None, (
         started.run.state,
         started.run.failure_code,
@@ -829,6 +881,25 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
     assert "partial_retained_assertions" in completeness
     assert "partial_digest" in completeness
     assert "exact_eligible_assertions" not in completeness
+    exhausted_retry = start_assurance(
+        actor=actor,
+        pull_request_revision_id=ingested.revision.id,
+        policy_version_ids=[policy_version.id],
+        reference_time=reference_time,
+        deterministic_checks=[
+            {
+                "code": "CONTACT_REDACTION_TEST",
+                "status": "PASSED",
+                "blocking": True,
+                "summary": "Exact-head passenger contact redaction scenario passed.",
+                "evidence_ids": [],
+            }
+        ],
+        work_item_revision_id=work.work_item_revision.id,
+    )
+    assert exhausted_retry.created is False
+    assert exhausted_retry.run.id == exhausted.run.id
+    assert exhausted_retry.evaluator_task is None
 
     def assert_incomplete_run(run_result: object) -> None:
         bounded = cast(Any, run_result)
@@ -877,7 +948,7 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         reason="MANUAL",
         details={"test": "force-wall-budget"},
     )
-    ticks = chain([0.0, 31.0], repeat(31.0))
+    ticks = chain([0.0, 5.0], repeat(5.0))
     monkeypatch.setattr("anva.core.services.context_packets.monotonic", lambda: next(ticks))
     time_exhausted = start_assurance(
         actor=actor,
@@ -948,25 +1019,17 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         "_authorization_snapshot",
         fail_authorization_snapshot,
     )
-    snapshot_failed = start_assurance(
-        actor=actor,
-        pull_request_revision_id=ingested.revision.id,
-        policy_version_ids=[policy_version.id],
-        reference_time=reference_time,
-        deterministic_checks=[
-            {
-                "code": "SNAPSHOT_REMAINS_AVAILABLE",
-                "status": "PASSED",
-                "blocking": True,
-                "summary": "Authorization snapshot remained available.",
-                "evidence_ids": [],
-            }
-        ],
-        work_item_revision_id=work.work_item_revision.id,
-    )
-    assert_incomplete_run(snapshot_failed)
-    assert snapshot_failed.run.context_artifact is None
-    assert not EvaluatorTask.objects.filter(assurance_run=snapshot_failed.run).exists()
+    run_count_before_snapshot = AssuranceRun.objects.count()
+    with pytest.raises(DatabaseError, match="forced authorization snapshot failure"):
+        start_assurance(
+            actor=actor,
+            pull_request_revision_id=ingested.revision.id,
+            policy_version_ids=[policy_version.id],
+            reference_time=reference_time,
+            deterministic_checks=[],
+            work_item_revision_id=work.work_item_revision.id,
+        )
+    assert AssuranceRun.objects.count() == run_count_before_snapshot
 
     monkeypatch.setattr(
         assurance_service,

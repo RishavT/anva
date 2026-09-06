@@ -1259,14 +1259,15 @@ def _advance_to_model_review(*, actor: ActorContext, run: AssuranceRun) -> Assur
 
 
 @transaction.atomic
-def _finalize_incomplete_context_start(*, run: AssuranceRun) -> AssuranceStartResult:
+def _finalize_incomplete_context_start(*, run: AssuranceRun, created: bool) -> AssuranceStartResult:
     """Durably close a request-bound run when preparation cannot safely complete."""
+    run = AssuranceRun.objects.select_for_update().get(id=run.id)
+    task = EvaluatorTask.objects.filter(assurance_run=run).first()
+    if run.state != AssuranceRun.State.REQUESTED or task is not None:
+        return AssuranceStartResult(run, cast(EvaluatorTask, task), False)
     blockers = (
         f"{REQUIRED_ASSURANCE_CONTEXT_LIMITATION_PREFIX} "
         "CONFLICT_REVIEW_REQUIRED / ASSURANCE_CONTEXT_INCOMPLETE"
-    )
-    run.input_hash = content_hash(
-        {"provisional_input_hash": run.input_hash, "failed_run_id": str(run.id)}
     )
     ReadinessDecision.objects.get_or_create(
         organization_id=run.organization_id,
@@ -1288,7 +1289,6 @@ def _finalize_incomplete_context_start(*, run: AssuranceRun) -> AssuranceStartRe
     run.save(
         update_fields=[
             "failure_code",
-            "input_hash",
             "readiness",
             "limitations",
             "completed_at",
@@ -1297,7 +1297,7 @@ def _finalize_incomplete_context_start(*, run: AssuranceRun) -> AssuranceStartRe
             "updated_at",
         ]
     )
-    return AssuranceStartResult(run, cast(EvaluatorTask, None), True)
+    return AssuranceStartResult(run, cast(EvaluatorTask, None), created)
 
 
 def start_assurance(
@@ -1321,18 +1321,41 @@ def start_assurance(
         len(trigger_key) > 64 or re.fullmatch(r"[a-f0-9]{64}", trigger_key) is None
     ):
         raise ValueError("trigger_key must be a lowercase SHA-256 digest")
-    revision = get_tenant_record(
-        queryset=PullRequestRevision.objects.select_related(
-            "organization",
-            "pull_request__repository",
-            "diff_artifact",
-        ),
-        record_id=pull_request_revision_id,
-        organization_id=actor.organization_id,
-    )
+    # A durable run cannot be identified if the database is unavailable before
+    # this minimal revision, authorization, and watermark boundary completes.
+    with transaction.atomic():
+        revision = get_tenant_record(
+            queryset=PullRequestRevision.objects.select_related(
+                "organization",
+                "pull_request__repository",
+                "diff_artifact",
+            ),
+            record_id=pull_request_revision_id,
+            organization_id=actor.organization_id,
+        )
+        repository = revision.pull_request.repository
+        access_scope_id = revision.diff_artifact.access_scope_id
+        if access_scope_id is None:
+            raise ValueError("Diff artifact must have an access scope")
+        scoped_actor = _authorize_assurance(
+            actor=actor,
+            repository_id=repository.id,
+            access_scope_id=access_scope_id,
+        )
+        bound_reviewer_id, bound_reviewer_token_id = _resolve_bootstrap_reviewer_binding(
+            actor=scoped_actor,
+            repository_id=repository.id,
+            reviewer_service_identity_id=reviewer_service_identity_id,
+            reviewer_token_id=reviewer_token_id,
+        )
+        _visible_scopes, authorization_hash = _authorization_snapshot(
+            actor=scoped_actor,
+            repository_id=repository.id,
+        )
+        watermark_value = _watermark(actor=scoped_actor, repository_id=repository.id).value
     provisional_digest = content_hash(
         {
-            "version": "assurance-start-provisional-v1",
+            "version": "assurance-start-provisional-v2",
             "actor_type": actor.actor_type,
             "actor_id": actor.actor_id,
             "credential_id": str(actor.credential_id) if actor.credential_id else None,
@@ -1348,10 +1371,16 @@ def start_assurance(
                 str(reviewer_service_identity_id) if reviewer_service_identity_id else None
             ),
             "reviewer_token_id": str(reviewer_token_id) if reviewer_token_id else None,
+            "bound_reviewer_id": str(bound_reviewer_id) if bound_reviewer_id else None,
+            "bound_reviewer_token_id": (
+                str(bound_reviewer_token_id) if bound_reviewer_token_id else None
+            ),
+            "authorization_hash": authorization_hash,
+            "watermark": watermark_value,
         }
     )
     with transaction.atomic():
-        provisional_run, _provisional_created = AssuranceRun.objects.get_or_create(
+        provisional_run, provisional_created = AssuranceRun.objects.get_or_create(
             organization_id=actor.organization_id,
             repository_external_id=revision.pull_request.repository.external_id,
             pull_request_number=revision.pull_request.number,
@@ -1385,12 +1414,14 @@ def start_assurance(
                 trigger_key=trigger_key,
                 reviewer_service_identity_id=reviewer_service_identity_id,
                 reviewer_token_id=reviewer_token_id,
+                context_authorization_hash=authorization_hash,
+                context_watermark_value=watermark_value,
             )
     except (AuthenticationError, ResourceNotFoundError):
-        _finalize_incomplete_context_start(run=provisional_run)
+        _finalize_incomplete_context_start(run=provisional_run, created=provisional_created)
         raise
     except (DomainOperationError, DatabaseError):
-        return _finalize_incomplete_context_start(run=provisional_run)
+        return _finalize_incomplete_context_start(run=provisional_run, created=provisional_created)
 
 
 @transaction.atomic
@@ -1408,6 +1439,8 @@ def _start_assurance_bound(
     trigger_key: str = "",
     reviewer_service_identity_id: uuid.UUID | None = None,
     reviewer_token_id: uuid.UUID | None = None,
+    context_authorization_hash: str | None = None,
+    context_watermark_value: int | None = None,
 ) -> AssuranceStartResult:
     """Build exact deterministic context and enqueue one independent manual review."""
     provisional_run = AssuranceRun.objects.select_for_update().get(id=provisional_run.id)
@@ -1553,10 +1586,11 @@ def _start_assurance_bound(
         f"Independent assurance for pull request {revision.pull_request.number}. "
         f"Server-derived change facets: {', '.join(facet.label for facet in retrieval_facets)}."
     )
-    _context_scopes, context_authorization_hash = _authorization_snapshot(
-        actor=actor, repository_id=repository.id
-    )
-    context_watermark = _watermark(actor=actor, repository_id=repository.id)
+    if context_authorization_hash is None or context_watermark_value is None:
+        _context_scopes, context_authorization_hash = _authorization_snapshot(
+            actor=actor, repository_id=repository.id
+        )
+        context_watermark_value = _watermark(actor=actor, repository_id=repository.id).value
     requirements_hash = content_hash(requirements)
     policy_bundle_hash = content_hash(
         {
@@ -1580,7 +1614,7 @@ def _start_assurance_bound(
         "evidence_bundle_hash": evidence_bundle_hash,
         "context_request": context_task,
         "context_authorization_hash": context_authorization_hash,
-        "context_watermark": context_watermark.value,
+        "context_watermark": context_watermark_value,
         "context_query_version": CONTEXT_SCAN_VERSION,
         "context_facets": [
             {

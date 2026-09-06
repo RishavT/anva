@@ -7,6 +7,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
+from threading import Event
 from typing import TypedDict
 
 import pytest
@@ -21,6 +22,7 @@ from anva.core.exceptions import (
     AuthenticationError,
     IdempotencyConflictError,
     LeaseConflictError,
+    RequiredContextBudgetError,
     ResourceNotFoundError,
 )
 from anva.core.models import (
@@ -50,6 +52,7 @@ from anva.core.models import (
     User,
     content_hash,
 )
+from anva.core.services import assurance as assurance_service
 from anva.core.services.assurance import (
     MAX_LIMITATIONS,
     REQUIREMENT_TRACEABILITY_LIMITATION,
@@ -321,6 +324,131 @@ def test_concurrent_identical_assurance_starts_bind_one_canonical_run() -> None:
         ).count()
         <= 1
     )
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_concurrent_failed_finalizer_never_overwrites_canonical_success() -> None:
+    organization, repository, scope, actor = _tenant()
+    policy_version_id = _policy(organization, repository, scope, actor)
+    ingested = _ingest(
+        actor=actor,
+        repository=repository,
+        scope=scope,
+        number=36,
+        head="7" * 40,
+    )
+    success_committed = Event()
+    original_finalizer = assurance_service._finalize_incomplete_context_start
+
+    def start() -> tuple[uuid.UUID, uuid.UUID | None, str]:
+        close_old_connections()
+        try:
+            result = start_assurance(
+                actor=actor,
+                pull_request_revision_id=ingested.revision.id,
+                policy_version_ids=[policy_version_id],
+                reference_time=REFERENCE_TIME,
+                deterministic_checks=_passing_checks(),
+                evaluator_version="concurrent-race-evaluator-v1",
+            )
+            success_committed.set()
+            return (
+                result.run.id,
+                result.evaluator_task.id if result.evaluator_task else None,
+                result.run.state,
+            )
+        finally:
+            connections.close_all()
+
+    def finalize() -> tuple[uuid.UUID, uuid.UUID | None, str]:
+        assert success_committed.wait(timeout=60)
+        close_old_connections()
+        try:
+            run = AssuranceRun.objects.get(
+                organization=organization,
+                pull_request_number=36,
+            )
+            result = original_finalizer(run=run, created=True)
+            return (
+                result.run.id,
+                result.evaluator_task.id if result.evaluator_task else None,
+                result.run.state,
+            )
+        finally:
+            connections.close_all()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        success_future = executor.submit(start)
+        finalizer_future = executor.submit(finalize)
+        results = [success_future.result(), finalizer_future.result()]
+
+    assert len({run_id for run_id, _task_id, _state in results}) == 1
+    assert len({task_id for _run_id, task_id, _state in results}) == 1
+    assert None not in {task_id for _run_id, task_id, _state in results}, results
+    assert {state for _run_id, _task_id, state in results} == {AssuranceRun.State.MODEL_REVIEW}
+    run = AssuranceRun.objects.get(id=results[0][0])
+    assert run.state == AssuranceRun.State.MODEL_REVIEW
+    assert EvaluatorTask.objects.filter(assurance_run=run).count() == 1
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_concurrent_retry_after_failed_finalizer_reuses_canonical_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    organization, repository, scope, actor = _tenant()
+    policy_version_id = _policy(organization, repository, scope, actor)
+    ingested = _ingest(
+        actor=actor,
+        repository=repository,
+        scope=scope,
+        number=37,
+        head="8" * 40,
+    )
+    failure_committed = Event()
+
+    def fail_context(**_kwargs: object) -> object:
+        raise RequiredContextBudgetError("ASSURANCE_CONTEXT_INCOMPLETE")
+
+    monkeypatch.setattr(assurance_service, "build_context_packet", fail_context)
+
+    def start(*, wait_for_failure: bool) -> tuple[uuid.UUID, uuid.UUID | None, str, bool]:
+        if wait_for_failure:
+            assert failure_committed.wait(timeout=60)
+        close_old_connections()
+        try:
+            result = start_assurance(
+                actor=actor,
+                pull_request_revision_id=ingested.revision.id,
+                policy_version_ids=[policy_version_id],
+                reference_time=REFERENCE_TIME,
+                deterministic_checks=_passing_checks(),
+                evaluator_version="concurrent-failure-first-v1",
+            )
+            if not wait_for_failure:
+                failure_committed.set()
+            return (
+                result.run.id,
+                result.evaluator_task.id if result.evaluator_task else None,
+                result.run.state,
+                result.created,
+            )
+        finally:
+            connections.close_all()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        failure_future = executor.submit(start, wait_for_failure=False)
+        retry_future = executor.submit(start, wait_for_failure=True)
+        results = [failure_future.result(), retry_future.result()]
+
+    assert len({run_id for run_id, _task_id, _state, _created in results}) == 1
+    assert {task_id for _run_id, task_id, _state, _created in results} == {None}
+    assert {state for _run_id, _task_id, state, _created in results} == {AssuranceRun.State.FAILED}
+    assert sorted(created for _run_id, _task_id, _state, created in results) == [False, True]
+    run = AssuranceRun.objects.get(id=results[0][0])
+    assert run.failure_code == "ASSURANCE_CONTEXT_INCOMPLETE"
+    assert EvaluatorTask.objects.filter(assurance_run=run).count() == 0
 
 
 def _complete(
