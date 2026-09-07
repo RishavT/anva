@@ -7,6 +7,7 @@ import json
 import math
 import re
 import uuid
+from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -80,6 +81,7 @@ CONTEXT_SCAN_MAX_OPERATIONS = 100_000
 # Leave one second of the v3 five-second context target for ranking, sealing,
 # and publication reauthorization around this internal database scan.
 CONTEXT_SCAN_MAX_SECONDS = 4.0
+CONTEXT_PUBLICATION_MAX_SECONDS = 1.0
 CONTEXT_STATEMENT_TIMEOUT_MS = 4_000
 _deadline_sql_wrapper_active: ContextVar[bool] = ContextVar(
     "context_deadline_sql_wrapper_active", default=False
@@ -1918,7 +1920,7 @@ def _set_remaining_statement_timeout(deadline: float) -> None:
         cursor.execute("SET LOCAL statement_timeout = %s", (remaining_ms,))
 
 
-def _deadline_statement_wrapper(deadline: float) -> Any:
+def _deadline_statement_wrapper(deadline: float | Callable[[], float]) -> Any:
     def wrapper(
         execute: Any,
         sql: str,
@@ -1927,15 +1929,34 @@ def _deadline_statement_wrapper(deadline: float) -> Any:
         context: object,
     ) -> Any:
         if not sql.lstrip().upper().startswith("SET LOCAL"):
-            _require_context_deadline(deadline)
+            active_deadline = deadline() if callable(deadline) else deadline
+            _require_context_deadline(active_deadline)
             remaining_ms = max(
                 1,
-                min(CONTEXT_STATEMENT_TIMEOUT_MS, int((deadline - monotonic()) * 1_000)),
+                min(
+                    CONTEXT_STATEMENT_TIMEOUT_MS,
+                    int((active_deadline - monotonic()) * 1_000),
+                ),
             )
             execute("SET LOCAL statement_timeout = %s", (remaining_ms,), False, context)
         return execute(sql, params, many, context)
 
     return wrapper
+
+
+def _enter_context_publication_phase(
+    *,
+    scan_deadline: float,
+    publication_deadline: float,
+    active_deadline: list[float] | None,
+) -> float:
+    """Move a proven-complete scan into its absolute, non-renewable commit reserve."""
+    _require_context_deadline(scan_deadline)
+    _require_context_deadline(publication_deadline)
+    if active_deadline is not None:
+        active_deadline[0] = publication_deadline
+    _set_remaining_statement_timeout(publication_deadline)
+    return publication_deadline
 
 
 def _reauthorize_packet_current(
@@ -2126,6 +2147,8 @@ def _build_context_packet_bounded(
     retrieval_facets: tuple[RetrievalFacet, ...] | None = None,
     required_search_anchors: tuple[RequiredSearchAnchor, ...] | None = None,
     deadline: float,
+    publication_deadline: float | None = None,
+    active_deadline: list[float] | None = None,
 ) -> tuple[ContextPacketRecord, bool]:
     """Build or reuse an exact immutable packet for one actor/repository snapshot."""
     normalized_task = " ".join(task.split())
@@ -2313,6 +2336,15 @@ def _build_context_packet_bounded(
     )
     if not completeness.complete:
         raise RequiredContextBudgetError("ASSURANCE_CONTEXT_INCOMPLETE")
+    # Retrieval has now proven the complete authorized row/operation-bounded result.
+    # Ranking, sealing, and publication use the separately bounded final second of
+    # the original absolute five-second construction target.
+    if publication_deadline is not None:
+        deadline = _enter_context_publication_phase(
+            scan_deadline=deadline,
+            publication_deadline=publication_deadline,
+            active_deadline=active_deadline,
+        )
     if change_aware and conflicts:
         _require_context_deadline(deadline)
         conflict_facet_sets: dict[uuid.UUID, set[str]] = {}
@@ -2562,8 +2594,10 @@ def build_context_packet(
     retrieval_facets: tuple[RetrievalFacet, ...] | None = None,
     required_search_anchors: tuple[RequiredSearchAnchor, ...] | None = None,
 ) -> tuple[ContextPacketRecord, bool]:
-    """Build or reuse an exact immutable packet under one database-enforced deadline."""
-    deadline = monotonic() + CONTEXT_SCAN_MAX_SECONDS
+    """Build or reuse a packet under independent scan and publication deadlines."""
+    started_at = monotonic()
+    deadline = started_at + CONTEXT_SCAN_MAX_SECONDS
+    publication_deadline = deadline + CONTEXT_PUBLICATION_MAX_SECONDS
     if connection.vendor != "postgresql":
         return _build_context_packet_bounded(
             actor=actor,
@@ -2574,10 +2608,12 @@ def build_context_packet(
             retrieval_facets=retrieval_facets,
             required_search_anchors=required_search_anchors,
             deadline=deadline,
+            publication_deadline=publication_deadline,
         )
+    active_deadline = [deadline]
     token = _deadline_sql_wrapper_active.set(True)
     try:
-        with connection.execute_wrapper(_deadline_statement_wrapper(deadline)):
+        with connection.execute_wrapper(_deadline_statement_wrapper(lambda: active_deadline[0])):
             return _build_context_packet_bounded(
                 actor=actor,
                 repository_id=repository_id,
@@ -2587,6 +2623,8 @@ def build_context_packet(
                 retrieval_facets=retrieval_facets,
                 required_search_anchors=required_search_anchors,
                 deadline=deadline,
+                publication_deadline=publication_deadline,
+                active_deadline=active_deadline,
             )
     finally:
         _deadline_sql_wrapper_active.reset(token)
