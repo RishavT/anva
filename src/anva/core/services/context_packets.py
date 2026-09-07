@@ -74,7 +74,7 @@ from anva.core.services.search_index import EMBEDDING_VERSION, INDEX_VERSION
 MAX_ASSERTION_CANDIDATES = 500
 MAX_RELATIONSHIP_CANDIDATES = 200
 CONTEXT_SCAN_VERSION = "authorized-conflict-scan-v1"
-CONTEXT_SCAN_PAGE_SIZE = 1_000
+CONTEXT_SCAN_PAGE_SIZE = 200
 CONTEXT_SCAN_MAX_ROWS = 50_000
 CONTEXT_SCAN_MAX_OPERATIONS = 100_000
 # Leave one second of the v3 five-second context target for ranking, sealing,
@@ -306,6 +306,7 @@ class ScannedCandidates(list[PacketCandidate]):
         self.provenance_by_assertion: dict[uuid.UUID, AssertionProvenance] = {}
         self.authorization: AuthorizedRepositoryScopes | None = None
         self.processed_count = 0
+        self.operation_count = 0
 
 
 def normalize_required_search_anchors(
@@ -840,7 +841,7 @@ def _assertion_candidates(
     deadline = deadline or monotonic() + CONTEXT_SCAN_MAX_SECONDS
     last_id: uuid.UUID | None = None
     scanned = 0
-    candidate_capacity = min(CONTEXT_SCAN_MAX_ROWS, CONTEXT_SCAN_MAX_OPERATIONS // 2)
+    candidate_capacity = CONTEXT_SCAN_MAX_ROWS
     while True:
         if monotonic() >= deadline:
             candidates.complete = False
@@ -849,13 +850,20 @@ def _assertion_candidates(
         if last_id is not None:
             page_query = page_query.filter(assertion_id__gt=last_id)
         remaining = candidate_capacity - scanned
+        remaining_operations = CONTEXT_SCAN_MAX_OPERATIONS - candidates.operation_count
         if remaining <= 0:
+            if remaining_operations < 1:
+                candidates.complete = False
+                break
+            candidates.operation_count += 1
             candidates.complete = not page_query.exists()
             break
-        page_limit = min(CONTEXT_SCAN_PAGE_SIZE, remaining)
-        page_rows = list(page_query[: page_limit + 1])
-        has_more = len(page_rows) > page_limit
-        provenance_page = page_rows[:page_limit]
+        page_limit = min(CONTEXT_SCAN_PAGE_SIZE, remaining, remaining_operations - 1)
+        if page_limit <= 0:
+            candidates.complete = False
+            break
+        provenance_page = list(page_query[:page_limit])
+        candidates.operation_count += 1 + len(provenance_page)
         if not provenance_page:
             break
         assertions = [provenance.assertion for provenance in provenance_page]
@@ -944,10 +952,16 @@ def _assertion_candidates(
                     source_assertion_id=assertion.id,
                 )
             )
-        if not has_more:
+        if len(provenance_page) < page_limit:
             break
         if len(assertions) == remaining:
-            candidates.complete = False
+            # The only lookahead is an existence probe at the total-cap boundary;
+            # it does not materialize an unaccounted candidate row.
+            if candidates.operation_count >= CONTEXT_SCAN_MAX_OPERATIONS:
+                candidates.complete = False
+            else:
+                candidates.operation_count += 1
+                candidates.complete = not eligible.filter(assertion_id__gt=last_id).exists()
             break
     return candidates
 
@@ -1345,6 +1359,7 @@ def _conflict_candidates(
     deadline: float | None = None,
     selected_assertion_provenance: dict[uuid.UUID, AssertionProvenance] | None = None,
     authorization: AuthorizedRepositoryScopes | None = None,
+    prior_operation_count: int = 0,
 ) -> list[PacketCandidate]:
     if not selected_assertion_ids:
         return []
@@ -1361,7 +1376,8 @@ def _conflict_candidates(
     scan_complete = True
     deadline = deadline or monotonic() + CONTEXT_SCAN_MAX_SECONDS
     last_id: uuid.UUID | None = None
-    candidate_capacity = min(CONTEXT_SCAN_MAX_ROWS, CONTEXT_SCAN_MAX_OPERATIONS // 2)
+    candidate_capacity = CONTEXT_SCAN_MAX_ROWS
+    operation_count = prior_operation_count
     while True:
         if monotonic() >= deadline:
             scan_complete = False
@@ -1370,13 +1386,20 @@ def _conflict_candidates(
         if last_id is not None:
             page_query = page_query.filter(id__gt=last_id)
         remaining = candidate_capacity - len(selected_assertion_ids) - len(bounded_conflicts)
+        remaining_operations = CONTEXT_SCAN_MAX_OPERATIONS - operation_count
         if remaining <= 0:
+            if remaining_operations < 1:
+                scan_complete = False
+                break
+            operation_count += 1
             scan_complete = not page_query.exists()
             break
-        page_limit = min(CONTEXT_SCAN_PAGE_SIZE, remaining)
-        page_rows = list(page_query[: page_limit + 1])
-        has_more = len(page_rows) > page_limit
-        page = page_rows[:page_limit]
+        page_limit = min(CONTEXT_SCAN_PAGE_SIZE, remaining, remaining_operations - 1)
+        if page_limit <= 0:
+            scan_complete = False
+            break
+        page = list(page_query[:page_limit])
+        operation_count += 1 + len(page)
         if not page:
             break
         bounded_conflicts.extend(page)
@@ -1384,14 +1407,21 @@ def _conflict_candidates(
             scan_complete = False
             break
         last_id = page[-1].id
-        if not has_more:
+        if len(page) < page_limit:
             break
         if len(page) == remaining:
-            scan_complete = False
+            # Keep the row budget exact: probe only for existence beyond the
+            # consumed keyset instead of fetching a page-size-plus-one row.
+            if operation_count >= CONTEXT_SCAN_MAX_OPERATIONS:
+                scan_complete = False
+            else:
+                operation_count += 1
+                scan_complete = not conflict_queryset.filter(id__gt=last_id).exists()
             break
     candidates = ScannedCandidates()
     candidates.complete = scan_complete
     candidates.processed_count = len(bounded_conflicts)
+    candidates.operation_count = operation_count
     conflict_endpoint_ids = {
         assertion_id
         for conflict in bounded_conflicts
@@ -2248,6 +2278,7 @@ def _build_context_packet_bounded(
         deadline=deadline,
         selected_assertion_provenance=getattr(assertions, "provenance_by_assertion", None),
         authorization=getattr(assertions, "authorization", None),
+        prior_operation_count=int(getattr(assertions, "operation_count", 0)),
     )
     _require_context_deadline(deadline)
     completeness_payload = [

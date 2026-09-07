@@ -135,7 +135,11 @@ def test_assertion_scan_finds_relevance_after_legacy_uuid_prefix() -> None:
         SimpleNamespace(assertion_id=assertion.id, assertion=assertion) for assertion in assertions
     ]
     ordered = MagicMock()
-    ordered.__getitem__.return_value = eligible_rows
+    ordered.__getitem__.side_effect = [
+        eligible_rows[:200],
+        eligible_rows[200:400],
+        eligible_rows[400:],
+    ]
     ordered.filter.return_value = ordered
     initial_provenance = MagicMock()
     initial_provenance.order_by.return_value.values.return_value = MagicMock()
@@ -171,8 +175,16 @@ def test_assertion_scan_finds_relevance_after_legacy_uuid_prefix() -> None:
 
 
 class _KeysetRows:
-    def __init__(self, rows: list[Any]) -> None:
+    def __init__(
+        self,
+        rows: list[Any],
+        *,
+        slices: list[slice] | None = None,
+        probes: list[int] | None = None,
+    ) -> None:
         self.rows = rows
+        self.slices = slices if slices is not None else []
+        self.probes = probes if probes is not None else []
 
     def filter(self, *_args: Any, **kwargs: Any) -> _KeysetRows:
         minimum = kwargs.get("id__gt", kwargs.get("assertion_id__gt"))
@@ -183,7 +195,9 @@ class _KeysetRows:
                 row
                 for row in self.rows
                 if getattr(row, "assertion_id", getattr(row, "id", None)) > minimum
-            ]
+            ],
+            slices=self.slices,
+            probes=self.probes,
         )
 
     def select_related(self, *_args: str) -> _KeysetRows:
@@ -196,9 +210,11 @@ class _KeysetRows:
         return self
 
     def exists(self) -> bool:
+        self.probes.append(len(self.rows))
         return bool(self.rows)
 
     def __getitem__(self, key: slice) -> list[Any]:
+        self.slices.append(key)
         return self.rows[key]
 
     def __iter__(self) -> Any:
@@ -261,6 +277,11 @@ def test_assertion_scan_cap_boundary(row_count: int, complete: bool) -> None:
     assert cast(Any, candidates).processed_count == min(row_count, 5)
     assert cast(Any, candidates).processed_count <= 5
     assert cast(Any, candidates).complete is complete
+    assert all(item.stop is not None and item.stop <= 3 for item in eligible.slices)
+    assert eligible.probes == ([row_count - 5] if row_count >= 5 else [])
+    assert cast(Any, candidates).operation_count == (
+        min(row_count, 5) + len(eligible.slices) + len(eligible.probes)
+    )
     digest = _json_hash(
         [
             {"id": str(candidate.source_assertion_id), "payload": candidate.payload}
@@ -713,7 +734,6 @@ def test_required_packing_fails_stably_at_candidate_and_operation_bounds() -> No
 @pytest.mark.unit
 @pytest.mark.parametrize("row_count", [500, 501])
 def test_conflict_retrieval_keyset_scans_legacy_boundary(row_count: int) -> None:
-    ordered = MagicMock()
     assertion_id = uuid.uuid4()
     rows = [
         SimpleNamespace(
@@ -723,17 +743,12 @@ def test_conflict_retrieval_keyset_scans_legacy_boundary(row_count: int) -> None
         )
         for index in range(row_count)
     ]
-    ordered.__getitem__.return_value = rows
-    ordered.filter.return_value = ordered
-    selected = MagicMock()
-    selected.order_by.return_value = ordered
-    queryset = MagicMock()
-    queryset.select_related.return_value = selected
+    ordered = _KeysetRows(rows)
 
     with (
         patch(
             "anva.core.services.context_packets._open_conflicts_for_assertions",
-            return_value=queryset,
+            return_value=ordered,
         ) as open_conflicts,
         patch("anva.core.services.context_packets._authorized_provenance") as provenance,
     ):
@@ -753,8 +768,10 @@ def test_conflict_retrieval_keyset_scans_legacy_boundary(row_count: int) -> None
     assert open_conflicts.call_args.kwargs["selected_assertion_ids"] == {assertion_id}
     assert open_conflicts.call_args.kwargs["relevant_assertion_ids"] == {assertion_id}
     assert open_conflicts.call_args.kwargs["change_aware"] is True
-    selected.order_by.assert_called_once_with("id")
-    ordered.__getitem__.assert_called_once_with(slice(None, CONTEXT_SCAN_PAGE_SIZE + 1, None))
+    assert all(
+        item.stop is not None and item.stop <= CONTEXT_SCAN_PAGE_SIZE for item in ordered.slices
+    )
+    assert ordered.probes == []
 
 
 @pytest.mark.unit
@@ -813,6 +830,11 @@ def test_conflict_scan_cap_boundary_with_non_aligned_remainder(
     assert cast(Any, candidates).processed_count == min(row_count, 5)
     assert cast(Any, candidates).processed_count <= 5
     assert cast(Any, candidates).complete is complete
+    assert all(item.stop is not None and item.stop <= 3 for item in conflicts.slices)
+    assert conflicts.probes == ([row_count - 5] if row_count >= 5 else [])
+    assert cast(Any, candidates).operation_count == (
+        min(row_count, 5) + len(conflicts.slices) + len(conflicts.probes)
+    )
     digest = _json_hash(
         [
             {"id": str(candidate.source_conflict_id), "payload": candidate.payload}
@@ -861,7 +883,7 @@ def test_change_aware_conflicts_prefilter_irrelevant_rows_before_bound() -> None
         )
 
     relevant_queryset.select_related.assert_called_once_with("left_assertion", "right_assertion")
-    assert ordered.__getitem__.call_args.args[0] == slice(None, CONTEXT_SCAN_PAGE_SIZE + 1, None)
+    assert ordered.__getitem__.call_args.args[0] == slice(None, CONTEXT_SCAN_PAGE_SIZE, None)
 
 
 @pytest.mark.unit
