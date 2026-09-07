@@ -1064,6 +1064,18 @@ class AssertionConflict(TenantOwnedModel):
     resolved_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(
+                fields=["organization", "left_assertion", "id"],
+                condition=Q(status="OPEN"),
+                name="core_conflict_open_left_idx",
+            ),
+            models.Index(
+                fields=["organization", "right_assertion", "id"],
+                condition=Q(status="OPEN"),
+                name="core_conflict_open_right_idx",
+            ),
+        ]
         constraints: ClassVar[list[models.BaseConstraint]] = [
             models.UniqueConstraint(
                 fields=["organization", "id"],

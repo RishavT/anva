@@ -1952,7 +1952,9 @@ def assurance_start(
     return JsonResponse(
         {
             "assurance_run_id": str(result.run.id),
-            "evaluator_task_id": str(result.evaluator_task.id),
+            "evaluator_task_id": (
+                str(result.evaluator_task.id) if result.evaluator_task is not None else None
+            ),
             "state": result.run.state,
             "head_commit": result.run.head_commit,
             "input_hash": result.run.input_hash,

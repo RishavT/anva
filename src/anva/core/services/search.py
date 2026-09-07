@@ -294,6 +294,99 @@ ORDER BY fused.rrf_score DESC, candidate.chunk_id
 LIMIT %(result_limit)s
 """
 
+_AUTHORIZED_CHUNKS_CTE = _SEARCH_SQL.split("query_input AS (", maxsplit=1)[0]
+_BATCH_SEARCH_SQL = (
+    _AUTHORIZED_CHUNKS_CTE  # noqa: S608 - composed exclusively from static SQL literals
+    + """
+query_input AS (
+    SELECT
+        input.position,
+        websearch_to_tsquery('simple', input.query) AS ts_query,
+        input.embedding::vector AS embedding
+    FROM jsonb_to_recordset(%(queries)s::jsonb)
+        AS input(position integer, query text, embedding text)
+),
+lexical_ranked AS (
+    SELECT
+        query_input.position,
+        candidate.chunk_id,
+        row_number() OVER (
+            PARTITION BY query_input.position
+            ORDER BY ts_rank_cd(candidate.search_vector, query_input.ts_query) DESC,
+                     candidate.chunk_id
+        ) AS lexical_rank
+    FROM authorized_chunks candidate
+    CROSS JOIN query_input
+    WHERE candidate.search_vector @@ query_input.ts_query
+),
+lexical AS (
+    SELECT * FROM lexical_ranked WHERE lexical_rank <= %(candidate_limit)s
+),
+semantic_ranked AS (
+    SELECT
+        query_input.position,
+        candidate.chunk_id,
+        row_number() OVER (
+            PARTITION BY query_input.position
+            ORDER BY candidate.embedding <=> query_input.embedding, candidate.chunk_id
+        ) AS semantic_rank
+    FROM authorized_chunks candidate
+    CROSS JOIN query_input
+),
+semantic AS (
+    SELECT * FROM semantic_ranked WHERE semantic_rank <= %(candidate_limit)s
+),
+fused AS (
+    SELECT
+        position,
+        candidate_id AS chunk_id,
+        min(lexical_rank) AS lexical_rank,
+        min(semantic_rank) AS semantic_rank,
+        sum(score) AS rrf_score
+    FROM (
+        SELECT position, chunk_id AS candidate_id, lexical_rank,
+               NULL::bigint AS semantic_rank,
+               1.0 / (%(rrf_k)s + lexical_rank) AS score
+        FROM lexical
+        UNION ALL
+        SELECT position, chunk_id AS candidate_id, NULL::bigint AS lexical_rank,
+               semantic_rank, 1.0 / (%(rrf_k)s + semantic_rank) AS score
+        FROM semantic
+    ) ranked
+    GROUP BY position, candidate_id
+),
+results AS (
+    SELECT
+        fused.position,
+        candidate.chunk_id,
+        candidate.text,
+        candidate.content_hash,
+        candidate.pointer,
+        candidate.canonical_url,
+        candidate.access_scope_id,
+        candidate.source_location_id,
+        candidate.source_observation_id,
+        candidate.access_snapshot_id,
+        candidate.observed_at,
+        fused.lexical_rank,
+        fused.semantic_rank,
+        fused.rrf_score,
+        row_number() OVER (
+            PARTITION BY fused.position
+            ORDER BY fused.rrf_score DESC, candidate.chunk_id
+        ) AS result_rank
+    FROM fused
+    JOIN authorized_chunks candidate ON candidate.chunk_id = fused.chunk_id
+)
+SELECT position, chunk_id, text, content_hash, pointer, canonical_url,
+       access_scope_id, source_location_id, source_observation_id,
+       access_snapshot_id, observed_at, lexical_rank, semantic_rank, rrf_score
+FROM results
+WHERE result_rank <= %(result_limit)s
+ORDER BY position, rrf_score DESC, chunk_id
+"""
+)
+
 
 @dataclass(frozen=True, slots=True)
 class SearchResult:
@@ -436,4 +529,90 @@ def search_chunks(
         query=normalized_query,
         authorization_hash=authorization_hash,
         results=results,
+    )
+
+
+def search_chunks_batch(
+    *,
+    actor: ActorContext,
+    repository_id: uuid.UUID,
+    queries: tuple[str, ...],
+    phase: str | None = None,
+    limit: int = 20,
+) -> tuple[SearchResponse, ...]:
+    """Rank distinct queries independently over one authorized chunk materialization."""
+    normalized_queries = tuple(" ".join(query.split()) for query in queries)
+    if not normalized_queries or any(
+        not query or len(query) > MAX_QUERY_CHARACTERS for query in normalized_queries
+    ):
+        raise ValueError("queries must contain text between 1 and 500 characters")
+    if limit < 1 or limit > MAX_SEARCH_RESULTS:
+        raise ValueError("limit must contain between 1 and 100 results")
+    authorize_action(actor=actor, repository_id=repository_id, action=Action.SEARCH)
+    authorization_payload = {
+        "organization_id": str(actor.organization_id),
+        "repository_id": str(repository_id),
+        "actor_type": actor.actor_type,
+        "actor_id": actor.actor_id,
+        "credential_id": str(actor.credential_id) if actor.credential_id else None,
+        "action": Action.SEARCH.value,
+        "source_location_ids": None,
+    }
+    authorization_hash = hashlib.sha256(
+        json.dumps(authorization_payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    query_rows = [
+        {
+            "position": position,
+            "query": query,
+            "embedding": _vector_literal(
+                deterministic_embedding(" ".join((query, *phase_terms(phase))))
+            ),
+        }
+        for position, query in enumerate(normalized_queries)
+    ]
+    parameters: dict[str, Any] = {
+        "organization_id": actor.organization_id,
+        "repository_id": repository_id,
+        "actor_type": actor.actor_type,
+        "actor_id": uuid.UUID(actor.actor_id),
+        "credential_id": actor.credential_id,
+        "action": Action.SEARCH.value,
+        "index_version": INDEX_VERSION,
+        "embedding_version": EMBEDDING_VERSION,
+        "queries": json.dumps(query_rows, separators=(",", ":")),
+        "candidate_limit": min(MAX_SEARCH_RESULTS * 2, max(limit * 4, 50)),
+        "rrf_k": RRF_K,
+        "result_limit": limit,
+        "source_location_ids": None,
+    }
+    with connection.cursor() as cursor:
+        cursor.execute(_BATCH_SEARCH_SQL, parameters)
+        rows = cursor.fetchall()
+    grouped: list[list[SearchResult]] = [[] for _query in normalized_queries]
+    for row in rows:
+        grouped[row[0]].append(
+            SearchResult(
+                chunk_id=row[1],
+                text=row[2],
+                content_hash=row[3],
+                pointer=row[4],
+                canonical_url=row[5],
+                access_scope_id=row[6],
+                source_location_id=row[7],
+                source_observation_id=row[8],
+                access_snapshot_id=row[9],
+                observed_at=row[10],
+                explanation=RankingExplanation(
+                    lexical_rank=row[11],
+                    semantic_rank=row[12],
+                    reciprocal_rank_score=float(row[13]),
+                    phase=phase.upper() if phase else None,
+                    phase_terms=phase_terms(phase),
+                ),
+            )
+        )
+    return tuple(
+        SearchResponse(query=query, authorization_hash=authorization_hash, results=tuple(results))
+        for query, results in zip(normalized_queries, grouped, strict=True)
     )
