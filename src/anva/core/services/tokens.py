@@ -285,6 +285,12 @@ def rotate_repository_token(
         if old_token.revoked_at is not None:
             raise ResourceNotFoundError("Governed record was not found")
         actions = frozenset(Action(value) for value in old_token.allowed_actions)
+        for copied_action in actions:
+            authorize_action(
+                actor=actor,
+                action=copied_action,
+                repository_id=old_token.repository_id,
+            )
         issued = _create_token(
             organization=old_token.organization,
             repository=old_token.repository,
