@@ -2304,6 +2304,20 @@ def _build_context_packet_bounded(
         prior_operation_count=int(getattr(assertions, "operation_count", 0)),
     )
     _require_context_deadline(deadline)
+    scan_complete = bool(
+        getattr(assertions, "complete", True) and getattr(conflicts, "complete", True)
+    )
+    if not scan_complete:
+        raise RequiredContextBudgetError("ASSURANCE_CONTEXT_INCOMPLETE")
+    # Both authorized, row/operation-bounded database scans are complete. Building
+    # their canonical digest is in-memory result sealing, so it belongs to the
+    # separately bounded publication phase rather than consuming scan time.
+    if publication_deadline is not None:
+        deadline = _enter_context_publication_phase(
+            scan_deadline=deadline,
+            publication_deadline=publication_deadline,
+            active_deadline=active_deadline,
+        )
     completeness_payload = [
         {
             "kind": "assertion",
@@ -2321,7 +2335,6 @@ def _build_context_packet_bounded(
         }
         for candidate in conflicts
     ]
-    _require_context_deadline(deadline)
     completeness = ContextCompleteness(
         assertion_count=len(assertions),
         conflict_count=len(conflicts),
@@ -2330,21 +2343,8 @@ def _build_context_packet_bounded(
             + int(getattr(conflicts, "processed_count", len(conflicts)))
         ),
         digest=_json_hash(completeness_payload),
-        complete=bool(
-            getattr(assertions, "complete", True) and getattr(conflicts, "complete", True)
-        ),
+        complete=scan_complete,
     )
-    if not completeness.complete:
-        raise RequiredContextBudgetError("ASSURANCE_CONTEXT_INCOMPLETE")
-    # Retrieval has now proven the complete authorized row/operation-bounded result.
-    # Ranking, sealing, and publication use the separately bounded final second of
-    # the original absolute five-second construction target.
-    if publication_deadline is not None:
-        deadline = _enter_context_publication_phase(
-            scan_deadline=deadline,
-            publication_deadline=publication_deadline,
-            active_deadline=active_deadline,
-        )
     if change_aware and conflicts:
         _require_context_deadline(deadline)
         conflict_facet_sets: dict[uuid.UUID, set[str]] = {}

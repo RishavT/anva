@@ -45,6 +45,7 @@ from anva.core.models import (
     content_hash,
 )
 from anva.core.services import assurance as assurance_service
+from anva.core.services import context_packets as context_packet_service
 from anva.core.services.assurance import (
     REQUIRED_ASSURANCE_CONTEXT_LIMITATION_PREFIX,
     claim_evaluator_task,
@@ -758,6 +759,27 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         unified_diff=DIFF,
     )
     reference_time = timezone.now() + timedelta(seconds=5)
+    # Reproduce a loaded runner reaching the four-second edge only after the
+    # archive-heavy authorized scan is complete, while its canonical result digest
+    # is being sealed. That CPU-only sealing work must use the fixed fifth second.
+    context_clock = [0.0]
+    archive_digest_crossed_scan_edge = [False]
+    original_json_hash = context_packet_service._json_hash
+
+    def hash_with_archive_digest_delay(value: object) -> str:
+        if (
+            isinstance(value, list)
+            and len(value) > 500
+            and value
+            and isinstance(value[0], dict)
+            and value[0].get("kind") in {"assertion", "conflict"}
+        ):
+            context_clock[0] = 4.2
+            archive_digest_crossed_scan_edge[0] = True
+        return original_json_hash(value)
+
+    monkeypatch.setattr(context_packet_service, "monotonic", lambda: context_clock[0])
+    monkeypatch.setattr(context_packet_service, "_json_hash", hash_with_archive_digest_delay)
     context_started = time.monotonic()
     captured_query_counts: list[int] = []
     last_context_statement: list[str] = []
@@ -817,6 +839,7 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         last_context_statement,
     )
     assert captured_query_counts[0] < 200
+    assert archive_digest_crossed_scan_edge == [True]
     assert started.evaluator_task is not None, (
         started.run.state,
         started.run.failure_code,
