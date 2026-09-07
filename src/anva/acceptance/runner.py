@@ -832,6 +832,7 @@ class AcceptanceRunner:
                 "repository_id": state.identities["repository_id"],
                 "access_scope_id": state.identities["access_scope_id"],
                 "reviewer_service_identity_id": state.identities["reviewer_service_identity_id"],
+                "token_id": token_id,
                 "reviewer_token_id": state.identities["reviewer_token_id"],
                 "anva_token": token,
                 "reviewer_token": reviewer_token,
@@ -865,6 +866,16 @@ class AcceptanceRunner:
             "reviewer_token_id",
         ):
             state.identities[key] = _string(handoff, key)
+        # schema_version 1 handoffs created before token revocation support do not
+        # contain the initiator token identifier.  Keep accepting those files;
+        # every newly written handoff includes it for public API cleanup.
+        if "token_id" in handoff:
+            try:
+                uuid.UUID(_string(handoff, "token_id"))
+            except ValueError as error:
+                raise AcceptanceRunnerError(
+                    "Bootstrap credential handoff has an invalid token identity"
+                ) from error
         token = _string(handoff, "anva_token")
         _string(handoff, "reviewer_token")
         _string(handoff, "expires_at")

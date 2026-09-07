@@ -53,6 +53,7 @@ ACTION_VALUES: Final[tuple[str, ...]] = (
 
 ACCEPTANCE_INITIATOR_ACTIONS: Final[frozenset[str]] = frozenset(
     {
+        "token.manage",
         "source.view",
         "source.sync",
         "work.manage",

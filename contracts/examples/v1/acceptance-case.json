@@ -128,6 +128,7 @@
                 "search.query",
                 "source.sync",
                 "source.view",
+                "token.manage",
                 "work.manage"
               ],
               "repository_key": "repository"

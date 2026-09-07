@@ -77,6 +77,7 @@ def test_case_declares_exact_acceptance_principal_actions() -> None:
         "search.query",
         "source.sync",
         "source.view",
+        "token.manage",
         "work.manage",
     ]
     assert cast(list[str], reviewer_grants[0]["actions"]) == ["assurance.review"]
