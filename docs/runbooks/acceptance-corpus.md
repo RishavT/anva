@@ -117,9 +117,10 @@ The closed `organization.bootstrap_scope` object explicitly requests one reposit
 membership with the least-privilege `VIEWER` role, and exactly two named service identities. The
 initiator has only the actions needed by the acceptance journey (`artifact.create`, `artifact.view`,
 `assurance.execute`, `canvas.view`, `evidence.submit`, `evidence.view`, `knowledge.view`,
-`mcp.context`, `policy.manage`, `policy.view`, `search.query`, `source.sync`, `source.view`, and
-`work.manage`) on that repository. The independent reviewer has only `assurance.review` on the
-same repository. The access scope names every requested membership, repository, and service
+`mcp.context`, `policy.manage`, `policy.view`, `search.query`, `source.sync`, `source.view`,
+`token.manage`, and `work.manage`) on that repository. The independent reviewer has only
+`assurance.review` on the same repository. The access scope names every requested membership,
+repository, and service
 identity; it never uses an `all_*` binding.
 
 Keys, role codes, action values, repository grants, and access-scope references are closed and

@@ -1171,6 +1171,9 @@ def test_public_runner_pauses_for_external_review_rejects_tamper_and_seals(
         path == f"/assurance-runs/{_id(36)}" for _method, path, _token, _body in product.calls
     )
     credential_bytes = (tmp_path / "credentials" / "credentials.json").read_bytes()
+    credentials = json.loads(credential_bytes)
+    assert credentials["token_id"] == _id(7)
+    assert credentials["token_id"] != credentials["reviewer_token_id"]
     state_bytes = runner.config.state_path.read_bytes()
     assert b"initiator-token-material" in credential_bytes
     assert b"reviewer-token-material" in credential_bytes
@@ -1332,6 +1335,48 @@ def test_bootstrap_crash_after_handoff_reconciles_without_second_bootstrap(
     assert resumed.status == "AWAITING_EXTERNAL_REVIEW"
     assert resumed.identities["reviewer_service_identity_id"] == _id(8)
     assert resumed.identities["reviewer_token_id"] == _id(9)
+    assert sum(path == "/bootstrap" for _method, path, _token, _body in product.calls) == 1
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("primary_token_id", [None, "not-a-token-uuid"])
+def test_bootstrap_reconcile_handles_legacy_or_rejects_invalid_primary_token_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    primary_token_id: str | None,
+) -> None:
+    runner, product = _runner(tmp_path, monkeypatch)
+    original_save = AcceptanceRunner._save
+    crashed = False
+
+    def crash_after_handoff(self: AcceptanceRunner, state: ResumeState) -> None:
+        nonlocal crashed
+        if state.status == "PREPARING" and not crashed:
+            crashed = True
+            raise RuntimeError("injected crash after credential handoff")
+        original_save(self, state)
+
+    with patch.object(AcceptanceRunner, "_save", crash_after_handoff):
+        with pytest.raises(RuntimeError, match="injected crash"):
+            runner.start(bootstrap_secret="bootstrap-material", token=None)
+    assert runner.config.credential_output is not None
+    handoff = json.loads(runner.config.credential_output.read_bytes())
+    if primary_token_id is None:
+        handoff.pop("token_id")
+    else:
+        handoff["token_id"] = primary_token_id
+    runner.config.credential_output.write_text(json.dumps(handoff), encoding="utf-8")
+    runner.config.credential_output.chmod(0o600)
+
+    resumed_runner = AcceptanceRunner(runner.config)
+    if primary_token_id is not None:
+        with pytest.raises(AcceptanceRunnerError, match="invalid token identity"):
+            resumed_runner.start(bootstrap_secret=None, token=None)
+        assert sum(path == "/bootstrap" for _method, path, _token, _body in product.calls) == 1
+        return
+    resumed = resumed_runner.start(bootstrap_secret=None, token=None)
+
+    assert resumed.status == "AWAITING_EXTERNAL_REVIEW"
     assert sum(path == "/bootstrap" for _method, path, _token, _body in product.calls) == 1
 
 

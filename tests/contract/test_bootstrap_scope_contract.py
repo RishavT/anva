@@ -64,6 +64,16 @@ def test_bootstrap_public_contract_separates_scoped_and_legacy_requests() -> Non
     validator.validate(scoped)
     validator.validate(legacy)
     assert "scope" in scoped
+    scoped_body = cast(dict[str, object], scoped["scope"])
+    service_identities = cast(list[dict[str, object]], scoped_body["service_identities"])
+    initiator_actions = cast(
+        list[str], cast(list[dict[str, object]], service_identities[0]["grants"])[0]["actions"]
+    )
+    reviewer_actions = cast(
+        list[str], cast(list[dict[str, object]], service_identities[1]["grants"])[0]["actions"]
+    )
+    assert "token.manage" in initiator_actions
+    assert reviewer_actions == ["assurance.review"]
     for legacy_field in (
         "admin_email",
         "admin_display_name",

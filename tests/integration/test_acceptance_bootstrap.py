@@ -14,7 +14,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 
 from anva.contracts.acceptance import validate_acceptance_http_response
 from anva.contracts.bootstrap_scope import acceptance_bootstrap_scope_payload
-from anva.core.exceptions import ResourceNotFoundError
+from anva.core.exceptions import AuthenticationError, ResourceNotFoundError
 from anva.core.models import (
     AccessGrant,
     AccessScope,
@@ -24,6 +24,7 @@ from anva.core.models import (
     AuditEvent,
     Membership,
     Organization,
+    OutboxEvent,
     Repository,
     RepositoryAccessToken,
     Role,
@@ -167,6 +168,13 @@ def test_scoped_bootstrap_creates_only_explicit_records_bindings_and_action_gran
     initiator_actions = frozenset(identities[0]["grants"][0]["actions"])
     assert initiator.credential_actions == initiator_actions
     assert reviewer.credential_actions == frozenset({Action.ASSURANCE_REVIEW.value})
+    assert result["token_id"] != result["reviewer_token_id"]
+    assert RepositoryAccessToken.objects.get(id=result["token_id"]).service_identity_id == (
+        uuid.UUID(result["service_identity_id"])
+    )
+    assert RepositoryAccessToken.objects.get(
+        id=result["reviewer_token_id"]
+    ).service_identity_id == uuid.UUID(result["reviewer_service_identity_id"])
     assert (
         set(
             AccessGrant.objects.filter(
@@ -219,6 +227,108 @@ def test_scoped_bootstrap_creates_only_explicit_records_bindings_and_action_gran
             repository_id=omitted_repository.id,
             access_scope_id=uuid.UUID(result["access_scope_id"]),
         )
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+@override_settings(BOOTSTRAP_SECRET="acceptance-bootstrap-secret")
+def test_bootstrap_ids_support_public_revocation_of_both_official_credentials() -> None:
+    bootstrap = Client().post(
+        "/api/v1/bootstrap",
+        data=json.dumps(_scoped_payload(suffix="revocation")),
+        content_type="application/json",
+        headers={"X-Anva-Bootstrap-Secret": "acceptance-bootstrap-secret"},
+    )
+    assert bootstrap.status_code == 201, bootstrap.json()
+    credentials = bootstrap.json()
+    assert credentials["token_id"] != credentials["reviewer_token_id"]
+    administrator = Client(HTTP_AUTHORIZATION=f"Bearer {credentials['token']}")
+
+    reviewer_revoke = administrator.delete(f"/api/v1/tokens/{credentials['reviewer_token_id']}")
+    assert reviewer_revoke.status_code == 200, reviewer_revoke.json()
+    assert reviewer_revoke.json() == {
+        "id": credentials["reviewer_token_id"],
+        "status": "REVOKED",
+    }
+    with pytest.raises(AuthenticationError):
+        authenticate_bearer(f"Bearer {credentials['reviewer_token']}")
+
+    administrator_revoke = administrator.delete(f"/api/v1/tokens/{credentials['token_id']}")
+    assert administrator_revoke.status_code == 200, administrator_revoke.json()
+    assert administrator_revoke.json() == {
+        "id": credentials["token_id"],
+        "status": "REVOKED",
+    }
+    with pytest.raises(AuthenticationError):
+        authenticate_bearer(f"Bearer {credentials['token']}")
+    persisted_audit = json.dumps(
+        list(AuditEvent.objects.values("metadata", "actor_id", "authorization_path")),
+        sort_keys=True,
+    )
+    assert credentials["token"] not in persisted_audit
+    assert credentials["reviewer_token"] not in persisted_audit
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
+@override_settings(BOOTSTRAP_SECRET="acceptance-bootstrap-secret")
+def test_acceptance_initiator_cannot_rotate_reviewer_authority_but_can_rotate_own() -> None:
+    bootstrap = Client().post(
+        "/api/v1/bootstrap",
+        data=json.dumps(_scoped_payload(suffix="rotation-boundary")),
+        content_type="application/json",
+        headers={"X-Anva-Bootstrap-Secret": "acceptance-bootstrap-secret"},
+    )
+    assert bootstrap.status_code == 201, bootstrap.json()
+    credentials = bootstrap.json()
+    original_admin_actions = authenticate_bearer(
+        f"Bearer {credentials['token']}"
+    ).credential_actions
+    administrator = Client(HTTP_AUTHORIZATION=f"Bearer {credentials['token']}")
+    credential_count = RepositoryAccessToken.objects.count()
+    audit_count = AuditEvent.objects.count()
+    outbox_count = OutboxEvent.objects.count()
+
+    rejected = administrator.post(
+        f"/api/v1/tokens/{credentials['reviewer_token_id']}/rotate",
+        data=json.dumps({"expires_in_seconds": 3600}),
+        content_type="application/json",
+    )
+
+    assert rejected.status_code == 404
+    assert rejected.json()["code"] == "resource_not_found"
+    assert "token" not in rejected.json()
+    rejected_body = rejected.content.decode()
+    assert credentials["token"] not in rejected_body
+    assert credentials["reviewer_token"] not in rejected_body
+    assert RepositoryAccessToken.objects.count() == credential_count
+    assert AuditEvent.objects.count() == audit_count
+    assert OutboxEvent.objects.count() == outbox_count
+    reviewer = RepositoryAccessToken.objects.get(id=credentials["reviewer_token_id"])
+    assert reviewer.revoked_at is None
+    assert authenticate_bearer(f"Bearer {credentials['reviewer_token']}").credential_id == (
+        reviewer.id
+    )
+
+    rotated = administrator.post(
+        f"/api/v1/tokens/{credentials['token_id']}/rotate",
+        data=json.dumps({"expires_in_seconds": 3600}),
+        content_type="application/json",
+    )
+
+    assert rotated.status_code == 201, rotated.json()
+    replacement = rotated.json()
+    assert replacement["id"] != credentials["token_id"]
+    assert replacement["token"] != credentials["token"]
+    assert RepositoryAccessToken.objects.count() == credential_count + 1
+    assert AuditEvent.objects.count() == audit_count + 1
+    assert OutboxEvent.objects.count() == outbox_count + 1
+    assert RepositoryAccessToken.objects.get(id=credentials["token_id"]).revoked_at is not None
+    replacement_actor = authenticate_bearer(f"Bearer {replacement['token']}")
+    assert replacement_actor.credential_actions == original_admin_actions
+    assert authenticate_bearer(
+        f"Bearer {credentials['reviewer_token']}"
+    ).credential_actions == frozenset({Action.ASSURANCE_REVIEW.value})
 
 
 @pytest.mark.integration
