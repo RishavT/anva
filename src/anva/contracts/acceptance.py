@@ -965,7 +965,7 @@ MANUAL_DIFF_RESPONSE: Final[dict[str, object]] = _closed(
 ASSURANCE_START_RESPONSE: Final[dict[str, object]] = _closed(
     {
         "assurance_run_id": UUID,
-        "evaluator_task_id": UUID,
+        "evaluator_task_id": {"oneOf": [UUID, {"type": "null"}]},
         "state": {"type": "string", "minLength": 1, "maxLength": 32},
         "head_commit": COMMIT,
         "input_hash": SHA256,

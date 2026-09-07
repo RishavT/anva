@@ -3,18 +3,25 @@
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from copy import deepcopy
 from datetime import timedelta
-from itertools import cycle, islice
+from itertools import chain, cycle, islice, repeat
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
+from django.db import DatabaseError, connection
+from django.db.models import Subquery
 from django.utils import timezone
 
 from anva.contracts.catalog import EXAMPLES
-from anva.core.exceptions import IdempotencyConflictError, LeaseConflictError, ResourceNotFoundError
+from anva.core.exceptions import (
+    IdempotencyConflictError,
+    LeaseConflictError,
+    ResourceNotFoundError,
+)
 from anva.core.models import (
     AccessScope,
     AccessScopeMembership,
@@ -22,7 +29,11 @@ from anva.core.models import (
     AssertionProvenance,
     AssertionValidityInterval,
     AssuranceRun,
+    ContextPacketCitation,
     ContextPacketItem,
+    ContextPacketRecord,
+    EvaluatorTask,
+    ImmutableArtifact,
     KnowledgeAssertion,
     Membership,
     Organization,
@@ -31,7 +42,9 @@ from anva.core.models import (
     SourceChunkVisibility,
     SourceConnection,
     User,
+    content_hash,
 )
+from anva.core.services import assurance as assurance_service
 from anva.core.services.assurance import (
     REQUIRED_ASSURANCE_CONTEXT_LIMITATION_PREFIX,
     claim_evaluator_task,
@@ -39,8 +52,15 @@ from anva.core.services.assurance import (
     start_assurance,
     submit_evaluator_result,
 )
+from anva.core.services.authorization import Action, resolve_authorized_repository_scopes
 from anva.core.services.context import ActorContext
-from anva.core.services.context_packets import invalidate_context_packets
+from anva.core.services.context_packets import (
+    _authorized_provenance_for_authorization,
+    _conflict_candidates,
+    _eligible_assertion_provenance_for_authorization,
+    _open_conflicts_for_assertions,
+    invalidate_context_packets,
+)
 from anva.core.services.evaluators import FakeEvaluator
 from anva.core.services.evidence import submit_evidence_manifest
 from anva.core.services.ingestion import (
@@ -52,6 +72,7 @@ from anva.core.services.intent import import_work_item
 from anva.core.services.jobs import claim_next_job, complete_job
 from anva.core.services.mcp_gateway import dispatch_tool
 from anva.core.services.policies import import_policy
+from anva.core.services.retrieval import authorized_assertions
 from anva.mcp.contracts import validate_tool_output
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "assurance-broad-context.json"
@@ -214,11 +235,118 @@ def _policy_assertion(
 
 @pytest.mark.integration
 @pytest.mark.django_db
+def test_conflict_scan_uses_bounded_array_parameters_at_declared_cap() -> None:
+    organization = Organization.objects.create(
+        slug=f"conflict-boundary-{uuid.uuid4()}",
+        name="Conflict parameter boundary",
+    )
+    actor = ActorContext(
+        organization_id=organization.id,
+        actor_type="USER",
+        actor_id=str(uuid.uuid4()),
+        authorization_path="conflict-boundary-regression",
+        request_id=uuid.uuid4(),
+    )
+    left, right, excluded = [
+        KnowledgeAssertion.objects.create(
+            organization=organization,
+            subject_key=f"boundary:{name}",
+            predicate="owner",
+            value=name,
+            provenance=[{"source_id": name}],
+        )
+        for name in ("left", "right", "excluded")
+    ]
+    included_conflict = AssertionConflict.objects.create(
+        organization=organization,
+        left_assertion=left,
+        right_assertion=right,
+        predicate="owner",
+    )
+    AssertionConflict.objects.create(
+        organization=organization,
+        left_assertion=left,
+        right_assertion=excluded,
+        predicate="owner",
+    )
+    assert list(
+        _open_conflicts_for_assertions(
+            actor=actor,
+            selected_assertion_ids={left.id, right.id},
+            relevant_assertion_ids={left.id},
+            change_aware=True,
+        ).values_list("id", flat=True)
+    ) == [included_conflict.id]
+    assert not _open_conflicts_for_assertions(
+        actor=actor,
+        selected_assertion_ids={left.id, right.id},
+        relevant_assertion_ids={excluded.id},
+        change_aware=True,
+    ).exists()
+    assert not _open_conflicts_for_assertions(
+        actor=actor,
+        selected_assertion_ids={left.id, right.id},
+        relevant_assertion_ids=set(),
+        change_aware=True,
+    ).exists()
+    assert (
+        _conflict_candidates(
+            actor=actor,
+            repository_id=uuid.uuid4(),
+            selected_assertion_ids=set(),
+            relevant_assertion_facets={},
+            change_aware=True,
+        )
+        == []
+    )
+    selected_ids = {uuid.UUID(int=index + 1) for index in range(50_000)}
+    relevant_facets: dict[uuid.UUID, tuple[str, ...]] = dict.fromkeys(selected_ids, ("task",))
+    captured_parameters: list[tuple[object, ...]] = []
+
+    def capture_conflict_query(
+        execute: Any,
+        sql: str,
+        params: object,
+        many: bool,
+        context: object,
+    ) -> Any:
+        if "core_assertionconflict" in sql and params is not None:
+            captured_parameters.append(cast(tuple[object, ...], params))
+        return execute(sql, params, many, context)
+
+    started = time.monotonic()
+    with connection.execute_wrapper(capture_conflict_query):
+        candidates = _conflict_candidates(
+            actor=actor,
+            repository_id=uuid.uuid4(),
+            selected_assertion_ids=selected_ids,
+            relevant_assertion_facets=relevant_facets,
+            change_aware=True,
+            deadline=started + 4.0,
+        )
+
+    assert time.monotonic() - started < 4.0
+    assert candidates == []
+    assert cast(Any, candidates).complete is True
+    assert captured_parameters
+    assert {len(params) for params in captured_parameters} == {7}
+    array_parameters = [
+        parameter
+        for params in captured_parameters
+        for parameter in params
+        if isinstance(parameter, list)
+    ]
+    assert len(array_parameters) == 4
+    assert all(len(parameter) == 50_000 for parameter in array_parameters)
+
+
+@pytest.mark.integration
+@pytest.mark.django_db
 def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    organization, repository, scope, _membership, actor = _tenant()
+    organization, repository, scope, membership, actor = _tenant()
     corpus = tmp_path / "public"
     corpus.mkdir()
     _materialize_corpus(corpus)
@@ -305,12 +433,244 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         review_state=KnowledgeAssertion.ReviewState.UNREVIEWED,
         staleness_state=KnowledgeAssertion.StalenessState.STALE,
     )
-    conflict = AssertionConflict.objects.create(
+    lineage = AssertionProvenance.objects.select_related("source_observation__source_document").get(
+        assertion=current
+    )
+    noise_assertions = [
+        KnowledgeAssertion(
+            id=uuid.UUID(int=10_000 + index),
+            organization=organization,
+            access_scope=scope,
+            subject_key=f"archive:unrelated-{index:03d}",
+            predicate="owner",
+            value="archive-team",
+            provenance=[{"source_id": str(lineage.source_observation_id)}],
+            review_state=KnowledgeAssertion.ReviewState.UNREVIEWED,
+            staleness_state=KnowledgeAssertion.StalenessState.FRESH,
+            confidence=1.0,
+        )
+        for index in range(501)
+    ]
+    KnowledgeAssertion.objects.bulk_create(noise_assertions)
+    AssertionProvenance.objects.bulk_create(
+        [
+            AssertionProvenance(
+                organization=organization,
+                assertion=assertion,
+                source_location=lineage.source_location,
+                source_observation=lineage.source_observation,
+                access_snapshot=lineage.access_snapshot,
+                extraction_class=KnowledgeAssertion.ExtractionClass.HUMAN,
+                extraction_method="issue-156-dense-regression",
+                confidence=1.0,
+                observed_at=lineage.observed_at,
+            )
+            for assertion in noise_assertions
+        ]
+    )
+    AssertionValidityInterval.objects.bulk_create(
+        [
+            AssertionValidityInterval(
+                organization=organization,
+                assertion=assertion,
+                source_document=lineage.source_observation.source_document,
+                source_observation=lineage.source_observation,
+                valid_from=lineage.observed_at,
+                observed_from=lineage.observed_at,
+            )
+            for assertion in noise_assertions
+        ]
+    )
+    second_lineage = (
+        SourceChunkVisibility.objects.filter(
+            organization=organization,
+            access_scope=scope,
+        )
+        .exclude(source_location=lineage.source_location)
+        .select_related("source_location", "source_observation__source_document", "access_snapshot")
+        .order_by("id")
+        .first()
+    )
+    assert second_lineage is not None
+    AssertionProvenance.objects.create(
+        organization=organization,
+        assertion=noise_assertions[0],
+        source_location=second_lineage.source_location,
+        source_observation=second_lineage.source_observation,
+        access_snapshot=second_lineage.access_snapshot,
+        extraction_class=KnowledgeAssertion.ExtractionClass.HUMAN,
+        extraction_method="issue-156-multi-provenance-regression",
+        confidence=1.0,
+        observed_at=second_lineage.observed_at,
+    )
+    AssertionValidityInterval.objects.create(
+        organization=organization,
+        assertion=noise_assertions[0],
+        source_document=second_lineage.source_observation.source_document,
+        source_observation=second_lineage.source_observation,
+        valid_from=second_lineage.observed_at,
+        observed_from=second_lineage.observed_at,
+    )
+    no_normalized_provenance = KnowledgeAssertion.objects.create(
+        organization=organization,
+        access_scope=scope,
+        subject_key="excluded:no-normalized-provenance",
+        predicate="owner",
+        value="nobody",
+        provenance=[{"source_id": "not-normalized"}],
+        confidence=1.0,
+    )
+    expired_assertion = _policy_assertion(
+        organization=organization,
+        path="current-policy.md",
+        subject_key="excluded:expired-assertion",
+        value="This expired assertion must not be eligible.",
+        review_state=KnowledgeAssertion.ReviewState.UNREVIEWED,
+        staleness_state=KnowledgeAssertion.StalenessState.FRESH,
+    )
+    KnowledgeAssertion.objects.filter(id=expired_assertion.id).update(
+        valid_until=expired_assertion.valid_from + timedelta(seconds=1)
+    )
+    expired_provenance = _policy_assertion(
+        organization=organization,
+        path="current-policy.md",
+        subject_key="excluded:expired-provenance",
+        value="This closed validity interval must not be eligible.",
+        review_state=KnowledgeAssertion.ReviewState.UNREVIEWED,
+        staleness_state=KnowledgeAssertion.StalenessState.FRESH,
+    )
+    AssertionValidityInterval.objects.filter(assertion=expired_provenance).update(
+        valid_until=lineage.observed_at + timedelta(seconds=1),
+        observed_until=lineage.observed_at + timedelta(seconds=1),
+    )
+    hidden_assertion = _policy_assertion(
+        organization=organization,
+        path="contact-redaction.md",
+        subject_key="excluded:hidden-scope",
+        value="The visible actor must not receive this assertion.",
+        review_state=KnowledgeAssertion.ReviewState.UNREVIEWED,
+        staleness_state=KnowledgeAssertion.StalenessState.FRESH,
+    )
+    assert hidden_assertion.access_scope_id == hidden_scope.id
+    foreign_assertion = _policy_assertion(
+        organization=foreign_org,
+        path="contact-redaction.md",
+        subject_key="excluded:foreign-organization",
+        value="A foreign assertion must not cross the tenant boundary.",
+        review_state=KnowledgeAssertion.ReviewState.UNREVIEWED,
+        staleness_state=KnowledgeAssertion.StalenessState.FRESH,
+    )
+
+    authorization = resolve_authorized_repository_scopes(
+        actor=actor,
+        actions=(Action.SEARCH,),
+        required_action=Action.SEARCH,
+        repository_ids=(repository.id,),
+        repository_limit=1,
+    )
+    current_provenance = _authorized_provenance_for_authorization(
+        actor=actor,
+        authorization=authorization,
+        assertion_ids=None,
+    )
+    optimized_provenance = list(
+        _eligible_assertion_provenance_for_authorization(
+            actor=actor,
+            authorization=authorization,
+            current_provenance=current_provenance,
+        )
+    )
+    optimized_ids = [provenance.assertion_id for provenance in optimized_provenance]
+    reference_ids = list(
+        authorized_assertions(actor=actor, repository_id=repository.id, action=Action.SEARCH)
+        .filter(id__in=Subquery(current_provenance.order_by().values("assertion_id")))
+        .order_by("id")
+        .values_list("id", flat=True)
+        .distinct()
+    )
+    assert optimized_ids == reference_ids
+    assert len(optimized_ids) == len(set(optimized_ids))
+    assert noise_assertions[0].id in optimized_ids
+    reference_provenance = list(
+        current_provenance.filter(assertion_id__in=reference_ids)
+        .order_by("assertion_id", "observed_at", "id")
+        .distinct("assertion_id")
+    )
+    assert [
+        (
+            provenance.assertion_id,
+            provenance.source_location_id,
+            provenance.source_observation_id,
+            provenance.access_snapshot_id,
+            provenance.observed_at,
+            provenance.id,
+        )
+        for provenance in optimized_provenance
+    ] == [
+        (
+            provenance.assertion_id,
+            provenance.source_location_id,
+            provenance.source_observation_id,
+            provenance.access_snapshot_id,
+            provenance.observed_at,
+            provenance.id,
+        )
+        for provenance in reference_provenance
+    ]
+    selected_multi_provenance = next(
+        provenance
+        for provenance in optimized_provenance
+        if provenance.assertion_id == noise_assertions[0].id
+    )
+    expected_multi_provenance = (
+        AssertionProvenance.objects.filter(assertion=noise_assertions[0])
+        .order_by("observed_at", "id")
+        .first()
+    )
+    assert expected_multi_provenance is not None
+    assert selected_multi_provenance.id == expected_multi_provenance.id
+    assert {
+        no_normalized_provenance.id,
+        expired_assertion.id,
+        expired_provenance.id,
+        hidden_assertion.id,
+        foreign_assertion.id,
+    }.isdisjoint(optimized_ids)
+    AssertionConflict.objects.bulk_create(
+        [
+            AssertionConflict(
+                id=uuid.UUID(int=(2**128) - 2 if index == 500 else 20_000 + index),
+                organization=organization,
+                left_assertion=current,
+                right_assertion=assertion,
+                predicate="owner",
+            )
+            for index, assertion in enumerate(noise_assertions)
+        ]
+    )
+    AssertionConflict.objects.create(
+        id=uuid.UUID(int=1),
         organization=organization,
         left_assertion=current,
         right_assertion=stale,
         predicate="required_policy",
     )
+    with connection.cursor() as cursor:
+        cursor.execute("ANALYZE core_assertionconflict")
+        cursor.execute("SET LOCAL enable_seqscan = off")
+    conflict_plan = (
+        AssertionConflict.objects.filter(
+            organization=organization,
+            status=AssertionConflict.Status.OPEN,
+            left_assertion=current,
+        )
+        .order_by("id")
+        .explain()
+    )
+    assert "Index Scan" in conflict_plan
+    assert "Seq Scan" not in conflict_plan
+    with connection.cursor() as cursor:
+        cursor.execute("SET LOCAL enable_seqscan = on")
 
     work_payload = deepcopy(EXAMPLES["work-item-import"])
     work_payload.update(
@@ -398,6 +758,34 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         unified_diff=DIFF,
     )
     reference_time = timezone.now() + timedelta(seconds=5)
+    context_started = time.monotonic()
+    captured_query_counts: list[int] = []
+    last_context_statement: list[str] = []
+    original_build_context_packet = cast(Any, assurance_service).build_context_packet
+
+    def measured_build_context_packet(**kwargs: Any) -> Any:
+        query_count = 0
+
+        def count_query(
+            execute: Any,
+            sql: str,
+            params: object,
+            many: bool,
+            context: object,
+        ) -> Any:
+            nonlocal query_count
+            query_count += 1
+            last_context_statement[:] = [" ".join(sql.split())[:240]]
+            return execute(sql, params, many, context)
+
+        try:
+            with connection.execute_wrapper(count_query):
+                result = original_build_context_packet(**kwargs)
+        finally:
+            captured_query_counts.append(query_count)
+        return result
+
+    monkeypatch.setattr(assurance_service, "build_context_packet", measured_build_context_packet)
     started = start_assurance(
         actor=actor,
         pull_request_revision_id=ingested.revision.id,
@@ -413,6 +801,32 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
             }
         ],
         work_item_revision_id=work.work_item_revision.id,
+    )
+    context_elapsed = time.monotonic() - context_started
+    assert context_elapsed < 5.0, (
+        context_elapsed,
+        captured_query_counts,
+        last_context_statement,
+    )
+    assert len(captured_query_counts) == 1, (
+        started.run.state,
+        started.run.failure_code,
+        started.run.limitations,
+        context_elapsed,
+        captured_query_counts,
+        last_context_statement,
+    )
+    assert captured_query_counts[0] < 200
+    assert started.evaluator_task is not None, (
+        started.run.state,
+        started.run.failure_code,
+        started.run.limitations,
+        context_elapsed,
+        captured_query_counts,
+        last_context_statement,
+        started.run.context_artifact.payload.get("completeness")
+        if started.run.context_artifact is not None
+        else None,
     )
     duplicate = start_assurance(
         actor=actor,
@@ -435,9 +849,16 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
     assert duplicate.evaluator_task.request_artifact.content_hash == (
         started.evaluator_task.request_artifact.content_hash
     )
+    monkeypatch.setattr(assurance_service, "build_context_packet", original_build_context_packet)
 
     packet = started.run.context_packet
     assert packet is not None
+    duplicate_packet = duplicate.run.context_packet
+    assert duplicate_packet is not None
+    assert (
+        duplicate_packet.artifact.payload["completeness"] == packet.artifact.payload["completeness"]
+    )
+    assert duplicate_packet.artifact.payload["items"] == packet.artifact.payload["items"]
     selected_paths = {
         citation.canonical_url.rsplit("/", 1)[-1]
         for item in ContextPacketItem.objects.filter(context_packet=packet)
@@ -454,7 +875,59 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         ContextPacketItem.objects.filter(context_packet=packet).order_by("position")
     )
     artifact_items = cast(list[dict[str, object]], packet.artifact.payload["items"])
+    normalized_facets = cast(list[dict[str, object]], packet.normalized_request["retrieval_facets"])
+    represented_facet_labels = {
+        label
+        for item in artifact_items
+        for label in cast(
+            list[str], cast(dict[str, object], item["payload"]).get("retrieval_facets", [])
+        )
+    }
+    assert {cast(str, facet["label"]) for facet in normalized_facets} <= set(
+        represented_facet_labels
+    )
+    required_anchor_ids = {
+        cast(str, anchor["chunk_id"])
+        for anchor in cast(
+            list[dict[str, object]], packet.normalized_request.get("required_search_anchors", [])
+        )
+    }
+    assert required_anchor_ids <= {
+        cast(str, cast(dict[str, object], item["payload"]).get("chunk_id"))
+        for item in artifact_items
+    }
+    assert [item.position for item in ordered_items] == list(range(1, len(ordered_items) + 1))
+    assert [str(item.id) for item in ordered_items] == [item["item_id"] for item in artifact_items]
     assert [item.payload for item in ordered_items] == [item["payload"] for item in artifact_items]
+    assert all(item.content_hash == content_hash(item.payload) for item in ordered_items)
+    assert all(
+        set(item.access_scope.derived_from.values_list("id", flat=True))
+        and set(item.access_scope.derived_from.values_list("id", flat=True)) <= {scope.id}
+        for item in ordered_items
+    )
+    citations = list(
+        ContextPacketCitation.objects.filter(context_packet=packet).order_by(
+            "context_item_id", "position"
+        )
+    )
+    artifact_items_by_id = {item["item_id"]: item for item in artifact_items}
+    assert all(
+        citation.context_item_id in {item.id for item in ordered_items} for citation in citations
+    )
+    for item in ordered_items:
+        item_citations = [citation for citation in citations if citation.context_item_id == item.id]
+        assert [citation.position for citation in item_citations] == list(
+            range(1, len(item_citations) + 1)
+        )
+        artifact_citations = cast(
+            list[dict[str, object]], artifact_items_by_id[str(item.id)]["anva_sources"]
+        )
+        assert [citation.source_content_hash for citation in item_citations] == [
+            citation["source_content_hash"] for citation in artifact_citations
+        ]
+        assert all(isinstance(citation.id, uuid.UUID) for citation in item_citations)
+    assert packet.selection_hash == content_hash(artifact_items)
+    assert packet.artifact.content_hash == content_hash(packet.artifact.payload)
     assert all(
         item.byte_count
         == len(
@@ -494,8 +967,8 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         )
     ]
     assert set(first_relevant_positions) == relevant_names
-    assert archive_positions
-    assert max(first_relevant_positions.values()) < min(archive_positions)
+    if archive_positions:
+        assert max(first_relevant_positions.values()) < min(archive_positions)
     evidence_source_items = [
         item
         for item in ordered_items
@@ -512,8 +985,13 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
     )
     assert ContextPacketItem.objects.filter(
         context_packet=packet,
-        source_conflict=conflict,
+        source_conflict__isnull=False,
     ).exists()
+    completeness = cast(dict[str, object], packet.artifact.payload["completeness"])
+    assert completeness["complete"] is True
+    assert completeness["exact_eligible_conflicts"] == 502
+    assert "partial_retained_conflicts" not in completeness
+    assert any("conflict details omitted" in limitation for limitation in packet.limitations)
     assert not any(
         limitation.startswith(REQUIRED_ASSURANCE_CONTEXT_LIMITATION_PREFIX)
         for limitation in packet.limitations
@@ -566,21 +1044,14 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         for item in context
         if cast(dict[str, object], item["claim"]).get("assertion_id") == str(current.id)
     )
-    stale_context = next(
-        item
-        for item in context
-        if cast(dict[str, object], item["claim"]).get("assertion_id") == str(stale.id)
-    )
     conflict_context = next(
-        item
-        for item in context
-        if cast(dict[str, object], item["claim"]).get("conflict_id") == str(conflict.id)
+        item for item in context if cast(dict[str, object], item["claim"]).get("conflict_id")
     )
     assert current_context["freshness"] == "CURRENT"
     assert cast(dict[str, object], current_context["claim"])["review_state"] == "HUMAN_CONFIRMED"
-    assert stale_context["freshness"] == "STALE"
-    assert cast(dict[str, object], stale_context["claim"])["staleness_state"] == "STALE"
     assert "versus" in cast(str, conflict_context["summary"])
+    conflict_claim = cast(dict[str, object], conflict_context["claim"])
+    assert cast(dict[str, object], conflict_claim["right"])["staleness_state"] == "STALE"
     assert all(cast(list[dict[str, object]], item["citations"]) for item in context)
     assert all(item["selection_reason"] for item in context)
     assert "CANARY-FOREIGN-TENANT-ISSUE-128" not in json.dumps(claim.request, sort_keys=True)
@@ -640,6 +1111,7 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
             claim_token=claim.claim_token,
             result=result,
         )
+    changed_started = time.monotonic()
     changed = start_assurance(
         actor=actor,
         pull_request_revision_id=ingested.revision.id,
@@ -656,6 +1128,7 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         ],
         work_item_revision_id=work.work_item_revision.id,
     )
+    assert time.monotonic() - changed_started < 5.0
     started.run.refresh_from_db()
     assert started.run.state == AssuranceRun.State.STALE
     assert changed.created is True
@@ -690,3 +1163,398 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
     assert changed.run.state == AssuranceRun.State.STALE
     assert changed.evaluator_task.state == changed.evaluator_task.State.CANCELLED
     assert changed.evaluator_task.failure_code == "STALE_CONTEXT"
+
+    # Block the real assertion-provenance hydration statement. The inner deadline
+    # wrapper must refresh PostgreSQL immediately before the substituted slow SQL.
+    packet_count = ContextPacketRecord.objects.count()
+    artifact_count = ImmutableArtifact.objects.count()
+    item_count = ContextPacketItem.objects.count()
+    citation_count = ContextPacketCitation.objects.count()
+    hydration_blocked = False
+
+    def block_provenance_hydration(
+        execute: Any,
+        sql: str,
+        params: object,
+        many: bool,
+        context: object,
+    ) -> Any:
+        nonlocal hydration_blocked
+        if not hydration_blocked and 'FROM "core_assertionprovenance"' in sql:
+            hydration_blocked = True
+            return execute("SELECT pg_sleep(%s)", (5,), False, context)
+        return execute(sql, params, many, context)
+
+    hydration_started = time.monotonic()
+    with connection.execute_wrapper(block_provenance_hydration):
+        hydration_timeout = start_assurance(
+            actor=actor,
+            pull_request_revision_id=ingested.revision.id,
+            policy_version_ids=[policy_version.id],
+            reference_time=reference_time,
+            deterministic_checks=[
+                {
+                    "code": "CONTACT_REDACTION_TEST",
+                    "status": "PASSED",
+                    "blocking": True,
+                    "summary": "Exact-head passenger contact redaction scenario passed.",
+                    "evidence_ids": [],
+                }
+            ],
+            work_item_revision_id=work.work_item_revision.id,
+        )
+    assert hydration_blocked is True
+    assert time.monotonic() - hydration_started < 5.0
+    assert hydration_timeout.run.state == AssuranceRun.State.FAILED
+    assert hydration_timeout.run.failure_code == "ASSURANCE_CONTEXT_INCOMPLETE"
+    assert hydration_timeout.evaluator_task is None
+    assert ContextPacketRecord.objects.count() == packet_count
+    assert ImmutableArtifact.objects.count() == artifact_count
+    assert ContextPacketItem.objects.count() == item_count
+    assert ContextPacketCitation.objects.count() == citation_count
+    invalidate_context_packets(
+        actor=actor,
+        organization_id=organization.id,
+        repository_id=repository.id,
+        reason="MANUAL",
+        details={"test": "separate-hydration-from-publication-timeout"},
+    )
+
+    # A deadline exhausted after scopes/artifact/packet have begun publication rolls
+    # the inner transaction back before the durable failed-run finalizer executes.
+    packet_count = ContextPacketRecord.objects.count()
+    artifact_count = ImmutableArtifact.objects.count()
+    item_count = ContextPacketItem.objects.count()
+    citation_count = ContextPacketCitation.objects.count()
+    original_item_bulk_create = ContextPacketItem.objects.bulk_create
+
+    def expire_at_item_publication(*_args: object, **_kwargs: object) -> object:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT pg_sleep(5)")
+        raise AssertionError("deadline statement timeout did not interrupt publication")
+
+    monkeypatch.setattr(
+        ContextPacketItem.objects,
+        "bulk_create",
+        expire_at_item_publication,
+    )
+    tail_started = time.monotonic()
+    tail_timeout = start_assurance(
+        actor=actor,
+        pull_request_revision_id=ingested.revision.id,
+        policy_version_ids=[policy_version.id],
+        reference_time=reference_time,
+        deterministic_checks=[
+            {
+                "code": "CONTACT_REDACTION_TEST",
+                "status": "PASSED",
+                "blocking": True,
+                "summary": "Exact-head passenger contact redaction scenario passed.",
+                "evidence_ids": [],
+            }
+        ],
+        work_item_revision_id=work.work_item_revision.id,
+    )
+    monkeypatch.setattr(ContextPacketItem.objects, "bulk_create", original_item_bulk_create)
+    assert time.monotonic() - tail_started < 5.0
+    assert tail_timeout.run.state == AssuranceRun.State.FAILED
+    assert tail_timeout.run.failure_code == "ASSURANCE_CONTEXT_INCOMPLETE"
+    assert tail_timeout.evaluator_task is None
+    assert ContextPacketRecord.objects.count() == packet_count
+    assert ImmutableArtifact.objects.count() == artifact_count
+    assert ContextPacketItem.objects.count() == item_count
+    assert ContextPacketCitation.objects.count() == citation_count
+    invalidate_context_packets(
+        actor=actor,
+        organization_id=organization.id,
+        repository_id=repository.id,
+        reason="MANUAL",
+        details={"test": "separate-row-cap-exhaustion-identity"},
+    )
+
+    # Overall scan exhaustion is a durable, named non-ready assurance result,
+    # never a context-build 409 and never an evaluator task over partial input.
+    monkeypatch.setattr(
+        "anva.core.services.context_packets.CONTEXT_SCAN_MAX_ROWS",
+        0,
+    )
+
+    def publication_counts() -> tuple[int, int, int, int, int, int]:
+        return (
+            ContextPacketRecord.objects.count(),
+            ImmutableArtifact.objects.count(),
+            ContextPacketItem.objects.count(),
+            ContextPacketCitation.objects.count(),
+            AccessScope.objects.count(),
+            EvaluatorTask.objects.count(),
+        )
+
+    incomplete_publication_counts = publication_counts()
+    exhausted = start_assurance(
+        actor=actor,
+        pull_request_revision_id=ingested.revision.id,
+        policy_version_ids=[policy_version.id],
+        reference_time=reference_time,
+        deterministic_checks=[
+            {
+                "code": "CONTACT_REDACTION_TEST",
+                "status": "PASSED",
+                "blocking": True,
+                "summary": "Exact-head passenger contact redaction scenario passed.",
+                "evidence_ids": [],
+            }
+        ],
+        work_item_revision_id=work.work_item_revision.id,
+    )
+    assert exhausted.created is True
+    assert exhausted.evaluator_task is None
+    assert exhausted.run.state == AssuranceRun.State.FAILED
+    assert exhausted.run.readiness == "BLOCKED"
+    assert exhausted.run.failure_code == "ASSURANCE_CONTEXT_INCOMPLETE"
+    assert exhausted.run.readinessdecision.reason_codes == [
+        "CONFLICT_REVIEW_REQUIRED",
+        "ASSURANCE_CONTEXT_INCOMPLETE",
+    ]
+    assert exhausted.run.context_artifact is None
+    assert exhausted.run.context_packet is None
+    assert any(
+        limitation.startswith(REQUIRED_ASSURANCE_CONTEXT_LIMITATION_PREFIX)
+        for limitation in exhausted.run.limitations
+    )
+    assert publication_counts() == incomplete_publication_counts
+    exhausted_retry = start_assurance(
+        actor=actor,
+        pull_request_revision_id=ingested.revision.id,
+        policy_version_ids=[policy_version.id],
+        reference_time=reference_time,
+        deterministic_checks=[
+            {
+                "code": "CONTACT_REDACTION_TEST",
+                "status": "PASSED",
+                "blocking": True,
+                "summary": "Exact-head passenger contact redaction scenario passed.",
+                "evidence_ids": [],
+            }
+        ],
+        work_item_revision_id=work.work_item_revision.id,
+    )
+    assert exhausted_retry.created is False
+    assert exhausted_retry.run.id == exhausted.run.id
+    assert exhausted_retry.evaluator_task is None
+
+    def assert_incomplete_run(run_result: object) -> None:
+        bounded = cast(Any, run_result)
+        assert bounded.created is True
+        assert bounded.evaluator_task is None
+        assert bounded.run.state == AssuranceRun.State.FAILED
+        assert bounded.run.failure_code == "ASSURANCE_CONTEXT_INCOMPLETE"
+        assert bounded.run.readiness == "BLOCKED"
+        assert bounded.run.context_artifact is None
+        assert bounded.run.context_packet is None
+        assert bounded.run.readinessdecision.reason_codes == [
+            "CONFLICT_REVIEW_REQUIRED",
+            "ASSURANCE_CONTEXT_INCOMPLETE",
+        ]
+        assert any(
+            limitation.startswith(REQUIRED_ASSURANCE_CONTEXT_LIMITATION_PREFIX)
+            for limitation in bounded.run.limitations
+        )
+
+    assert_incomplete_run(exhausted)
+    monkeypatch.setattr("anva.core.services.context_packets.CONTEXT_SCAN_MAX_ROWS", 50_000)
+    invalidate_context_packets(
+        actor=actor,
+        organization_id=organization.id,
+        repository_id=repository.id,
+        reason="MANUAL",
+        details={"test": "force-operation-budget"},
+    )
+    monkeypatch.setattr("anva.core.services.context_packets.CONTEXT_SCAN_MAX_OPERATIONS", 1)
+    operation_publication_counts = publication_counts()
+    operation_exhausted = start_assurance(
+        actor=actor,
+        pull_request_revision_id=ingested.revision.id,
+        policy_version_ids=[policy_version.id],
+        reference_time=reference_time,
+        deterministic_checks=[
+            {
+                "code": "CONTACT_REDACTION_TEST",
+                "status": "PASSED",
+                "blocking": True,
+                "summary": "Exact-head passenger contact redaction scenario passed.",
+                "evidence_ids": [],
+            }
+        ],
+        work_item_revision_id=work.work_item_revision.id,
+    )
+    assert_incomplete_run(operation_exhausted)
+    assert publication_counts() == operation_publication_counts
+    operation_retry = start_assurance(
+        actor=actor,
+        pull_request_revision_id=ingested.revision.id,
+        policy_version_ids=[policy_version.id],
+        reference_time=reference_time,
+        deterministic_checks=[
+            {
+                "code": "CONTACT_REDACTION_TEST",
+                "status": "PASSED",
+                "blocking": True,
+                "summary": "Exact-head passenger contact redaction scenario passed.",
+                "evidence_ids": [],
+            }
+        ],
+        work_item_revision_id=work.work_item_revision.id,
+    )
+    assert operation_retry.created is False
+    assert operation_retry.run.id == operation_exhausted.run.id
+    assert publication_counts() == operation_publication_counts
+
+    monkeypatch.setattr("anva.core.services.context_packets.CONTEXT_SCAN_MAX_OPERATIONS", 100_000)
+    invalidate_context_packets(
+        actor=actor,
+        organization_id=organization.id,
+        repository_id=repository.id,
+        reason="MANUAL",
+        details={"test": "force-wall-budget"},
+    )
+    ticks = chain([0.0, 5.0], repeat(5.0))
+    monkeypatch.setattr("anva.core.services.context_packets.monotonic", lambda: next(ticks))
+    time_publication_counts = publication_counts()
+    time_exhausted = start_assurance(
+        actor=actor,
+        pull_request_revision_id=ingested.revision.id,
+        policy_version_ids=[policy_version.id],
+        reference_time=reference_time,
+        deterministic_checks=[
+            {
+                "code": "CONTACT_REDACTION_TEST",
+                "status": "PASSED",
+                "blocking": True,
+                "summary": "Exact-head passenger contact redaction scenario passed.",
+                "evidence_ids": [],
+            }
+        ],
+        work_item_revision_id=work.work_item_revision.id,
+    )
+    assert_incomplete_run(time_exhausted)
+    assert publication_counts() == time_publication_counts
+    time_retry = start_assurance(
+        actor=actor,
+        pull_request_revision_id=ingested.revision.id,
+        policy_version_ids=[policy_version.id],
+        reference_time=reference_time,
+        deterministic_checks=[
+            {
+                "code": "CONTACT_REDACTION_TEST",
+                "status": "PASSED",
+                "blocking": True,
+                "summary": "Exact-head passenger contact redaction scenario passed.",
+                "evidence_ids": [],
+            }
+        ],
+        work_item_revision_id=work.work_item_revision.id,
+    )
+    assert time_retry.created is False
+    assert time_retry.run.id == time_exhausted.run.id
+    assert publication_counts() == time_publication_counts
+
+    monkeypatch.setattr("anva.core.services.context_packets.monotonic", time.monotonic)
+    invalidate_context_packets(
+        actor=actor,
+        organization_id=organization.id,
+        repository_id=repository.id,
+        reason="MANUAL",
+        details={"test": "mutate-head-during-context-build"},
+    )
+    original_build_context_packet = assurance_service.build_context_packet
+
+    def build_then_mutate_head(**kwargs: Any) -> Any:
+        result = original_build_context_packet(**kwargs)
+        ingested.pull_request.__class__.objects.filter(id=ingested.pull_request.id).update(
+            current_head_commit="f" * 40
+        )
+        return result
+
+    monkeypatch.setattr(assurance_service, "build_context_packet", build_then_mutate_head)
+    head_changed = start_assurance(
+        actor=actor,
+        pull_request_revision_id=ingested.revision.id,
+        policy_version_ids=[policy_version.id],
+        reference_time=reference_time,
+        deterministic_checks=[],
+        work_item_revision_id=work.work_item_revision.id,
+    )
+    assert_incomplete_run(head_changed)
+    assert head_changed.run.failure_code == "ASSURANCE_CONTEXT_INCOMPLETE"
+    assert not EvaluatorTask.objects.filter(assurance_run=head_changed.run).exists()
+
+    ingested.pull_request.__class__.objects.filter(id=ingested.pull_request.id).update(
+        current_head_commit=HEAD
+    )
+    monkeypatch.setattr(assurance_service, "build_context_packet", original_build_context_packet)
+    invalidate_context_packets(
+        actor=actor,
+        organization_id=organization.id,
+        repository_id=repository.id,
+        reason="MANUAL",
+        details={"test": "fail-authorization-snapshot-after-provisional-run"},
+    )
+    original_authorization_snapshot = assurance_service._authorization_snapshot
+
+    def fail_authorization_snapshot(**_kwargs: Any) -> Any:
+        raise DatabaseError("forced authorization snapshot failure")
+
+    monkeypatch.setattr(
+        assurance_service,
+        "_authorization_snapshot",
+        fail_authorization_snapshot,
+    )
+    run_count_before_snapshot = AssuranceRun.objects.count()
+    with pytest.raises(DatabaseError, match="forced authorization snapshot failure"):
+        start_assurance(
+            actor=actor,
+            pull_request_revision_id=ingested.revision.id,
+            policy_version_ids=[policy_version.id],
+            reference_time=reference_time,
+            deterministic_checks=[],
+            work_item_revision_id=work.work_item_revision.id,
+        )
+    assert AssuranceRun.objects.count() == run_count_before_snapshot
+
+    monkeypatch.setattr(
+        assurance_service,
+        "_authorization_snapshot",
+        original_authorization_snapshot,
+    )
+    invalidate_context_packets(
+        actor=actor,
+        organization_id=organization.id,
+        repository_id=repository.id,
+        reason="MANUAL",
+        details={"test": "revoke-caller-during-context-build"},
+    )
+
+    def build_then_revoke_actor(**kwargs: Any) -> Any:
+        result = original_build_context_packet(**kwargs)
+        Membership.objects.filter(id=membership.id).delete()
+        return result
+
+    monkeypatch.setattr(assurance_service, "build_context_packet", build_then_revoke_actor)
+    authorization_revoked = start_assurance(
+        actor=actor,
+        pull_request_revision_id=ingested.revision.id,
+        policy_version_ids=[policy_version.id],
+        reference_time=reference_time,
+        deterministic_checks=[
+            {
+                "code": "AUTHORIZATION_STILL_CURRENT",
+                "status": "PASSED",
+                "blocking": True,
+                "summary": "Caller authorization remained current through publication.",
+                "evidence_ids": [],
+            }
+        ],
+        work_item_revision_id=work.work_item_revision.id,
+    )
+    assert_incomplete_run(authorization_revoked)
+    assert not EvaluatorTask.objects.filter(assurance_run=authorization_revoked.run).exists()

@@ -13,12 +13,14 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import cast
 
-from django.db import transaction
+from django.db import DatabaseError, IntegrityError, transaction
 from django.db.models import F, Q
 from django.utils import timezone
 
 from anva.contracts import validate_knowledge_changes, validate_payload
 from anva.core.exceptions import (
+    AuthenticationError,
+    DomainOperationError,
     IdempotencyConflictError,
     LeaseConflictError,
     ResourceNotFoundError,
@@ -66,8 +68,11 @@ from anva.core.services.authorization import (
 )
 from anva.core.services.context import ActorContext
 from anva.core.services.context_packets import (
+    CONTEXT_SCAN_VERSION,
     PacketBudget,
     RetrievalFacet,
+    _authorization_snapshot,
+    _watermark,
     build_context_packet,
     seal_actor_scope,
 )
@@ -1254,6 +1259,47 @@ def _advance_to_model_review(*, actor: ActorContext, run: AssuranceRun) -> Assur
 
 
 @transaction.atomic
+def _finalize_incomplete_context_start(*, run: AssuranceRun, created: bool) -> AssuranceStartResult:
+    """Durably close a request-bound run when preparation cannot safely complete."""
+    run = AssuranceRun.objects.select_for_update().get(id=run.id)
+    task = EvaluatorTask.objects.filter(assurance_run=run).first()
+    if run.state != AssuranceRun.State.REQUESTED or task is not None:
+        return AssuranceStartResult(run, cast(EvaluatorTask, task), False)
+    blockers = (
+        f"{REQUIRED_ASSURANCE_CONTEXT_LIMITATION_PREFIX} "
+        "CONFLICT_REVIEW_REQUIRED / ASSURANCE_CONTEXT_INCOMPLETE"
+    )
+    ReadinessDecision.objects.get_or_create(
+        organization_id=run.organization_id,
+        assurance_run=run,
+        defaults={
+            "status": ReadinessDecision.Status.BLOCKED,
+            "reason_codes": ["CONFLICT_REVIEW_REQUIRED", "ASSURANCE_CONTEXT_INCOMPLETE"],
+            "input_hash": content_hash(
+                {"run_input_hash": run.input_hash, "reason": "ASSURANCE_CONTEXT_INCOMPLETE"}
+            ),
+        },
+    )
+    run.failure_code = "ASSURANCE_CONTEXT_INCOMPLETE"
+    run.readiness = ReadinessDecision.Status.BLOCKED
+    run.limitations = _bounded_limitations(cast(list[str], run.limitations), [blockers])
+    run.completed_at = timezone.now()
+    run.state = AssuranceRun.State.FAILED
+    run.revision += 1
+    run.save(
+        update_fields=[
+            "failure_code",
+            "readiness",
+            "limitations",
+            "completed_at",
+            "state",
+            "revision",
+            "updated_at",
+        ]
+    )
+    return AssuranceStartResult(run, cast(EvaluatorTask, None), created)
+
+
 def start_assurance(
     *,
     actor: ActorContext,
@@ -1268,7 +1314,144 @@ def start_assurance(
     reviewer_service_identity_id: uuid.UUID | None = None,
     reviewer_token_id: uuid.UUID | None = None,
 ) -> AssuranceStartResult:
+    """Persist the request identity before any fallible assurance preparation."""
+    if reference_time.tzinfo is None:
+        raise ValueError("reference_time must include a timezone")
+    if trigger_key and (
+        len(trigger_key) > 64 or re.fullmatch(r"[a-f0-9]{64}", trigger_key) is None
+    ):
+        raise ValueError("trigger_key must be a lowercase SHA-256 digest")
+    # A durable run cannot be identified if the database is unavailable before
+    # this minimal revision, authorization, and watermark boundary completes.
+    with transaction.atomic():
+        revision = get_tenant_record(
+            queryset=PullRequestRevision.objects.select_related(
+                "organization",
+                "pull_request__repository",
+                "diff_artifact",
+            ),
+            record_id=pull_request_revision_id,
+            organization_id=actor.organization_id,
+        )
+        repository = revision.pull_request.repository
+        access_scope_id = revision.diff_artifact.access_scope_id
+        if access_scope_id is None:
+            raise ValueError("Diff artifact must have an access scope")
+        scoped_actor = _authorize_assurance(
+            actor=actor,
+            repository_id=repository.id,
+            access_scope_id=access_scope_id,
+        )
+        bound_reviewer_id, bound_reviewer_token_id = _resolve_bootstrap_reviewer_binding(
+            actor=scoped_actor,
+            repository_id=repository.id,
+            reviewer_service_identity_id=reviewer_service_identity_id,
+            reviewer_token_id=reviewer_token_id,
+        )
+        _visible_scopes, authorization_hash = _authorization_snapshot(
+            actor=scoped_actor,
+            repository_id=repository.id,
+        )
+        watermark_value = _watermark(actor=scoped_actor, repository_id=repository.id).value
+    provisional_digest = content_hash(
+        {
+            "version": "assurance-start-provisional-v2",
+            "actor_type": actor.actor_type,
+            "actor_id": actor.actor_id,
+            "credential_id": str(actor.credential_id) if actor.credential_id else None,
+            "pull_request_revision_id": str(pull_request_revision_id),
+            "policy_version_ids": sorted(str(item) for item in policy_version_ids),
+            "reference_time": reference_time.isoformat(),
+            "deterministic_checks": deterministic_checks,
+            "work_item_revision_id": str(work_item_revision_id) if work_item_revision_id else None,
+            "evaluator_version": evaluator_version,
+            "prompt_version": prompt_version,
+            "trigger_key": trigger_key,
+            "reviewer_service_identity_id": (
+                str(reviewer_service_identity_id) if reviewer_service_identity_id else None
+            ),
+            "reviewer_token_id": str(reviewer_token_id) if reviewer_token_id else None,
+            "bound_reviewer_id": str(bound_reviewer_id) if bound_reviewer_id else None,
+            "bound_reviewer_token_id": (
+                str(bound_reviewer_token_id) if bound_reviewer_token_id else None
+            ),
+            "authorization_hash": authorization_hash,
+            "watermark": watermark_value,
+        }
+    )
+    with transaction.atomic():
+        provisional_run, provisional_created = AssuranceRun.objects.get_or_create(
+            organization_id=actor.organization_id,
+            repository_external_id=revision.pull_request.repository.external_id,
+            pull_request_number=revision.pull_request.number,
+            head_commit=revision.head_commit,
+            input_hash=provisional_digest,
+            defaults={
+                "initiated_by_actor_type": actor.actor_type,
+                "initiated_by_actor_id": actor.actor_id,
+                "initiated_by_credential_id": actor.credential_id,
+                "repository": revision.pull_request.repository,
+                "pull_request_revision": revision,
+                "policy_version": 1,
+                "diff_artifact": revision.diff_artifact,
+                "trigger_key": trigger_key,
+                "evaluator_version": evaluator_version,
+                "prompt_version": prompt_version,
+            },
+        )
+    try:
+        with transaction.atomic():
+            return _start_assurance_bound(
+                provisional_run=provisional_run,
+                actor=actor,
+                pull_request_revision_id=pull_request_revision_id,
+                policy_version_ids=policy_version_ids,
+                reference_time=reference_time,
+                deterministic_checks=deterministic_checks,
+                work_item_revision_id=work_item_revision_id,
+                evaluator_version=evaluator_version,
+                prompt_version=prompt_version,
+                trigger_key=trigger_key,
+                reviewer_service_identity_id=reviewer_service_identity_id,
+                reviewer_token_id=reviewer_token_id,
+                context_authorization_hash=authorization_hash,
+                context_watermark_value=watermark_value,
+            )
+    except (AuthenticationError, ResourceNotFoundError):
+        _finalize_incomplete_context_start(run=provisional_run, created=provisional_created)
+        raise
+    except (DomainOperationError, DatabaseError):
+        return _finalize_incomplete_context_start(run=provisional_run, created=provisional_created)
+
+
+@transaction.atomic
+def _start_assurance_bound(
+    *,
+    provisional_run: AssuranceRun,
+    actor: ActorContext,
+    pull_request_revision_id: uuid.UUID,
+    policy_version_ids: list[uuid.UUID],
+    reference_time: datetime,
+    deterministic_checks: list[dict[str, object]],
+    work_item_revision_id: uuid.UUID | None = None,
+    evaluator_version: str = DEFAULT_EVALUATOR_VERSION,
+    prompt_version: str = DEFAULT_PROMPT_VERSION,
+    trigger_key: str = "",
+    reviewer_service_identity_id: uuid.UUID | None = None,
+    reviewer_token_id: uuid.UUID | None = None,
+    context_authorization_hash: str | None = None,
+    context_watermark_value: int | None = None,
+) -> AssuranceStartResult:
     """Build exact deterministic context and enqueue one independent manual review."""
+    provisional_run = AssuranceRun.objects.select_for_update().get(id=provisional_run.id)
+    if provisional_run.state != AssuranceRun.State.REQUESTED:
+        task_query = EvaluatorTask.objects.filter(assurance_run=provisional_run)
+        task = (
+            task_query.get()
+            if provisional_run.state == AssuranceRun.State.MODEL_REVIEW
+            else task_query.first()
+        )
+        return AssuranceStartResult(provisional_run, cast(EvaluatorTask, task), False)
     if reference_time.tzinfo is None:
         raise ValueError("reference_time must include a timezone")
     if trigger_key and (
@@ -1403,14 +1586,11 @@ def start_assurance(
         f"Independent assurance for pull request {revision.pull_request.number}. "
         f"Server-derived change facets: {', '.join(facet.label for facet in retrieval_facets)}."
     )
-    packet, _ = build_context_packet(
-        actor=actor,
-        repository_id=repository.id,
-        task=context_task,
-        phase="ASSURANCE",
-        budget=PacketBudget(max_items=50, max_tokens=8_000, max_bytes=100_000),
-        retrieval_facets=retrieval_facets,
-    )
+    if context_authorization_hash is None or context_watermark_value is None:
+        _context_scopes, context_authorization_hash = _authorization_snapshot(
+            actor=actor, repository_id=repository.id
+        )
+        context_watermark_value = _watermark(actor=actor, repository_id=repository.id).value
     requirements_hash = content_hash(requirements)
     policy_bundle_hash = content_hash(
         {
@@ -1432,12 +1612,20 @@ def start_assurance(
         "policy_evaluation_input_hash": policy_evaluation.input_hash,
         "policy_evaluation_output_hash": policy_evaluation.output_hash,
         "evidence_bundle_hash": evidence_bundle_hash,
-        "context_artifact_hash": packet.artifact.content_hash,
-        "context_versions": {
-            "retrieval": packet.retrieval_algorithm_version,
-            "index": packet.index_version,
-            "embedding": packet.embedding_version,
-        },
+        "context_request": context_task,
+        "context_authorization_hash": context_authorization_hash,
+        "context_watermark": context_watermark_value,
+        "context_query_version": CONTEXT_SCAN_VERSION,
+        "context_facets": [
+            {
+                "label": facet.label,
+                "query": facet.query,
+                "anchors": facet.anchors,
+                "required_if_matched": facet.required_if_matched,
+                "coverage_incomplete": facet.coverage_incomplete,
+            }
+            for facet in retrieval_facets
+        ],
         "deterministic_checks": checks,
         "reference_time": reference_time.isoformat(),
         "diff_parser_version": PARSER_VERSION,
@@ -1463,18 +1651,38 @@ def start_assurance(
         .first()
     )
     if existing is not None:
-        task = EvaluatorTask.objects.get(
+        task = EvaluatorTask.objects.filter(
             organization_id=actor.organization_id,
             assurance_run=existing,
-        )
-        if (
+        ).first()
+        if task is not None and (
             task.reviewer_service_identity_id != bound_reviewer_id
             or task.reviewer_token_id != bound_reviewer_token_id
         ):
             raise IdempotencyConflictError(
                 "Assurance run is bound to a different evaluator reviewer"
             )
-        return AssuranceStartResult(existing, task, False)
+        provisional_run.state = AssuranceRun.State.CANCELLED
+        provisional_run.input_hash = content_hash(
+            {
+                "provisional_input_hash": provisional_run.input_hash,
+                "duplicate_run_id": str(provisional_run.id),
+            }
+        )
+        provisional_run.failure_code = "DUPLICATE_ASSURANCE_START"
+        provisional_run.completed_at = timezone.now()
+        provisional_run.revision += 1
+        provisional_run.save(
+            update_fields=[
+                "state",
+                "input_hash",
+                "failure_code",
+                "completed_at",
+                "revision",
+                "updated_at",
+            ]
+        )
+        return AssuranceStartResult(existing, cast(EvaluatorTask, task), False)
 
     older_runs = list(
         AssuranceRun.objects.select_for_update()
@@ -1483,6 +1691,7 @@ def start_assurance(
             repository=repository,
             pull_request_number=revision.pull_request.number,
         )
+        .exclude(id=provisional_run.id)
         .exclude(
             state__in=[
                 AssuranceRun.State.STALE,
@@ -1500,44 +1709,52 @@ def start_assurance(
         cast(dict[str, object], policy_evaluation.input_payload)["policy_versions"],
     )
     scalar_policy_version = max(cast(int, item["version"]) for item in policy_versions)
-    packet_limitations = cast(list[str], packet.limitations)
-    required_run_limitations = (
-        *((REQUIREMENT_TRACEABILITY_LIMITATION,) if work_revision is None else ()),
-        *_required_context_limitations(packet_limitations),
-        *_packet_accounting_limitations(packet_limitations),
+    run = provisional_run
+    run.organization = organization
+    run.initiated_by_actor_type = actor.actor_type
+    run.initiated_by_actor_id = actor.actor_id
+    run.initiated_by_credential_id = actor.credential_id
+    run.repository_external_id = repository.external_id
+    run.repository = repository
+    run.pull_request_number = revision.pull_request.number
+    run.pull_request_revision = revision
+    run.work_item_revision = work_revision
+    run.head_commit = revision.head_commit
+    run.policy_version = scalar_policy_version
+    run.diff_artifact = revision.diff_artifact
+    run.policy_evaluation = policy_evaluation
+    run.trigger_key = trigger_key
+    run.input_hash = input_digest
+    run.requirements_hash = requirements_hash
+    run.policy_bundle_hash = policy_bundle_hash
+    run.evidence_bundle_hash = evidence_bundle_hash
+    run.evaluator_version = evaluator_version
+    run.prompt_version = prompt_version
+    run.limitations = _project_external_limitations(
+        cast(list[str], revision.limitations), prefix=REVISION_LIMITATION_PREFIX
     )
-    run = AssuranceRun.objects.create(
-        organization=organization,
-        initiated_by_actor_type=actor.actor_type,
-        initiated_by_actor_id=actor.actor_id,
-        initiated_by_credential_id=actor.credential_id,
-        repository_external_id=repository.external_id,
-        repository=repository,
-        pull_request_number=revision.pull_request.number,
-        pull_request_revision=revision,
-        work_item_revision=work_revision,
-        head_commit=revision.head_commit,
-        policy_version=scalar_policy_version,
-        diff_artifact=revision.diff_artifact,
-        context_packet=packet,
-        context_artifact=packet.artifact,
-        policy_evaluation=policy_evaluation,
-        trigger_key=trigger_key,
-        input_hash=input_digest,
-        requirements_hash=requirements_hash,
-        policy_bundle_hash=policy_bundle_hash,
-        evidence_bundle_hash=evidence_bundle_hash,
-        evaluator_version=evaluator_version,
-        prompt_version=prompt_version,
-        limitations=_bounded_limitations(
-            _project_external_limitations(
-                cast(list[str], revision.limitations),
-                prefix=REVISION_LIMITATION_PREFIX,
-            ),
-            packet_limitations,
-            required=required_run_limitations,
-        ),
-    )
+    try:
+        with transaction.atomic():
+            run.save()
+    except IntegrityError:
+        existing = AssuranceRun.objects.get(
+            organization_id=actor.organization_id,
+            repository=repository,
+            pull_request_number=revision.pull_request.number,
+            head_commit=revision.head_commit,
+            input_hash=input_digest,
+        )
+        task = EvaluatorTask.objects.filter(assurance_run=existing).first()
+        run.refresh_from_db()
+        run.state = AssuranceRun.State.CANCELLED
+        run.input_hash = content_hash(
+            {"provisional_input_hash": run.input_hash, "duplicate_run_id": str(run.id)}
+        )
+        run.failure_code = "DUPLICATE_ASSURANCE_START"
+        run.completed_at = timezone.now()
+        run.revision += 1
+        run.save()
+        return AssuranceStartResult(existing, cast(EvaluatorTask, task), False)
     record_transition(
         organization=organization,
         actor=actor,
@@ -1548,6 +1765,114 @@ def start_assurance(
         revision=run.revision,
         metadata={"head_commit": run.head_commit},
     )
+    try:
+        with transaction.atomic():
+            packet, _ = build_context_packet(
+                actor=actor,
+                repository_id=repository.id,
+                task=context_task,
+                phase="ASSURANCE",
+                budget=PacketBudget(max_items=50, max_tokens=8_000, max_bytes=100_000),
+                retrieval_facets=retrieval_facets,
+            )
+            current_pull_request = PullRequest.objects.only(
+                "current_head_commit",
+                "current_revision_number",
+            ).get(id=revision.pull_request_id)
+            if (
+                current_pull_request.current_head_commit != revision.head_commit
+                or current_pull_request.current_revision_number != revision.revision
+            ):
+                raise IdempotencyConflictError(
+                    "Pull request head changed while assurance context was being built"
+                )
+            actor = _authorize_assurance(
+                actor=actor,
+                repository_id=repository.id,
+                access_scope_id=access_scope_id,
+            )
+    except (AuthenticationError, ResourceNotFoundError):
+        raise
+    except (DomainOperationError, DatabaseError):
+        blockers = (
+            f"{REQUIRED_ASSURANCE_CONTEXT_LIMITATION_PREFIX} "
+            "CONFLICT_REVIEW_REQUIRED / ASSURANCE_CONTEXT_INCOMPLETE"
+        )
+        ReadinessDecision.objects.create(
+            organization=organization,
+            assurance_run=run,
+            status=ReadinessDecision.Status.BLOCKED,
+            reason_codes=["CONFLICT_REVIEW_REQUIRED", "ASSURANCE_CONTEXT_INCOMPLETE"],
+            input_hash=content_hash(
+                {"run_input_hash": run.input_hash, "reason": "ASSURANCE_CONTEXT_INCOMPLETE"}
+            ),
+        )
+        run.failure_code = "ASSURANCE_CONTEXT_INCOMPLETE"
+        run.readiness = ReadinessDecision.Status.BLOCKED
+        run.limitations = _bounded_limitations(cast(list[str], run.limitations), [blockers])
+        run.completed_at = timezone.now()
+        run.state = AssuranceRun.State.FAILED
+        run.revision += 1
+        run.save(
+            update_fields=[
+                "failure_code",
+                "readiness",
+                "limitations",
+                "completed_at",
+                "state",
+                "revision",
+                "updated_at",
+            ]
+        )
+        return AssuranceStartResult(run, cast(EvaluatorTask, None), True)
+
+    packet_limitations = cast(list[str], packet.limitations)
+    required_run_limitations = (
+        *((REQUIREMENT_TRACEABILITY_LIMITATION,) if work_revision is None else ()),
+        *_required_context_limitations(packet_limitations),
+        *_packet_accounting_limitations(packet_limitations),
+    )
+    run.context_packet = packet
+    run.context_artifact = packet.artifact
+    run.limitations = _bounded_limitations(
+        cast(list[str], run.limitations),
+        packet_limitations,
+        required=required_run_limitations,
+    )
+    run.save(update_fields=["context_packet", "context_artifact", "limitations", "updated_at"])
+    completeness = cast(dict[str, object], packet.artifact.payload).get("completeness")
+    if isinstance(completeness, dict) and completeness.get("complete") is False:
+        blockers = (
+            f"{REQUIRED_ASSURANCE_CONTEXT_LIMITATION_PREFIX} "
+            "CONFLICT_REVIEW_REQUIRED / ASSURANCE_CONTEXT_INCOMPLETE"
+        )
+        ReadinessDecision.objects.create(
+            organization=organization,
+            assurance_run=run,
+            status=ReadinessDecision.Status.BLOCKED,
+            reason_codes=["CONFLICT_REVIEW_REQUIRED", "ASSURANCE_CONTEXT_INCOMPLETE"],
+            input_hash=content_hash(
+                {"run_input_hash": run.input_hash, "reason": "ASSURANCE_CONTEXT_INCOMPLETE"}
+            ),
+        )
+        run.failure_code = "ASSURANCE_CONTEXT_INCOMPLETE"
+        run.readiness = ReadinessDecision.Status.BLOCKED
+        run.limitations = _bounded_limitations(cast(list[str], run.limitations), [blockers])
+        run.completed_at = timezone.now()
+        run.state = AssuranceRun.State.FAILED
+        run.revision += 1
+        run.save(
+            update_fields=[
+                "failure_code",
+                "readiness",
+                "limitations",
+                "completed_at",
+                "state",
+                "revision",
+                "updated_at",
+            ]
+        )
+        return AssuranceStartResult(run, cast(EvaluatorTask, None), True)
     check_rows: list[AssuranceCheck] = []
     for position, check in enumerate(checks, start=1):
         check_hash = content_hash(
@@ -2778,6 +3103,16 @@ def _finalize_evaluator_failure(
 ) -> None:
     """Persist a terminal evaluator failure without inventing model observations."""
     run = task.assurance_run
+    failure_status = (
+        ReadinessDecision.Status.BLOCKED
+        if failure_code == "ASSURANCE_CONTEXT_INCOMPLETE"
+        else ReadinessDecision.Status.FAILED
+    )
+    reason_codes = (
+        ["CONFLICT_REVIEW_REQUIRED", "ASSURANCE_CONTEXT_INCOMPLETE"]
+        if failure_code == "ASSURANCE_CONTEXT_INCOMPLETE"
+        else [failure_code]
+    )
     if run.state in {
         AssuranceRun.State.STALE,
         AssuranceRun.State.CANCELLED,
@@ -2794,8 +3129,8 @@ def _finalize_evaluator_failure(
         organization=run.organization,
         assurance_run=run,
         defaults={
-            "status": ReadinessDecision.Status.FAILED,
-            "reason_codes": [failure_code],
+            "status": failure_status,
+            "reason_codes": reason_codes,
             "input_hash": content_hash(failure_input),
         },
     )
@@ -2810,8 +3145,8 @@ def _finalize_evaluator_failure(
     )
     markdown, rendered_html, limitations = _render_report(
         run=run,
-        status=ReadinessDecision.Status.FAILED,
-        reasons=[failure_code],
+        status=failure_status,
+        reasons=reason_codes,
         findings=(),
         limitations=limitations,
     )
@@ -2827,8 +3162,8 @@ def _finalize_evaluator_failure(
         "repository_id": str(run.repository_id),
         "pull_request_revision_id": str(run.pull_request_revision_id),
         "head_commit": run.head_commit,
-        "readiness": ReadinessDecision.Status.FAILED,
-        "reason_codes": [failure_code],
+        "readiness": failure_status,
+        "reason_codes": reason_codes,
         "finding_fingerprints": [],
         "versions": {
             "diff": run.diff_artifact.content_hash if run.diff_artifact else "0" * 64,
@@ -2894,7 +3229,7 @@ def _finalize_evaluator_failure(
         ]
     )
     run.failure_code = failure_code
-    run.readiness = ReadinessDecision.Status.FAILED
+    run.readiness = failure_status
     run.limitations = limitations
     run.save(
         update_fields=["failure_code", "readiness", "limitations", "updated_at"],

@@ -870,6 +870,10 @@ CONTEXT_REQUEST: Final[dict[str, object]] = _closed(
             "uniqueItems": True,
         },
         "required_search_anchors": deepcopy(REQUIRED_SEARCH_ANCHORS),
+        "context_scan_version": {
+            "type": "string",
+            "const": "authorized-conflict-scan-v1",
+        },
     },
     ("task", "phase", "budget"),
 )
@@ -894,6 +898,47 @@ CONTEXT_PACKET: Final[dict[str, object]] = _closed(
         "retrieval_algorithm_version": {"type": "string", "minLength": 1, "maxLength": 100},
         "index_version": {"type": "string", "minLength": 1, "maxLength": 100},
         "embedding_version": {"type": "string", "minLength": 1, "maxLength": 100},
+        "completeness": _closed(
+            {
+                "version": {"type": "string", "minLength": 1, "maxLength": 100},
+                "ordering": {"type": "string", "const": "kind,id"},
+                "exact_eligible_assertions": {"type": "integer", "minimum": 0},
+                "exact_eligible_conflicts": {"type": "integer", "minimum": 0},
+                "partial_retained_assertions": {"type": "integer", "minimum": 0},
+                "partial_retained_conflicts": {"type": "integer", "minimum": 0},
+                "processed_rows": {"type": "integer", "minimum": 0},
+                "digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+                "exact_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+                "partial_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+                "complete": {"type": "boolean"},
+                "page_size": {"type": "integer", "minimum": 1, "maximum": 1_000},
+                "bindings": _closed(
+                    {
+                        "organization_id": deepcopy(UUID),
+                        "repository_id": deepcopy(UUID),
+                        "authorization_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+                        "retrieval_watermark": {"type": "integer", "minimum": 1},
+                        "query_version": {"type": "string", "minLength": 1, "maxLength": 100},
+                    },
+                    (
+                        "organization_id",
+                        "repository_id",
+                        "authorization_hash",
+                        "retrieval_watermark",
+                        "query_version",
+                    ),
+                ),
+            },
+            (
+                "version",
+                "ordering",
+                "processed_rows",
+                "digest",
+                "complete",
+                "page_size",
+                "bindings",
+            ),
+        ),
         "budget": _closed(
             {
                 "max_items": {"type": "integer", "minimum": 1, "maximum": 100},

@@ -6,6 +6,7 @@ import json
 import uuid
 from dataclasses import replace
 from pathlib import Path
+from time import monotonic
 from typing import Any, cast
 
 import pytest
@@ -30,9 +31,11 @@ from anva.core.models import (
     AssertionValidityInterval,
     AuditEvent,
     BackgroundJob,
+    ContextPacketCitation,
     ContextPacketInvalidation,
     ContextPacketItem,
     ContextPacketRecord,
+    ImmutableArtifact,
     IngestionFailure,
     IngestionStageResult,
     KnowledgeAssertion,
@@ -63,6 +66,7 @@ from anva.core.services.context_packets import (
     RequiredSearchAnchor,
     RetrievalFacet,
     _chunk_candidate,
+    _deadline_statement_wrapper,
     _merge_candidates,
     _required_search_anchor_candidates,
     build_context_packet,
@@ -82,7 +86,7 @@ from anva.core.services.retrieval import (
     authorized_source_chunks,
 )
 from anva.core.services.scopes import revoke_source_connection
-from anva.core.services.search import search_chunks
+from anva.core.services.search import search_chunks, search_chunks_batch
 from anva.ingestion.errors import IngestionError
 from anva.ingestion.filesystem import FilesystemConnector
 from anva.ingestion.limits import IngestionLimits
@@ -109,6 +113,41 @@ class _SqlCapture:
             self.sql = sql
             self.parameters = parameters
         return execute(sql, parameters, many, context)
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_deadline_wrapper_immediately_refreshes_and_shrinks_real_postgres_timeout() -> None:
+    events: list[tuple[str, Any]] = []
+    started = monotonic()
+    deadline = started + 0.25
+
+    with pytest.raises(DatabaseError), transaction.atomic():
+        with connection.cursor() as cursor:
+
+            def execute(
+                sql: str,
+                parameters: Any,
+                _many: bool,
+                _context: object,
+            ) -> object:
+                events.append((sql, parameters))
+                return cursor.execute(sql, parameters)
+
+            wrapped = _deadline_statement_wrapper(deadline)
+            wrapped(execute, "SELECT pg_sleep(%s)", (0.05,), False, {})
+            wrapped(execute, "SELECT pg_sleep(%s)", (5,), False, {})
+
+    assert monotonic() - started < 0.6
+    assert [sql for sql, _parameters in events] == [
+        "SET LOCAL statement_timeout = %s",
+        "SELECT pg_sleep(%s)",
+        "SET LOCAL statement_timeout = %s",
+        "SELECT pg_sleep(%s)",
+    ]
+    first_timeout = cast(tuple[int], events[0][1])[0]
+    second_timeout = cast(tuple[int], events[2][1])[0]
+    assert 1 <= second_timeout < first_timeout <= 250
 
 
 def _assert_explainable(capture: _SqlCapture) -> None:
@@ -301,6 +340,23 @@ def test_required_search_anchor_survives_dense_context_and_fails_closed(
         limit=50,
     )
     assert search.results
+    comparison_query = "dense common retry context"
+    batch = search_chunks_batch(
+        actor=actor,
+        repository_id=repository_id,
+        queries=("distinctive capped retry anchor six attempts", comparison_query),
+        phase="ASSURANCE",
+        limit=50,
+    )
+    comparison = search_chunks(
+        actor=actor,
+        repository_id=repository_id,
+        query=comparison_query,
+        phase="ASSURANCE",
+        limit=50,
+    )
+    assert batch[0].as_dict() == search.as_dict()
+    assert batch[1].as_dict() == comparison.as_dict()
     target = search.results[0]
     anchor = _required_anchor(target)
     budget = PacketBudget(max_items=1, max_tokens=8_000, max_bytes=100_000, max_citations=1)
@@ -325,7 +381,9 @@ def test_required_search_anchor_survives_dense_context_and_fails_closed(
             budget=budget,
             required_search_anchors=(anchor,),
         )
-    assert len(anchor_queries) <= 80
+    # Includes bounded phase-local SET LOCAL statements that continually reduce the
+    # PostgreSQL timeout to the shared remaining deadline.
+    assert len(anchor_queries) <= 100
     cached, cached_created = build_context_packet(
         actor=actor,
         repository_id=repository_id,
@@ -506,6 +564,46 @@ def test_required_search_anchor_survives_dense_context_and_fails_closed(
         required_search_anchors=(),
     )
     assert "required_search_anchors" not in zero_anchor_packet.normalized_request
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_context_packet_publication_rolls_back_invalid_bulk_member(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "member.json").write_text(json.dumps({"policy": "retain exact hashes"}))
+    actor, source = _source_setup(tmp_path, monkeypatch, slug="invalid-packet-member")
+    _execute_requested(actor, source)
+    assert source.repository_id is not None
+    before = {
+        "scopes": AccessScope.objects.count(),
+        "artifacts": ImmutableArtifact.objects.count(),
+        "packets": ContextPacketRecord.objects.count(),
+        "items": ContextPacketItem.objects.count(),
+        "citations": ContextPacketCitation.objects.count(),
+    }
+    original_bulk_create = ContextPacketItem.objects.bulk_create
+
+    def invalid_bulk_create(items: list[ContextPacketItem], *args: Any, **kwargs: Any) -> Any:
+        assert items
+        items[0].organization_id = uuid.uuid4()
+        return original_bulk_create(items, *args, **kwargs)
+
+    monkeypatch.setattr(ContextPacketItem.objects, "bulk_create", invalid_bulk_create)
+    with pytest.raises(DatabaseError):
+        build_context_packet(
+            actor=actor,
+            repository_id=source.repository_id,
+            task="retain exact hashes",
+            phase=ContextPacketRecord.Phase.ASSURANCE,
+        )
+
+    assert AccessScope.objects.count() == before["scopes"]
+    assert ImmutableArtifact.objects.count() == before["artifacts"]
+    assert ContextPacketRecord.objects.count() == before["packets"]
+    assert ContextPacketItem.objects.count() == before["items"]
+    assert ContextPacketCitation.objects.count() == before["citations"]
 
 
 @pytest.mark.integration

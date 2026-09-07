@@ -7,12 +7,15 @@ import json
 import math
 import re
 import uuid
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from datetime import datetime
+from time import monotonic
 from typing import Any, NoReturn, cast
 
 from django.db import connection, transaction
-from django.db.models import Case, F, Q, QuerySet, TextField, Value, When
+from django.db.models import BooleanField, Case, F, Q, QuerySet, TextField, Value, When
+from django.db.models.expressions import RawSQL
 from django.db.models.functions import Cast, Concat
 from django.utils import timezone
 
@@ -44,6 +47,9 @@ from anva.core.models import (
     RetrievalWatermark,
     SourceChunkVisibility,
 )
+from anva.core.models import (
+    content_hash as model_content_hash,
+)
 from anva.core.services.authorization import (
     NOT_FOUND_MESSAGE,
     Action,
@@ -62,12 +68,22 @@ from anva.core.services.retrieval import (
     authorized_source_chunks,
     get_authorized_artifact,
 )
-from anva.core.services.search import SearchResult, search_chunks
+from anva.core.services.search import SearchResult, search_chunks_batch
 from anva.core.services.search_index import EMBEDDING_VERSION, INDEX_VERSION
 
 MAX_ASSERTION_CANDIDATES = 500
 MAX_RELATIONSHIP_CANDIDATES = 200
-MAX_CONFLICT_CANDIDATES = 500
+CONTEXT_SCAN_VERSION = "authorized-conflict-scan-v1"
+CONTEXT_SCAN_PAGE_SIZE = 200
+CONTEXT_SCAN_MAX_ROWS = 50_000
+CONTEXT_SCAN_MAX_OPERATIONS = 100_000
+# Leave one second of the v3 five-second context target for ranking, sealing,
+# and publication reauthorization around this internal database scan.
+CONTEXT_SCAN_MAX_SECONDS = 4.0
+CONTEXT_STATEMENT_TIMEOUT_MS = 4_000
+_deadline_sql_wrapper_active: ContextVar[bool] = ContextVar(
+    "context_deadline_sql_wrapper_active", default=False
+)
 MAX_RETRIEVAL_FACETS = 8
 MAX_REQUIRED_SEARCH_ANCHORS = 50
 # One closed anchor is 373 canonical ASCII JSON bytes. The array adds 49 commas
@@ -244,6 +260,53 @@ class PacketSelection:
     selected_bytes: int
     selected_citations: int
     limitations: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ContextCompleteness:
+    """Bounded internal scan accounting; never a public continuation cursor."""
+
+    assertion_count: int
+    conflict_count: int
+    processed_count: int
+    digest: str
+    complete: bool = True
+
+    def as_dict(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "version": CONTEXT_SCAN_VERSION,
+            "ordering": "kind,id",
+            "processed_rows": self.processed_count,
+            "digest": self.digest,
+            "complete": self.complete,
+            "page_size": CONTEXT_SCAN_PAGE_SIZE,
+        }
+        if self.complete:
+            payload.update(
+                exact_eligible_assertions=self.assertion_count,
+                exact_eligible_conflicts=self.conflict_count,
+                exact_digest=self.digest,
+            )
+        else:
+            payload.update(
+                partial_retained_assertions=self.assertion_count,
+                partial_retained_conflicts=self.conflict_count,
+                partial_digest=self.digest,
+            )
+        return payload
+
+
+class ScannedCandidates(list[PacketCandidate]):
+    """Candidate list carrying internal completeness without changing public models."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.complete = True
+        self.eligible_assertion_ids: set[uuid.UUID] = set()
+        self.provenance_by_assertion: dict[uuid.UUID, AssertionProvenance] = {}
+        self.authorization: AuthorizedRepositoryScopes | None = None
+        self.processed_count = 0
+        self.operation_count = 0
 
 
 def normalize_required_search_anchors(
@@ -486,7 +549,7 @@ def _authorized_provenance_for_authorization(
     *,
     actor: ActorContext,
     authorization: AuthorizedRepositoryScopes,
-    assertion_ids: list[uuid.UUID] | set[uuid.UUID],
+    assertion_ids: list[uuid.UUID] | set[uuid.UUID] | None,
 ) -> QuerySet[AssertionProvenance]:
     """Apply the relational repository/scope boundary to current provenance."""
     if not authorization.repository_ids_for(Action.SEARCH) or not authorization.scope_ids_for(
@@ -496,7 +559,6 @@ def _authorized_provenance_for_authorization(
     queryset = (
         AssertionProvenance.objects.filter(
             organization_id=actor.organization_id,
-            assertion_id__in=assertion_ids,
             access_snapshot__revoked_at__isnull=True,
             access_snapshot__source_connection_id=F(
                 "source_observation__source_document__source_container__source_connection_id"
@@ -556,6 +618,8 @@ def _authorized_provenance_for_authorization(
         .order_by("assertion_id", "observed_at", "id")
         .distinct()
     )
+    if assertion_ids is not None:
+        queryset = queryset.filter(assertion_id__in=assertion_ids)
     return queryset
 
 
@@ -577,6 +641,32 @@ def _authorized_provenance(
         actor=actor,
         authorization=authorization,
         assertion_ids=assertion_ids,
+    )
+
+
+def _eligible_assertion_provenance_for_authorization(
+    *,
+    actor: ActorContext,
+    authorization: AuthorizedRepositoryScopes,
+    current_provenance: QuerySet[AssertionProvenance] | None = None,
+) -> QuerySet[AssertionProvenance]:
+    """Select one deterministic authorized current provenance per assertion."""
+    provenance = current_provenance
+    if provenance is None:
+        provenance = _authorized_provenance_for_authorization(
+            actor=actor,
+            authorization=authorization,
+            assertion_ids=None,
+        )
+    return (
+        provenance.filter(
+            assertion__organization_id=actor.organization_id,
+            assertion__access_scope_id__in=authorization.scope_ids_for(Action.SEARCH),
+            assertion__valid_until__isnull=True,
+        )
+        .select_related("assertion", "assertion__access_scope")
+        .order_by("assertion_id", "observed_at", "id")
+        .distinct("assertion_id")
     )
 
 
@@ -726,103 +816,153 @@ def _assertion_candidates(
     repository_id: uuid.UUID,
     facets: tuple[RetrievalFacet, ...],
     change_aware: bool,
+    deadline: float | None = None,
 ) -> list[PacketCandidate]:
-    assertions = list(
-        authorized_assertions(
-            actor=actor,
-            repository_id=repository_id,
-            action=Action.SEARCH,
-        )
-        .select_related("access_scope")
-        .order_by("id")[:MAX_ASSERTION_CANDIDATES]
-    )
-    provenance_by_assertion: dict[uuid.UUID, tuple[CitationCandidate, ...]] = {}
-    provenance_rows = _authorized_provenance(
+    authorization = resolve_authorized_repository_scopes(
         actor=actor,
-        repository_id=repository_id,
-        assertion_ids=[assertion.id for assertion in assertions],
+        actions=(Action.SEARCH,),
+        required_action=Action.SEARCH,
+        repository_ids=(repository_id,),
+        repository_limit=1,
     )
-    for provenance in provenance_rows:
-        existing = provenance_by_assertion.get(provenance.assertion_id, ())
-        provenance_by_assertion[provenance.assertion_id] = (
-            *existing,
-            _citation_from_provenance(provenance),
-        )
+    current_provenance = _authorized_provenance_for_authorization(
+        actor=actor,
+        authorization=authorization,
+        assertion_ids=None,
+    )
+    eligible = _eligible_assertion_provenance_for_authorization(
+        actor=actor,
+        authorization=authorization,
+        current_provenance=current_provenance,
+    )
 
-    candidates: list[PacketCandidate] = []
-    for assertion in assertions:
-        citations = provenance_by_assertion.get(assertion.id, ())
-        if not citations or assertion.access_scope_id is None:
-            continue
-        summary = _assertion_summary(assertion)
-        required = _required_policy(assertion)
-        matched_facets = _matching_facets(summary, facets)
-        required_facets = _required_matching_facets(summary, matched_facets, facets)
-        matches = bool(matched_facets)
-        kind = _assertion_kind(assertion)
-        if not matches and kind not in {
-            ContextPacketItem.Kind.POLICY,
-            ContextPacketItem.Kind.DECISION,
-            ContextPacketItem.Kind.INCIDENT,
-        }:
-            continue
-        if required and _freshness(assertion) == ContextPacketItem.Freshness.CURRENT:
-            tier = 0
-            reason = "Applicable required current policy"
-        elif change_aware and required_facets:
-            tier = 1
-            reason = f"Change-aware assurance anchored match: {', '.join(required_facets)}"
-        elif change_aware and matches:
-            tier = 3
-            reason = f"Change-aware assurance lexical fallback: {', '.join(matched_facets)}"
-        elif kind == ContextPacketItem.Kind.POLICY:
-            tier = 6 if change_aware else 3
-            reason = "Governed policy fallback"
-        elif kind == ContextPacketItem.Kind.DECISION:
-            tier = 7 if change_aware else 5
-            reason = "Relevant decision"
-        elif kind == ContextPacketItem.Kind.INCIDENT:
-            tier = 8 if change_aware else 6
-            reason = "Relevant risk or incident"
-        else:
-            tier = 2
-            reason = "Phase-relevant governed assertion"
-        payload = {
-            "assertion_id": str(assertion.id),
-            "subject_key": assertion.subject_key,
-            "predicate": assertion.predicate,
-            "value": assertion.value,
-            "review_state": assertion.review_state,
-            "staleness_state": assertion.staleness_state,
-            "confidence": assertion.confidence,
+    candidates = ScannedCandidates()
+    candidates.authorization = authorization
+    deadline = deadline or monotonic() + CONTEXT_SCAN_MAX_SECONDS
+    last_id: uuid.UUID | None = None
+    scanned = 0
+    candidate_capacity = CONTEXT_SCAN_MAX_ROWS
+    while True:
+        if monotonic() >= deadline:
+            candidates.complete = False
+            break
+        page_query = eligible
+        if last_id is not None:
+            page_query = page_query.filter(assertion_id__gt=last_id)
+        remaining = candidate_capacity - scanned
+        remaining_operations = CONTEXT_SCAN_MAX_OPERATIONS - candidates.operation_count
+        if remaining <= 0:
+            if remaining_operations < 1:
+                candidates.complete = False
+                break
+            candidates.operation_count += 1
+            candidates.complete = not page_query.exists()
+            break
+        page_limit = min(CONTEXT_SCAN_PAGE_SIZE, remaining, remaining_operations - 1)
+        if page_limit <= 0:
+            candidates.complete = False
+            break
+        provenance_page = list(page_query[:page_limit])
+        candidates.operation_count += 1 + len(provenance_page)
+        if not provenance_page:
+            break
+        assertions = [provenance.assertion for provenance in provenance_page]
+        scanned += len(provenance_page)
+        candidates.processed_count = scanned
+        candidates.eligible_assertion_ids.update(assertion.id for assertion in assertions)
+        if monotonic() >= deadline:
+            candidates.complete = False
+            break
+        last_id = provenance_page[-1].assertion_id
+        provenance_by_assertion = {
+            provenance.assertion_id: provenance for provenance in provenance_page
         }
-        candidates.append(
-            PacketCandidate(
-                item_id=uuid.uuid4(),
-                kind=kind,
-                item_key=f"assertion:{assertion.id}",
-                summary=summary,
-                freshness=_freshness(assertion),
-                is_inferred=assertion.is_inferred,
-                selection_reason=reason,
-                rank_score=max(0.0, assertion.confidence),
-                tier=tier,
-                required_policy=required,
-                payload=payload,
-                contributing_scope_ids=tuple(
-                    sorted(
-                        {
-                            assertion.access_scope_id,
-                            *(citation.access_scope_id for citation in citations),
-                        }
-                    )
-                ),
-                citations=citations,
-                matched_facets=matched_facets,
-                required_context_facets=required_facets,
-                source_assertion_id=assertion.id,
+        candidates.provenance_by_assertion.update(provenance_by_assertion)
+        for assertion in assertions:
+            provenance = provenance_by_assertion[assertion.id]
+            if assertion.access_scope_id is None:
+                continue
+            summary = _assertion_summary(assertion)
+            required = _required_policy(assertion)
+            matched_facets = _matching_facets(summary, facets)
+            required_facets = _required_matching_facets(summary, matched_facets, facets)
+            matches = bool(matched_facets)
+            citations = (_citation_from_provenance(provenance),)
+            kind = _assertion_kind(assertion)
+            if not matches and kind not in {
+                ContextPacketItem.Kind.POLICY,
+                ContextPacketItem.Kind.DECISION,
+                ContextPacketItem.Kind.INCIDENT,
+            }:
+                continue
+            if required and _freshness(assertion) == ContextPacketItem.Freshness.CURRENT:
+                tier = 0
+                reason = "Applicable required current policy"
+            elif change_aware and required_facets:
+                tier = 1
+                reason = f"Change-aware assurance anchored match: {', '.join(required_facets)}"
+            elif change_aware and matches:
+                tier = 3
+                reason = f"Change-aware assurance lexical fallback: {', '.join(matched_facets)}"
+            elif kind == ContextPacketItem.Kind.POLICY:
+                tier = 6 if change_aware else 3
+                reason = "Governed policy fallback"
+            elif kind == ContextPacketItem.Kind.DECISION:
+                tier = 7 if change_aware else 5
+                reason = "Relevant decision"
+            elif kind == ContextPacketItem.Kind.INCIDENT:
+                tier = 8 if change_aware else 6
+                reason = "Relevant risk or incident"
+            else:
+                tier = 2
+                reason = "Phase-relevant governed assertion"
+            payload = {
+                "assertion_id": str(assertion.id),
+                "subject_key": assertion.subject_key,
+                "predicate": assertion.predicate,
+                "value": assertion.value,
+                "review_state": assertion.review_state,
+                "staleness_state": assertion.staleness_state,
+                "confidence": assertion.confidence,
+            }
+            candidates.append(
+                PacketCandidate(
+                    item_id=uuid.uuid4(),
+                    kind=kind,
+                    item_key=f"assertion:{assertion.id}",
+                    summary=summary,
+                    freshness=_freshness(assertion),
+                    is_inferred=assertion.is_inferred,
+                    selection_reason=reason,
+                    rank_score=max(0.0, assertion.confidence),
+                    tier=tier,
+                    required_policy=required,
+                    payload=payload,
+                    contributing_scope_ids=tuple(
+                        sorted(
+                            {
+                                assertion.access_scope_id,
+                                *(citation.access_scope_id for citation in citations),
+                            }
+                        )
+                    ),
+                    citations=citations,
+                    matched_facets=matched_facets,
+                    required_context_facets=required_facets,
+                    source_assertion_id=assertion.id,
+                )
             )
-        )
+        if len(provenance_page) < page_limit:
+            break
+        if len(assertions) == remaining:
+            # The only lookahead is an existence probe at the total-cap boundary;
+            # it does not materialize an unaccounted candidate row.
+            if candidates.operation_count >= CONTEXT_SCAN_MAX_OPERATIONS:
+                candidates.complete = False
+            else:
+                candidates.operation_count += 1
+                candidates.complete = not eligible.filter(assertion_id__gt=last_id).exists()
+            break
     return candidates
 
 
@@ -1178,6 +1318,37 @@ def _required_search_anchor_candidates(
     return candidates
 
 
+def _open_conflicts_for_assertions(
+    *,
+    actor: ActorContext,
+    selected_assertion_ids: set[uuid.UUID],
+    relevant_assertion_ids: set[uuid.UUID],
+    change_aware: bool,
+) -> QuerySet[AssertionConflict]:
+    """Keep large assertion memberships in bounded PostgreSQL UUID-array binds."""
+    ordered_selected_ids = sorted(selected_assertion_ids, key=str)
+    queryset = AssertionConflict.objects.filter(
+        organization_id=actor.organization_id,
+        status=AssertionConflict.Status.OPEN,
+    ).filter(
+        RawSQL(
+            "left_assertion_id = ANY(%s::uuid[]) AND right_assertion_id = ANY(%s::uuid[])",
+            (ordered_selected_ids, ordered_selected_ids),
+            output_field=BooleanField(),
+        )
+    )
+    if not change_aware:
+        return queryset
+    ordered_relevant_ids = sorted(relevant_assertion_ids, key=str)
+    return queryset.filter(
+        RawSQL(
+            "left_assertion_id = ANY(%s::uuid[]) OR right_assertion_id = ANY(%s::uuid[])",
+            (ordered_relevant_ids, ordered_relevant_ids),
+            output_field=BooleanField(),
+        )
+    )
+
+
 def _conflict_candidates(
     *,
     actor: ActorContext,
@@ -1185,38 +1356,121 @@ def _conflict_candidates(
     selected_assertion_ids: set[uuid.UUID],
     relevant_assertion_facets: dict[uuid.UUID, tuple[str, ...]],
     change_aware: bool,
+    deadline: float | None = None,
+    selected_assertion_provenance: dict[uuid.UUID, AssertionProvenance] | None = None,
+    authorization: AuthorizedRepositoryScopes | None = None,
+    prior_operation_count: int = 0,
 ) -> list[PacketCandidate]:
     if not selected_assertion_ids:
         return []
-    conflict_queryset = AssertionConflict.objects.filter(
-        organization_id=actor.organization_id,
-        status=AssertionConflict.Status.OPEN,
-        left_assertion_id__in=selected_assertion_ids,
-        right_assertion_id__in=selected_assertion_ids,
-    )
-    if change_aware:
-        relevant_assertion_ids = set(relevant_assertion_facets)
-        conflict_queryset = conflict_queryset.filter(
-            Q(left_assertion_id__in=relevant_assertion_ids)
-            | Q(right_assertion_id__in=relevant_assertion_ids)
-        )
-    bounded_conflicts = list(
-        conflict_queryset.select_related("left_assertion", "right_assertion").order_by("id")[
-            : MAX_CONFLICT_CANDIDATES + 1
-        ]
-    )
-    if len(bounded_conflicts) > MAX_CONFLICT_CANDIDATES:
-        raise RequiredContextBudgetError(
-            "Conflict candidate retrieval exceeded its deterministic bound"
-        )
-    candidates: list[PacketCandidate] = []
-    provenance_by_assertion: dict[uuid.UUID, AssertionProvenance] = {}
-    for provenance in _authorized_provenance(
+    conflict_queryset = _open_conflicts_for_assertions(
         actor=actor,
-        repository_id=repository_id,
-        assertion_ids=selected_assertion_ids,
-    ):
-        provenance_by_assertion.setdefault(provenance.assertion_id, provenance)
+        selected_assertion_ids=selected_assertion_ids,
+        relevant_assertion_ids=set(relevant_assertion_facets),
+        change_aware=change_aware,
+    )
+    ordered_conflicts = conflict_queryset.select_related(
+        "left_assertion", "right_assertion"
+    ).order_by("id")
+    bounded_conflicts: list[AssertionConflict] = []
+    scan_complete = True
+    deadline = deadline or monotonic() + CONTEXT_SCAN_MAX_SECONDS
+    last_id: uuid.UUID | None = None
+    candidate_capacity = CONTEXT_SCAN_MAX_ROWS
+    operation_count = prior_operation_count
+    while True:
+        if monotonic() >= deadline:
+            scan_complete = False
+            break
+        page_query = ordered_conflicts
+        if last_id is not None:
+            page_query = page_query.filter(id__gt=last_id)
+        remaining = candidate_capacity - len(selected_assertion_ids) - len(bounded_conflicts)
+        remaining_operations = CONTEXT_SCAN_MAX_OPERATIONS - operation_count
+        if remaining <= 0:
+            if remaining_operations < 1:
+                scan_complete = False
+                break
+            operation_count += 1
+            scan_complete = not page_query.exists()
+            break
+        page_limit = min(CONTEXT_SCAN_PAGE_SIZE, remaining, remaining_operations - 1)
+        if page_limit <= 0:
+            scan_complete = False
+            break
+        page = list(page_query[:page_limit])
+        operation_count += 1 + len(page)
+        if not page:
+            break
+        bounded_conflicts.extend(page)
+        if monotonic() >= deadline:
+            scan_complete = False
+            break
+        last_id = page[-1].id
+        if len(page) < page_limit:
+            break
+        if len(page) == remaining:
+            # Keep the row budget exact: probe only for existence beyond the
+            # consumed keyset instead of fetching a page-size-plus-one row.
+            if operation_count >= CONTEXT_SCAN_MAX_OPERATIONS:
+                scan_complete = False
+            else:
+                operation_count += 1
+                scan_complete = not conflict_queryset.filter(id__gt=last_id).exists()
+            break
+    candidates = ScannedCandidates()
+    candidates.complete = scan_complete
+    candidates.processed_count = len(bounded_conflicts)
+    candidates.operation_count = operation_count
+    conflict_endpoint_ids = {
+        assertion_id
+        for conflict in bounded_conflicts
+        for assertion_id in (conflict.left_assertion_id, conflict.right_assertion_id)
+    }
+    provenance_by_assertion: dict[uuid.UUID, AssertionProvenance] = {}
+    if selected_assertion_provenance is not None and authorization is not None:
+        cached_provenance = {
+            assertion_id: provenance
+            for assertion_id, provenance in selected_assertion_provenance.items()
+            if assertion_id in conflict_endpoint_ids
+        }
+        authorized_provenance_ids: set[uuid.UUID] = set()
+        ordered_cached_ids = sorted(cached_provenance, key=str)
+        for offset in range(0, len(ordered_cached_ids), CONTEXT_SCAN_PAGE_SIZE * 2):
+            assertion_page = set(ordered_cached_ids[offset : offset + CONTEXT_SCAN_PAGE_SIZE * 2])
+            authorized_provenance_ids.update(
+                _authorized_provenance_for_authorization(
+                    actor=actor,
+                    authorization=authorization,
+                    assertion_ids=assertion_page,
+                )
+                .filter(
+                    id__in=[cached_provenance[assertion_id].id for assertion_id in assertion_page]
+                )
+                .order_by()
+                .values_list("id", flat=True)
+                .distinct()
+            )
+        provenance_by_assertion = {
+            assertion_id: provenance
+            for assertion_id, provenance in cached_provenance.items()
+            if provenance.id in authorized_provenance_ids
+        }
+    else:
+        ordered_endpoint_ids = sorted(conflict_endpoint_ids, key=str)
+        for offset in range(0, len(ordered_endpoint_ids), CONTEXT_SCAN_PAGE_SIZE * 2):
+            endpoint_page = set(ordered_endpoint_ids[offset : offset + CONTEXT_SCAN_PAGE_SIZE * 2])
+            provenance_rows = (
+                _authorized_provenance(
+                    actor=actor,
+                    repository_id=repository_id,
+                    assertion_ids=endpoint_page,
+                )
+                .order_by("assertion_id", "observed_at", "id")
+                .distinct("assertion_id")
+            )
+            for provenance in provenance_rows:
+                provenance_by_assertion.setdefault(provenance.assertion_id, provenance)
     for conflict in bounded_conflicts:
         matched_facets = tuple(
             sorted(
@@ -1300,7 +1554,10 @@ def _select(
     budget: PacketBudget,
     *,
     required_context_overflow: tuple[str, ...] = (),
+    deadline: float | None = None,
 ) -> PacketSelection:
+    deadline = deadline or monotonic() + CONTEXT_SCAN_MAX_SECONDS
+    _require_context_deadline(deadline)
     ordered = sorted(_merge_candidates(candidates), key=_candidate_order)
     selected: list[PacketCandidate] = []
     selected_keys: set[str] = set()
@@ -1334,6 +1591,7 @@ def _select(
     # lower-priority content.  The final packet is sorted canonically below, so reservation
     # order cannot leak caller or retrieval ordering.
     for candidate in ordered:
+        _require_context_deadline(deadline)
         if candidate.required_policy and candidate.freshness == ContextPacketItem.Freshness.CURRENT:
             if not add_if_fits(candidate):
                 raise RequiredPolicyBudgetError(
@@ -1341,6 +1599,7 @@ def _select(
                 )
 
     for candidate in ordered:
+        _require_context_deadline(deadline)
         if candidate.required_search_anchor and candidate.item_key not in selected_keys:
             if not add_if_fits(candidate):
                 raise RequiredContextBudgetError(
@@ -1384,11 +1643,13 @@ def _select(
         for candidate in representatives
     }
     for candidate in representatives:
+        _require_context_deadline(deadline)
         candidate_mask = sum(
             label_bits[label] for label in candidate.required_context_facets if label in label_bits
         )
         state_snapshot = [(mask, tuple(mask_states)) for mask, mask_states in states.items()]
         for mask, mask_states in state_snapshot:
+            _require_context_deadline(deadline)
             next_mask = mask | candidate_mask
             if next_mask == mask:
                 continue
@@ -1486,6 +1747,7 @@ def _select(
                 raise RuntimeError("Required context packing diverged from its bounded selection")
 
     for candidate in ordered:
+        _require_context_deadline(deadline)
         if candidate.item_key not in selected_keys:
             add_if_fits(candidate)
 
@@ -1501,8 +1763,11 @@ def seal_actor_scope(
     repository_id: uuid.UUID,
     source_scope_ids: set[uuid.UUID],
     scope_key: uuid.UUID,
+    deadline: float | None = None,
 ) -> AccessScope:
     """Create an actor-and-repository-only scope narrower than every input scope."""
+    deadline = deadline or monotonic() + CONTEXT_SCAN_MAX_SECONDS
+    _set_remaining_statement_timeout(deadline)
     principal = resolve_principal(actor)
     scopes = list(
         AccessScope.objects.select_for_update()
@@ -1515,12 +1780,15 @@ def seal_actor_scope(
     )
     if len(scopes) != len(source_scope_ids):
         raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    _require_context_deadline(deadline)
     organization = Organization.objects.get(id=actor.organization_id)
     derived = AccessScope.objects.create(
         organization=organization,
         name=f"context-packet:{scope_key}",
     )
+    _require_context_deadline(deadline)
     derived.derived_from.set(scopes)
+    _require_context_deadline(deadline)
     if principal.membership is not None:
         AccessScopeMembership.objects.create(
             organization=organization,
@@ -1540,6 +1808,7 @@ def seal_actor_scope(
         access_scope=derived,
         repository_id=repository_id,
     )
+    _require_context_deadline(deadline)
     source_ids = AccessScopeSource.objects.filter(access_scope_id__in=source_scope_ids).values_list(
         "source_connection_id", flat=True
     )
@@ -1553,6 +1822,7 @@ def seal_actor_scope(
             for source_id in sorted(set(source_ids))
         ]
     )
+    _require_context_deadline(deadline)
     derived.is_derived = True
     derived.boundary_sealed_at = timezone.now()
     derived.save(
@@ -1618,7 +1888,9 @@ def _watermark(
         id=repository_id,
         organization_id=actor.organization_id,
     )
-    watermark, _created = RetrievalWatermark.objects.get_or_create(
+    # This row is the scan's internal snapshot fence. All supported provenance,
+    # authorization, and ingestion mutations advance it under the same row lock.
+    watermark, _created = RetrievalWatermark.objects.select_for_update().get_or_create(
         organization_id=actor.organization_id,
         repository=repository,
     )
@@ -1629,13 +1901,52 @@ def _deny_packet() -> NoReturn:
     raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
 
 
+def _require_context_deadline(deadline: float) -> None:
+    if monotonic() >= deadline:
+        raise RequiredContextBudgetError("Context construction deadline exhausted")
+
+
+def _set_remaining_statement_timeout(deadline: float) -> None:
+    _require_context_deadline(deadline)
+    if connection.vendor != "postgresql" or _deadline_sql_wrapper_active.get():
+        return
+    remaining_ms = max(
+        1,
+        min(CONTEXT_STATEMENT_TIMEOUT_MS, int((deadline - monotonic()) * 1_000)),
+    )
+    with connection.cursor() as cursor:
+        cursor.execute("SET LOCAL statement_timeout = %s", (remaining_ms,))
+
+
+def _deadline_statement_wrapper(deadline: float) -> Any:
+    def wrapper(
+        execute: Any,
+        sql: str,
+        params: object,
+        many: bool,
+        context: object,
+    ) -> Any:
+        if not sql.lstrip().upper().startswith("SET LOCAL"):
+            _require_context_deadline(deadline)
+            remaining_ms = max(
+                1,
+                min(CONTEXT_STATEMENT_TIMEOUT_MS, int((deadline - monotonic()) * 1_000)),
+            )
+            execute("SET LOCAL statement_timeout = %s", (remaining_ms,), False, context)
+        return execute(sql, params, many, context)
+
+    return wrapper
+
+
 def _reauthorize_packet_current(
     *,
     actor: ActorContext,
     repository_id: uuid.UUID,
     packet: ContextPacketRecord,
+    deadline: float | None = None,
 ) -> ImmutableArtifact:
     """Recheck every parent scope and citation against current source lineage."""
+    deadline = deadline or monotonic() + CONTEXT_SCAN_MAX_SECONDS
     if ContextPacketInvalidation.objects.filter(context_packet=packet).exists():
         _deny_packet()
     artifact = get_authorized_artifact(
@@ -1657,11 +1968,15 @@ def _reauthorize_packet_current(
             organization_id=actor.organization_id,
             context_packet=packet,
         )
-        .select_related("access_scope")
+        .select_related("access_scope", "source_chunk")
         .prefetch_related("access_scope__derived_from")
         .order_by("position")
     )
     packet_parent_ids = set(packet.access_scope.derived_from.values_list("id", flat=True))
+    item_parent_ids_by_scope = {
+        item.access_scope_id: {parent.id for parent in item.access_scope.derived_from.all()}
+        for item in items
+    }
     expected_packet_parents = {item.access_scope_id for item in items}
     if items:
         if packet_parent_ids != expected_packet_parents:
@@ -1713,11 +2028,27 @@ def _reauthorize_packet_current(
     )
     for citation in citations:
         citations_by_item.setdefault(citation.context_item_id, []).append(citation)
+    allowed_scope_sources = set(
+        AccessScopeSource.objects.filter(
+            organization_id=actor.organization_id,
+            access_scope_id__in={
+                citation.access_snapshot.access_scope_id
+                for citation in citations
+                if citation.access_snapshot is not None
+            },
+            source_connection_id__in={
+                citation.source_observation.source_document.source_container.source_connection_id
+                for citation in citations
+                if citation.source_observation is not None
+            },
+        ).values_list("access_scope_id", "source_connection_id")
+    )
 
     for item in items:
+        _require_context_deadline(deadline)
         if item.access_scope_id not in visible_scope_ids:
             _deny_packet()
-        item_parent_ids = set(item.access_scope.derived_from.values_list("id", flat=True))
+        item_parent_ids = item_parent_ids_by_scope[item.access_scope_id]
         if not item_parent_ids or not item_parent_ids <= visible_scope_ids:
             _deny_packet()
         item_citations = citations_by_item.get(item.id, [])
@@ -1725,6 +2056,7 @@ def _reauthorize_packet_current(
             _deny_packet()
         citation_scope_ids: set[uuid.UUID] = set()
         for citation in item_citations:
+            _require_context_deadline(deadline)
             if citation.access_snapshot is None:
                 _deny_packet()
             citation_scope_ids.add(citation.access_snapshot.access_scope_id)
@@ -1761,11 +2093,7 @@ def _reauthorize_packet_current(
                 snapshot.revoked_at is not None
                 or snapshot.access_scope_id not in item_parent_ids
                 or snapshot.source_connection_id != source_connection.id
-                or not AccessScopeSource.objects.filter(
-                    organization_id=actor.organization_id,
-                    access_scope_id=snapshot.access_scope_id,
-                    source_connection_id=source_connection.id,
-                ).exists()
+                or (snapshot.access_scope_id, source_connection.id) not in allowed_scope_sources
                 or source_connection.repository_id != repository_id
                 or source_connection.state not in {"ACTIVE", "DEGRADED"}
                 or document.state != "PRESENT"
@@ -1788,8 +2116,7 @@ def _reauthorize_packet_current(
     return artifact
 
 
-@transaction.atomic
-def build_context_packet(
+def _build_context_packet_bounded(
     *,
     actor: ActorContext,
     repository_id: uuid.UUID,
@@ -1798,6 +2125,7 @@ def build_context_packet(
     budget: PacketBudget | None = None,
     retrieval_facets: tuple[RetrievalFacet, ...] | None = None,
     required_search_anchors: tuple[RequiredSearchAnchor, ...] | None = None,
+    deadline: float,
 ) -> tuple[ContextPacketRecord, bool]:
     """Build or reuse an exact immutable packet for one actor/repository snapshot."""
     normalized_task = " ".join(task.split())
@@ -1820,10 +2148,19 @@ def build_context_packet(
         repository_id=repository_id,
     )
     watermark = _watermark(actor=actor, repository_id=repository_id)
+    if connection.vendor == "postgresql":
+        with connection.cursor() as cursor:
+            remaining_ms = max(
+                1, min(CONTEXT_STATEMENT_TIMEOUT_MS, int((deadline - monotonic()) * 1000))
+            )
+            cursor.execute("SET LOCAL statement_timeout = %s", (remaining_ms,))
+            cursor.execute("SET LOCAL lock_timeout = %s", (1_000,))
+            cursor.execute("SET LOCAL idle_in_transaction_session_timeout = %s", (5_000,))
     normalized_request: dict[str, object] = {
         "task": normalized_task,
         "phase": normalized_phase,
         "budget": budget.as_dict(),
+        "context_scan_version": CONTEXT_SCAN_VERSION,
     }
     if change_aware:
         normalized_request["retrieval_facets"] = [
@@ -1865,13 +2202,16 @@ def build_context_packet(
         .first()
     )
     if cached is not None:
+        _set_remaining_statement_timeout(deadline)
         _reauthorize_packet_current(
             actor=actor,
             repository_id=repository_id,
             packet=cached,
+            deadline=deadline,
         )
         return cached, False
 
+    _set_remaining_statement_timeout(deadline)
     anchored_chunks = _required_search_anchor_candidates(
         actor=actor,
         repository_id=repository_id,
@@ -1879,12 +2219,15 @@ def build_context_packet(
         visible_scope_ids=visible_scopes,
     )
 
+    _set_remaining_statement_timeout(deadline)
     assertions = _assertion_candidates(
         actor=actor,
         repository_id=repository_id,
         facets=facets,
         change_aware=change_aware,
+        deadline=deadline,
     )
+    _set_remaining_statement_timeout(deadline)
     relationships = _relationship_candidates(
         actor=actor,
         repository_id=repository_id,
@@ -1893,14 +2236,17 @@ def build_context_packet(
     )
     chunks: list[PacketCandidate] = []
     per_facet_limit = min(100, max(25, budget.max_items))
-    for facet_position, facet in enumerate(facets):
-        search_response = search_chunks(
-            actor=actor,
-            repository_id=repository_id,
-            query=facet.query,
-            phase=normalized_phase,
-            limit=per_facet_limit,
-        )
+    _set_remaining_statement_timeout(deadline)
+    search_responses = search_chunks_batch(
+        actor=actor,
+        repository_id=repository_id,
+        queries=tuple(facet.query for facet in facets),
+        phase=normalized_phase,
+        limit=per_facet_limit,
+    )
+    for facet_position, (facet, search_response) in enumerate(
+        zip(facets, search_responses, strict=True)
+    ):
         chunks.extend(
             _chunk_candidate(
                 result,
@@ -1911,47 +2257,76 @@ def build_context_packet(
             )
             for position, result in enumerate(search_response.results, start=1)
         )
-    selected_assertions = {
+    relevant_assertions = {
         candidate.source_assertion_id
         for candidate in assertions
         if candidate.source_assertion_id is not None
     }
+    _set_remaining_statement_timeout(deadline)
     conflicts = _conflict_candidates(
         actor=actor,
         repository_id=repository_id,
-        selected_assertion_ids=selected_assertions,
+        selected_assertion_ids=set(
+            getattr(assertions, "eligible_assertion_ids", relevant_assertions)
+        ),
         relevant_assertion_facets={
             candidate.source_assertion_id: candidate.matched_facets
             for candidate in assertions
             if candidate.source_assertion_id is not None and candidate.matched_facets
         },
         change_aware=change_aware,
+        deadline=deadline,
+        selected_assertion_provenance=getattr(assertions, "provenance_by_assertion", None),
+        authorization=getattr(assertions, "authorization", None),
+        prior_operation_count=int(getattr(assertions, "operation_count", 0)),
     )
+    _require_context_deadline(deadline)
+    completeness_payload = [
+        {
+            "kind": "assertion",
+            "id": str(candidate.source_assertion_id),
+            "payload": candidate.payload,
+            "citations": [citation.as_dict() for citation in candidate.citations],
+        }
+        for candidate in assertions
+    ] + [
+        {
+            "kind": "conflict",
+            "id": str(candidate.source_conflict_id),
+            "payload": candidate.payload,
+            "citations": [citation.as_dict() for citation in candidate.citations],
+        }
+        for candidate in conflicts
+    ]
+    _require_context_deadline(deadline)
+    completeness = ContextCompleteness(
+        assertion_count=len(assertions),
+        conflict_count=len(conflicts),
+        processed_count=(
+            int(getattr(assertions, "processed_count", len(assertions)))
+            + int(getattr(conflicts, "processed_count", len(conflicts)))
+        ),
+        digest=_json_hash(completeness_payload),
+        complete=bool(
+            getattr(assertions, "complete", True) and getattr(conflicts, "complete", True)
+        ),
+    )
+    if not completeness.complete:
+        raise RequiredContextBudgetError("ASSURANCE_CONTEXT_INCOMPLETE")
     if change_aware and conflicts:
-        conflict_assertion_ids = {
-            assertion_id
-            for conflict in conflicts
-            for assertion_id in (
+        _require_context_deadline(deadline)
+        conflict_facet_sets: dict[uuid.UUID, set[str]] = {}
+        for conflict in conflicts:
+            endpoint_ids = (
                 uuid.UUID(cast(str, conflict.payload["left_assertion_id"])),
                 uuid.UUID(cast(str, conflict.payload["right_assertion_id"])),
             )
-        }
+            for assertion_id in endpoint_ids:
+                conflict_facet_sets.setdefault(assertion_id, set()).update(conflict.matched_facets)
+        conflict_assertion_ids = set(conflict_facet_sets)
         conflict_facets = {
-            assertion_id: tuple(
-                sorted(
-                    {
-                        label
-                        for conflict in conflicts
-                        if assertion_id
-                        in {
-                            uuid.UUID(cast(str, conflict.payload["left_assertion_id"])),
-                            uuid.UUID(cast(str, conflict.payload["right_assertion_id"])),
-                        }
-                        for label in conflict.matched_facets
-                    }
-                )
-            )
-            for assertion_id in conflict_assertion_ids
+            assertion_id: tuple(sorted(labels))
+            for assertion_id, labels in conflict_facet_sets.items()
         }
         assertions = [
             replace(
@@ -1982,14 +2357,45 @@ def build_context_packet(
             else candidate
             for candidate in assertions
         ]
+        _require_context_deadline(deadline)
     selection = _select(
         [*assertions, *relationships, *chunks, *anchored_chunks, *conflicts],
         budget,
         required_context_overflow=tuple(
             facet.label for facet in facets if facet.coverage_incomplete
         ),
+        deadline=deadline,
     )
+    _require_context_deadline(deadline)
+    selected_conflicts = sum(
+        candidate.source_conflict_id is not None for candidate in selection.candidates
+    )
+    if conflicts and selected_conflicts < len(conflicts):
+        selection = replace(
+            selection,
+            limitations=(
+                *selection.limitations,
+                f"{len(conflicts) - selected_conflicts} conflict details omitted by report budget; "
+                f"complete scan digest {completeness.digest}",
+            ),
+        )
+    # Publication is a separate security boundary: a revocation, scope change, or
+    # ingestion watermark movement during scanning invalidates this result.
+    _set_remaining_statement_timeout(deadline)
+    current_scopes, current_authorization_hash = _authorization_snapshot(
+        actor=actor,
+        repository_id=repository_id,
+    )
+    _set_remaining_statement_timeout(deadline)
+    current_watermark = _watermark(actor=actor, repository_id=repository_id)
+    if (
+        current_scopes != visible_scopes
+        or current_authorization_hash != authorization_hash
+        or current_watermark.value != watermark.value
+    ):
+        raise RequiredContextBudgetError("ASSURANCE_CONTEXT_INCOMPLETE")
     selection_hash = _json_hash([candidate.as_dict() for candidate in selection.candidates])
+    _require_context_deadline(deadline)
     packet_id = uuid.uuid4()
     generated_at = timezone.now()
     packet_payload: dict[str, Any] = {
@@ -2009,6 +2415,16 @@ def build_context_packet(
         "retrieval_algorithm_version": RETRIEVAL_ALGORITHM_VERSION,
         "index_version": INDEX_VERSION,
         "embedding_version": EMBEDDING_VERSION,
+        "completeness": {
+            **completeness.as_dict(),
+            "bindings": {
+                "organization_id": str(actor.organization_id),
+                "repository_id": str(repository_id),
+                "authorization_hash": authorization_hash,
+                "retrieval_watermark": watermark.value,
+                "query_version": CONTEXT_SCAN_VERSION,
+            },
+        },
         "budget": {
             **budget.as_dict(),
             "selected_items": len(selection.candidates),
@@ -2019,23 +2435,33 @@ def build_context_packet(
         "items": [candidate.as_dict() for candidate in selection.candidates],
         "limitations": list(selection.limitations),
     }
-    item_scopes = {
-        candidate.item_id: seal_actor_scope(
-            actor=actor,
-            repository_id=repository_id,
-            source_scope_ids=set(candidate.contributing_scope_ids),
-            scope_key=candidate.item_id,
-        )
-        for candidate in selection.candidates
-    }
+    scopes_by_boundary: dict[tuple[uuid.UUID, ...], AccessScope] = {}
+    item_scopes: dict[uuid.UUID, AccessScope] = {}
+    for candidate in selection.candidates:
+        _require_context_deadline(deadline)
+        boundary = tuple(sorted(candidate.contributing_scope_ids))
+        scope = scopes_by_boundary.get(boundary)
+        if scope is None:
+            scope = seal_actor_scope(
+                actor=actor,
+                repository_id=repository_id,
+                source_scope_ids=set(boundary),
+                scope_key=candidate.item_id,
+                deadline=deadline,
+            )
+            scopes_by_boundary[boundary] = scope
+        item_scopes[candidate.item_id] = scope
     selected_scope_ids = {scope.id for scope in item_scopes.values()} or {visible_scopes[0]}
     sealed_scope = seal_actor_scope(
         actor=actor,
         repository_id=repository_id,
         source_scope_ids=selected_scope_ids,
         scope_key=packet_id,
+        deadline=deadline,
     )
+    _require_context_deadline(deadline)
     organization = Organization.objects.get(id=actor.organization_id)
+    _require_context_deadline(deadline)
     artifact = ImmutableArtifact.objects.create(
         organization=organization,
         access_scope=sealed_scope,
@@ -2044,6 +2470,7 @@ def build_context_packet(
         schema_version="1.0",
         payload=packet_payload,
     )
+    _require_context_deadline(deadline)
     packet = ContextPacketRecord.objects.create(
         id=packet_id,
         organization=organization,
@@ -2073,8 +2500,8 @@ def build_context_packet(
         cache_key=cache_key,
         generated_at=generated_at,
     )
-    for position, candidate in enumerate(selection.candidates, start=1):
-        item = ContextPacketItem.objects.create(
+    items = [
+        ContextPacketItem(
             id=candidate.item_id,
             organization=organization,
             context_packet=packet,
@@ -2090,33 +2517,79 @@ def build_context_packet(
             token_count=candidate.token_count,
             byte_count=candidate.byte_count,
             payload=candidate.effective_payload,
+            content_hash=model_content_hash(candidate.effective_payload),
             source_assertion_id=candidate.source_assertion_id,
             source_relationship_id=candidate.source_relationship_id,
             source_chunk_id=candidate.source_chunk_id,
             source_conflict_id=candidate.source_conflict_id,
         )
-        ContextPacketCitation.objects.bulk_create(
-            [
-                ContextPacketCitation(
-                    organization=organization,
-                    context_packet=packet,
-                    context_item=item,
-                    position=citation_position,
-                    source_location_id=citation.source_location_id,
-                    source_observation_id=citation.source_observation_id,
-                    access_snapshot_id=citation.access_snapshot_id,
-                    canonical_url=citation.canonical_url,
-                    locator=citation.locator,
-                    source_content_hash=citation.source_content_hash,
-                    observed_at=citation.observed_at,
-                )
-                for citation_position, citation in enumerate(
-                    candidate.citations,
-                    start=1,
-                )
-            ]
-        )
+        for position, candidate in enumerate(selection.candidates, start=1)
+    ]
+    _set_remaining_statement_timeout(deadline)
+    ContextPacketItem.objects.bulk_create(items)
+    _set_remaining_statement_timeout(deadline)
+    ContextPacketCitation.objects.bulk_create(
+        [
+            ContextPacketCitation(
+                organization=organization,
+                context_packet=packet,
+                context_item_id=candidate.item_id,
+                position=citation_position,
+                source_location_id=citation.source_location_id,
+                source_observation_id=citation.source_observation_id,
+                access_snapshot_id=citation.access_snapshot_id,
+                canonical_url=citation.canonical_url,
+                locator=citation.locator,
+                source_content_hash=citation.source_content_hash,
+                observed_at=citation.observed_at,
+            )
+            for candidate in selection.candidates
+            for citation_position, citation in enumerate(candidate.citations, start=1)
+        ]
+    )
+    _require_context_deadline(deadline)
     return packet, True
+
+
+@transaction.atomic
+def build_context_packet(
+    *,
+    actor: ActorContext,
+    repository_id: uuid.UUID,
+    task: str,
+    phase: str,
+    budget: PacketBudget | None = None,
+    retrieval_facets: tuple[RetrievalFacet, ...] | None = None,
+    required_search_anchors: tuple[RequiredSearchAnchor, ...] | None = None,
+) -> tuple[ContextPacketRecord, bool]:
+    """Build or reuse an exact immutable packet under one database-enforced deadline."""
+    deadline = monotonic() + CONTEXT_SCAN_MAX_SECONDS
+    if connection.vendor != "postgresql":
+        return _build_context_packet_bounded(
+            actor=actor,
+            repository_id=repository_id,
+            task=task,
+            phase=phase,
+            budget=budget,
+            retrieval_facets=retrieval_facets,
+            required_search_anchors=required_search_anchors,
+            deadline=deadline,
+        )
+    token = _deadline_sql_wrapper_active.set(True)
+    try:
+        with connection.execute_wrapper(_deadline_statement_wrapper(deadline)):
+            return _build_context_packet_bounded(
+                actor=actor,
+                repository_id=repository_id,
+                task=task,
+                phase=phase,
+                budget=budget,
+                retrieval_facets=retrieval_facets,
+                required_search_anchors=required_search_anchors,
+                deadline=deadline,
+            )
+    finally:
+        _deadline_sql_wrapper_active.reset(token)
 
 
 def get_context_packet(

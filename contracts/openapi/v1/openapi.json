@@ -7071,8 +7071,15 @@
             "type": "boolean"
           },
           "evaluator_task_id": {
-            "format": "uuid",
-            "type": "string"
+            "oneOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "head_commit": {
             "pattern": "^[a-f0-9]{40}$",
@@ -7110,8 +7117,15 @@
             "type": "boolean"
           },
           "evaluator_task_id": {
-            "format": "uuid",
-            "type": "string"
+            "oneOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "head_commit": {
             "pattern": "^[a-f0-9]{40}$",
@@ -7878,6 +7892,71 @@
               "selected_tokens",
               "selected_bytes",
               "selected_citations"
+            ],
+            "type": "object"
+          },
+          "completeness": {
+            "additionalProperties": false,
+            "properties": {
+              "bindings": {
+                "type": "object"
+              },
+              "complete": {
+                "type": "boolean"
+              },
+              "digest": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "exact_digest": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "exact_eligible_assertions": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "exact_eligible_conflicts": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "ordering": {
+                "const": "kind,id",
+                "type": "string"
+              },
+              "page_size": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "partial_digest": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "partial_retained_assertions": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "partial_retained_conflicts": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "processed_rows": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "version": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "version",
+              "ordering",
+              "processed_rows",
+              "digest",
+              "complete",
+              "page_size",
+              "bindings"
             ],
             "type": "object"
           },
