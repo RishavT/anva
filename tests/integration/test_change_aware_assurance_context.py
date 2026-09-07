@@ -342,7 +342,7 @@ def test_conflict_scan_uses_bounded_array_parameters_at_declared_cap() -> None:
 
 
 @pytest.mark.integration
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -784,7 +784,9 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
     context_started = time.monotonic()
     captured_query_counts: list[int] = []
     last_context_statement: list[str] = []
-    original_build_context_packet = cast(Any, assurance_service).build_context_packet
+    original_build_context_packet = cast(
+        Any, assurance_service
+    )._build_context_packet_in_transaction
 
     def measured_build_context_packet(**kwargs: Any) -> Any:
         query_count = 0
@@ -808,7 +810,11 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
             captured_query_counts.append(query_count)
         return result
 
-    monkeypatch.setattr(assurance_service, "build_context_packet", measured_build_context_packet)
+    monkeypatch.setattr(
+        assurance_service,
+        "_build_context_packet_in_transaction",
+        measured_build_context_packet,
+    )
     started = start_assurance(
         actor=actor,
         pull_request_revision_id=ingested.revision.id,
@@ -875,7 +881,11 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
     assert duplicate.evaluator_task.request_artifact.content_hash == (
         started.evaluator_task.request_artifact.content_hash
     )
-    monkeypatch.setattr(assurance_service, "build_context_packet", original_build_context_packet)
+    monkeypatch.setattr(
+        assurance_service,
+        "_build_context_packet_in_transaction",
+        original_build_context_packet,
+    )
 
     packet = started.run.context_packet
     assert packet is not None
@@ -1492,16 +1502,26 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         reason="MANUAL",
         details={"test": "mutate-head-during-context-build"},
     )
-    original_build_context_packet = assurance_service.build_context_packet
+    original_build_context_packet = assurance_service._build_context_packet_in_transaction
 
     def build_then_mutate_head(**kwargs: Any) -> Any:
-        result = original_build_context_packet(**kwargs)
-        ingested.pull_request.__class__.objects.filter(id=ingested.pull_request.id).update(
-            current_head_commit="f" * 40
-        )
-        return result
+        before_commit = kwargs["before_commit"]
 
-    monkeypatch.setattr(assurance_service, "build_context_packet", build_then_mutate_head)
+        def mutate_then_validate(packet: ContextPacketRecord) -> None:
+            ingested.pull_request.__class__.objects.filter(id=ingested.pull_request.id).update(
+                current_head_commit="f" * 40
+            )
+            before_commit(packet)
+
+        kwargs["before_commit"] = mutate_then_validate
+        return original_build_context_packet(**kwargs)
+
+    monkeypatch.setattr(
+        assurance_service,
+        "_build_context_packet_in_transaction",
+        build_then_mutate_head,
+    )
+    head_publication_counts = publication_counts()
     head_changed = start_assurance(
         actor=actor,
         pull_request_revision_id=ingested.revision.id,
@@ -1513,11 +1533,16 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
     assert_incomplete_run(head_changed)
     assert head_changed.run.failure_code == "ASSURANCE_CONTEXT_INCOMPLETE"
     assert not EvaluatorTask.objects.filter(assurance_run=head_changed.run).exists()
+    assert publication_counts() == head_publication_counts
 
     ingested.pull_request.__class__.objects.filter(id=ingested.pull_request.id).update(
         current_head_commit=HEAD
     )
-    monkeypatch.setattr(assurance_service, "build_context_packet", original_build_context_packet)
+    monkeypatch.setattr(
+        assurance_service,
+        "_build_context_packet_in_transaction",
+        original_build_context_packet,
+    )
     invalidate_context_packets(
         actor=actor,
         organization_id=organization.id,
@@ -1561,11 +1586,21 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
     )
 
     def build_then_revoke_actor(**kwargs: Any) -> Any:
-        result = original_build_context_packet(**kwargs)
-        Membership.objects.filter(id=membership.id).delete()
-        return result
+        before_commit = kwargs["before_commit"]
 
-    monkeypatch.setattr(assurance_service, "build_context_packet", build_then_revoke_actor)
+        def revoke_then_validate(packet: ContextPacketRecord) -> None:
+            Membership.objects.filter(id=membership.id).delete()
+            before_commit(packet)
+
+        kwargs["before_commit"] = revoke_then_validate
+        return original_build_context_packet(**kwargs)
+
+    monkeypatch.setattr(
+        assurance_service,
+        "_build_context_packet_in_transaction",
+        build_then_revoke_actor,
+    )
+    revoked_publication_counts = publication_counts()
     authorization_revoked = start_assurance(
         actor=actor,
         pull_request_revision_id=ingested.revision.id,
@@ -1584,3 +1619,89 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
     )
     assert_incomplete_run(authorization_revoked)
     assert not EvaluatorTask.objects.filter(assurance_run=authorization_revoked.run).exists()
+    assert publication_counts() == revoked_publication_counts
+
+    monkeypatch.setattr(
+        assurance_service,
+        "_build_context_packet_in_transaction",
+        original_build_context_packet,
+    )
+    invalidate_context_packets(
+        actor=actor,
+        organization_id=organization.id,
+        repository_id=repository.id,
+        reason="MANUAL",
+        details={"test": "fail-task-creation-before-context-commit"},
+    )
+    original_task_create = EvaluatorTask.objects.create
+
+    def fail_task_creation(**_kwargs: Any) -> Any:
+        raise DatabaseError("forced evaluator task creation failure")
+
+    monkeypatch.setattr(EvaluatorTask.objects, "create", fail_task_creation)
+    task_failure_publication_counts = publication_counts()
+    task_failure = start_assurance(
+        actor=actor,
+        pull_request_revision_id=ingested.revision.id,
+        policy_version_ids=[policy_version.id],
+        reference_time=reference_time,
+        deterministic_checks=[],
+        work_item_revision_id=work.work_item_revision.id,
+    )
+    monkeypatch.setattr(EvaluatorTask.objects, "create", original_task_create)
+    assert_incomplete_run(task_failure)
+    assert not EvaluatorTask.objects.filter(assurance_run=task_failure.run).exists()
+    assert publication_counts() == task_failure_publication_counts
+
+    invalidate_context_packets(
+        actor=actor,
+        organization_id=organization.id,
+        repository_id=repository.id,
+        reason="MANUAL",
+        details={"test": "delay-assurance-context-commit"},
+    )
+    packet_table = connection.ops.quote_name(ContextPacketRecord._meta.db_table)
+    function_name = "test_anva_assurance_delayed_context_commit"
+    trigger_name = "test_anva_assurance_delayed_context_commit_trigger"
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"""
+            CREATE FUNCTION {function_name}() RETURNS trigger AS $$
+            BEGIN
+                PERFORM pg_sleep(6);
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql
+            """
+        )
+        cursor.execute(
+            f"""
+            CREATE CONSTRAINT TRIGGER {trigger_name}
+            AFTER INSERT ON {packet_table}
+            DEFERRABLE INITIALLY DEFERRED
+            FOR EACH ROW EXECUTE FUNCTION {function_name}()
+            """
+        )
+    delayed_commit_counts = publication_counts()
+    delayed_started = time.monotonic()
+    try:
+        delayed_commit = start_assurance(
+            actor=actor,
+            pull_request_revision_id=ingested.revision.id,
+            policy_version_ids=[policy_version.id],
+            reference_time=reference_time,
+            deterministic_checks=[],
+            work_item_revision_id=work.work_item_revision.id,
+        )
+    finally:
+        with connection.cursor() as cursor:
+            cursor.execute(f"DROP TRIGGER IF EXISTS {trigger_name} ON {packet_table}")
+            cursor.execute(f"DROP FUNCTION IF EXISTS {function_name}()")
+    delayed_elapsed = time.monotonic() - delayed_started
+    print(f"issue158_assurance_delayed_commit_elapsed={delayed_elapsed:.6f}s")
+    assert delayed_elapsed < 5.0
+    assert_incomplete_run(delayed_commit)
+    assert delayed_commit.run.context_packet_id is None
+    assert delayed_commit.run.context_artifact_id is None
+    assert not EvaluatorTask.objects.filter(assurance_run=delayed_commit.run).exists()
+    assert publication_counts() == delayed_commit_counts

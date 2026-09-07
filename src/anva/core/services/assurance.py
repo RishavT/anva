@@ -11,7 +11,7 @@ import secrets
 import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
-from typing import cast
+from typing import Any, cast
 
 from django.db import DatabaseError, IntegrityError, transaction
 from django.db.models import F, Q
@@ -23,6 +23,7 @@ from anva.core.exceptions import (
     DomainOperationError,
     IdempotencyConflictError,
     LeaseConflictError,
+    RequiredContextBudgetError,
     ResourceNotFoundError,
     TenantBoundaryError,
 )
@@ -37,6 +38,7 @@ from anva.core.models import (
     ContextPacketCitation,
     ContextPacketInvalidation,
     ContextPacketItem,
+    ContextPacketRecord,
     CriterionEvidence,
     DiffChunk,
     EvaluatorAttempt,
@@ -49,6 +51,7 @@ from anva.core.models import (
     ImmutableArtifact,
     KnowledgeProposal,
     Organization,
+    PolicyEvaluation,
     PolicyVersion,
     PullRequest,
     PullRequestRevision,
@@ -72,8 +75,11 @@ from anva.core.services.context_packets import (
     PacketBudget,
     RetrievalFacet,
     _authorization_snapshot,
+    _build_context_packet_in_transaction,
+    _CommitDeadlineWatchdog,
+    _context_commit_deadline_exhausted,
     _watermark,
-    build_context_packet,
+    require_context_transaction_ownership,
     seal_actor_scope,
 )
 from anva.core.services.creation import submit_knowledge_proposal
@@ -1315,6 +1321,7 @@ def start_assurance(
     reviewer_token_id: uuid.UUID | None = None,
 ) -> AssuranceStartResult:
     """Persist the request identity before any fallible assurance preparation."""
+    require_context_transaction_ownership()
     if reference_time.tzinfo is None:
         raise ValueError("reference_time must include a timezone")
     if trigger_key and (
@@ -1400,23 +1407,22 @@ def start_assurance(
             },
         )
     try:
-        with transaction.atomic():
-            return _start_assurance_bound(
-                provisional_run=provisional_run,
-                actor=actor,
-                pull_request_revision_id=pull_request_revision_id,
-                policy_version_ids=policy_version_ids,
-                reference_time=reference_time,
-                deterministic_checks=deterministic_checks,
-                work_item_revision_id=work_item_revision_id,
-                evaluator_version=evaluator_version,
-                prompt_version=prompt_version,
-                trigger_key=trigger_key,
-                reviewer_service_identity_id=reviewer_service_identity_id,
-                reviewer_token_id=reviewer_token_id,
-                context_authorization_hash=authorization_hash,
-                context_watermark_value=watermark_value,
-            )
+        return _start_assurance_bound(
+            provisional_run=provisional_run,
+            actor=actor,
+            pull_request_revision_id=pull_request_revision_id,
+            policy_version_ids=policy_version_ids,
+            reference_time=reference_time,
+            deterministic_checks=deterministic_checks,
+            work_item_revision_id=work_item_revision_id,
+            evaluator_version=evaluator_version,
+            prompt_version=prompt_version,
+            trigger_key=trigger_key,
+            reviewer_service_identity_id=reviewer_service_identity_id,
+            reviewer_token_id=reviewer_token_id,
+            context_authorization_hash=authorization_hash,
+            context_watermark_value=watermark_value,
+        )
     except (AuthenticationError, ResourceNotFoundError):
         _finalize_incomplete_context_start(run=provisional_run, created=provisional_created)
         raise
@@ -1424,9 +1430,31 @@ def start_assurance(
         return _finalize_incomplete_context_start(run=provisional_run, created=provisional_created)
 
 
-@transaction.atomic
-def _start_assurance_bound(
+def _start_assurance_bound(**kwargs: Any) -> AssuranceStartResult:
+    watchdogs: list[_CommitDeadlineWatchdog] = []
+    try:
+        try:
+            with transaction.atomic():
+                result = _start_assurance_bound_in_transaction(
+                    watchdogs=watchdogs,
+                    **kwargs,
+                )
+        except DatabaseError as error:
+            watchdog = watchdogs[0] if watchdogs else None
+            if _context_commit_deadline_exhausted(error, watchdog):
+                raise RequiredContextBudgetError(
+                    "Context construction deadline exhausted"
+                ) from error
+            raise
+        return result
+    finally:
+        for watchdog in watchdogs:
+            watchdog.close()
+
+
+def _start_assurance_bound_in_transaction(
     *,
+    watchdogs: list[_CommitDeadlineWatchdog],
     provisional_run: AssuranceRun,
     actor: ActorContext,
     pull_request_revision_id: uuid.UUID,
@@ -1765,66 +1793,103 @@ def _start_assurance_bound(
         revision=run.revision,
         metadata={"head_commit": run.head_commit},
     )
-    try:
-        with transaction.atomic():
-            packet, _ = build_context_packet(
+    finalized: list[AssuranceStartResult] = []
+
+    def finalize_context(packet: ContextPacketRecord) -> None:
+        finalized.append(
+            _finalize_assurance_context(
+                packet=packet,
                 actor=actor,
-                repository_id=repository.id,
-                task=context_task,
-                phase="ASSURANCE",
-                budget=PacketBudget(max_items=50, max_tokens=8_000, max_bytes=100_000),
-                retrieval_facets=retrieval_facets,
-            )
-            current_pull_request = PullRequest.objects.only(
-                "current_head_commit",
-                "current_revision_number",
-            ).get(id=revision.pull_request_id)
-            if (
-                current_pull_request.current_head_commit != revision.head_commit
-                or current_pull_request.current_revision_number != revision.revision
-            ):
-                raise IdempotencyConflictError(
-                    "Pull request head changed while assurance context was being built"
-                )
-            actor = _authorize_assurance(
-                actor=actor,
-                repository_id=repository.id,
                 access_scope_id=access_scope_id,
+                revision=revision,
+                repository=repository,
+                run=run,
+                work_revision=work_revision,
+                checks=checks,
+                organization=organization,
+                input_digest=input_digest,
+                exact_diff_chunks=exact_diff_chunks,
+                evaluator_version=evaluator_version,
+                prompt_version=prompt_version,
+                requirements_hash=requirements_hash,
+                policy_bundle_hash=policy_bundle_hash,
+                evidence_bundle_hash=evidence_bundle_hash,
+                requirements=requirements,
+                policy_controls=policy_controls,
+                mapping_payload=mapping_payload,
+                policy_evaluation=policy_evaluation,
+                mappings=mappings,
+                check_evidence=check_evidence,
+                bound_reviewer_id=bound_reviewer_id,
+                bound_reviewer_token_id=bound_reviewer_token_id,
             )
-    except (AuthenticationError, ResourceNotFoundError):
-        raise
-    except (DomainOperationError, DatabaseError):
-        blockers = (
-            f"{REQUIRED_ASSURANCE_CONTEXT_LIMITATION_PREFIX} "
-            "CONFLICT_REVIEW_REQUIRED / ASSURANCE_CONTEXT_INCOMPLETE"
         )
-        ReadinessDecision.objects.create(
-            organization=organization,
-            assurance_run=run,
-            status=ReadinessDecision.Status.BLOCKED,
-            reason_codes=["CONFLICT_REVIEW_REQUIRED", "ASSURANCE_CONTEXT_INCOMPLETE"],
-            input_hash=content_hash(
-                {"run_input_hash": run.input_hash, "reason": "ASSURANCE_CONTEXT_INCOMPLETE"}
-            ),
+
+    _packet_result, watchdog = _build_context_packet_in_transaction(
+        actor=actor,
+        repository_id=repository.id,
+        task=context_task,
+        phase="ASSURANCE",
+        budget=PacketBudget(max_items=50, max_tokens=8_000, max_bytes=100_000),
+        retrieval_facets=retrieval_facets,
+        before_commit=finalize_context,
+    )
+    watchdogs.append(watchdog)
+
+    if len(finalized) != 1:
+        raise RuntimeError("Assurance context finalization did not run exactly once")
+    return finalized[0]
+
+
+def _finalize_assurance_context(
+    *,
+    packet: ContextPacketRecord,
+    actor: ActorContext,
+    access_scope_id: uuid.UUID,
+    revision: PullRequestRevision,
+    repository: Repository,
+    run: AssuranceRun,
+    work_revision: WorkItemRevision | None,
+    checks: list[dict[str, object]],
+    organization: Organization,
+    input_digest: str,
+    exact_diff_chunks: tuple[DiffChunk, ...],
+    evaluator_version: str,
+    prompt_version: str,
+    requirements_hash: str,
+    policy_bundle_hash: str,
+    evidence_bundle_hash: str,
+    requirements: list[dict[str, object]],
+    policy_controls: list[dict[str, object]],
+    mapping_payload: list[dict[str, object]],
+    policy_evaluation: PolicyEvaluation,
+    mappings: tuple[CriterionEvidence, ...],
+    check_evidence: tuple[Evidence, ...],
+    bound_reviewer_id: uuid.UUID | None,
+    bound_reviewer_token_id: uuid.UUID | None,
+) -> AssuranceStartResult:
+    """Revalidate and bind assurance state in the packet publication transaction."""
+    run = AssuranceRun.objects.select_for_update().get(id=run.id)
+    current_pull_request = (
+        PullRequest.objects.select_for_update()
+        .only(
+            "current_head_commit",
+            "current_revision_number",
         )
-        run.failure_code = "ASSURANCE_CONTEXT_INCOMPLETE"
-        run.readiness = ReadinessDecision.Status.BLOCKED
-        run.limitations = _bounded_limitations(cast(list[str], run.limitations), [blockers])
-        run.completed_at = timezone.now()
-        run.state = AssuranceRun.State.FAILED
-        run.revision += 1
-        run.save(
-            update_fields=[
-                "failure_code",
-                "readiness",
-                "limitations",
-                "completed_at",
-                "state",
-                "revision",
-                "updated_at",
-            ]
+        .get(id=revision.pull_request_id)
+    )
+    if (
+        current_pull_request.current_head_commit != revision.head_commit
+        or current_pull_request.current_revision_number != revision.revision
+    ):
+        raise IdempotencyConflictError(
+            "Pull request head changed while assurance context was being built"
         )
-        return AssuranceStartResult(run, cast(EvaluatorTask, None), True)
+    actor = _authorize_assurance(
+        actor=actor,
+        repository_id=repository.id,
+        access_scope_id=access_scope_id,
+    )
 
     packet_limitations = cast(list[str], packet.limitations)
     required_run_limitations = (

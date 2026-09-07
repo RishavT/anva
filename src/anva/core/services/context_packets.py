@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import re
+import threading
 import uuid
 from collections.abc import Callable
 from contextvars import ContextVar
@@ -14,7 +15,7 @@ from datetime import datetime
 from time import monotonic
 from typing import Any, NoReturn, cast
 
-from django.db import connection, transaction
+from django.db import DatabaseError, connection, transaction
 from django.db.models import BooleanField, Case, F, Q, QuerySet, TextField, Value, When
 from django.db.models.expressions import RawSQL
 from django.db.models.functions import Cast, Concat
@@ -78,11 +79,12 @@ CONTEXT_SCAN_VERSION = "authorized-conflict-scan-v1"
 CONTEXT_SCAN_PAGE_SIZE = 200
 CONTEXT_SCAN_MAX_ROWS = 50_000
 CONTEXT_SCAN_MAX_OPERATIONS = 100_000
-# Leave 800ms for ranking, sealing, and publication reauthorization after the
-# scan. The resulting 4.8s internal ceiling preserves headroom for the enclosing
-# public assurance operation's own fail-closed work under its five-second target.
+# Leave 500ms for ranking, sealing, and publication reauthorization after the
+# scan. The resulting 4.5s commit-cancel ceiling preserves the empirically required
+# cancellation and public-response headroom under the five-second target while
+# still exceeding the measured 410.494ms successful cold-publication tail.
 CONTEXT_SCAN_MAX_SECONDS = 4.0
-CONTEXT_PUBLICATION_MAX_SECONDS = 0.8
+CONTEXT_PUBLICATION_MAX_SECONDS = 0.5
 CONTEXT_STATEMENT_TIMEOUT_MS = 4_000
 _deadline_sql_wrapper_active: ContextVar[bool] = ContextVar(
     "context_deadline_sql_wrapper_active", default=False
@@ -1921,6 +1923,54 @@ def _set_remaining_statement_timeout(deadline: float) -> None:
         cursor.execute("SET LOCAL statement_timeout = %s", (remaining_ms,))
 
 
+@dataclass(slots=True)
+class _CommitDeadlineWatchdog:
+    timer: threading.Timer
+    completed: threading.Event
+    cancel_sent: threading.Event
+    cancel_failed: threading.Event
+
+    def close(self) -> None:
+        self.completed.set()
+        self.timer.cancel()
+        self.timer.join()
+
+
+def _arm_context_commit_timeout(deadline: float) -> _CommitDeadlineWatchdog:
+    """Cancel PostgreSQL if the outermost packet COMMIT exceeds its deadline."""
+    _require_context_deadline(deadline)
+    if connection.vendor != "postgresql":
+        raise RuntimeError("Context packet deadlines require PostgreSQL")
+    raw_connection = connection.connection
+    if raw_connection is None:
+        raise RuntimeError("Context packet transaction has no database connection")
+    completed = threading.Event()
+    cancel_sent = threading.Event()
+    cancel_failed = threading.Event()
+
+    def cancel_commit() -> None:
+        if completed.is_set():
+            return
+        cancel_sent.set()
+        try:
+            # psycopg 3 documents cancel_safe() for cross-thread use. Its own
+            # timeout also prevents the watchdog from blocking later reuse of
+            # Django's persistent connection indefinitely.
+            raw_connection.cancel_safe(timeout=0.25)
+        except Exception:  # pragma: no cover - exercised by connection-fault tests
+            cancel_failed.set()
+
+    timer = threading.Timer(max(0.0, deadline - monotonic()), cancel_commit)
+    timer.daemon = True
+    timer.start()
+    return _CommitDeadlineWatchdog(
+        timer=timer,
+        completed=completed,
+        cancel_sent=cancel_sent,
+        cancel_failed=cancel_failed,
+    )
+
+
 def _deadline_statement_wrapper(deadline: float | Callable[[], float]) -> Any:
     def wrapper(
         execute: Any,
@@ -2584,8 +2634,7 @@ def _build_context_packet_bounded(
     return packet, True
 
 
-@transaction.atomic
-def build_context_packet(
+def _build_context_packet_in_transaction(
     *,
     actor: ActorContext,
     repository_id: uuid.UUID,
@@ -2594,28 +2643,19 @@ def build_context_packet(
     budget: PacketBudget | None = None,
     retrieval_facets: tuple[RetrievalFacet, ...] | None = None,
     required_search_anchors: tuple[RequiredSearchAnchor, ...] | None = None,
-) -> tuple[ContextPacketRecord, bool]:
-    """Build or reuse a packet under independent scan and publication deadlines."""
+    before_commit: Callable[[ContextPacketRecord], None] | None = None,
+) -> tuple[tuple[ContextPacketRecord, bool], _CommitDeadlineWatchdog]:
+    """Build packet rows and arm a watchdog for the caller's immediate COMMIT."""
+    if not connection.in_atomic_block:
+        raise RuntimeError("Context packet transaction is not active")
     started_at = monotonic()
     deadline = started_at + CONTEXT_SCAN_MAX_SECONDS
     publication_deadline = deadline + CONTEXT_PUBLICATION_MAX_SECONDS
-    if connection.vendor != "postgresql":
-        return _build_context_packet_bounded(
-            actor=actor,
-            repository_id=repository_id,
-            task=task,
-            phase=phase,
-            budget=budget,
-            retrieval_facets=retrieval_facets,
-            required_search_anchors=required_search_anchors,
-            deadline=deadline,
-            publication_deadline=publication_deadline,
-        )
     active_deadline = [deadline]
     token = _deadline_sql_wrapper_active.set(True)
     try:
         with connection.execute_wrapper(_deadline_statement_wrapper(lambda: active_deadline[0])):
-            return _build_context_packet_bounded(
+            result = _build_context_packet_bounded(
                 actor=actor,
                 repository_id=repository_id,
                 task=task,
@@ -2627,8 +2667,70 @@ def build_context_packet(
                 publication_deadline=publication_deadline,
                 active_deadline=active_deadline,
             )
+            if before_commit is not None:
+                _require_context_deadline(publication_deadline)
+                before_commit(result[0])
+            return result, _arm_context_commit_timeout(publication_deadline)
     finally:
         _deadline_sql_wrapper_active.reset(token)
+
+
+def _context_commit_deadline_exhausted(
+    error: DatabaseError,
+    watchdog: _CommitDeadlineWatchdog | None,
+) -> bool:
+    return bool(
+        watchdog is not None
+        and watchdog.cancel_sent.is_set()
+        and not watchdog.cancel_failed.is_set()
+        and getattr(error.__cause__, "sqlstate", None) == "57014"
+    )
+
+
+def require_context_transaction_ownership() -> None:
+    """Reject production ambient transactions that would turn COMMIT into a savepoint."""
+    non_test_atomic_blocks = [
+        block for block in connection.atomic_blocks if not getattr(block, "_from_testcase", False)
+    ]
+    if non_test_atomic_blocks:
+        raise RuntimeError("Context packet publication requires an outermost transaction")
+
+
+def build_context_packet(
+    *,
+    actor: ActorContext,
+    repository_id: uuid.UUID,
+    task: str,
+    phase: str,
+    budget: PacketBudget | None = None,
+    retrieval_facets: tuple[RetrievalFacet, ...] | None = None,
+    required_search_anchors: tuple[RequiredSearchAnchor, ...] | None = None,
+) -> tuple[ContextPacketRecord, bool]:
+    """Build or reuse a durably committed packet under one absolute deadline."""
+    require_context_transaction_ownership()
+    watchdog: _CommitDeadlineWatchdog | None = None
+    try:
+        try:
+            with transaction.atomic():
+                result, watchdog = _build_context_packet_in_transaction(
+                    actor=actor,
+                    repository_id=repository_id,
+                    task=task,
+                    phase=phase,
+                    budget=budget,
+                    retrieval_facets=retrieval_facets,
+                    required_search_anchors=required_search_anchors,
+                )
+        except DatabaseError as error:
+            if _context_commit_deadline_exhausted(error, watchdog):
+                raise RequiredContextBudgetError(
+                    "Context construction deadline exhausted"
+                ) from error
+            raise
+        return result
+    finally:
+        if watchdog is not None:
+            watchdog.close()
 
 
 def get_context_packet(

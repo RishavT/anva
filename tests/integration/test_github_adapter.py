@@ -10,7 +10,7 @@ import time
 import uuid
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 from unittest.mock import patch
 
 import pytest
@@ -45,7 +45,13 @@ from anva.core.models import (
     SourceConnection,
     User,
 )
-from anva.core.services.assurance import claim_evaluator_task, submit_evaluator_result
+from anva.core.services.assurance import (
+    claim_evaluator_task,
+    submit_evaluator_result,
+)
+from anva.core.services.assurance import (
+    start_assurance as start_assurance_service,
+)
 from anva.core.services.bootstrap import bootstrap_local_organization
 from anva.core.services.context import ActorContext
 from anva.core.services.evaluators import FakeEvaluator, FakeScenario
@@ -1401,7 +1407,9 @@ def _process_delivery_in_thread(
 
 @pytest.mark.integration
 @pytest.mark.django_db(transaction=True)
-def test_delayed_older_snapshot_cannot_regress_current_provider_head() -> None:
+def test_delayed_older_snapshot_cannot_regress_current_provider_head(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     tenant = _tenant("provider-freshness")
     policy_version_id = _policy_version_id(tenant)
     binding = _binding(
@@ -1429,6 +1437,14 @@ def test_delayed_older_snapshot_cannot_regress_current_provider_head() -> None:
     old_results: list[GitHubEventProcessing] = []
     current_results: list[GitHubEventProcessing] = []
     failures: list[BaseException] = []
+    assurance_atomic_states: list[bool] = []
+    original_start_assurance = start_assurance_service
+
+    def observed_start_assurance(**kwargs: Any) -> Any:
+        assurance_atomic_states.append(connections["default"].in_atomic_block)
+        return original_start_assurance(**kwargs)
+
+    monkeypatch.setattr(github_service, "start_assurance", observed_start_assurance)
 
     def process_delayed_old_delivery() -> None:
         close_old_connections()
@@ -1516,6 +1532,7 @@ def test_delayed_older_snapshot_cannot_regress_current_provider_head() -> None:
     assert not current_worker.is_alive()
     assert failures == []
     assert len(old_results) == len(current_results) == 1
+    assert assurance_atomic_states == [False, False]
     pull_request = PullRequest.objects.get(repository=tenant.repository, number=17)
     revisions = list(
         PullRequestRevision.objects.filter(pull_request=pull_request).order_by("revision")
@@ -1550,6 +1567,62 @@ def test_delayed_older_snapshot_cannot_regress_current_provider_head() -> None:
         repository_binding=binding,
         head_commit="b" * 40,
     ).exists()
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_assurance_start_failure_leaves_ingestion_retryable_and_idempotent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tenant = _tenant("assurance-retry")
+    policy_version_id = _policy_version_id(tenant)
+    binding = _binding(
+        tenant,
+        auto_assurance=True,
+        policy_version_ids=[policy_version_id],
+    ).binding
+    delivery = cast(
+        GitHubWebhookDelivery,
+        accept_verified_event(_parsed_pr_event(head_commit="b" * 40)).delivery,
+    )
+    client = FakeGitHubClient()
+    client.add_pull_request(
+        repository=RepositoryReference(binding.external_repository_id, binding.full_name),
+        snapshot=_provider_snapshot(head_commit="b" * 40, title="Retryable head"),
+        unified_diff=MANUAL_DIFF,
+    )
+    original_start_assurance = start_assurance_service
+
+    def fail_assurance_start(**_kwargs: Any) -> Any:
+        raise RuntimeError("injected assurance failure")
+
+    monkeypatch.setattr(
+        github_service,
+        "start_assurance",
+        fail_assurance_start,
+    )
+
+    with pytest.raises(RuntimeError, match="injected assurance failure"):
+        process_delivery(delivery_id=delivery.id, client=client)
+
+    assert GitHubEventProcessing.objects.get(delivery=delivery).state == (
+        GitHubEventProcessing.State.FAILED
+    )
+    assert PullRequestRevision.objects.count() == 1
+    assert GitHubPullRequestObservation.objects.count() == 1
+    assert AssuranceRun.objects.count() == 0
+
+    monkeypatch.setattr(github_service, "start_assurance", original_start_assurance)
+    retried = process_delivery(delivery_id=delivery.id, client=client)
+
+    assert retried.state == GitHubEventProcessing.State.PROCESSED
+    assert PullRequestRevision.objects.count() == 1
+    assert GitHubPullRequestObservation.objects.count() == 1
+    assert AssuranceRun.objects.count() == 1
+    assert retried.result_identifiers["pull_request_revision_id"] == str(
+        PullRequestRevision.objects.get().id
+    )
+    assert retried.result_identifiers["assurance_run_id"] == str(AssuranceRun.objects.get().id)
 
 
 @pytest.mark.integration

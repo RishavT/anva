@@ -1015,7 +1015,8 @@ def _process_pull_request_event(
                 "payload_hash": content_hash(observation_payload),
             },
         )
-        run_id: str | None = None
+        policy_ids: list[uuid.UUID] | None = None
+        trigger_key: str | None = None
         if (
             active_binding.auto_assurance
             and active_binding.policy_version_ids
@@ -1038,16 +1039,6 @@ def _process_pull_request_event(
                     ),
                 }
             )
-            assurance = start_assurance(
-                actor=actor,
-                pull_request_revision_id=result.revision.id,
-                policy_version_ids=policy_ids,
-                reference_time=result.revision.created_at,
-                deterministic_checks=[],
-                work_item_revision_id=active_binding.work_item_revision_id,
-                trigger_key=trigger_key,
-            )
-            run_id = str(assurance.run.id)
         final_snapshot = _validated_pull_request_snapshot(
             client.get_pull_request(
                 repository=repository,
@@ -1061,6 +1052,18 @@ def _process_pull_request_event(
                 transient=True,
                 retry_after_seconds=1,
             )
+    run_id: str | None = None
+    if policy_ids is not None and trigger_key is not None:
+        assurance = start_assurance(
+            actor=actor,
+            pull_request_revision_id=result.revision.id,
+            policy_version_ids=policy_ids,
+            reference_time=result.revision.created_at,
+            deterministic_checks=[],
+            work_item_revision_id=active_binding.work_item_revision_id,
+            trigger_key=trigger_key,
+        )
+        run_id = str(assurance.run.id)
     return {
         "status": "processed",
         "pull_request_id": str(result.pull_request.id),

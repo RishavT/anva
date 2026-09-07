@@ -36,11 +36,28 @@ only the successful fixed-product packets.
 
 Full-suite validation exposed that an internal five-second SQL timeout could make the enclosing
 public assurance operation exceed its five-second target by about 62 milliseconds. The final
-implementation therefore retains the four-second complete-scan bound and tightens the in-memory
-sealing/publication reserve from one second to 800 milliseconds. The measured fixed-corpus
-publication/response tail above was 0.410494 seconds. A deterministic 501-archive regression
-crosses the scan edge at 4.2 seconds during canonical digest sealing, succeeds within 4.8 seconds,
-and verifies that a 4.8-second overrun publishes no scope, artifact, packet, item, or citation.
+implementation therefore retains the four-second complete-scan bound and now uses a 500-millisecond
+sealing/finalization/commit reserve. The measured fixed-corpus publication/response tail above was
+0.410494 seconds. A deterministic 501-archive regression crosses the scan edge during canonical
+digest sealing and verifies that a 4.5-second overrun publishes no scope, artifact, packet, item,
+or citation.
+
+Independent review found that the earlier implementation measured transaction-body exit rather
+than the actual COMMIT. A real deferred PostgreSQL trigger then established that `SET LOCAL
+statement_timeout` did not cancel the Django/psycopg COMMIT. The remediated exact transaction owner
+uses psycopg's bounded cross-thread cancellation and joins its watchdog before connection reuse.
+Production-scale deferred-COMMIT evidence returned REST fail-closed in 4.73-4.83 seconds; the
+assurance owner returned in exactly 4.661635 seconds, persisted only a FAILED provisional run with
+null context identifiers, and left no scope, artifact, packet, item, citation, or evaluator task.
+Head-change, authorization-revocation, task-creation-failure, near-deadline success, cached reuse,
+and identical concurrent-start cases also passed. REST is non-atomic and `ATOMIC_REQUESTS` is
+disabled. New-packet MCP dispatch delegates transaction ownership to publication and persists its
+success audit afterward; a simulated audit-store outage returned the committed packet, logged only
+the stable tool name, and a retry reused that packet before persisting one SUCCEEDED audit. GitHub
+commits its locked ingestion and final provider-head recheck before starting assurance; a simulated
+start failure left one reusable revision/observation, marked the delivery FAILED, and a retry
+created one run without duplicating ingestion. Both service entries reject ambient production
+transactions.
 
 A fresh local rerun canonicalized the same 115 files and exact corpus identities, but the recovered
 launch workspace was rejected before bootstrap or context retrieval with stable reason
