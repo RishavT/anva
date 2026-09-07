@@ -6,14 +6,16 @@ import hashlib
 import json
 import math
 import re
+import threading
 import uuid
+from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from datetime import datetime
 from time import monotonic
 from typing import Any, NoReturn, cast
 
-from django.db import connection, transaction
+from django.db import DatabaseError, connection, transaction
 from django.db.models import BooleanField, Case, F, Q, QuerySet, TextField, Value, When
 from django.db.models.expressions import RawSQL
 from django.db.models.functions import Cast, Concat
@@ -46,6 +48,9 @@ from anva.core.models import (
     Repository,
     RetrievalWatermark,
     SourceChunkVisibility,
+    SourceConnection,
+    SourceDocument,
+    SourceObservation,
 )
 from anva.core.models import (
     content_hash as model_content_hash,
@@ -77,9 +82,12 @@ CONTEXT_SCAN_VERSION = "authorized-conflict-scan-v1"
 CONTEXT_SCAN_PAGE_SIZE = 200
 CONTEXT_SCAN_MAX_ROWS = 50_000
 CONTEXT_SCAN_MAX_OPERATIONS = 100_000
-# Leave one second of the v3 five-second context target for ranking, sealing,
-# and publication reauthorization around this internal database scan.
+# Leave 500ms for ranking, sealing, and publication reauthorization after the
+# scan. The resulting 4.5s commit-cancel ceiling preserves the empirically required
+# cancellation and public-response headroom under the five-second target while
+# still exceeding the measured 410.494ms successful cold-publication tail.
 CONTEXT_SCAN_MAX_SECONDS = 4.0
+CONTEXT_PUBLICATION_MAX_SECONDS = 0.5
 CONTEXT_STATEMENT_TIMEOUT_MS = 4_000
 _deadline_sql_wrapper_active: ContextVar[bool] = ContextVar(
     "context_deadline_sql_wrapper_active", default=False
@@ -623,6 +631,60 @@ def _authorized_provenance_for_authorization(
     return queryset
 
 
+def _provenance_selector_for_authorization(
+    *,
+    actor: ActorContext,
+    authorization: AuthorizedRepositoryScopes,
+) -> QuerySet[AssertionProvenance]:
+    """Select provisional current identities from the already-resolved scope snapshot.
+
+    This query deliberately avoids repeating the live authorization subqueries. Every
+    selected identity is reauthorized and rechecked for currentness by
+    ``_hydrate_authorized_provenance_page`` before it can become a candidate.
+    """
+    if not authorization.is_bound_to(actor):
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    if actor.credential_actions and Action.SEARCH.value not in actor.credential_actions:
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    repository_ids = authorization.repository_ids_for(Action.SEARCH)
+    scope_ids = authorization.scope_ids_for(Action.SEARCH)
+    if not repository_ids or not scope_ids:
+        return AssertionProvenance.objects.none()
+    return AssertionProvenance.objects.filter(
+        organization_id=actor.organization_id,
+        access_snapshot__revoked_at__isnull=True,
+        access_snapshot__access_scope_id__in=scope_ids,
+        access_snapshot__source_connection_id=F(
+            "source_observation__source_document__source_container__source_connection_id"
+        ),
+        access_snapshot__access_scope__accessscopesource__source_connection_id=F(
+            "source_observation__source_document__source_container__source_connection_id"
+        ),
+        source_observation__status=SourceObservation.Status.PRESENT,
+        source_observation__source_document__state=SourceDocument.State.PRESENT,
+        source_observation__source_document__source_container__source_connection__state__in=(
+            SourceConnection.State.ACTIVE,
+            SourceConnection.State.DEGRADED,
+        ),
+        source_observation__source_document__source_container__source_connection__repository_id__in=(
+            repository_ids
+        ),
+        source_observation__source_revision_id=F(
+            "source_observation__source_document__current_revision_id"
+        ),
+        source_observation__sync_run_id=F("source_observation__source_document__last_seen_run_id"),
+        source_location__source_observation_id=F("source_observation_id"),
+        source_location__parsed_source__source_revision_id=F(
+            "source_observation__source_revision_id"
+        ),
+        assertion__organization_id=actor.organization_id,
+        assertion__access_scope_id__in=scope_ids,
+        assertion__valid_until__isnull=True,
+        assertion__assertionvalidityinterval__valid_until__isnull=True,
+        assertion__assertionvalidityinterval__source_observation_id=F("source_observation_id"),
+    )
+
+
 def _authorized_provenance(
     *,
     actor: ActorContext,
@@ -668,6 +730,32 @@ def _eligible_assertion_provenance_for_authorization(
         .order_by("assertion_id", "observed_at", "id")
         .distinct("assertion_id")
     )
+
+
+def _hydrate_authorized_provenance_page(
+    *,
+    actor: ActorContext,
+    authorization: AuthorizedRepositoryScopes,
+    provenance_ids: list[uuid.UUID],
+) -> list[AssertionProvenance]:
+    """Reauthorize and hydrate one bounded deterministic provenance page."""
+    if not provenance_ids:
+        return []
+    rows_by_id = {
+        provenance.id: provenance
+        for provenance in _authorized_provenance_for_authorization(
+            actor=actor,
+            authorization=authorization,
+            assertion_ids=None,
+        )
+        .filter(id__in=provenance_ids)
+        .select_related("assertion", "assertion__access_scope")
+        .order_by()
+        .distinct()
+    }
+    return [
+        rows_by_id[provenance_id] for provenance_id in provenance_ids if provenance_id in rows_by_id
+    ]
 
 
 def _citation_from_provenance(
@@ -825,10 +913,9 @@ def _assertion_candidates(
         repository_ids=(repository_id,),
         repository_limit=1,
     )
-    current_provenance = _authorized_provenance_for_authorization(
+    current_provenance = _provenance_selector_for_authorization(
         actor=actor,
         authorization=authorization,
-        assertion_ids=None,
     )
     eligible = _eligible_assertion_provenance_for_authorization(
         actor=actor,
@@ -858,13 +945,24 @@ def _assertion_candidates(
             candidates.operation_count += 1
             candidates.complete = not page_query.exists()
             break
-        page_limit = min(CONTEXT_SCAN_PAGE_SIZE, remaining, remaining_operations - 1)
+        # Reserve one operation for the narrow identity query and one for the
+        # bounded, authorization-revalidating hydration query.
+        page_limit = min(CONTEXT_SCAN_PAGE_SIZE, remaining, remaining_operations - 2)
         if page_limit <= 0:
             candidates.complete = False
             break
-        provenance_page = list(page_query[:page_limit])
+        provenance_identity_page = list(page_query.values_list("id", "assertion_id")[:page_limit])
+        candidates.operation_count += 1
+        if not provenance_identity_page:
+            break
+        provenance_page = _hydrate_authorized_provenance_page(
+            actor=actor,
+            authorization=authorization,
+            provenance_ids=[row[0] for row in provenance_identity_page],
+        )
         candidates.operation_count += 1 + len(provenance_page)
-        if not provenance_page:
+        if len(provenance_page) != len(provenance_identity_page):
+            candidates.complete = False
             break
         assertions = [provenance.assertion for provenance in provenance_page]
         scanned += len(provenance_page)
@@ -1918,7 +2016,55 @@ def _set_remaining_statement_timeout(deadline: float) -> None:
         cursor.execute("SET LOCAL statement_timeout = %s", (remaining_ms,))
 
 
-def _deadline_statement_wrapper(deadline: float) -> Any:
+@dataclass(slots=True)
+class _CommitDeadlineWatchdog:
+    timer: threading.Timer
+    completed: threading.Event
+    cancel_sent: threading.Event
+    cancel_failed: threading.Event
+
+    def close(self) -> None:
+        self.completed.set()
+        self.timer.cancel()
+        self.timer.join()
+
+
+def _arm_context_commit_timeout(deadline: float) -> _CommitDeadlineWatchdog:
+    """Cancel PostgreSQL if the outermost packet COMMIT exceeds its deadline."""
+    _require_context_deadline(deadline)
+    if connection.vendor != "postgresql":
+        raise RuntimeError("Context packet deadlines require PostgreSQL")
+    raw_connection = connection.connection
+    if raw_connection is None:
+        raise RuntimeError("Context packet transaction has no database connection")
+    completed = threading.Event()
+    cancel_sent = threading.Event()
+    cancel_failed = threading.Event()
+
+    def cancel_commit() -> None:
+        if completed.is_set():
+            return
+        cancel_sent.set()
+        try:
+            # psycopg 3 documents cancel_safe() for cross-thread use. Its own
+            # timeout also prevents the watchdog from blocking later reuse of
+            # Django's persistent connection indefinitely.
+            raw_connection.cancel_safe(timeout=0.25)
+        except Exception:  # pragma: no cover - exercised by connection-fault tests
+            cancel_failed.set()
+
+    timer = threading.Timer(max(0.0, deadline - monotonic()), cancel_commit)
+    timer.daemon = True
+    timer.start()
+    return _CommitDeadlineWatchdog(
+        timer=timer,
+        completed=completed,
+        cancel_sent=cancel_sent,
+        cancel_failed=cancel_failed,
+    )
+
+
+def _deadline_statement_wrapper(deadline: float | Callable[[], float]) -> Any:
     def wrapper(
         execute: Any,
         sql: str,
@@ -1927,15 +2073,34 @@ def _deadline_statement_wrapper(deadline: float) -> Any:
         context: object,
     ) -> Any:
         if not sql.lstrip().upper().startswith("SET LOCAL"):
-            _require_context_deadline(deadline)
+            active_deadline = deadline() if callable(deadline) else deadline
+            _require_context_deadline(active_deadline)
             remaining_ms = max(
                 1,
-                min(CONTEXT_STATEMENT_TIMEOUT_MS, int((deadline - monotonic()) * 1_000)),
+                min(
+                    CONTEXT_STATEMENT_TIMEOUT_MS,
+                    int((active_deadline - monotonic()) * 1_000),
+                ),
             )
             execute("SET LOCAL statement_timeout = %s", (remaining_ms,), False, context)
         return execute(sql, params, many, context)
 
     return wrapper
+
+
+def _enter_context_publication_phase(
+    *,
+    scan_deadline: float,
+    publication_deadline: float,
+    active_deadline: list[float] | None,
+) -> float:
+    """Move a proven-complete scan into its absolute, non-renewable commit reserve."""
+    _require_context_deadline(scan_deadline)
+    _require_context_deadline(publication_deadline)
+    if active_deadline is not None:
+        active_deadline[0] = publication_deadline
+    _set_remaining_statement_timeout(publication_deadline)
+    return publication_deadline
 
 
 def _reauthorize_packet_current(
@@ -2126,6 +2291,8 @@ def _build_context_packet_bounded(
     retrieval_facets: tuple[RetrievalFacet, ...] | None = None,
     required_search_anchors: tuple[RequiredSearchAnchor, ...] | None = None,
     deadline: float,
+    publication_deadline: float | None = None,
+    active_deadline: list[float] | None = None,
 ) -> tuple[ContextPacketRecord, bool]:
     """Build or reuse an exact immutable packet for one actor/repository snapshot."""
     normalized_task = " ".join(task.split())
@@ -2281,6 +2448,20 @@ def _build_context_packet_bounded(
         prior_operation_count=int(getattr(assertions, "operation_count", 0)),
     )
     _require_context_deadline(deadline)
+    scan_complete = bool(
+        getattr(assertions, "complete", True) and getattr(conflicts, "complete", True)
+    )
+    if not scan_complete:
+        raise RequiredContextBudgetError("ASSURANCE_CONTEXT_INCOMPLETE")
+    # Both authorized, row/operation-bounded database scans are complete. Building
+    # their canonical digest is in-memory result sealing, so it belongs to the
+    # separately bounded publication phase rather than consuming scan time.
+    if publication_deadline is not None:
+        deadline = _enter_context_publication_phase(
+            scan_deadline=deadline,
+            publication_deadline=publication_deadline,
+            active_deadline=active_deadline,
+        )
     completeness_payload = [
         {
             "kind": "assertion",
@@ -2298,7 +2479,6 @@ def _build_context_packet_bounded(
         }
         for candidate in conflicts
     ]
-    _require_context_deadline(deadline)
     completeness = ContextCompleteness(
         assertion_count=len(assertions),
         conflict_count=len(conflicts),
@@ -2307,12 +2487,8 @@ def _build_context_packet_bounded(
             + int(getattr(conflicts, "processed_count", len(conflicts)))
         ),
         digest=_json_hash(completeness_payload),
-        complete=bool(
-            getattr(assertions, "complete", True) and getattr(conflicts, "complete", True)
-        ),
+        complete=scan_complete,
     )
-    if not completeness.complete:
-        raise RequiredContextBudgetError("ASSURANCE_CONTEXT_INCOMPLETE")
     if change_aware and conflicts:
         _require_context_deadline(deadline)
         conflict_facet_sets: dict[uuid.UUID, set[str]] = {}
@@ -2551,7 +2727,68 @@ def _build_context_packet_bounded(
     return packet, True
 
 
-@transaction.atomic
+def _build_context_packet_in_transaction(
+    *,
+    actor: ActorContext,
+    repository_id: uuid.UUID,
+    task: str,
+    phase: str,
+    budget: PacketBudget | None = None,
+    retrieval_facets: tuple[RetrievalFacet, ...] | None = None,
+    required_search_anchors: tuple[RequiredSearchAnchor, ...] | None = None,
+    before_commit: Callable[[ContextPacketRecord], None] | None = None,
+) -> tuple[tuple[ContextPacketRecord, bool], _CommitDeadlineWatchdog]:
+    """Build packet rows and arm a watchdog for the caller's immediate COMMIT."""
+    if not connection.in_atomic_block:
+        raise RuntimeError("Context packet transaction is not active")
+    started_at = monotonic()
+    deadline = started_at + CONTEXT_SCAN_MAX_SECONDS
+    publication_deadline = deadline + CONTEXT_PUBLICATION_MAX_SECONDS
+    active_deadline = [deadline]
+    token = _deadline_sql_wrapper_active.set(True)
+    try:
+        with connection.execute_wrapper(_deadline_statement_wrapper(lambda: active_deadline[0])):
+            result = _build_context_packet_bounded(
+                actor=actor,
+                repository_id=repository_id,
+                task=task,
+                phase=phase,
+                budget=budget,
+                retrieval_facets=retrieval_facets,
+                required_search_anchors=required_search_anchors,
+                deadline=deadline,
+                publication_deadline=publication_deadline,
+                active_deadline=active_deadline,
+            )
+            if before_commit is not None:
+                _require_context_deadline(publication_deadline)
+                before_commit(result[0])
+            return result, _arm_context_commit_timeout(publication_deadline)
+    finally:
+        _deadline_sql_wrapper_active.reset(token)
+
+
+def _context_commit_deadline_exhausted(
+    error: DatabaseError,
+    watchdog: _CommitDeadlineWatchdog | None,
+) -> bool:
+    return bool(
+        watchdog is not None
+        and watchdog.cancel_sent.is_set()
+        and not watchdog.cancel_failed.is_set()
+        and getattr(error.__cause__, "sqlstate", None) == "57014"
+    )
+
+
+def require_context_transaction_ownership() -> None:
+    """Reject production ambient transactions that would turn COMMIT into a savepoint."""
+    non_test_atomic_blocks = [
+        block for block in connection.atomic_blocks if not getattr(block, "_from_testcase", False)
+    ]
+    if non_test_atomic_blocks:
+        raise RuntimeError("Context packet publication requires an outermost transaction")
+
+
 def build_context_packet(
     *,
     actor: ActorContext,
@@ -2562,34 +2799,31 @@ def build_context_packet(
     retrieval_facets: tuple[RetrievalFacet, ...] | None = None,
     required_search_anchors: tuple[RequiredSearchAnchor, ...] | None = None,
 ) -> tuple[ContextPacketRecord, bool]:
-    """Build or reuse an exact immutable packet under one database-enforced deadline."""
-    deadline = monotonic() + CONTEXT_SCAN_MAX_SECONDS
-    if connection.vendor != "postgresql":
-        return _build_context_packet_bounded(
-            actor=actor,
-            repository_id=repository_id,
-            task=task,
-            phase=phase,
-            budget=budget,
-            retrieval_facets=retrieval_facets,
-            required_search_anchors=required_search_anchors,
-            deadline=deadline,
-        )
-    token = _deadline_sql_wrapper_active.set(True)
+    """Build or reuse a durably committed packet under one absolute deadline."""
+    require_context_transaction_ownership()
+    watchdog: _CommitDeadlineWatchdog | None = None
     try:
-        with connection.execute_wrapper(_deadline_statement_wrapper(deadline)):
-            return _build_context_packet_bounded(
-                actor=actor,
-                repository_id=repository_id,
-                task=task,
-                phase=phase,
-                budget=budget,
-                retrieval_facets=retrieval_facets,
-                required_search_anchors=required_search_anchors,
-                deadline=deadline,
-            )
+        try:
+            with transaction.atomic():
+                result, watchdog = _build_context_packet_in_transaction(
+                    actor=actor,
+                    repository_id=repository_id,
+                    task=task,
+                    phase=phase,
+                    budget=budget,
+                    retrieval_facets=retrieval_facets,
+                    required_search_anchors=required_search_anchors,
+                )
+        except DatabaseError as error:
+            if _context_commit_deadline_exhausted(error, watchdog):
+                raise RequiredContextBudgetError(
+                    "Context construction deadline exhausted"
+                ) from error
+            raise
+        return result
     finally:
-        _deadline_sql_wrapper_active.reset(token)
+        if watchdog is not None:
+            watchdog.close()
 
 
 def get_context_packet(

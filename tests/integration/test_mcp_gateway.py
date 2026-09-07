@@ -7,6 +7,7 @@ import uuid
 from copy import deepcopy
 from dataclasses import replace
 from datetime import timedelta
+from typing import Any, cast
 
 import pytest
 from django.conf import settings
@@ -35,6 +36,7 @@ from anva.core.models import (
 from anva.core.services import mcp_gateway
 from anva.core.services.authorization import NOT_FOUND_MESSAGE, Action
 from anva.core.services.context import ActorContext
+from anva.core.services.context_packets import build_context_packet as build_context_packet_service
 from anva.core.services.intent import import_work_item
 from anva.core.services.mcp_gateway import (
     MCPGatewayError,
@@ -178,7 +180,10 @@ def _assertion_packet(
 
 @pytest.mark.integration
 @pytest.mark.django_db(transaction=True)
-def test_codex_and_claude_workflow_traces_share_exact_authorized_packet() -> None:
+def test_codex_and_claude_workflow_traces_share_exact_authorized_packet(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     organization, repository, scope, plaintext = _gateway_tenant("mcp-host-parity")
     base_actor = authenticate_bearer(f"Bearer {plaintext}")
     work_payload = deepcopy(EXAMPLES["work-item-import"])
@@ -210,6 +215,24 @@ def test_codex_and_claude_workflow_traces_share_exact_authorized_packet() -> Non
         "task": task,
         "phase": "PREPARE",
     }
+    generic_atomic_states: list[bool] = []
+    context_atomic_states: list[bool] = []
+    original_resolve = mcp_gateway._READ_HANDLERS["anva.resolve_repository"]
+
+    def observed_resolve(actor: ActorContext, arguments: dict[str, object]) -> dict[str, object]:
+        generic_atomic_states.append(connection.in_atomic_block)
+        return cast(dict[str, object], original_resolve(actor, arguments))
+
+    def observed_build(**kwargs: Any) -> Any:
+        context_atomic_states.append(connection.in_atomic_block)
+        return build_context_packet_service(**kwargs)
+
+    monkeypatch.setitem(
+        mcp_gateway._READ_HANDLERS,
+        "anva.resolve_repository",
+        observed_resolve,
+    )
+    monkeypatch.setattr(mcp_gateway, "build_context_packet", observed_build)
 
     def invoke(
         actor: ActorContext,
@@ -237,6 +260,8 @@ def test_codex_and_claude_workflow_traces_share_exact_authorized_packet() -> Non
     claude_trace, claude_context, claude_request_ids = invoke(base_actor)
 
     assert codex_trace[:2] == claude_trace[:2]
+    assert generic_atomic_states == [True, True]
+    assert context_atomic_states == [False, False]
     codex_data = codex_context["data"]
     claude_data = claude_context["data"]
     assert isinstance(codex_data, dict)
@@ -253,6 +278,50 @@ def test_codex_and_claude_workflow_traces_share_exact_authorized_packet() -> Non
     assert claude_data["created"] is False
     validate_tool_output("anva.get_context_packet", codex_context)
     validate_tool_output("anva.get_context_packet", claude_context)
+    audit_outage_arguments = {
+        **context_arguments,
+        "task": "Publish context while the invocation audit store is unavailable",
+    }
+    audit_outage_actor = replace(base_actor, request_id=uuid.uuid4())
+    original_record_invocation = mcp_gateway._record_invocation
+
+    audit_error_canary = "AUDIT_DATABASE_DETAIL_MUST_NOT_BE_LOGGED"
+
+    def fail_success_audit(**_kwargs: Any) -> None:
+        raise DatabaseError(audit_error_canary)
+
+    monkeypatch.setattr(mcp_gateway, "_record_invocation", fail_success_audit)
+    committed_without_audit = dispatch_tool(
+        actor=audit_outage_actor,
+        tool_name="anva.get_context_packet",
+        arguments=audit_outage_arguments,
+        transport="MCP",
+    )
+    committed_data = cast(dict[str, object], committed_without_audit["data"])
+    assert committed_data["created"] is True
+    assert not MCPToolInvocation.objects.filter(request_id=audit_outage_actor.request_id).exists()
+    audit_failure_records = [
+        record
+        for record in caplog.records
+        if record.message == "Unable to persist MCP success audit after context publication"
+    ]
+    assert len(audit_failure_records) == 1
+    assert getattr(audit_failure_records[0], "tool_name", None) == "anva.get_context_packet"
+    assert audit_error_canary not in caplog.text
+
+    monkeypatch.setattr(mcp_gateway, "_record_invocation", original_record_invocation)
+    replayed_after_audit_recovery = dispatch_tool(
+        actor=audit_outage_actor,
+        tool_name="anva.get_context_packet",
+        arguments=audit_outage_arguments,
+        transport="MCP",
+    )
+    replayed_data = cast(dict[str, object], replayed_after_audit_recovery["data"])
+    assert replayed_data["created"] is False
+    assert replayed_data["packet_id"] == committed_data["packet_id"]
+    recovered_audit = MCPToolInvocation.objects.get(request_id=audit_outage_actor.request_id)
+    assert recovered_audit.outcome == MCPToolInvocation.Outcome.SUCCEEDED
+    assert recovered_audit.error_code == ""
     search_result = dispatch_tool(
         actor=replace(base_actor, request_id=uuid.uuid4()),
         tool_name="anva.search",

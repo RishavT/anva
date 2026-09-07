@@ -6,7 +6,7 @@ import json
 import uuid
 from dataclasses import replace
 from pathlib import Path
-from time import monotonic
+from time import monotonic, sleep
 from typing import Any, cast
 
 import pytest
@@ -59,6 +59,7 @@ from anva.core.models import (
     SyncRun,
     User,
 )
+from anva.core.services import context_packets as context_packet_service
 from anva.core.services.authorization import Action
 from anva.core.services.context import ActorContext
 from anva.core.services.context_packets import (
@@ -67,6 +68,7 @@ from anva.core.services.context_packets import (
     RetrievalFacet,
     _chunk_candidate,
     _deadline_statement_wrapper,
+    _enter_context_publication_phase,
     _merge_candidates,
     _required_search_anchor_candidates,
     build_context_packet,
@@ -148,6 +150,306 @@ def test_deadline_wrapper_immediately_refreshes_and_shrinks_real_postgres_timeou
     first_timeout = cast(tuple[int], events[0][1])[0]
     second_timeout = cast(tuple[int], events[2][1])[0]
     assert 1 <= second_timeout < first_timeout <= 250
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_context_deadline_phase_edges_are_absolute_and_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = [3.999]
+    timeout_deadlines: list[float] = []
+    active_deadline = [4.0]
+    monkeypatch.setattr(
+        "anva.core.services.context_packets.monotonic",
+        lambda: clock[0],
+    )
+    monkeypatch.setattr(
+        "anva.core.services.context_packets._set_remaining_statement_timeout",
+        timeout_deadlines.append,
+    )
+
+    entered = _enter_context_publication_phase(
+        scan_deadline=4.0,
+        publication_deadline=5.0,
+        active_deadline=active_deadline,
+    )
+    assert entered == 5.0
+    assert active_deadline == [5.0]
+    assert timeout_deadlines == [5.0]
+
+    sql_events: list[tuple[str, Any]] = []
+
+    def capture_execute(
+        sql: str,
+        parameters: Any,
+        _many: bool,
+        _context: object,
+    ) -> None:
+        sql_events.append((sql, parameters))
+
+    active_deadline[:] = [4.0]
+    wrapper = _deadline_statement_wrapper(lambda: active_deadline[0])
+    wrapper(capture_execute, "SELECT 1", (), False, {})
+    active_deadline[:] = [5.0]
+    wrapper(capture_execute, "SELECT 2", (), False, {})
+    assert [event[0] for event in sql_events] == [
+        "SET LOCAL statement_timeout = %s",
+        "SELECT 1",
+        "SET LOCAL statement_timeout = %s",
+        "SELECT 2",
+    ]
+    assert cast(tuple[int], sql_events[0][1]) == (1,)
+    assert cast(tuple[int], sql_events[2][1]) == (1000,)
+
+    # The phase boundary is absolute: it neither renews an exhausted scan nor
+    # extends publication beyond the original construction start plus five seconds.
+    for exhausted_at, initial_active in ((4.0, 4.0), (5.0, 4.0)):
+        clock[0] = exhausted_at
+        active_deadline[:] = [initial_active]
+        timeout_deadlines.clear()
+        with pytest.raises(
+            RequiredContextBudgetError,
+            match=r"^Context construction deadline exhausted$",
+        ):
+            _enter_context_publication_phase(
+                scan_deadline=4.0 if exhausted_at == 4.0 else 4.999,
+                publication_deadline=5.0,
+                active_deadline=active_deadline,
+            )
+        assert active_deadline == [initial_active]
+        assert timeout_deadlines == []
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_complete_cold_scan_can_rank_after_four_seconds_but_never_publish_after_internal_cap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert context_packet_service.CONTEXT_SCAN_MAX_SECONDS == 4.0
+    assert context_packet_service.CONTEXT_PUBLICATION_MAX_SECONDS == 0.5
+    (tmp_path / "policy.json").write_text(json.dumps({"policy": "exact cold context"}))
+    actor, source = _source_setup(tmp_path, monkeypatch, slug="cold-ranking-reserve")
+    _execute_requested(actor, source)
+    assert source.repository_id is not None
+
+    clock = [0.0]
+    original_select = context_packet_service._select
+
+    def delayed_select(*args: Any, **kwargs: Any) -> Any:
+        # Completeness has already been proven when ranking begins. Simulate cold
+        # in-memory work crossing the four-second scan edge without renewing the
+        # original absolute 4.5-second internal construction target.
+        clock[0] = 4.4
+        return original_select(*args, **kwargs)
+
+    monkeypatch.setattr(context_packet_service, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(context_packet_service, "_select", delayed_select)
+    packet, created = build_context_packet(
+        actor=actor,
+        repository_id=source.repository_id,
+        task="exact cold context",
+        phase=ContextPacketRecord.Phase.ASSURANCE,
+    )
+    assert created is True
+    assert packet.artifact.payload["completeness"]["complete"] is True
+
+    before = {
+        "scopes": AccessScope.objects.count(),
+        "artifacts": ImmutableArtifact.objects.count(),
+        "packets": ContextPacketRecord.objects.count(),
+        "items": ContextPacketItem.objects.count(),
+        "citations": ContextPacketCitation.objects.count(),
+    }
+
+    def exhausted_select(*args: Any, **kwargs: Any) -> Any:
+        clock[0] = 4.5
+        return original_select(*args, **kwargs)
+
+    clock[0] = 0.0
+    monkeypatch.setattr(context_packet_service, "_select", exhausted_select)
+    with pytest.raises(
+        RequiredContextBudgetError,
+        match=r"^Context construction deadline exhausted$",
+    ):
+        build_context_packet(
+            actor=actor,
+            repository_id=source.repository_id,
+            task="different exact cold context",
+            phase=ContextPacketRecord.Phase.ASSURANCE,
+        )
+    assert AccessScope.objects.count() == before["scopes"]
+    assert ImmutableArtifact.objects.count() == before["artifacts"]
+    assert ContextPacketRecord.objects.count() == before["packets"]
+    assert ContextPacketItem.objects.count() == before["items"]
+    assert ContextPacketCitation.objects.count() == before["citations"]
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_context_packet_deadline_cancels_delayed_commit_and_rolls_back(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A deferred trigger proves the deadline covers PostgreSQL COMMIT itself."""
+    (tmp_path / "policy.json").write_text(json.dumps({"policy": "commit deadline"}))
+    actor, source = _source_setup(tmp_path, monkeypatch, slug="commit-deadline")
+    _execute_requested(actor, source)
+    assert source.repository_id is not None
+    assert context_packet_service.CONTEXT_SCAN_MAX_SECONDS == 4.0
+    assert context_packet_service.CONTEXT_PUBLICATION_MAX_SECONDS == 0.5
+
+    before = {
+        "scopes": AccessScope.objects.count(),
+        "artifacts": ImmutableArtifact.objects.count(),
+        "packets": ContextPacketRecord.objects.count(),
+        "items": ContextPacketItem.objects.count(),
+        "citations": ContextPacketCitation.objects.count(),
+    }
+    table = connection.ops.quote_name(ContextPacketRecord._meta.db_table)
+    function_name = "test_anva_context_packet_delayed_commit"
+    trigger_name = "test_anva_context_packet_delayed_commit_trigger"
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"""
+            CREATE FUNCTION {function_name}() RETURNS trigger AS $$
+            BEGIN
+                PERFORM pg_sleep(6);
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql
+            """
+        )
+        cursor.execute(
+            f"""
+            CREATE CONSTRAINT TRIGGER {trigger_name}
+            AFTER INSERT ON {table}
+            DEFERRABLE INITIALLY DEFERRED
+            FOR EACH ROW EXECUTE FUNCTION {function_name}()
+            """
+        )
+
+    started = monotonic()
+    try:
+        monkeypatch.setattr(core_views, "_actor", lambda _request: actor)
+        request = RequestFactory().post(
+            "/api/v1/context-packets",
+            data=json.dumps(
+                {
+                    "repository_id": str(source.repository_id),
+                    "task": "commit deadline",
+                    "phase": ContextPacketRecord.Phase.ASSURANCE,
+                }
+            ),
+            content_type="application/json",
+        )
+        response = core_views.context_packets(request)
+    finally:
+        with connection.cursor() as cursor:
+            cursor.execute(f"DROP TRIGGER IF EXISTS {trigger_name} ON {table}")
+            cursor.execute(f"DROP FUNCTION IF EXISTS {function_name}()")
+
+    elapsed = monotonic() - started
+    assert elapsed < 5.0
+    assert response.status_code == 409
+    assert json.loads(response.content)["code"] == "required_context_budget_exceeded"
+    assert AccessScope.objects.count() == before["scopes"]
+    assert ImmutableArtifact.objects.count() == before["artifacts"]
+    assert ContextPacketRecord.objects.count() == before["packets"]
+    assert ContextPacketItem.objects.count() == before["items"]
+    assert ContextPacketCitation.objects.count() == before["citations"]
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT 1")
+        assert cursor.fetchone() == (1,)
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_context_packet_commit_watchdog_disarms_after_success_and_connection_reuse(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A completed COMMIT cannot let its watchdog cancel a later operation."""
+    (tmp_path / "policy.json").write_text(json.dumps({"policy": "commit succeeds"}))
+    actor, source = _source_setup(tmp_path, monkeypatch, slug="commit-success")
+    _execute_requested(actor, source)
+    assert source.repository_id is not None
+    monkeypatch.setattr(context_packet_service, "CONTEXT_SCAN_MAX_SECONDS", 1.0)
+    monkeypatch.setattr(context_packet_service, "CONTEXT_PUBLICATION_MAX_SECONDS", 0.5)
+
+    table = connection.ops.quote_name(ContextPacketRecord._meta.db_table)
+    function_name = "test_anva_context_packet_near_deadline_commit"
+    trigger_name = "test_anva_context_packet_near_deadline_commit_trigger"
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"""
+            CREATE FUNCTION {function_name}() RETURNS trigger AS $$
+            BEGIN
+                PERFORM pg_sleep(0.8);
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql
+            """
+        )
+        cursor.execute(
+            f"""
+            CREATE CONSTRAINT TRIGGER {trigger_name}
+            AFTER INSERT ON {table}
+            DEFERRABLE INITIALLY DEFERRED
+            FOR EACH ROW EXECUTE FUNCTION {function_name}()
+            """
+        )
+
+    started = monotonic()
+    try:
+        packet, created = build_context_packet(
+            actor=actor,
+            repository_id=source.repository_id,
+            task="commit succeeds",
+            phase=ContextPacketRecord.Phase.ASSURANCE,
+        )
+    finally:
+        with connection.cursor() as cursor:
+            cursor.execute(f"DROP TRIGGER IF EXISTS {trigger_name} ON {table}")
+            cursor.execute(f"DROP FUNCTION IF EXISTS {function_name}()")
+    elapsed = monotonic() - started
+    assert 0.8 <= elapsed < 1.5
+    assert created is True
+    assert ContextPacketRecord.objects.filter(id=packet.id).exists()
+
+    # Wait beyond the original deadline. A callback racing after close() would
+    # otherwise cancel either this query or the immediate cached operation.
+    sleep(max(0.0, 1.6 - elapsed))
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT 1")
+        assert cursor.fetchone() == (1,)
+    cached, cached_created = build_context_packet(
+        actor=actor,
+        repository_id=source.repository_id,
+        task="commit succeeds",
+        phase=ContextPacketRecord.Phase.ASSURANCE,
+    )
+    assert cached_created is False
+    assert cached.id == packet.id
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_context_packet_rejects_ambient_transaction() -> None:
+    with (
+        transaction.atomic(),
+        pytest.raises(
+            RuntimeError,
+            match="requires an outermost transaction",
+        ),
+    ):
+        build_context_packet(
+            actor=cast(ActorContext, None),
+            repository_id=uuid.uuid4(),
+            task="must not use a savepoint",
+            phase=ContextPacketRecord.Phase.ASSURANCE,
+        )
 
 
 def _assert_explainable(capture: _SqlCapture) -> None:

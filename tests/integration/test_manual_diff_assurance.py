@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from threading import Event
-from typing import TypedDict
+from typing import TypedDict, cast
 
 import pytest
 from django.db import DatabaseError, close_old_connections, connections, transaction
@@ -315,6 +315,11 @@ def test_concurrent_identical_assurance_starts_bind_one_canonical_run() -> None:
     assert sorted(created for _run_id, _task_id, created in results) == [False, True]
     canonical_run_id = results[0][0]
     assert EvaluatorTask.objects.filter(assurance_run_id=canonical_run_id).count() == 1
+    canonical_run = AssuranceRun.objects.get(id=canonical_run_id)
+    assert canonical_run.state == AssuranceRun.State.MODEL_REVIEW
+    assert canonical_run.failure_code == ""
+    assert canonical_run.context_packet_id is not None
+    assert canonical_run.context_artifact_id is not None
     assert (
         AssuranceRun.objects.filter(
             organization=organization,
@@ -324,6 +329,27 @@ def test_concurrent_identical_assurance_starts_bind_one_canonical_run() -> None:
         ).count()
         <= 1
     )
+
+
+@pytest.mark.integration
+@pytest.mark.django_db(transaction=True)
+def test_assurance_start_rejects_ambient_transaction_before_writes() -> None:
+    before = AssuranceRun.objects.count()
+    with (
+        transaction.atomic(),
+        pytest.raises(
+            RuntimeError,
+            match="requires an outermost transaction",
+        ),
+    ):
+        start_assurance(
+            actor=cast(ActorContext, None),
+            pull_request_revision_id=uuid.uuid4(),
+            policy_version_ids=[],
+            reference_time=REFERENCE_TIME,
+            deterministic_checks=[],
+        )
+    assert AssuranceRun.objects.count() == before
 
 
 @pytest.mark.integration
@@ -411,7 +437,11 @@ def test_concurrent_retry_after_failed_finalizer_reuses_canonical_failure(
     def fail_context(**_kwargs: object) -> object:
         raise RequiredContextBudgetError("ASSURANCE_CONTEXT_INCOMPLETE")
 
-    monkeypatch.setattr(assurance_service, "build_context_packet", fail_context)
+    monkeypatch.setattr(
+        assurance_service,
+        "_build_context_packet_in_transaction",
+        fail_context,
+    )
 
     def start(*, wait_for_failure: bool) -> tuple[uuid.UUID, uuid.UUID | None, str, bool]:
         if wait_for_failure:

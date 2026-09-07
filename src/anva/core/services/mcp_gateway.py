@@ -11,6 +11,7 @@ import re
 import unicodedata
 import uuid
 from collections.abc import Callable, Iterable
+from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime
@@ -1743,7 +1744,9 @@ def dispatch_tool(
         repository_id = _uuid(arguments, "repository_id")
         action = Action(contract["required_action"])
         _repository(actor=actor, repository_id=repository_id, action=action)
-        with transaction.atomic():
+        transaction_owning = tool_name == "anva.get_context_packet" and "packet_id" not in arguments
+        handler_transaction = nullcontext() if transaction_owning else transaction.atomic()
+        with handler_transaction:
             if tool_name in PROPOSAL_TOOL_NAMES:
                 if settings.ANVA_MCP_READ_ONLY:
                     raise MCPGatewayError(
@@ -1782,15 +1785,25 @@ def dispatch_tool(
                 code="invalid_tool_output",
                 label=f"{tool_name} output",
             )
-            _record_invocation(
-                actor=actor,
-                transport=transport,
-                tool_name=audit_tool_name,
-                required_action=audit_action,
-                arguments=arguments,
-                outcome=MCPToolInvocation.Outcome.SUCCEEDED,
-                target_id=_target_id(data),
-            )
+            audit_transaction = transaction.atomic() if transaction_owning else nullcontext()
+            try:
+                with audit_transaction:
+                    _record_invocation(
+                        actor=actor,
+                        transport=transport,
+                        tool_name=audit_tool_name,
+                        required_action=audit_action,
+                        arguments=arguments,
+                        outcome=MCPToolInvocation.Outcome.SUCCEEDED,
+                        target_id=_target_id(data),
+                    )
+            except Exception:
+                if not transaction_owning:
+                    raise
+                logger.error(
+                    "Unable to persist MCP success audit after context publication",
+                    extra={"tool_name": audit_tool_name},
+                )
             return result
     except Exception as error:
         code = error.code if isinstance(error, DomainOperationError) else "invalid_request"
