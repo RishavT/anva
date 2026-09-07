@@ -132,15 +132,19 @@ def test_assertion_scan_finds_relevance_after_legacy_uuid_prefix() -> None:
         for index in range(501)
     ]
     eligible_rows = [
-        SimpleNamespace(assertion_id=assertion.id, assertion=assertion) for assertion in assertions
+        SimpleNamespace(id=uuid.uuid4(), assertion_id=assertion.id, assertion=assertion)
+        for assertion in assertions
     ]
+    eligible_by_id = {row.id: row for row in eligible_rows}
+    eligible_identities = [(row.id, row.assertion_id) for row in eligible_rows]
     ordered = MagicMock()
     ordered.__getitem__.side_effect = [
-        eligible_rows[:200],
-        eligible_rows[200:400],
-        eligible_rows[400:],
+        eligible_identities[:200],
+        eligible_identities[200:400],
+        eligible_identities[400:],
     ]
     ordered.filter.return_value = ordered
+    ordered.values_list.return_value = ordered
     initial_provenance = MagicMock()
     initial_provenance.order_by.return_value.values.return_value = MagicMock()
 
@@ -150,12 +154,18 @@ def test_assertion_scan_finds_relevance_after_legacy_uuid_prefix() -> None:
             return_value=MagicMock(),
         ),
         patch(
-            "anva.core.services.context_packets._authorized_provenance_for_authorization",
+            "anva.core.services.context_packets._provenance_selector_for_authorization",
             return_value=initial_provenance,
         ),
         patch(
             "anva.core.services.context_packets._eligible_assertion_provenance_for_authorization",
             return_value=ordered,
+        ),
+        patch(
+            "anva.core.services.context_packets._hydrate_authorized_provenance_page",
+            side_effect=lambda **kwargs: [
+                eligible_by_id[value] for value in kwargs["provenance_ids"]
+            ],
         ),
         patch(
             "anva.core.services.context_packets._citation_from_provenance",
@@ -209,6 +219,13 @@ class _KeysetRows:
     def distinct(self, *_args: str) -> _KeysetRows:
         return self
 
+    def values_list(self, *fields: str) -> _KeysetRows:
+        return _KeysetRows(
+            [tuple(getattr(row, field) for field in fields) for row in self.rows],
+            slices=self.slices,
+            probes=self.probes,
+        )
+
     def exists(self) -> bool:
         self.probes.append(len(self.rows))
         return bool(self.rows)
@@ -243,10 +260,11 @@ def test_assertion_scan_cap_boundary(row_count: int, complete: bool) -> None:
     ]
     eligible = _KeysetRows(
         [
-            SimpleNamespace(assertion_id=assertion.id, assertion=assertion)
+            SimpleNamespace(id=uuid.uuid4(), assertion_id=assertion.id, assertion=assertion)
             for assertion in assertions
         ]
     )
+    eligible_by_id = {row.id: row for row in eligible.rows}
     initial_provenance = MagicMock()
     initial_provenance.order_by.return_value.values.return_value = MagicMock()
 
@@ -256,12 +274,18 @@ def test_assertion_scan_cap_boundary(row_count: int, complete: bool) -> None:
         patch("anva.core.services.context_packets.CONTEXT_SCAN_PAGE_SIZE", 3),
         patch("anva.core.services.context_packets.resolve_authorized_repository_scopes"),
         patch(
-            "anva.core.services.context_packets._authorized_provenance_for_authorization",
+            "anva.core.services.context_packets._provenance_selector_for_authorization",
             return_value=initial_provenance,
         ),
         patch(
             "anva.core.services.context_packets._eligible_assertion_provenance_for_authorization",
             return_value=eligible,
+        ),
+        patch(
+            "anva.core.services.context_packets._hydrate_authorized_provenance_page",
+            side_effect=lambda **kwargs: [
+                eligible_by_id[value] for value in kwargs["provenance_ids"]
+            ],
         ),
         patch(
             "anva.core.services.context_packets._citation_from_provenance", return_value=_citation()
@@ -279,8 +303,9 @@ def test_assertion_scan_cap_boundary(row_count: int, complete: bool) -> None:
     assert cast(Any, candidates).complete is complete
     assert all(item.stop is not None and item.stop <= 3 for item in eligible.slices)
     assert eligible.probes == ([row_count - 5] if row_count >= 5 else [])
+    hydrated_pages = (min(row_count, 5) + 2) // 3
     assert cast(Any, candidates).operation_count == (
-        min(row_count, 5) + len(eligible.slices) + len(eligible.probes)
+        min(row_count, 5) + len(eligible.slices) + hydrated_pages + len(eligible.probes)
     )
     digest = _json_hash(
         [
@@ -302,6 +327,58 @@ def test_assertion_scan_cap_boundary(row_count: int, complete: bool) -> None:
     else:
         assert metadata["partial_digest"] == digest
         assert "exact_digest" not in metadata
+
+
+@pytest.mark.unit
+def test_assertion_scan_fails_closed_when_hydration_loses_an_authorized_row() -> None:
+    assertions = [
+        SimpleNamespace(
+            id=uuid.UUID(int=index + 1),
+            access_scope_id=uuid.uuid4(),
+            subject_key=f"policy-{index}",
+            predicate="requires",
+            value="review",
+            review_state="UNREVIEWED",
+            staleness_state="FRESH",
+            confidence=1.0,
+            is_inferred=False,
+        )
+        for index in range(2)
+    ]
+    eligible = _KeysetRows(
+        [
+            SimpleNamespace(id=uuid.uuid4(), assertion_id=assertion.id, assertion=assertion)
+            for assertion in assertions
+        ]
+    )
+    initial_provenance = MagicMock()
+
+    with (
+        patch("anva.core.services.context_packets.resolve_authorized_repository_scopes"),
+        patch(
+            "anva.core.services.context_packets._provenance_selector_for_authorization",
+            return_value=initial_provenance,
+        ),
+        patch(
+            "anva.core.services.context_packets._eligible_assertion_provenance_for_authorization",
+            return_value=eligible,
+        ),
+        patch(
+            "anva.core.services.context_packets._hydrate_authorized_provenance_page",
+            return_value=[eligible.rows[0]],
+        ),
+    ):
+        candidates = _assertion_candidates(
+            actor=cast(Any, SimpleNamespace()),
+            repository_id=uuid.uuid4(),
+            facets=(),
+            change_aware=False,
+        )
+
+    assert candidates == []
+    assert cast(Any, candidates).complete is False
+    assert cast(Any, candidates).processed_count == 0
+    assert cast(Any, candidates).operation_count == 3
 
 
 def _search_anchor(seed: int = 0) -> RequiredSearchAnchor:

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from django.db import DatabaseError, connection
+from django.db import DatabaseError, connection, transaction
 from django.db.models import Subquery
 from django.utils import timezone
 
@@ -30,6 +30,7 @@ from anva.core.models import (
     AssertionValidityInterval,
     AssuranceRun,
     ContextPacketCitation,
+    ContextPacketInvalidation,
     ContextPacketItem,
     ContextPacketRecord,
     EvaluatorTask,
@@ -56,6 +57,9 @@ from anva.core.services.assurance import (
 from anva.core.services.authorization import Action, resolve_authorized_repository_scopes
 from anva.core.services.context import ActorContext
 from anva.core.services.context_packets import (
+    CONTEXT_SCAN_PAGE_SIZE,
+    RetrievalFacet,
+    _assertion_candidates,
     _authorized_provenance_for_authorization,
     _conflict_candidates,
     _eligible_assertion_provenance_for_authorization,
@@ -618,6 +622,183 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         )
         for provenance in reference_provenance
     ]
+    provenance_queries: list[tuple[str, tuple[object, ...]]] = []
+    hydration_pages: list[tuple[uuid.UUID, ...]] = []
+    observed_hydrate = context_packet_service._hydrate_authorized_provenance_page
+
+    def capture_hydration_page(**kwargs: Any) -> Any:
+        hydration_pages.append(tuple(kwargs["provenance_ids"]))
+        return observed_hydrate(**kwargs)
+
+    def capture_provenance_queries(
+        execute: Any,
+        sql: str,
+        params: object,
+        many: bool,
+        context: object,
+    ) -> Any:
+        if 'FROM "core_assertionprovenance"' in sql:
+            provenance_queries.append((" ".join(sql.split()), tuple(cast(Any, params) or ())))
+        return execute(sql, params, many, context)
+
+    monkeypatch.setattr(
+        context_packet_service,
+        "_hydrate_authorized_provenance_page",
+        capture_hydration_page,
+    )
+    with connection.execute_wrapper(capture_provenance_queries):
+        scanned_candidates = _assertion_candidates(
+            actor=actor,
+            repository_id=repository.id,
+            facets=(RetrievalFacet("task", "passenger contact redaction"),),
+            change_aware=True,
+        )
+    monkeypatch.setattr(
+        context_packet_service,
+        "_hydrate_authorized_provenance_page",
+        observed_hydrate,
+    )
+    hydration_queries = [
+        query for query in provenance_queries if '"core_assertionprovenance"."id" IN' in query[0]
+    ]
+    selector_queries = [
+        query
+        for query in provenance_queries
+        if '"core_assertionprovenance"."id" IN' not in query[0] and "SELECT DISTINCT ON" in query[0]
+    ]
+    assert cast(Any, scanned_candidates).complete is True
+    assert cast(Any, scanned_candidates).processed_count == len(reference_provenance)
+    assert len(reference_provenance) == 610
+    assert list(cast(Any, scanned_candidates).provenance_by_assertion) == reference_ids
+    assert [
+        provenance.id
+        for provenance in cast(Any, scanned_candidates).provenance_by_assertion.values()
+    ] == [provenance.id for provenance in reference_provenance]
+    assert len(selector_queries) == len(hydration_queries)
+    assert len(hydration_queries) >= 1
+    assert len(hydration_queries) == len(hydration_pages)
+    expected_page_sizes = [
+        min(CONTEXT_SCAN_PAGE_SIZE, len(reference_provenance) - offset)
+        for offset in range(0, len(reference_provenance), CONTEXT_SCAN_PAGE_SIZE)
+    ]
+    assert [len(page) for page in hydration_pages] == expected_page_sizes
+    assert expected_page_sizes == [200, 200, 200, 10]
+    assert len(selector_queries) == 4
+    assert all(0 < len(page) <= CONTEXT_SCAN_PAGE_SIZE for page in hydration_pages)
+    assert all(len(page) == len(set(page)) for page in hydration_pages)
+    assert all('"core_knowledgeassertion"."value"' not in sql for sql, _ in selector_queries)
+    assert all('"core_sourcerevision"."content_hash"' not in sql for sql, _ in selector_queries)
+    assert all("core_repositoryaccesstoken" not in sql for sql, _ in selector_queries)
+    assert all("core_accessgrant" not in sql for sql, _ in selector_queries)
+    assert all("core_serviceidentity" not in sql for sql, _ in selector_queries)
+    selector_parameter_counts = {len(params) for _, params in selector_queries}
+    assert max(selector_parameter_counts) - min(selector_parameter_counts) <= 1
+    assert all(len(params) <= 20 for _, params in selector_queries)
+    fixed_parameter_counts = {
+        len(params) - len(page)
+        for (_, params), page in zip(hydration_queries, hydration_pages, strict=True)
+    }
+    assert len(fixed_parameter_counts) == 1
+    assert fixed_parameter_counts == {97}
+    assert next(iter(fixed_parameter_counts)) <= 100
+    assert all(len(params) <= CONTEXT_SCAN_PAGE_SIZE + 100 for _, params in hydration_queries)
+    assert all(len(params) <= 100 for _, params in selector_queries)
+    assert cast(Any, scanned_candidates).operation_count == (
+        len(reference_provenance) + len(selector_queries) + len(hydration_queries)
+    )
+    assert cast(Any, scanned_candidates).operation_count == 618
+
+    original_hydrate = context_packet_service._hydrate_authorized_provenance_page
+    race_triggered = False
+
+    def revoke_between_selector_and_hydration(**kwargs: Any) -> Any:
+        nonlocal race_triggered
+        if not race_triggered:
+            selected_provenance = AssertionProvenance.objects.only(
+                "assertion_id", "source_observation_id"
+            ).get(id=kwargs["provenance_ids"][0])
+            interval = AssertionValidityInterval.objects.get(
+                assertion_id=selected_provenance.assertion_id,
+                source_observation_id=selected_provenance.source_observation_id,
+                valid_until__isnull=True,
+            )
+            AssertionValidityInterval.objects.filter(id=interval.id).update(
+                valid_until=interval.valid_from + timedelta(microseconds=1),
+                observed_until=interval.observed_from,
+            )
+            race_triggered = True
+        return original_hydrate(**kwargs)
+
+    monkeypatch.setattr(
+        context_packet_service,
+        "_hydrate_authorized_provenance_page",
+        revoke_between_selector_and_hydration,
+    )
+    with transaction.atomic():
+        publication_counts_before_race = (
+            AccessScope.objects.count(),
+            ImmutableArtifact.objects.count(),
+            ContextPacketRecord.objects.count(),
+            ContextPacketItem.objects.count(),
+            ContextPacketCitation.objects.count(),
+            ContextPacketInvalidation.objects.count(),
+        )
+        raced_candidates = _assertion_candidates(
+            actor=actor,
+            repository_id=repository.id,
+            facets=(RetrievalFacet("task", "passenger contact redaction"),),
+            change_aware=True,
+        )
+        assert race_triggered is True
+        assert raced_candidates == []
+        assert cast(Any, raced_candidates).complete is False
+        assert cast(Any, raced_candidates).processed_count == 0
+        assert (
+            AccessScope.objects.count(),
+            ImmutableArtifact.objects.count(),
+            ContextPacketRecord.objects.count(),
+            ContextPacketItem.objects.count(),
+            ContextPacketCitation.objects.count(),
+            ContextPacketInvalidation.objects.count(),
+        ) == publication_counts_before_race
+        transaction.set_rollback(True)
+    monkeypatch.setattr(
+        context_packet_service,
+        "_hydrate_authorized_provenance_page",
+        original_hydrate,
+    )
+
+    scope_revoked = False
+
+    def revoke_scope_between_selector_and_hydration(**kwargs: Any) -> Any:
+        nonlocal scope_revoked
+        if not scope_revoked:
+            AccessScope.objects.filter(id=scope.id).update(is_active=False)
+            scope_revoked = True
+        return original_hydrate(**kwargs)
+
+    monkeypatch.setattr(
+        context_packet_service,
+        "_hydrate_authorized_provenance_page",
+        revoke_scope_between_selector_and_hydration,
+    )
+    with transaction.atomic():
+        raced_candidates = _assertion_candidates(
+            actor=actor,
+            repository_id=repository.id,
+            facets=(RetrievalFacet("task", "passenger contact redaction"),),
+            change_aware=True,
+        )
+        assert scope_revoked is True
+        assert raced_candidates == []
+        assert cast(Any, raced_candidates).complete is False
+        assert cast(Any, raced_candidates).processed_count == 0
+        transaction.set_rollback(True)
+    monkeypatch.setattr(
+        context_packet_service,
+        "_hydrate_authorized_provenance_page",
+        original_hydrate,
+    )
     selected_multi_provenance = next(
         provenance
         for provenance in optimized_provenance

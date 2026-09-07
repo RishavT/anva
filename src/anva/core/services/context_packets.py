@@ -48,6 +48,9 @@ from anva.core.models import (
     Repository,
     RetrievalWatermark,
     SourceChunkVisibility,
+    SourceConnection,
+    SourceDocument,
+    SourceObservation,
 )
 from anva.core.models import (
     content_hash as model_content_hash,
@@ -628,6 +631,60 @@ def _authorized_provenance_for_authorization(
     return queryset
 
 
+def _provenance_selector_for_authorization(
+    *,
+    actor: ActorContext,
+    authorization: AuthorizedRepositoryScopes,
+) -> QuerySet[AssertionProvenance]:
+    """Select provisional current identities from the already-resolved scope snapshot.
+
+    This query deliberately avoids repeating the live authorization subqueries. Every
+    selected identity is reauthorized and rechecked for currentness by
+    ``_hydrate_authorized_provenance_page`` before it can become a candidate.
+    """
+    if not authorization.is_bound_to(actor):
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    if actor.credential_actions and Action.SEARCH.value not in actor.credential_actions:
+        raise ResourceNotFoundError(NOT_FOUND_MESSAGE)
+    repository_ids = authorization.repository_ids_for(Action.SEARCH)
+    scope_ids = authorization.scope_ids_for(Action.SEARCH)
+    if not repository_ids or not scope_ids:
+        return AssertionProvenance.objects.none()
+    return AssertionProvenance.objects.filter(
+        organization_id=actor.organization_id,
+        access_snapshot__revoked_at__isnull=True,
+        access_snapshot__access_scope_id__in=scope_ids,
+        access_snapshot__source_connection_id=F(
+            "source_observation__source_document__source_container__source_connection_id"
+        ),
+        access_snapshot__access_scope__accessscopesource__source_connection_id=F(
+            "source_observation__source_document__source_container__source_connection_id"
+        ),
+        source_observation__status=SourceObservation.Status.PRESENT,
+        source_observation__source_document__state=SourceDocument.State.PRESENT,
+        source_observation__source_document__source_container__source_connection__state__in=(
+            SourceConnection.State.ACTIVE,
+            SourceConnection.State.DEGRADED,
+        ),
+        source_observation__source_document__source_container__source_connection__repository_id__in=(
+            repository_ids
+        ),
+        source_observation__source_revision_id=F(
+            "source_observation__source_document__current_revision_id"
+        ),
+        source_observation__sync_run_id=F("source_observation__source_document__last_seen_run_id"),
+        source_location__source_observation_id=F("source_observation_id"),
+        source_location__parsed_source__source_revision_id=F(
+            "source_observation__source_revision_id"
+        ),
+        assertion__organization_id=actor.organization_id,
+        assertion__access_scope_id__in=scope_ids,
+        assertion__valid_until__isnull=True,
+        assertion__assertionvalidityinterval__valid_until__isnull=True,
+        assertion__assertionvalidityinterval__source_observation_id=F("source_observation_id"),
+    )
+
+
 def _authorized_provenance(
     *,
     actor: ActorContext,
@@ -673,6 +730,32 @@ def _eligible_assertion_provenance_for_authorization(
         .order_by("assertion_id", "observed_at", "id")
         .distinct("assertion_id")
     )
+
+
+def _hydrate_authorized_provenance_page(
+    *,
+    actor: ActorContext,
+    authorization: AuthorizedRepositoryScopes,
+    provenance_ids: list[uuid.UUID],
+) -> list[AssertionProvenance]:
+    """Reauthorize and hydrate one bounded deterministic provenance page."""
+    if not provenance_ids:
+        return []
+    rows_by_id = {
+        provenance.id: provenance
+        for provenance in _authorized_provenance_for_authorization(
+            actor=actor,
+            authorization=authorization,
+            assertion_ids=None,
+        )
+        .filter(id__in=provenance_ids)
+        .select_related("assertion", "assertion__access_scope")
+        .order_by()
+        .distinct()
+    }
+    return [
+        rows_by_id[provenance_id] for provenance_id in provenance_ids if provenance_id in rows_by_id
+    ]
 
 
 def _citation_from_provenance(
@@ -830,10 +913,9 @@ def _assertion_candidates(
         repository_ids=(repository_id,),
         repository_limit=1,
     )
-    current_provenance = _authorized_provenance_for_authorization(
+    current_provenance = _provenance_selector_for_authorization(
         actor=actor,
         authorization=authorization,
-        assertion_ids=None,
     )
     eligible = _eligible_assertion_provenance_for_authorization(
         actor=actor,
@@ -863,13 +945,24 @@ def _assertion_candidates(
             candidates.operation_count += 1
             candidates.complete = not page_query.exists()
             break
-        page_limit = min(CONTEXT_SCAN_PAGE_SIZE, remaining, remaining_operations - 1)
+        # Reserve one operation for the narrow identity query and one for the
+        # bounded, authorization-revalidating hydration query.
+        page_limit = min(CONTEXT_SCAN_PAGE_SIZE, remaining, remaining_operations - 2)
         if page_limit <= 0:
             candidates.complete = False
             break
-        provenance_page = list(page_query[:page_limit])
+        provenance_identity_page = list(page_query.values_list("id", "assertion_id")[:page_limit])
+        candidates.operation_count += 1
+        if not provenance_identity_page:
+            break
+        provenance_page = _hydrate_authorized_provenance_page(
+            actor=actor,
+            authorization=authorization,
+            provenance_ids=[row[0] for row in provenance_identity_page],
+        )
         candidates.operation_count += 1 + len(provenance_page)
-        if not provenance_page:
+        if len(provenance_page) != len(provenance_identity_page):
+            candidates.complete = False
             break
         assertions = [provenance.assertion for provenance in provenance_page]
         scanned += len(provenance_page)
