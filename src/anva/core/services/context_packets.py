@@ -78,10 +78,11 @@ CONTEXT_SCAN_VERSION = "authorized-conflict-scan-v1"
 CONTEXT_SCAN_PAGE_SIZE = 200
 CONTEXT_SCAN_MAX_ROWS = 50_000
 CONTEXT_SCAN_MAX_OPERATIONS = 100_000
-# Leave one second of the v3 five-second context target for ranking, sealing,
-# and publication reauthorization around this internal database scan.
+# Leave 800ms for ranking, sealing, and publication reauthorization after the
+# scan. The resulting 4.8s internal ceiling preserves headroom for the enclosing
+# public assurance operation's own fail-closed work under its five-second target.
 CONTEXT_SCAN_MAX_SECONDS = 4.0
-CONTEXT_PUBLICATION_MAX_SECONDS = 1.0
+CONTEXT_PUBLICATION_MAX_SECONDS = 0.8
 CONTEXT_STATEMENT_TIMEOUT_MS = 4_000
 _deadline_sql_wrapper_active: ContextVar[bool] = ContextVar(
     "context_deadline_sql_wrapper_active", default=False

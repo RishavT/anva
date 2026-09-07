@@ -31,3 +31,19 @@ retry or cache warm-up.
 The runner continued through assurance and the stale-head probe to the sealed external-review
 handoff. The failed pre-fix cold transaction had published no packet; this fresh stack contained
 only the successful fixed-product packets.
+
+## Final bound tightening and rerun note
+
+Full-suite validation exposed that an internal five-second SQL timeout could make the enclosing
+public assurance operation exceed its five-second target by about 62 milliseconds. The final
+implementation therefore retains the four-second complete-scan bound and tightens the in-memory
+sealing/publication reserve from one second to 800 milliseconds. The measured fixed-corpus
+publication/response tail above was 0.410494 seconds. A deterministic 501-archive regression
+crosses the scan edge at 4.2 seconds during canonical digest sealing, succeeds within 4.8 seconds,
+and verifies that a 4.8-second overrun publishes no scope, artifact, packet, item, or citation.
+
+A fresh local rerun canonicalized the same 115 files and exact corpus identities, but the recovered
+launch workspace was rejected before bootstrap or context retrieval with stable reason
+`launch_bind_mismatch`; no product context call occurred. The rejected stack was removed. The
+unchanged sealed case is therefore scheduled for the authoritative fresh blind acceptance after
+merge rather than treating a reconstructed provenance boundary as valid evidence.

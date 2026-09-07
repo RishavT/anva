@@ -764,6 +764,7 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
     # is being sealed. That CPU-only sealing work must use the fixed fifth second.
     context_clock = [0.0]
     archive_digest_crossed_scan_edge = [False]
+    original_context_monotonic = time.monotonic
     original_json_hash = context_packet_service._json_hash
 
     def hash_with_archive_digest_delay(value: object) -> str:
@@ -824,6 +825,8 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
         ],
         work_item_revision_id=work.work_item_revision.id,
     )
+    monkeypatch.setattr(context_packet_service, "monotonic", original_context_monotonic)
+    monkeypatch.setattr(context_packet_service, "_json_hash", original_json_hash)
     context_elapsed = time.monotonic() - context_started
     assert context_elapsed < 5.0, (
         context_elapsed,

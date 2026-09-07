@@ -223,10 +223,12 @@ def test_context_deadline_phase_edges_are_absolute_and_fail_closed(
 
 @pytest.mark.integration
 @pytest.mark.django_db(transaction=True)
-def test_complete_cold_scan_can_rank_after_four_seconds_but_never_publish_after_five(
+def test_complete_cold_scan_can_rank_after_four_seconds_but_never_publish_after_internal_cap(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    assert context_packet_service.CONTEXT_SCAN_MAX_SECONDS == 4.0
+    assert context_packet_service.CONTEXT_PUBLICATION_MAX_SECONDS == 0.8
     (tmp_path / "policy.json").write_text(json.dumps({"policy": "exact cold context"}))
     actor, source = _source_setup(tmp_path, monkeypatch, slug="cold-ranking-reserve")
     _execute_requested(actor, source)
@@ -238,7 +240,7 @@ def test_complete_cold_scan_can_rank_after_four_seconds_but_never_publish_after_
     def delayed_select(*args: Any, **kwargs: Any) -> Any:
         # Completeness has already been proven when ranking begins. Simulate cold
         # in-memory work crossing the four-second scan edge without renewing the
-        # original absolute five-second construction target.
+        # original absolute 4.8-second internal construction target.
         clock[0] = 4.5
         return original_select(*args, **kwargs)
 
@@ -262,7 +264,7 @@ def test_complete_cold_scan_can_rank_after_four_seconds_but_never_publish_after_
     }
 
     def exhausted_select(*args: Any, **kwargs: Any) -> Any:
-        clock[0] = 5.0
+        clock[0] = 4.8
         return original_select(*args, **kwargs)
 
     clock[0] = 0.0
