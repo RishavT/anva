@@ -465,6 +465,10 @@
                 "bootstrap_mode": "SCOPED",
                 "bootstrap_request_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
                 "credential_metadata": {
+                  "bootstrap_request_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+                  "credential_set_generation": 0,
+                  "credential_set_id": "00000000-0000-4000-8000-000000000010",
+                  "observed_at": "2026-08-03T12:00:00Z",
                   "primary": {
                     "access_scope_id": "00000000-0000-4000-8000-000000000006",
                     "allowed_actions": [
@@ -486,10 +490,10 @@
                     ],
                     "expires_at": "2026-08-10T12:00:00Z",
                     "repository_id": "00000000-0000-4000-8000-000000000004",
-                    "revoked_at": null,
-                    "service_identity_active": true,
+                    "revoked_at_issuance": null,
+                    "service_identity_active_at_issuance": true,
                     "service_identity_id": "00000000-0000-4000-8000-000000000005",
-                    "token_active": true,
+                    "token_active_at_issuance": true,
                     "token_id": "00000000-0000-4000-8000-000000000007"
                   },
                   "reviewer": {
@@ -499,12 +503,13 @@
                     ],
                     "expires_at": "2026-08-10T12:00:00Z",
                     "repository_id": "00000000-0000-4000-8000-000000000004",
-                    "revoked_at": null,
-                    "service_identity_active": true,
+                    "revoked_at_issuance": null,
+                    "service_identity_active_at_issuance": true,
                     "service_identity_id": "00000000-0000-4000-8000-000000000008",
-                    "token_active": true,
+                    "token_active_at_issuance": true,
                     "token_id": "00000000-0000-4000-8000-000000000009"
-                  }
+                  },
+                  "schema_version": 1
                 },
                 "expires_at": "2026-08-10T12:00:00Z",
                 "membership_id": "00000000-0000-4000-8000-000000000003",
@@ -541,6 +546,22 @@
                       "credential_metadata": {
                         "additionalProperties": false,
                         "properties": {
+                          "bootstrap_request_sha256": {
+                            "pattern": "^[a-f0-9]{64}$",
+                            "type": "string"
+                          },
+                          "credential_set_generation": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "credential_set_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "observed_at": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
                           "primary": {
                             "additionalProperties": false,
                             "properties": {
@@ -599,7 +620,7 @@
                                 "format": "uuid",
                                 "type": "string"
                               },
-                              "revoked_at": {
+                              "revoked_at_issuance": {
                                 "oneOf": [
                                   {
                                     "format": "date-time",
@@ -610,14 +631,14 @@
                                   }
                                 ]
                               },
-                              "service_identity_active": {
+                              "service_identity_active_at_issuance": {
                                 "type": "boolean"
                               },
                               "service_identity_id": {
                                 "format": "uuid",
                                 "type": "string"
                               },
-                              "token_active": {
+                              "token_active_at_issuance": {
                                 "type": "boolean"
                               },
                               "token_id": {
@@ -631,9 +652,9 @@
                               "repository_id",
                               "access_scope_id",
                               "allowed_actions",
-                              "service_identity_active",
-                              "token_active",
-                              "revoked_at",
+                              "service_identity_active_at_issuance",
+                              "token_active_at_issuance",
+                              "revoked_at_issuance",
                               "expires_at"
                             ],
                             "type": "object"
@@ -696,7 +717,7 @@
                                 "format": "uuid",
                                 "type": "string"
                               },
-                              "revoked_at": {
+                              "revoked_at_issuance": {
                                 "oneOf": [
                                   {
                                     "format": "date-time",
@@ -707,14 +728,14 @@
                                   }
                                 ]
                               },
-                              "service_identity_active": {
+                              "service_identity_active_at_issuance": {
                                 "type": "boolean"
                               },
                               "service_identity_id": {
                                 "format": "uuid",
                                 "type": "string"
                               },
-                              "token_active": {
+                              "token_active_at_issuance": {
                                 "type": "boolean"
                               },
                               "token_id": {
@@ -728,15 +749,24 @@
                               "repository_id",
                               "access_scope_id",
                               "allowed_actions",
-                              "service_identity_active",
-                              "token_active",
-                              "revoked_at",
+                              "service_identity_active_at_issuance",
+                              "token_active_at_issuance",
+                              "revoked_at_issuance",
                               "expires_at"
                             ],
                             "type": "object"
+                          },
+                          "schema_version": {
+                            "const": 1,
+                            "type": "integer"
                           }
                         },
                         "required": [
+                          "schema_version",
+                          "bootstrap_request_sha256",
+                          "credential_set_id",
+                          "credential_set_generation",
+                          "observed_at",
                           "primary",
                           "reviewer"
                         ],
@@ -836,6 +866,22 @@
                       "credential_metadata": {
                         "additionalProperties": false,
                         "properties": {
+                          "bootstrap_request_sha256": {
+                            "pattern": "^[a-f0-9]{64}$",
+                            "type": "string"
+                          },
+                          "credential_set_generation": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "credential_set_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "observed_at": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
                           "primary": {
                             "additionalProperties": false,
                             "properties": {
@@ -894,7 +940,7 @@
                                 "format": "uuid",
                                 "type": "string"
                               },
-                              "revoked_at": {
+                              "revoked_at_issuance": {
                                 "oneOf": [
                                   {
                                     "format": "date-time",
@@ -905,14 +951,14 @@
                                   }
                                 ]
                               },
-                              "service_identity_active": {
+                              "service_identity_active_at_issuance": {
                                 "type": "boolean"
                               },
                               "service_identity_id": {
                                 "format": "uuid",
                                 "type": "string"
                               },
-                              "token_active": {
+                              "token_active_at_issuance": {
                                 "type": "boolean"
                               },
                               "token_id": {
@@ -926,9 +972,9 @@
                               "repository_id",
                               "access_scope_id",
                               "allowed_actions",
-                              "service_identity_active",
-                              "token_active",
-                              "revoked_at",
+                              "service_identity_active_at_issuance",
+                              "token_active_at_issuance",
+                              "revoked_at_issuance",
                               "expires_at"
                             ],
                             "type": "object"
@@ -991,7 +1037,7 @@
                                 "format": "uuid",
                                 "type": "string"
                               },
-                              "revoked_at": {
+                              "revoked_at_issuance": {
                                 "oneOf": [
                                   {
                                     "format": "date-time",
@@ -1002,14 +1048,14 @@
                                   }
                                 ]
                               },
-                              "service_identity_active": {
+                              "service_identity_active_at_issuance": {
                                 "type": "boolean"
                               },
                               "service_identity_id": {
                                 "format": "uuid",
                                 "type": "string"
                               },
-                              "token_active": {
+                              "token_active_at_issuance": {
                                 "type": "boolean"
                               },
                               "token_id": {
@@ -1023,15 +1069,24 @@
                               "repository_id",
                               "access_scope_id",
                               "allowed_actions",
-                              "service_identity_active",
-                              "token_active",
-                              "revoked_at",
+                              "service_identity_active_at_issuance",
+                              "token_active_at_issuance",
+                              "revoked_at_issuance",
                               "expires_at"
                             ],
                             "type": "object"
+                          },
+                          "schema_version": {
+                            "const": 1,
+                            "type": "integer"
                           }
                         },
                         "required": [
+                          "schema_version",
+                          "bootstrap_request_sha256",
+                          "credential_set_id",
+                          "credential_set_generation",
+                          "observed_at",
                           "primary",
                           "reviewer"
                         ],
@@ -1131,6 +1186,22 @@
                       "credential_metadata": {
                         "additionalProperties": false,
                         "properties": {
+                          "bootstrap_request_sha256": {
+                            "pattern": "^[a-f0-9]{64}$",
+                            "type": "string"
+                          },
+                          "credential_set_generation": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "credential_set_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "observed_at": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
                           "primary": {
                             "additionalProperties": false,
                             "properties": {
@@ -1189,7 +1260,7 @@
                                 "format": "uuid",
                                 "type": "string"
                               },
-                              "revoked_at": {
+                              "revoked_at_issuance": {
                                 "oneOf": [
                                   {
                                     "format": "date-time",
@@ -1200,14 +1271,14 @@
                                   }
                                 ]
                               },
-                              "service_identity_active": {
+                              "service_identity_active_at_issuance": {
                                 "type": "boolean"
                               },
                               "service_identity_id": {
                                 "format": "uuid",
                                 "type": "string"
                               },
-                              "token_active": {
+                              "token_active_at_issuance": {
                                 "type": "boolean"
                               },
                               "token_id": {
@@ -1221,15 +1292,24 @@
                               "repository_id",
                               "access_scope_id",
                               "allowed_actions",
-                              "service_identity_active",
-                              "token_active",
-                              "revoked_at",
+                              "service_identity_active_at_issuance",
+                              "token_active_at_issuance",
+                              "revoked_at_issuance",
                               "expires_at"
                             ],
                             "type": "object"
+                          },
+                          "schema_version": {
+                            "const": 1,
+                            "type": "integer"
                           }
                         },
                         "required": [
+                          "schema_version",
+                          "bootstrap_request_sha256",
+                          "credential_set_id",
+                          "credential_set_generation",
+                          "observed_at",
                           "primary"
                         ],
                         "type": "object"
@@ -1785,6 +1865,22 @@
                       "credential_metadata": {
                         "additionalProperties": false,
                         "properties": {
+                          "bootstrap_request_sha256": {
+                            "pattern": "^[a-f0-9]{64}$",
+                            "type": "string"
+                          },
+                          "credential_set_generation": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "credential_set_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "observed_at": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
                           "primary": {
                             "additionalProperties": false,
                             "properties": {
@@ -1843,7 +1939,7 @@
                                 "format": "uuid",
                                 "type": "string"
                               },
-                              "revoked_at": {
+                              "revoked_at_issuance": {
                                 "oneOf": [
                                   {
                                     "format": "date-time",
@@ -1854,14 +1950,14 @@
                                   }
                                 ]
                               },
-                              "service_identity_active": {
+                              "service_identity_active_at_issuance": {
                                 "type": "boolean"
                               },
                               "service_identity_id": {
                                 "format": "uuid",
                                 "type": "string"
                               },
-                              "token_active": {
+                              "token_active_at_issuance": {
                                 "type": "boolean"
                               },
                               "token_id": {
@@ -1875,9 +1971,9 @@
                               "repository_id",
                               "access_scope_id",
                               "allowed_actions",
-                              "service_identity_active",
-                              "token_active",
-                              "revoked_at",
+                              "service_identity_active_at_issuance",
+                              "token_active_at_issuance",
+                              "revoked_at_issuance",
                               "expires_at"
                             ],
                             "type": "object"
@@ -1940,7 +2036,7 @@
                                 "format": "uuid",
                                 "type": "string"
                               },
-                              "revoked_at": {
+                              "revoked_at_issuance": {
                                 "oneOf": [
                                   {
                                     "format": "date-time",
@@ -1951,14 +2047,14 @@
                                   }
                                 ]
                               },
-                              "service_identity_active": {
+                              "service_identity_active_at_issuance": {
                                 "type": "boolean"
                               },
                               "service_identity_id": {
                                 "format": "uuid",
                                 "type": "string"
                               },
-                              "token_active": {
+                              "token_active_at_issuance": {
                                 "type": "boolean"
                               },
                               "token_id": {
@@ -1972,15 +2068,24 @@
                               "repository_id",
                               "access_scope_id",
                               "allowed_actions",
-                              "service_identity_active",
-                              "token_active",
-                              "revoked_at",
+                              "service_identity_active_at_issuance",
+                              "token_active_at_issuance",
+                              "revoked_at_issuance",
                               "expires_at"
                             ],
                             "type": "object"
+                          },
+                          "schema_version": {
+                            "const": 1,
+                            "type": "integer"
                           }
                         },
                         "required": [
+                          "schema_version",
+                          "bootstrap_request_sha256",
+                          "credential_set_id",
+                          "credential_set_generation",
+                          "observed_at",
                           "primary",
                           "reviewer"
                         ],
@@ -2149,6 +2254,22 @@
                       "credential_metadata": {
                         "additionalProperties": false,
                         "properties": {
+                          "bootstrap_request_sha256": {
+                            "pattern": "^[a-f0-9]{64}$",
+                            "type": "string"
+                          },
+                          "credential_set_generation": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "credential_set_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "observed_at": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
                           "primary": {
                             "additionalProperties": false,
                             "properties": {
@@ -2207,7 +2328,7 @@
                                 "format": "uuid",
                                 "type": "string"
                               },
-                              "revoked_at": {
+                              "revoked_at_issuance": {
                                 "oneOf": [
                                   {
                                     "format": "date-time",
@@ -2218,14 +2339,14 @@
                                   }
                                 ]
                               },
-                              "service_identity_active": {
+                              "service_identity_active_at_issuance": {
                                 "type": "boolean"
                               },
                               "service_identity_id": {
                                 "format": "uuid",
                                 "type": "string"
                               },
-                              "token_active": {
+                              "token_active_at_issuance": {
                                 "type": "boolean"
                               },
                               "token_id": {
@@ -2239,9 +2360,9 @@
                               "repository_id",
                               "access_scope_id",
                               "allowed_actions",
-                              "service_identity_active",
-                              "token_active",
-                              "revoked_at",
+                              "service_identity_active_at_issuance",
+                              "token_active_at_issuance",
+                              "revoked_at_issuance",
                               "expires_at"
                             ],
                             "type": "object"
@@ -2304,7 +2425,7 @@
                                 "format": "uuid",
                                 "type": "string"
                               },
-                              "revoked_at": {
+                              "revoked_at_issuance": {
                                 "oneOf": [
                                   {
                                     "format": "date-time",
@@ -2315,14 +2436,14 @@
                                   }
                                 ]
                               },
-                              "service_identity_active": {
+                              "service_identity_active_at_issuance": {
                                 "type": "boolean"
                               },
                               "service_identity_id": {
                                 "format": "uuid",
                                 "type": "string"
                               },
-                              "token_active": {
+                              "token_active_at_issuance": {
                                 "type": "boolean"
                               },
                               "token_id": {
@@ -2336,15 +2457,24 @@
                               "repository_id",
                               "access_scope_id",
                               "allowed_actions",
-                              "service_identity_active",
-                              "token_active",
-                              "revoked_at",
+                              "service_identity_active_at_issuance",
+                              "token_active_at_issuance",
+                              "revoked_at_issuance",
                               "expires_at"
                             ],
                             "type": "object"
+                          },
+                          "schema_version": {
+                            "const": 1,
+                            "type": "integer"
                           }
                         },
                         "required": [
+                          "schema_version",
+                          "bootstrap_request_sha256",
+                          "credential_set_id",
+                          "credential_set_generation",
+                          "observed_at",
                           "primary",
                           "reviewer"
                         ],
@@ -2507,6 +2637,22 @@
                       "credential_metadata": {
                         "additionalProperties": false,
                         "properties": {
+                          "bootstrap_request_sha256": {
+                            "pattern": "^[a-f0-9]{64}$",
+                            "type": "string"
+                          },
+                          "credential_set_generation": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "credential_set_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "observed_at": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
                           "primary": {
                             "additionalProperties": false,
                             "properties": {
@@ -2565,7 +2711,7 @@
                                 "format": "uuid",
                                 "type": "string"
                               },
-                              "revoked_at": {
+                              "revoked_at_issuance": {
                                 "oneOf": [
                                   {
                                     "format": "date-time",
@@ -2576,14 +2722,14 @@
                                   }
                                 ]
                               },
-                              "service_identity_active": {
+                              "service_identity_active_at_issuance": {
                                 "type": "boolean"
                               },
                               "service_identity_id": {
                                 "format": "uuid",
                                 "type": "string"
                               },
-                              "token_active": {
+                              "token_active_at_issuance": {
                                 "type": "boolean"
                               },
                               "token_id": {
@@ -2597,15 +2743,24 @@
                               "repository_id",
                               "access_scope_id",
                               "allowed_actions",
-                              "service_identity_active",
-                              "token_active",
-                              "revoked_at",
+                              "service_identity_active_at_issuance",
+                              "token_active_at_issuance",
+                              "revoked_at_issuance",
                               "expires_at"
                             ],
                             "type": "object"
+                          },
+                          "schema_version": {
+                            "const": 1,
+                            "type": "integer"
                           }
                         },
                         "required": [
+                          "schema_version",
+                          "bootstrap_request_sha256",
+                          "credential_set_id",
+                          "credential_set_generation",
+                          "observed_at",
                           "primary"
                         ],
                         "type": "object"

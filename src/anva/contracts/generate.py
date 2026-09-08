@@ -82,9 +82,9 @@ def openapi_document() -> dict[str, object]:
                 "maxItems": len(ACTION_VALUES),
                 "uniqueItems": True,
             },
-            "service_identity_active": {"type": "boolean"},
-            "token_active": {"type": "boolean"},
-            "revoked_at": {
+            "service_identity_active_at_issuance": {"type": "boolean"},
+            "token_active_at_issuance": {"type": "boolean"},
+            "revoked_at_issuance": {
                 "oneOf": [
                     {"type": "string", "format": "date-time"},
                     {"type": "null"},
@@ -98,9 +98,9 @@ def openapi_document() -> dict[str, object]:
             "repository_id",
             "access_scope_id",
             "allowed_actions",
-            "service_identity_active",
-            "token_active",
-            "revoked_at",
+            "service_identity_active_at_issuance",
+            "token_active_at_issuance",
+            "revoked_at_issuance",
             "expires_at",
         ],
     }
@@ -1441,6 +1441,26 @@ def openapi_document() -> dict[str, object]:
                                                     "type": "object",
                                                     "additionalProperties": False,
                                                     "properties": {
+                                                        "schema_version": {
+                                                            "type": "integer",
+                                                            "const": 1,
+                                                        },
+                                                        "bootstrap_request_sha256": {
+                                                            "type": "string",
+                                                            "pattern": "^[a-f0-9]{64}$",
+                                                        },
+                                                        "credential_set_id": {
+                                                            "type": "string",
+                                                            "format": "uuid",
+                                                        },
+                                                        "credential_set_generation": {
+                                                            "type": "integer",
+                                                            "minimum": 0,
+                                                        },
+                                                        "observed_at": {
+                                                            "type": "string",
+                                                            "format": "date-time",
+                                                        },
                                                         "primary": deepcopy(
                                                             bootstrap_credential_metadata_entry
                                                         ),
@@ -1448,7 +1468,14 @@ def openapi_document() -> dict[str, object]:
                                                             bootstrap_credential_metadata_entry
                                                         ),
                                                     },
-                                                    "required": ["primary"],
+                                                    "required": [
+                                                        "schema_version",
+                                                        "bootstrap_request_sha256",
+                                                        "credential_set_id",
+                                                        "credential_set_generation",
+                                                        "observed_at",
+                                                        "primary",
+                                                    ],
                                                 },
                                             },
                                             "required": [

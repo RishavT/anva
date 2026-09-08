@@ -153,6 +153,8 @@ class MCPBoundary(Protocol):
 
     def call(self, tool_name: str, arguments: Mapping[str, object]) -> dict[str, object]: ...
 
+    def probe(self) -> None: ...
+
 
 class StreamableHTTPMCP:
     """Real official-client MCP boundary; no HTTP parity shortcut is used."""
@@ -190,3 +192,24 @@ class StreamableHTTPMCP:
 
     def call(self, tool_name: str, arguments: Mapping[str, object]) -> dict[str, object]:
         return asyncio.run(self._call(tool_name, arguments))
+
+    async def _probe(self) -> None:
+        """Authenticate through side-effect-free MCP capability discovery."""
+        try:
+            async with httpx.AsyncClient(
+                headers={"Authorization": f"Bearer {self.token}"},
+                timeout=self.timeout,
+            ) as http_client:
+                async with streamable_http_client(self.url, http_client=http_client) as streams:
+                    async with ClientSession(streams[0], streams[1]) as session:
+                        await session.initialize()
+                        discovered = await session.list_tools()
+        except Exception as error:
+            raise AcceptanceBoundaryError(
+                "mcp_unavailable", "Anva MCP credential probe failed"
+            ) from error
+        if not discovered.tools:
+            raise AcceptanceBoundaryError("mcp_rejected", "Anva MCP credential probe failed")
+
+    def probe(self) -> None:
+        asyncio.run(self._probe())

@@ -97,16 +97,23 @@ def test_bootstrap_default_returns_scope_without_creating_reviewer() -> None:
     assert result["access_scope_id"]
     assert result["bootstrap_mode"] == "LEGACY"
     assert "reviewer_token" not in result
-    assert set(result["credential_metadata"]) == {"primary"}
+    assert set(result["credential_metadata"]) == {
+        "schema_version",
+        "bootstrap_request_sha256",
+        "credential_set_id",
+        "credential_set_generation",
+        "observed_at",
+        "primary",
+    }
     primary_metadata = result["credential_metadata"]["primary"]
     assert primary_metadata["token_id"] == result["token_id"]
     assert primary_metadata["service_identity_id"] == result["service_identity_id"]
     assert primary_metadata["repository_id"] == result["repository_id"]
     assert primary_metadata["access_scope_id"] == result["access_scope_id"]
     assert primary_metadata["allowed_actions"] == sorted(action.value for action in Action)
-    assert primary_metadata["service_identity_active"] is True
-    assert primary_metadata["token_active"] is True
-    assert primary_metadata["revoked_at"] is None
+    assert primary_metadata["service_identity_active_at_issuance"] is True
+    assert primary_metadata["token_active_at_issuance"] is True
+    assert primary_metadata["revoked_at_issuance"] is None
     assert primary_metadata["expires_at"] == result["expires_at"]
     validate_acceptance_http_response("bootstrapOrganization", 201, result, request_payload=payload)
     _validate_published_exchange(payload, result)
@@ -180,7 +187,19 @@ def test_scoped_bootstrap_creates_only_explicit_records_bindings_and_action_gran
     assert initiator.credential_actions == initiator_actions
     assert reviewer.credential_actions == frozenset({Action.ASSURANCE_REVIEW.value})
     metadata = result["credential_metadata"]
-    assert set(metadata) == {"primary", "reviewer"}
+    assert set(metadata) == {
+        "schema_version",
+        "bootstrap_request_sha256",
+        "credential_set_id",
+        "credential_set_generation",
+        "observed_at",
+        "primary",
+        "reviewer",
+    }
+    assert metadata["schema_version"] == 1
+    assert metadata["bootstrap_request_sha256"] == result["bootstrap_request_sha256"]
+    assert metadata["credential_set_generation"] == 0
+    uuid.UUID(metadata["credential_set_id"])
     primary_metadata = metadata["primary"]
     reviewer_metadata = metadata["reviewer"]
     assert primary_metadata == {
@@ -189,9 +208,9 @@ def test_scoped_bootstrap_creates_only_explicit_records_bindings_and_action_gran
         "repository_id": result["repository_id"],
         "access_scope_id": result["access_scope_id"],
         "allowed_actions": sorted(initiator_actions),
-        "service_identity_active": True,
-        "token_active": True,
-        "revoked_at": None,
+        "service_identity_active_at_issuance": True,
+        "token_active_at_issuance": True,
+        "revoked_at_issuance": None,
         "expires_at": result["expires_at"],
     }
     assert len(primary_metadata["allowed_actions"]) == 15
@@ -202,9 +221,9 @@ def test_scoped_bootstrap_creates_only_explicit_records_bindings_and_action_gran
         "repository_id": result["repository_id"],
         "access_scope_id": result["access_scope_id"],
         "allowed_actions": ["assurance.review"],
-        "service_identity_active": True,
-        "token_active": True,
-        "revoked_at": None,
+        "service_identity_active_at_issuance": True,
+        "token_active_at_issuance": True,
+        "revoked_at_issuance": None,
         "expires_at": result["reviewer_expires_at"],
     }
     assert primary_metadata["service_identity_id"] != reviewer_metadata["service_identity_id"]
@@ -540,10 +559,25 @@ def test_exact_bootstrap_retry_revokes_and_reissues_only_precommitted_credential
     assert replacement["organization_id"] == original["organization_id"]
     assert replacement["token_id"] != original["token_id"]
     assert replacement["reviewer_token_id"] != original["reviewer_token_id"]
+    original_snapshot = original["credential_metadata"]
+    replacement_snapshot = replacement["credential_metadata"]
+    assert original_snapshot["credential_set_generation"] == 0
+    assert replacement_snapshot["credential_set_generation"] == 1
+    assert original_snapshot["credential_set_id"] != replacement_snapshot["credential_set_id"]
+    assert (
+        original_snapshot["bootstrap_request_sha256"]
+        == replacement_snapshot["bootstrap_request_sha256"]
+    )
+    assert original_snapshot["primary"]["token_active_at_issuance"] is True
+    assert original_snapshot["primary"]["revoked_at_issuance"] is None
     assert RepositoryAccessToken.objects.get(id=original["token_id"]).revoked_at is not None
     assert (
         RepositoryAccessToken.objects.get(id=original["reviewer_token_id"]).revoked_at is not None
     )
+    with pytest.raises(AuthenticationError):
+        authenticate_bearer(f"Bearer {original['token']}")
+    with pytest.raises(AuthenticationError):
+        authenticate_bearer(f"Bearer {original['reviewer_token']}")
     assert (
         authenticate_bearer(f"Bearer {replacement['token']}").actor_id
         == replacement["service_identity_id"]

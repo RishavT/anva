@@ -8,11 +8,13 @@ credential-introspection boundary was added.
 
 ## Reviewed invariants
 
-- Metadata is serialized from the committed repository-token and service-identity models and is
-  bound to the response token, identity, repository, access scope, and expiry fields.
+- Metadata is serialized as a committed issuance snapshot from the repository-token and
+  service-identity models. It is bound to the response token, identity, repository, access scope,
+  expiry, request hash, observation time, generation, and credential-set ID.
 - Scoped acceptance requires the exact sorted 15-action primary set, including `token.manage`,
   and exactly `assurance.review` for the distinct reviewer identity and token.
-- New handoffs verify the same bindings both before publication and during recovery. Older
+- New handoffs verify the same bindings and authenticate both bearers through side-effect-free MCP
+  capability discovery before publication and during recovery. Older
   schema-version 1 handoffs remain resumable only when metadata is absent; malformed,
   incomplete, reordered, inactive, revoked, cross-boundary, or extra-field metadata fails closed.
 - Metadata contains neither plaintext credentials nor token digests. Existing plaintext values
@@ -21,15 +23,16 @@ credential-introspection boundary was added.
 
 ## Verification
 
-- Focused runner and contract tests: 50 passed.
-- Real PostgreSQL bootstrap integration: 16 passed.
+- Focused runner, boundary, and contract tests: 59 passed.
+- Real PostgreSQL bootstrap and resume integration: 18 passed.
 - Format, Ruff, MyPy (113 source files), generated-contract validation (35 artifacts): passed.
-- Clean broad suite: 1,751 passed and 9 skipped; its sole unrelated near-deadline timing failure
-  passed unchanged in isolation and is tracked by issue 165. The earlier retained-MinIO failures
-  did not recur after the exact isolated project reset tracked by issue 163.
+- P2 broad suite: 1,753 passed and 9 skipped; its sole unrelated canvas wall-clock timing failure
+  passed unchanged in isolation and is tracked by issue 167. The earlier unrelated near-deadline
+  failure remains tracked by issue 165, and retained-MinIO failures remain tracked by issue 163.
 
 ## Residual risk
 
 The protected handoff remains privileged mode-`0600` secret material and must be handled as such.
-Credential metadata is an issuance-time attestation, not a new live introspection API; later
-revocation is authoritatively exercised through the existing public token operation.
+Credential metadata is an issuance-time attestation, not a new live introspection API. A bearer
+may be revoked immediately after a successful liveness probe; later revocation is authoritatively
+exercised through the existing public token operation.

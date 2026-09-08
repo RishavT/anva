@@ -36,10 +36,14 @@ exact documented idempotent recovery flow.
 
 The protected response also contains a closed `credential_metadata` object. `primary` (and
 `reviewer`, when issued) reports the committed token and service-identity UUIDs, repository and
-access-scope UUIDs, exact sorted action list, identity/token active state, revocation timestamp,
-and expiry. This is the supported way to verify bootstrap bindings; do not query internal tables
+access-scope UUIDs, exact sorted action list, identity/token state at issuance, revocation timestamp
+at issuance, expiry, observation time, request hash, and credential-set generation/ID. This is the
+supported committed issuance snapshot for verifying bootstrap bindings; it is not a claim that a
+credential cannot be revoked immediately afterward. Do not query internal tables
 or add a general credential-introspection endpoint. Metadata never contains a plaintext token or
-token digest. Treat missing or contradictory metadata as a failed bootstrap handoff.
+token digest. The official runner also authenticates both bearers through side-effect-free MCP
+capability discovery before publishing or recovering a usable handoff. Treat missing,
+contradictory, or failed-probe metadata as a failed bootstrap handoff.
 
 ## Issue and rotate
 

@@ -59,9 +59,9 @@ BOOTSTRAP_CREDENTIAL_METADATA_ENTRY: Final[dict[str, object]] = {
             "maxItems": len(ACTION_VALUES),
             "uniqueItems": True,
         },
-        "service_identity_active": {"type": "boolean"},
-        "token_active": {"type": "boolean"},
-        "revoked_at": {"oneOf": [DATE_TIME, {"type": "null"}]},
+        "service_identity_active_at_issuance": {"type": "boolean"},
+        "token_active_at_issuance": {"type": "boolean"},
+        "revoked_at_issuance": {"oneOf": [DATE_TIME, {"type": "null"}]},
         "expires_at": DATE_TIME,
     },
     "required": [
@@ -70,9 +70,9 @@ BOOTSTRAP_CREDENTIAL_METADATA_ENTRY: Final[dict[str, object]] = {
         "repository_id",
         "access_scope_id",
         "allowed_actions",
-        "service_identity_active",
-        "token_active",
-        "revoked_at",
+        "service_identity_active_at_issuance",
+        "token_active_at_issuance",
+        "revoked_at_issuance",
         "expires_at",
     ],
 }
@@ -144,15 +144,42 @@ def _closed(
 
 
 BOOTSTRAP_PRIMARY_CREDENTIAL_METADATA: Final[dict[str, object]] = _closed(
-    {"primary": deepcopy(BOOTSTRAP_CREDENTIAL_METADATA_ENTRY)},
-    ("primary",),
+    {
+        "schema_version": {"type": "integer", "const": 1},
+        "bootstrap_request_sha256": SHA256,
+        "credential_set_id": UUID,
+        "credential_set_generation": {"type": "integer", "minimum": 0},
+        "observed_at": DATE_TIME,
+        "primary": deepcopy(BOOTSTRAP_CREDENTIAL_METADATA_ENTRY),
+    },
+    (
+        "schema_version",
+        "bootstrap_request_sha256",
+        "credential_set_id",
+        "credential_set_generation",
+        "observed_at",
+        "primary",
+    ),
 )
 BOOTSTRAP_REVIEWER_CREDENTIAL_METADATA: Final[dict[str, object]] = _closed(
     {
+        "schema_version": {"type": "integer", "const": 1},
+        "bootstrap_request_sha256": SHA256,
+        "credential_set_id": UUID,
+        "credential_set_generation": {"type": "integer", "minimum": 0},
+        "observed_at": DATE_TIME,
         "primary": deepcopy(BOOTSTRAP_CREDENTIAL_METADATA_ENTRY),
         "reviewer": deepcopy(BOOTSTRAP_CREDENTIAL_METADATA_ENTRY),
     },
-    ("primary", "reviewer"),
+    (
+        "schema_version",
+        "bootstrap_request_sha256",
+        "credential_set_id",
+        "credential_set_generation",
+        "observed_at",
+        "primary",
+        "reviewer",
+    ),
 )
 
 BOOTSTRAP_COMMON_RESPONSE_PROPERTIES: Final[dict[str, object]] = {
@@ -1581,15 +1608,20 @@ HTTP_OPERATION_EXAMPLES: Final[dict[str, dict[str, object]]] = {
             "reviewer_token": "example-only-opaque-value-never-issued-0002",
             "reviewer_expires_at": "2026-08-10T12:00:00Z",
             "credential_metadata": {
+                "schema_version": 1,
+                "bootstrap_request_sha256": "1" * 64,
+                "credential_set_id": _ids(10),
+                "credential_set_generation": 0,
+                "observed_at": "2026-08-03T12:00:00Z",
                 "primary": {
                     "token_id": _ids(7),
                     "service_identity_id": _ids(5),
                     "repository_id": _ids(4),
                     "access_scope_id": _ids(6),
                     "allowed_actions": sorted(ACCEPTANCE_INITIATOR_ACTIONS),
-                    "service_identity_active": True,
-                    "token_active": True,
-                    "revoked_at": None,
+                    "service_identity_active_at_issuance": True,
+                    "token_active_at_issuance": True,
+                    "revoked_at_issuance": None,
                     "expires_at": "2026-08-10T12:00:00Z",
                 },
                 "reviewer": {
@@ -1598,9 +1630,9 @@ HTTP_OPERATION_EXAMPLES: Final[dict[str, dict[str, object]]] = {
                     "repository_id": _ids(4),
                     "access_scope_id": _ids(6),
                     "allowed_actions": sorted(ACCEPTANCE_REVIEWER_ACTIONS),
-                    "service_identity_active": True,
-                    "token_active": True,
-                    "revoked_at": None,
+                    "service_identity_active_at_issuance": True,
+                    "token_active_at_issuance": True,
+                    "revoked_at_issuance": None,
                     "expires_at": "2026-08-10T12:00:00Z",
                 },
             },

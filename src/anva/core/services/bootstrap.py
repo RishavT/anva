@@ -54,6 +54,7 @@ class BootstrapResult:
     reviewer_issued_token: IssuedRepositoryToken | None = None
     request_sha256: str | None = None
     recovered: bool = False
+    credential_set_generation: int = 0
 
 
 SHA256_PATTERN = re.compile(r"^[a-f0-9]{64}$")
@@ -252,6 +253,7 @@ def bootstrap_local_organization(
                 reviewer_issued_token=reviewer_issued_token,
                 request_sha256=request_sha256,
                 recovered=True,
+                credential_set_generation=recovery.recovery_count,
             )
 
         organization = Organization.objects.create(

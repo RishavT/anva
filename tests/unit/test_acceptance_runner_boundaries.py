@@ -127,6 +127,8 @@ class FakeProduct:
         self.request_id = _id(901)
         self.evidence_manifest: dict[str, object] | None = None
         self.evidence_payload_hash = "6" * 64
+        self.mcp_probe_tokens: list[str] = []
+        self.valid_probe_tokens = {"initiator-token-material", "reviewer-token-material"}
 
     def request(
         self,
@@ -167,15 +169,20 @@ class FakeProduct:
                     "bootstrap_mode": "SCOPED" if "scope" in payload else "LEGACY",
                     "recovered": False,
                     "credential_metadata": {
+                        "schema_version": 1,
+                        "bootstrap_request_sha256": request_hash,
+                        "credential_set_id": _id(10),
+                        "credential_set_generation": 0,
+                        "observed_at": "2026-08-03T12:00:00Z",
                         "primary": {
                             "token_id": _id(7),
                             "service_identity_id": _id(6),
                             "repository_id": _id(2),
                             "access_scope_id": _id(3),
                             "allowed_actions": primary_actions,
-                            "service_identity_active": True,
-                            "token_active": True,
-                            "revoked_at": None,
+                            "service_identity_active_at_issuance": True,
+                            "token_active_at_issuance": True,
+                            "revoked_at_issuance": None,
                             "expires_at": "2026-08-04T12:00:00Z",
                         },
                         "reviewer": {
@@ -184,9 +191,9 @@ class FakeProduct:
                             "repository_id": _id(2),
                             "access_scope_id": _id(3),
                             "allowed_actions": sorted(ACCEPTANCE_REVIEWER_ACTIONS),
-                            "service_identity_active": True,
-                            "token_active": True,
-                            "revoked_at": None,
+                            "service_identity_active_at_issuance": True,
+                            "token_active_at_issuance": True,
+                            "revoked_at_issuance": None,
                             "expires_at": "2026-08-04T12:00:00Z",
                         },
                     },
@@ -401,8 +408,16 @@ class FakeAPI:
 
 
 class FakeMCP:
-    def __init__(self, product: FakeProduct | None = None) -> None:
+    def __init__(self, product: FakeProduct | None = None, token: str = "") -> None:
         self.product = product
+        self.token = token
+
+    def probe(self) -> None:
+        if self.product is None:
+            return
+        self.product.mcp_probe_tokens.append(self.token)
+        if self.token not in self.product.valid_probe_tokens:
+            raise AcceptanceBoundaryError("invalid_credential", "synthetic secret", status=401)
 
     def call(self, tool_name: str, arguments: Mapping[str, object]) -> dict[str, object]:
         if self.product is not None:
@@ -472,14 +487,13 @@ def _runner(
     pin = hashlib.sha256((raw / "acceptance-corpus.json").read_bytes()).hexdigest()
     corpus = canonicalize_corpus(raw_root=raw, canonical_root=canonical, manifest_sha256=pin)
     product = FakeProduct()
-    fake_mcp = FakeMCP(product)
     monkeypatch.setattr(
         "anva.acceptance.runner.PublicAPI",
         lambda _url, token=None: FakeAPI(product, token),
     )
     monkeypatch.setattr(
         "anva.acceptance.runner.StreamableHTTPMCP",
-        lambda _url, _token: fake_mcp,
+        lambda _url, token: FakeMCP(product, token),
     )
     provenance = tmp_path / "anva-build-provenance.json"
     package_digest = package_sha256(Path(__file__).resolve().parents[2] / "src" / "anva")
@@ -598,6 +612,10 @@ def test_case_drives_query_commits_pr_and_public_payloads(
     awaiting = runner.start(bootstrap_secret="bootstrap-material", token=None)
 
     assert awaiting.status == "AWAITING_EXTERNAL_REVIEW"
+    assert product.mcp_probe_tokens == [
+        "initiator-token-material",
+        "reviewer-token-material",
+    ]
     assert awaiting.hashes["base_commit"] == base_commit
     assert awaiting.hashes["head_commit"] == head_commit
     assert "new_head_commit" not in awaiting.hashes
@@ -962,6 +980,9 @@ def test_completed_slow_sync_resumes_without_duplicate_mutation_through_finaliza
     class FailFirstSearch:
         failed = False
 
+        def probe(self) -> None:
+            return None
+
         def call(self, tool_name: str, arguments: Mapping[str, object]) -> dict[str, object]:
             del arguments
             if tool_name == "anva.search" and not self.failed:
@@ -1090,6 +1111,9 @@ def test_diagnostic_io_failure_preserves_original_sanitizable_boundary_error(
     runner, _product = _runner(tmp_path, monkeypatch)
 
     class UnavailableMCP:
+        def probe(self) -> None:
+            return None
+
         def call(self, tool_name: str, arguments: Mapping[str, object]) -> dict[str, object]:
             del tool_name, arguments
             raise AcceptanceBoundaryError("mcp_unavailable", "PRIVATE-CANARY")
@@ -1153,6 +1177,9 @@ def test_operator_diagnostics_distinguish_sync_timeout_and_semantic_assertion(
     semantic_runner, _semantic_product = _runner(semantic_root, monkeypatch)
 
     class EmptyMCP:
+        def probe(self) -> None:
+            return None
+
         def call(self, tool_name: str, arguments: Mapping[str, object]) -> dict[str, object]:
             del arguments
             if tool_name == "anva.search":
@@ -1429,10 +1456,10 @@ def test_bootstrap_reconcile_handles_legacy_or_rejects_invalid_primary_token_id(
             "token_id", _id(7)
         ),
         lambda metadata: cast(dict[str, object], metadata["primary"]).__setitem__(
-            "token_active", False
+            "token_active_at_issuance", False
         ),
         lambda metadata: cast(dict[str, object], metadata["reviewer"]).__setitem__(
-            "revoked_at", "2026-08-01T00:00:00Z"
+            "revoked_at_issuance", "2026-08-01T00:00:00Z"
         ),
         lambda metadata: cast(dict[str, object], metadata["primary"]).__setitem__(
             "repository_id", _id(999)
@@ -1479,6 +1506,41 @@ def test_bootstrap_credential_metadata_tampering_fails_before_handoff(
     assert runner.config.credential_output is not None
     assert not runner.config.credential_output.exists()
     assert load_state(runner.config.state_path).status == "BOOTSTRAP_PREPARED"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("valid_tokens", "expected_probes"),
+    [
+        ({"reviewer-token-material"}, ["initiator-token-material"]),
+        (
+            {"initiator-token-material"},
+            ["initiator-token-material", "reviewer-token-material"],
+        ),
+    ],
+)
+def test_superseded_bootstrap_credential_probe_leaves_no_usable_handoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    valid_tokens: set[str],
+    expected_probes: list[str],
+) -> None:
+    runner, product = _runner(
+        tmp_path,
+        monkeypatch,
+        case_payload=deepcopy(EXAMPLES["acceptance-case"]),
+    )
+    product.valid_probe_tokens = valid_tokens
+
+    with pytest.raises(AcceptanceBoundaryError, match="synthetic secret") as caught:
+        runner.start(bootstrap_secret="bootstrap-material", token=None)
+
+    assert product.mcp_probe_tokens == expected_probes
+    assert runner.config.credential_output is not None
+    assert not runner.config.credential_output.exists()
+    assert load_state(runner.config.state_path).status == "BOOTSTRAP_PREPARED"
+    assert "initiator-token-material" not in str(caught.value)
+    assert "reviewer-token-material" not in str(caught.value)
 
 
 @pytest.mark.unit

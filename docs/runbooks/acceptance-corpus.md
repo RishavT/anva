@@ -224,9 +224,12 @@ one-time credential/handoff flow and never enter resume state or sealed results.
 credential into its named environment variable without printing it.
 
 New credential handoffs also carry closed, secret-free `credential_metadata` for both principals:
-token and service-identity IDs, repository/access-scope bindings, exact sorted actions, active and
-revoked state, and expiry. The runner verifies this metadata against the protected bootstrap
-response before publishing the handoff and verifies it again on crash recovery. A schema-version
+token and service-identity IDs, repository/access-scope bindings, exact sorted actions, issuance-
+time state, expiry, observation time, request hash, and credential-set generation/ID. The runner
+verifies this committed issuance snapshot against the protected bootstrap response and proves
+both bearers are currently accepted through side-effect-free MCP capability discovery before
+publishing the handoff; it repeats the probe on crash recovery. As with every bearer, either may be
+revoked immediately after a successful probe. A schema-version
 1 handoff written by an older release remains resumable when this field is absent; if the field is
 present, missing, extra, reordered, or contradictory values fail closed. For the scoped acceptance
 profile the primary list is exactly 15 actions (including `token.manage`) and the reviewer list is
