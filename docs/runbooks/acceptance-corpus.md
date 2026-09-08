@@ -222,6 +222,15 @@ bound into scoped assurance start, restart state, review handoff, and sealed pro
 different actor or credential cannot adopt the task. Raw tokens remain only in the private
 one-time credential/handoff flow and never enter resume state or sealed results. Load each
 credential into its named environment variable without printing it.
+
+New credential handoffs also carry closed, secret-free `credential_metadata` for both principals:
+token and service-identity IDs, repository/access-scope bindings, exact sorted actions, active and
+revoked state, and expiry. The runner verifies this metadata against the protected bootstrap
+response before publishing the handoff and verifies it again on crash recovery. A schema-version
+1 handoff written by an older release remains resumable when this field is absent; if the field is
+present, missing, extra, reordered, or contradictory values fail closed. For the scoped acceptance
+profile the primary list is exactly 15 actions (including `token.manage`) and the reviewer list is
+exactly `assurance.review`.
 Use the reviewer credential only for the two reviewer phases:
 
 ```sh

@@ -124,6 +124,10 @@ def _bootstrap_examples(
         "reviewer_expires_at",
     ):
         legacy_response_without_reviewer.pop(field)
+    credential_metadata = cast(
+        dict[str, object], legacy_response_without_reviewer["credential_metadata"]
+    )
+    credential_metadata.pop("reviewer")
     return (
         scoped_request,
         scoped_response,

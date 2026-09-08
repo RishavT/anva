@@ -28,9 +28,18 @@ configured `X-Anva-Bootstrap-Secret` and:
 }
 ```
 
-The `token` response field is the only plaintext copy Anva returns. Transfer it directly into the
-approved secret store, then discard the response. PostgreSQL stores only a keyed SHA-256 digest.
-A repeated bootstrap request fails closed.
+The `token` response field is the only plaintext copy Anva returns for the primary credential.
+When an independent reviewer is requested, `reviewer_token` is likewise returned once. Transfer
+plaintext values directly into the approved secret store, then discard the response. PostgreSQL
+stores only keyed SHA-256 digests. A repeated bootstrap request fails closed unless it is the
+exact documented idempotent recovery flow.
+
+The protected response also contains a closed `credential_metadata` object. `primary` (and
+`reviewer`, when issued) reports the committed token and service-identity UUIDs, repository and
+access-scope UUIDs, exact sorted action list, identity/token active state, revocation timestamp,
+and expiry. This is the supported way to verify bootstrap bindings; do not query internal tables
+or add a general credential-introspection endpoint. Metadata never contains a plaintext token or
+token digest. Treat missing or contradictory metadata as a failed bootstrap handoff.
 
 ## Issue and rotate
 

@@ -97,6 +97,17 @@ def test_bootstrap_default_returns_scope_without_creating_reviewer() -> None:
     assert result["access_scope_id"]
     assert result["bootstrap_mode"] == "LEGACY"
     assert "reviewer_token" not in result
+    assert set(result["credential_metadata"]) == {"primary"}
+    primary_metadata = result["credential_metadata"]["primary"]
+    assert primary_metadata["token_id"] == result["token_id"]
+    assert primary_metadata["service_identity_id"] == result["service_identity_id"]
+    assert primary_metadata["repository_id"] == result["repository_id"]
+    assert primary_metadata["access_scope_id"] == result["access_scope_id"]
+    assert primary_metadata["allowed_actions"] == sorted(action.value for action in Action)
+    assert primary_metadata["service_identity_active"] is True
+    assert primary_metadata["token_active"] is True
+    assert primary_metadata["revoked_at"] is None
+    assert primary_metadata["expires_at"] == result["expires_at"]
     validate_acceptance_http_response("bootstrapOrganization", 201, result, request_payload=payload)
     _validate_published_exchange(payload, result)
     assert ServiceIdentity.objects.count() == 1
@@ -168,6 +179,36 @@ def test_scoped_bootstrap_creates_only_explicit_records_bindings_and_action_gran
     initiator_actions = frozenset(identities[0]["grants"][0]["actions"])
     assert initiator.credential_actions == initiator_actions
     assert reviewer.credential_actions == frozenset({Action.ASSURANCE_REVIEW.value})
+    metadata = result["credential_metadata"]
+    assert set(metadata) == {"primary", "reviewer"}
+    primary_metadata = metadata["primary"]
+    reviewer_metadata = metadata["reviewer"]
+    assert primary_metadata == {
+        "token_id": result["token_id"],
+        "service_identity_id": result["service_identity_id"],
+        "repository_id": result["repository_id"],
+        "access_scope_id": result["access_scope_id"],
+        "allowed_actions": sorted(initiator_actions),
+        "service_identity_active": True,
+        "token_active": True,
+        "revoked_at": None,
+        "expires_at": result["expires_at"],
+    }
+    assert len(primary_metadata["allowed_actions"]) == 15
+    assert "token.manage" in primary_metadata["allowed_actions"]
+    assert reviewer_metadata == {
+        "token_id": result["reviewer_token_id"],
+        "service_identity_id": result["reviewer_service_identity_id"],
+        "repository_id": result["repository_id"],
+        "access_scope_id": result["access_scope_id"],
+        "allowed_actions": ["assurance.review"],
+        "service_identity_active": True,
+        "token_active": True,
+        "revoked_at": None,
+        "expires_at": result["reviewer_expires_at"],
+    }
+    assert primary_metadata["service_identity_id"] != reviewer_metadata["service_identity_id"]
+    assert primary_metadata["token_id"] != reviewer_metadata["token_id"]
     assert result["token_id"] != result["reviewer_token_id"]
     assert RepositoryAccessToken.objects.get(id=result["token_id"]).service_identity_id == (
         uuid.UUID(result["service_identity_id"])
@@ -242,6 +283,11 @@ def test_bootstrap_ids_support_public_revocation_of_both_official_credentials() 
     assert bootstrap.status_code == 201, bootstrap.json()
     credentials = bootstrap.json()
     assert credentials["token_id"] != credentials["reviewer_token_id"]
+    assert credentials["credential_metadata"]["primary"]["token_id"] == credentials["token_id"]
+    assert (
+        credentials["credential_metadata"]["reviewer"]["token_id"]
+        == credentials["reviewer_token_id"]
+    )
     administrator = Client(HTTP_AUTHORIZATION=f"Bearer {credentials['token']}")
 
     reviewer_revoke = administrator.delete(f"/api/v1/tokens/{credentials['reviewer_token_id']}")

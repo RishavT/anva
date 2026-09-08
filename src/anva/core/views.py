@@ -1062,8 +1062,49 @@ def bootstrap(request: HttpRequest) -> JsonResponse:
         "bootstrap_request_sha256": result.request_sha256,
         "recovered": result.recovered,
         "bootstrap_mode": "SCOPED" if "scope" in payload else "LEGACY",
+        "credential_metadata": {
+            "primary": {
+                "token_id": str(result.issued_token.record.id),
+                "service_identity_id": str(result.service_identity.id),
+                "repository_id": str(result.repository.id),
+                "access_scope_id": str(result.access_scope.id),
+                "allowed_actions": sorted(result.issued_token.record.allowed_actions),
+                "service_identity_active": result.service_identity.is_active,
+                "token_active": (
+                    result.service_identity.is_active
+                    and result.issued_token.record.revoked_at is None
+                    and result.issued_token.record.expires_at > timezone.now()
+                ),
+                "revoked_at": (
+                    result.issued_token.record.revoked_at.isoformat()
+                    if result.issued_token.record.revoked_at is not None
+                    else None
+                ),
+                "expires_at": result.issued_token.record.expires_at.isoformat(),
+            }
+        },
     }
     if result.reviewer_service_identity is not None and result.reviewer_issued_token is not None:
+        credential_metadata = cast(dict[str, object], response["credential_metadata"])
+        credential_metadata["reviewer"] = {
+            "token_id": str(result.reviewer_issued_token.record.id),
+            "service_identity_id": str(result.reviewer_service_identity.id),
+            "repository_id": str(result.repository.id),
+            "access_scope_id": str(result.access_scope.id),
+            "allowed_actions": sorted(result.reviewer_issued_token.record.allowed_actions),
+            "service_identity_active": result.reviewer_service_identity.is_active,
+            "token_active": (
+                result.reviewer_service_identity.is_active
+                and result.reviewer_issued_token.record.revoked_at is None
+                and result.reviewer_issued_token.record.expires_at > timezone.now()
+            ),
+            "revoked_at": (
+                result.reviewer_issued_token.record.revoked_at.isoformat()
+                if result.reviewer_issued_token.record.revoked_at is not None
+                else None
+            ),
+            "expires_at": result.reviewer_issued_token.record.expires_at.isoformat(),
+        }
         response.update(
             {
                 "reviewer_service_identity_id": str(result.reviewer_service_identity.id),

@@ -348,6 +348,210 @@
                     "pattern": "^[a-f0-9]{64}$",
                     "type": "string"
                   },
+                  "credential_metadata": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "primary": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "access_scope_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "allowed_actions": {
+                            "items": {
+                              "enum": [
+                                "organization.view",
+                                "membership.manage",
+                                "repository.view",
+                                "token.manage",
+                                "source.view",
+                                "source.sync",
+                                "source.revoke",
+                                "knowledge.view",
+                                "knowledge.propose",
+                                "knowledge.review",
+                                "assurance.view",
+                                "assurance.execute",
+                                "assurance.review",
+                                "audit.view",
+                                "finding.dismiss",
+                                "policy.override",
+                                "work.view",
+                                "work.manage",
+                                "work.approve",
+                                "policy.view",
+                                "policy.manage",
+                                "evidence.view",
+                                "evidence.submit",
+                                "search.query",
+                                "canvas.view",
+                                "canvas.manage",
+                                "mcp.context",
+                                "artifact.view",
+                                "artifact.create",
+                                "scope.manage",
+                                "github.manage",
+                                "retention.manage"
+                              ],
+                              "type": "string"
+                            },
+                            "maxItems": 32,
+                            "minItems": 1,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "expires_at": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          "repository_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "revoked_at": {
+                            "oneOf": [
+                              {
+                                "format": "date-time",
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "service_identity_active": {
+                            "type": "boolean"
+                          },
+                          "service_identity_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "token_active": {
+                            "type": "boolean"
+                          },
+                          "token_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "token_id",
+                          "service_identity_id",
+                          "repository_id",
+                          "access_scope_id",
+                          "allowed_actions",
+                          "service_identity_active",
+                          "token_active",
+                          "revoked_at",
+                          "expires_at"
+                        ],
+                        "type": "object"
+                      },
+                      "reviewer": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "access_scope_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "allowed_actions": {
+                            "items": {
+                              "enum": [
+                                "organization.view",
+                                "membership.manage",
+                                "repository.view",
+                                "token.manage",
+                                "source.view",
+                                "source.sync",
+                                "source.revoke",
+                                "knowledge.view",
+                                "knowledge.propose",
+                                "knowledge.review",
+                                "assurance.view",
+                                "assurance.execute",
+                                "assurance.review",
+                                "audit.view",
+                                "finding.dismiss",
+                                "policy.override",
+                                "work.view",
+                                "work.manage",
+                                "work.approve",
+                                "policy.view",
+                                "policy.manage",
+                                "evidence.view",
+                                "evidence.submit",
+                                "search.query",
+                                "canvas.view",
+                                "canvas.manage",
+                                "mcp.context",
+                                "artifact.view",
+                                "artifact.create",
+                                "scope.manage",
+                                "github.manage",
+                                "retention.manage"
+                              ],
+                              "type": "string"
+                            },
+                            "maxItems": 32,
+                            "minItems": 1,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "expires_at": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          "repository_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "revoked_at": {
+                            "oneOf": [
+                              {
+                                "format": "date-time",
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "service_identity_active": {
+                            "type": "boolean"
+                          },
+                          "service_identity_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "token_active": {
+                            "type": "boolean"
+                          },
+                          "token_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "token_id",
+                          "service_identity_id",
+                          "repository_id",
+                          "access_scope_id",
+                          "allowed_actions",
+                          "service_identity_active",
+                          "token_active",
+                          "revoked_at",
+                          "expires_at"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "primary",
+                      "reviewer"
+                    ],
+                    "type": "object"
+                  },
                   "expires_at": {
                     "format": "date-time",
                     "type": "string"
@@ -414,6 +618,7 @@
                   "expires_at",
                   "bootstrap_request_sha256",
                   "recovered",
+                  "credential_metadata",
                   "reviewer_service_identity_id",
                   "reviewer_token_id",
                   "reviewer_token",
@@ -507,6 +712,210 @@
                     "pattern": "^[a-f0-9]{64}$",
                     "type": "string"
                   },
+                  "credential_metadata": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "primary": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "access_scope_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "allowed_actions": {
+                            "items": {
+                              "enum": [
+                                "organization.view",
+                                "membership.manage",
+                                "repository.view",
+                                "token.manage",
+                                "source.view",
+                                "source.sync",
+                                "source.revoke",
+                                "knowledge.view",
+                                "knowledge.propose",
+                                "knowledge.review",
+                                "assurance.view",
+                                "assurance.execute",
+                                "assurance.review",
+                                "audit.view",
+                                "finding.dismiss",
+                                "policy.override",
+                                "work.view",
+                                "work.manage",
+                                "work.approve",
+                                "policy.view",
+                                "policy.manage",
+                                "evidence.view",
+                                "evidence.submit",
+                                "search.query",
+                                "canvas.view",
+                                "canvas.manage",
+                                "mcp.context",
+                                "artifact.view",
+                                "artifact.create",
+                                "scope.manage",
+                                "github.manage",
+                                "retention.manage"
+                              ],
+                              "type": "string"
+                            },
+                            "maxItems": 32,
+                            "minItems": 1,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "expires_at": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          "repository_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "revoked_at": {
+                            "oneOf": [
+                              {
+                                "format": "date-time",
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "service_identity_active": {
+                            "type": "boolean"
+                          },
+                          "service_identity_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "token_active": {
+                            "type": "boolean"
+                          },
+                          "token_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "token_id",
+                          "service_identity_id",
+                          "repository_id",
+                          "access_scope_id",
+                          "allowed_actions",
+                          "service_identity_active",
+                          "token_active",
+                          "revoked_at",
+                          "expires_at"
+                        ],
+                        "type": "object"
+                      },
+                      "reviewer": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "access_scope_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "allowed_actions": {
+                            "items": {
+                              "enum": [
+                                "organization.view",
+                                "membership.manage",
+                                "repository.view",
+                                "token.manage",
+                                "source.view",
+                                "source.sync",
+                                "source.revoke",
+                                "knowledge.view",
+                                "knowledge.propose",
+                                "knowledge.review",
+                                "assurance.view",
+                                "assurance.execute",
+                                "assurance.review",
+                                "audit.view",
+                                "finding.dismiss",
+                                "policy.override",
+                                "work.view",
+                                "work.manage",
+                                "work.approve",
+                                "policy.view",
+                                "policy.manage",
+                                "evidence.view",
+                                "evidence.submit",
+                                "search.query",
+                                "canvas.view",
+                                "canvas.manage",
+                                "mcp.context",
+                                "artifact.view",
+                                "artifact.create",
+                                "scope.manage",
+                                "github.manage",
+                                "retention.manage"
+                              ],
+                              "type": "string"
+                            },
+                            "maxItems": 32,
+                            "minItems": 1,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "expires_at": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          "repository_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "revoked_at": {
+                            "oneOf": [
+                              {
+                                "format": "date-time",
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "service_identity_active": {
+                            "type": "boolean"
+                          },
+                          "service_identity_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "token_active": {
+                            "type": "boolean"
+                          },
+                          "token_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "token_id",
+                          "service_identity_id",
+                          "repository_id",
+                          "access_scope_id",
+                          "allowed_actions",
+                          "service_identity_active",
+                          "token_active",
+                          "revoked_at",
+                          "expires_at"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "primary",
+                      "reviewer"
+                    ],
+                    "type": "object"
+                  },
                   "expires_at": {
                     "format": "date-time",
                     "type": "string"
@@ -573,6 +982,7 @@
                   "expires_at",
                   "bootstrap_request_sha256",
                   "recovered",
+                  "credential_metadata",
                   "reviewer_service_identity_id",
                   "reviewer_token_id",
                   "reviewer_token",
@@ -660,6 +1070,112 @@
                     "pattern": "^[a-f0-9]{64}$",
                     "type": "string"
                   },
+                  "credential_metadata": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "primary": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "access_scope_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "allowed_actions": {
+                            "items": {
+                              "enum": [
+                                "organization.view",
+                                "membership.manage",
+                                "repository.view",
+                                "token.manage",
+                                "source.view",
+                                "source.sync",
+                                "source.revoke",
+                                "knowledge.view",
+                                "knowledge.propose",
+                                "knowledge.review",
+                                "assurance.view",
+                                "assurance.execute",
+                                "assurance.review",
+                                "audit.view",
+                                "finding.dismiss",
+                                "policy.override",
+                                "work.view",
+                                "work.manage",
+                                "work.approve",
+                                "policy.view",
+                                "policy.manage",
+                                "evidence.view",
+                                "evidence.submit",
+                                "search.query",
+                                "canvas.view",
+                                "canvas.manage",
+                                "mcp.context",
+                                "artifact.view",
+                                "artifact.create",
+                                "scope.manage",
+                                "github.manage",
+                                "retention.manage"
+                              ],
+                              "type": "string"
+                            },
+                            "maxItems": 32,
+                            "minItems": 1,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "expires_at": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          "repository_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "revoked_at": {
+                            "oneOf": [
+                              {
+                                "format": "date-time",
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "service_identity_active": {
+                            "type": "boolean"
+                          },
+                          "service_identity_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "token_active": {
+                            "type": "boolean"
+                          },
+                          "token_id": {
+                            "format": "uuid",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "token_id",
+                          "service_identity_id",
+                          "repository_id",
+                          "access_scope_id",
+                          "allowed_actions",
+                          "service_identity_active",
+                          "token_active",
+                          "revoked_at",
+                          "expires_at"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "primary"
+                    ],
+                    "type": "object"
+                  },
                   "expires_at": {
                     "format": "date-time",
                     "type": "string"
@@ -709,6 +1225,7 @@
                   "expires_at",
                   "bootstrap_request_sha256",
                   "recovered",
+                  "credential_metadata",
                   "bootstrap_mode"
                 ],
                 "type": "object"
@@ -746,6 +1263,210 @@
                 "pattern": "^[a-f0-9]{64}$",
                 "type": "string"
               },
+              "credential_metadata": {
+                "additionalProperties": false,
+                "properties": {
+                  "primary": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "access_scope_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "allowed_actions": {
+                        "items": {
+                          "enum": [
+                            "organization.view",
+                            "membership.manage",
+                            "repository.view",
+                            "token.manage",
+                            "source.view",
+                            "source.sync",
+                            "source.revoke",
+                            "knowledge.view",
+                            "knowledge.propose",
+                            "knowledge.review",
+                            "assurance.view",
+                            "assurance.execute",
+                            "assurance.review",
+                            "audit.view",
+                            "finding.dismiss",
+                            "policy.override",
+                            "work.view",
+                            "work.manage",
+                            "work.approve",
+                            "policy.view",
+                            "policy.manage",
+                            "evidence.view",
+                            "evidence.submit",
+                            "search.query",
+                            "canvas.view",
+                            "canvas.manage",
+                            "mcp.context",
+                            "artifact.view",
+                            "artifact.create",
+                            "scope.manage",
+                            "github.manage",
+                            "retention.manage"
+                          ],
+                          "type": "string"
+                        },
+                        "maxItems": 32,
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "expires_at": {
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      "repository_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "revoked_at": {
+                        "oneOf": [
+                          {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "service_identity_active": {
+                        "type": "boolean"
+                      },
+                      "service_identity_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "token_active": {
+                        "type": "boolean"
+                      },
+                      "token_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "token_id",
+                      "service_identity_id",
+                      "repository_id",
+                      "access_scope_id",
+                      "allowed_actions",
+                      "service_identity_active",
+                      "token_active",
+                      "revoked_at",
+                      "expires_at"
+                    ],
+                    "type": "object"
+                  },
+                  "reviewer": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "access_scope_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "allowed_actions": {
+                        "items": {
+                          "enum": [
+                            "organization.view",
+                            "membership.manage",
+                            "repository.view",
+                            "token.manage",
+                            "source.view",
+                            "source.sync",
+                            "source.revoke",
+                            "knowledge.view",
+                            "knowledge.propose",
+                            "knowledge.review",
+                            "assurance.view",
+                            "assurance.execute",
+                            "assurance.review",
+                            "audit.view",
+                            "finding.dismiss",
+                            "policy.override",
+                            "work.view",
+                            "work.manage",
+                            "work.approve",
+                            "policy.view",
+                            "policy.manage",
+                            "evidence.view",
+                            "evidence.submit",
+                            "search.query",
+                            "canvas.view",
+                            "canvas.manage",
+                            "mcp.context",
+                            "artifact.view",
+                            "artifact.create",
+                            "scope.manage",
+                            "github.manage",
+                            "retention.manage"
+                          ],
+                          "type": "string"
+                        },
+                        "maxItems": 32,
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "expires_at": {
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      "repository_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "revoked_at": {
+                        "oneOf": [
+                          {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "service_identity_active": {
+                        "type": "boolean"
+                      },
+                      "service_identity_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "token_active": {
+                        "type": "boolean"
+                      },
+                      "token_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "token_id",
+                      "service_identity_id",
+                      "repository_id",
+                      "access_scope_id",
+                      "allowed_actions",
+                      "service_identity_active",
+                      "token_active",
+                      "revoked_at",
+                      "expires_at"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "primary",
+                  "reviewer"
+                ],
+                "type": "object"
+              },
               "expires_at": {
                 "format": "date-time",
                 "type": "string"
@@ -812,6 +1533,7 @@
               "expires_at",
               "bootstrap_request_sha256",
               "recovered",
+              "credential_metadata",
               "reviewer_service_identity_id",
               "reviewer_token_id",
               "reviewer_token",
@@ -835,6 +1557,210 @@
               "bootstrap_request_sha256": {
                 "pattern": "^[a-f0-9]{64}$",
                 "type": "string"
+              },
+              "credential_metadata": {
+                "additionalProperties": false,
+                "properties": {
+                  "primary": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "access_scope_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "allowed_actions": {
+                        "items": {
+                          "enum": [
+                            "organization.view",
+                            "membership.manage",
+                            "repository.view",
+                            "token.manage",
+                            "source.view",
+                            "source.sync",
+                            "source.revoke",
+                            "knowledge.view",
+                            "knowledge.propose",
+                            "knowledge.review",
+                            "assurance.view",
+                            "assurance.execute",
+                            "assurance.review",
+                            "audit.view",
+                            "finding.dismiss",
+                            "policy.override",
+                            "work.view",
+                            "work.manage",
+                            "work.approve",
+                            "policy.view",
+                            "policy.manage",
+                            "evidence.view",
+                            "evidence.submit",
+                            "search.query",
+                            "canvas.view",
+                            "canvas.manage",
+                            "mcp.context",
+                            "artifact.view",
+                            "artifact.create",
+                            "scope.manage",
+                            "github.manage",
+                            "retention.manage"
+                          ],
+                          "type": "string"
+                        },
+                        "maxItems": 32,
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "expires_at": {
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      "repository_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "revoked_at": {
+                        "oneOf": [
+                          {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "service_identity_active": {
+                        "type": "boolean"
+                      },
+                      "service_identity_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "token_active": {
+                        "type": "boolean"
+                      },
+                      "token_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "token_id",
+                      "service_identity_id",
+                      "repository_id",
+                      "access_scope_id",
+                      "allowed_actions",
+                      "service_identity_active",
+                      "token_active",
+                      "revoked_at",
+                      "expires_at"
+                    ],
+                    "type": "object"
+                  },
+                  "reviewer": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "access_scope_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "allowed_actions": {
+                        "items": {
+                          "enum": [
+                            "organization.view",
+                            "membership.manage",
+                            "repository.view",
+                            "token.manage",
+                            "source.view",
+                            "source.sync",
+                            "source.revoke",
+                            "knowledge.view",
+                            "knowledge.propose",
+                            "knowledge.review",
+                            "assurance.view",
+                            "assurance.execute",
+                            "assurance.review",
+                            "audit.view",
+                            "finding.dismiss",
+                            "policy.override",
+                            "work.view",
+                            "work.manage",
+                            "work.approve",
+                            "policy.view",
+                            "policy.manage",
+                            "evidence.view",
+                            "evidence.submit",
+                            "search.query",
+                            "canvas.view",
+                            "canvas.manage",
+                            "mcp.context",
+                            "artifact.view",
+                            "artifact.create",
+                            "scope.manage",
+                            "github.manage",
+                            "retention.manage"
+                          ],
+                          "type": "string"
+                        },
+                        "maxItems": 32,
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "expires_at": {
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      "repository_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "revoked_at": {
+                        "oneOf": [
+                          {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "service_identity_active": {
+                        "type": "boolean"
+                      },
+                      "service_identity_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "token_active": {
+                        "type": "boolean"
+                      },
+                      "token_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "token_id",
+                      "service_identity_id",
+                      "repository_id",
+                      "access_scope_id",
+                      "allowed_actions",
+                      "service_identity_active",
+                      "token_active",
+                      "revoked_at",
+                      "expires_at"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "primary",
+                  "reviewer"
+                ],
+                "type": "object"
               },
               "expires_at": {
                 "format": "date-time",
@@ -902,6 +1828,7 @@
               "expires_at",
               "bootstrap_request_sha256",
               "recovered",
+              "credential_metadata",
               "reviewer_service_identity_id",
               "reviewer_token_id",
               "reviewer_token",
@@ -925,6 +1852,112 @@
               "bootstrap_request_sha256": {
                 "pattern": "^[a-f0-9]{64}$",
                 "type": "string"
+              },
+              "credential_metadata": {
+                "additionalProperties": false,
+                "properties": {
+                  "primary": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "access_scope_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "allowed_actions": {
+                        "items": {
+                          "enum": [
+                            "organization.view",
+                            "membership.manage",
+                            "repository.view",
+                            "token.manage",
+                            "source.view",
+                            "source.sync",
+                            "source.revoke",
+                            "knowledge.view",
+                            "knowledge.propose",
+                            "knowledge.review",
+                            "assurance.view",
+                            "assurance.execute",
+                            "assurance.review",
+                            "audit.view",
+                            "finding.dismiss",
+                            "policy.override",
+                            "work.view",
+                            "work.manage",
+                            "work.approve",
+                            "policy.view",
+                            "policy.manage",
+                            "evidence.view",
+                            "evidence.submit",
+                            "search.query",
+                            "canvas.view",
+                            "canvas.manage",
+                            "mcp.context",
+                            "artifact.view",
+                            "artifact.create",
+                            "scope.manage",
+                            "github.manage",
+                            "retention.manage"
+                          ],
+                          "type": "string"
+                        },
+                        "maxItems": 32,
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "expires_at": {
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      "repository_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "revoked_at": {
+                        "oneOf": [
+                          {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "service_identity_active": {
+                        "type": "boolean"
+                      },
+                      "service_identity_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "token_active": {
+                        "type": "boolean"
+                      },
+                      "token_id": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "token_id",
+                      "service_identity_id",
+                      "repository_id",
+                      "access_scope_id",
+                      "allowed_actions",
+                      "service_identity_active",
+                      "token_active",
+                      "revoked_at",
+                      "expires_at"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "primary"
+                ],
+                "type": "object"
               },
               "expires_at": {
                 "format": "date-time",
@@ -975,6 +2008,7 @@
               "expires_at",
               "bootstrap_request_sha256",
               "recovered",
+              "credential_metadata",
               "bootstrap_mode"
             ],
             "type": "object"
@@ -11572,6 +12606,48 @@
                   "access_scope_id": "00000000-0000-4000-8000-000000000006",
                   "bootstrap_mode": "SCOPED",
                   "bootstrap_request_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+                  "credential_metadata": {
+                    "primary": {
+                      "access_scope_id": "00000000-0000-4000-8000-000000000006",
+                      "allowed_actions": [
+                        "artifact.create",
+                        "artifact.view",
+                        "assurance.execute",
+                        "canvas.view",
+                        "evidence.submit",
+                        "evidence.view",
+                        "knowledge.view",
+                        "mcp.context",
+                        "policy.manage",
+                        "policy.view",
+                        "search.query",
+                        "source.sync",
+                        "source.view",
+                        "token.manage",
+                        "work.manage"
+                      ],
+                      "expires_at": "2026-08-10T12:00:00Z",
+                      "repository_id": "00000000-0000-4000-8000-000000000004",
+                      "revoked_at": null,
+                      "service_identity_active": true,
+                      "service_identity_id": "00000000-0000-4000-8000-000000000005",
+                      "token_active": true,
+                      "token_id": "00000000-0000-4000-8000-000000000007"
+                    },
+                    "reviewer": {
+                      "access_scope_id": "00000000-0000-4000-8000-000000000006",
+                      "allowed_actions": [
+                        "assurance.review"
+                      ],
+                      "expires_at": "2026-08-10T12:00:00Z",
+                      "repository_id": "00000000-0000-4000-8000-000000000004",
+                      "revoked_at": null,
+                      "service_identity_active": true,
+                      "service_identity_id": "00000000-0000-4000-8000-000000000008",
+                      "token_active": true,
+                      "token_id": "00000000-0000-4000-8000-000000000009"
+                    }
+                  },
                   "expires_at": "2026-08-10T12:00:00Z",
                   "membership_id": "00000000-0000-4000-8000-000000000003",
                   "organization_id": "00000000-0000-4000-8000-000000000001",

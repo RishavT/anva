@@ -22,6 +22,7 @@ from anva.contracts.acceptance import (
     acceptance_operation_document,
     apply_acceptance_http_contracts,
 )
+from anva.contracts.bootstrap_scope import ACTION_VALUES
 from anva.contracts.catalog import EXAMPLES, KNOWLEDGE_CHANGE, SCHEMAS
 from anva.contracts.validation import validate_payload
 from anva.mcp.contracts import TOOL_CONTRACTS, mcp_contract_document
@@ -64,6 +65,43 @@ def openapi_document() -> dict[str, object]:
             "detected_type",
             "archive_summary",
             "storage_state",
+        ],
+    }
+    bootstrap_credential_metadata_entry: dict[str, object] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "token_id": {"type": "string", "format": "uuid"},
+            "service_identity_id": {"type": "string", "format": "uuid"},
+            "repository_id": {"type": "string", "format": "uuid"},
+            "access_scope_id": {"type": "string", "format": "uuid"},
+            "allowed_actions": {
+                "type": "array",
+                "items": {"type": "string", "enum": list(ACTION_VALUES)},
+                "minItems": 1,
+                "maxItems": len(ACTION_VALUES),
+                "uniqueItems": True,
+            },
+            "service_identity_active": {"type": "boolean"},
+            "token_active": {"type": "boolean"},
+            "revoked_at": {
+                "oneOf": [
+                    {"type": "string", "format": "date-time"},
+                    {"type": "null"},
+                ]
+            },
+            "expires_at": {"type": "string", "format": "date-time"},
+        },
+        "required": [
+            "token_id",
+            "service_identity_id",
+            "repository_id",
+            "access_scope_id",
+            "allowed_actions",
+            "service_identity_active",
+            "token_active",
+            "revoked_at",
+            "expires_at",
         ],
     }
     structured_errors: dict[str, object] = {
@@ -1399,6 +1437,19 @@ def openapi_document() -> dict[str, object]:
                                                     "type": "string",
                                                     "format": "date-time",
                                                 },
+                                                "credential_metadata": {
+                                                    "type": "object",
+                                                    "additionalProperties": False,
+                                                    "properties": {
+                                                        "primary": deepcopy(
+                                                            bootstrap_credential_metadata_entry
+                                                        ),
+                                                        "reviewer": deepcopy(
+                                                            bootstrap_credential_metadata_entry
+                                                        ),
+                                                    },
+                                                    "required": ["primary"],
+                                                },
                                             },
                                             "required": [
                                                 "organization_id",
@@ -1412,6 +1463,7 @@ def openapi_document() -> dict[str, object]:
                                                 "expires_at",
                                                 "bootstrap_request_sha256",
                                                 "recovered",
+                                                "credential_metadata",
                                             ],
                                         }
                                     }

@@ -39,7 +39,12 @@ from anva.contract_limits import (
     MAX_CANVAS_QUERY_NODES,
 )
 from anva.contracts.acceptance import ACCEPTANCE_HTTP_OPERATION_IDS
-from anva.contracts.bootstrap_scope import acceptance_bootstrap_scope_payload
+from anva.contracts.bootstrap_scope import (
+    ACCEPTANCE_INITIATOR_ACTIONS,
+    ACCEPTANCE_REVIEWER_ACTIONS,
+    ACTION_VALUES,
+    acceptance_bootstrap_scope_payload,
+)
 from anva.contracts.catalog import EXAMPLES
 from anva.core.services.evidence_uploads import inspect_evidence_upload
 
@@ -141,6 +146,9 @@ class FakeProduct:
             request_hash = hashlib.sha256(
                 (json.dumps(request_payload, separators=(",", ":"), sort_keys=True) + "\n").encode()
             ).hexdigest()
+            primary_actions = sorted(
+                ACCEPTANCE_INITIATOR_ACTIONS if "scope" in payload else ACTION_VALUES
+            )
             return APIResponse(
                 201,
                 {
@@ -158,6 +166,30 @@ class FakeProduct:
                     "bootstrap_request_sha256": request_hash,
                     "bootstrap_mode": "SCOPED" if "scope" in payload else "LEGACY",
                     "recovered": False,
+                    "credential_metadata": {
+                        "primary": {
+                            "token_id": _id(7),
+                            "service_identity_id": _id(6),
+                            "repository_id": _id(2),
+                            "access_scope_id": _id(3),
+                            "allowed_actions": primary_actions,
+                            "service_identity_active": True,
+                            "token_active": True,
+                            "revoked_at": None,
+                            "expires_at": "2026-08-04T12:00:00Z",
+                        },
+                        "reviewer": {
+                            "token_id": _id(9),
+                            "service_identity_id": _id(8),
+                            "repository_id": _id(2),
+                            "access_scope_id": _id(3),
+                            "allowed_actions": sorted(ACCEPTANCE_REVIEWER_ACTIONS),
+                            "service_identity_active": True,
+                            "token_active": True,
+                            "revoked_at": None,
+                            "expires_at": "2026-08-04T12:00:00Z",
+                        },
+                    },
                 },
             )
         if token in {"wrong-token", "expired-token", "reused-token"}:
@@ -1363,6 +1395,8 @@ def test_bootstrap_reconcile_handles_legacy_or_rejects_invalid_primary_token_id(
     handoff = json.loads(runner.config.credential_output.read_bytes())
     if primary_token_id is None:
         handoff.pop("token_id")
+        handoff.pop("service_identity_id")
+        handoff.pop("credential_metadata")
     else:
         handoff["token_id"] = primary_token_id
     runner.config.credential_output.write_text(json.dumps(handoff), encoding="utf-8")
@@ -1378,6 +1412,114 @@ def test_bootstrap_reconcile_handles_legacy_or_rejects_invalid_primary_token_id(
 
     assert resumed.status == "AWAITING_EXTERNAL_REVIEW"
     assert sum(path == "/bootstrap" for _method, path, _token, _body in product.calls) == 1
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda metadata: metadata.pop("primary"),
+        lambda metadata: cast(dict[str, object], metadata["primary"]).__setitem__(
+            "allowed_actions", [*sorted(ACCEPTANCE_INITIATOR_ACTIONS), "organization.view"]
+        ),
+        lambda metadata: cast(dict[str, object], metadata["primary"]).__setitem__(
+            "allowed_actions", sorted(ACCEPTANCE_INITIATOR_ACTIONS, reverse=True)
+        ),
+        lambda metadata: cast(dict[str, object], metadata["reviewer"]).__setitem__(
+            "token_id", _id(7)
+        ),
+        lambda metadata: cast(dict[str, object], metadata["primary"]).__setitem__(
+            "token_active", False
+        ),
+        lambda metadata: cast(dict[str, object], metadata["reviewer"]).__setitem__(
+            "revoked_at", "2026-08-01T00:00:00Z"
+        ),
+        lambda metadata: cast(dict[str, object], metadata["primary"]).__setitem__(
+            "repository_id", _id(999)
+        ),
+        lambda metadata: cast(dict[str, object], metadata["primary"]).__setitem__(
+            "service_identity_id", _id(999)
+        ),
+        lambda metadata: cast(dict[str, object], metadata["primary"]).__setitem__(
+            "token", "must-not-be-accepted"
+        ),
+    ],
+)
+def test_bootstrap_credential_metadata_tampering_fails_before_handoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: Callable[[dict[str, object]], object],
+) -> None:
+    runner, product = _runner(
+        tmp_path,
+        monkeypatch,
+        case_payload=deepcopy(EXAMPLES["acceptance-case"]),
+    )
+    original_request = product.request
+
+    def tampered_bootstrap(
+        token: str | None,
+        method: str,
+        path: str,
+        payload: dict[str, object] | None,
+        content: bytes | None,
+    ) -> APIResponse:
+        response = original_request(token, method, path, payload, content)
+        if path == "/bootstrap":
+            tampered = deepcopy(response.payload)
+            metadata = cast(dict[str, object], tampered["credential_metadata"])
+            mutation(metadata)
+            return APIResponse(response.status, tampered)
+        return response
+
+    monkeypatch.setattr(product, "request", tampered_bootstrap)
+
+    with pytest.raises(AcceptanceRunnerError, match="credential metadata|independent"):
+        runner.start(bootstrap_secret="bootstrap-material", token=None)
+    assert runner.config.credential_output is not None
+    assert not runner.config.credential_output.exists()
+    assert load_state(runner.config.state_path).status == "BOOTSTRAP_PREPARED"
+
+
+@pytest.mark.unit
+def test_bootstrap_handoff_metadata_is_secret_free_and_tampering_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner, _product = _runner(
+        tmp_path,
+        monkeypatch,
+        case_payload=deepcopy(EXAMPLES["acceptance-case"]),
+    )
+    original_save = AcceptanceRunner._save
+    crashed = False
+
+    def crash_after_handoff(self: AcceptanceRunner, state: ResumeState) -> None:
+        nonlocal crashed
+        if state.status == "PREPARING" and not crashed:
+            crashed = True
+            raise RuntimeError("injected crash after credential handoff")
+        original_save(self, state)
+
+    with patch.object(AcceptanceRunner, "_save", crash_after_handoff):
+        with pytest.raises(RuntimeError, match="injected crash"):
+            runner.start(bootstrap_secret="bootstrap-material", token=None)
+    assert runner.config.credential_output is not None
+    handoff = json.loads(runner.config.credential_output.read_bytes())
+    metadata = cast(dict[str, object], handoff["credential_metadata"])
+    rendered_metadata = json.dumps(metadata, sort_keys=True)
+    assert "initiator-token-material" not in rendered_metadata
+    assert "reviewer-token-material" not in rendered_metadata
+    primary = cast(dict[str, object], metadata["primary"])
+    assert primary["allowed_actions"] == sorted(ACCEPTANCE_INITIATOR_ACTIONS)
+    assert len(cast(list[str], primary["allowed_actions"])) == 15
+    primary["access_scope_id"] = _id(999)
+    runner.config.credential_output.write_text(json.dumps(handoff), encoding="utf-8")
+    runner.config.credential_output.chmod(0o600)
+
+    with pytest.raises(AcceptanceRunnerError, match="credential metadata") as caught:
+        AcceptanceRunner(runner.config).start(bootstrap_secret=None, token=None)
+    assert "initiator-token-material" not in str(caught.value)
+    assert "reviewer-token-material" not in str(caught.value)
 
 
 @pytest.mark.unit
