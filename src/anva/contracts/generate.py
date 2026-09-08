@@ -22,6 +22,7 @@ from anva.contracts.acceptance import (
     acceptance_operation_document,
     apply_acceptance_http_contracts,
 )
+from anva.contracts.bootstrap_scope import ACTION_VALUES
 from anva.contracts.catalog import EXAMPLES, KNOWLEDGE_CHANGE, SCHEMAS
 from anva.contracts.validation import validate_payload
 from anva.mcp.contracts import TOOL_CONTRACTS, mcp_contract_document
@@ -64,6 +65,45 @@ def openapi_document() -> dict[str, object]:
             "detected_type",
             "archive_summary",
             "storage_state",
+        ],
+    }
+    bootstrap_credential_metadata_entry: dict[str, object] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "token_id": {"type": "string", "format": "uuid"},
+            "service_identity_id": {"type": "string", "format": "uuid"},
+            "repository_id": {"type": "string", "format": "uuid"},
+            "access_scope_id": {"type": "string", "format": "uuid"},
+            "allowed_actions": {
+                "type": "array",
+                "items": {"type": "string", "enum": list(ACTION_VALUES)},
+                "minItems": 1,
+                "maxItems": len(ACTION_VALUES),
+                "uniqueItems": True,
+            },
+            "service_identity_active_at_issuance": {"type": "boolean"},
+            "token_active_at_issuance": {"type": "boolean"},
+            "revoked_at_issuance": {
+                "oneOf": [
+                    {"type": "string", "format": "date-time"},
+                    {"type": "null"},
+                ]
+            },
+            "expires_at": {"type": "string", "format": "date-time"},
+            "issued_at": {"type": "string", "format": "date-time"},
+        },
+        "required": [
+            "token_id",
+            "service_identity_id",
+            "repository_id",
+            "access_scope_id",
+            "allowed_actions",
+            "service_identity_active_at_issuance",
+            "token_active_at_issuance",
+            "revoked_at_issuance",
+            "expires_at",
+            "issued_at",
         ],
     }
     structured_errors: dict[str, object] = {
@@ -1382,6 +1422,10 @@ def openapi_document() -> dict[str, object]:
                                                     "type": "string",
                                                     "pattern": "^[a-f0-9]{64}$",
                                                 },
+                                                "credential_set_generation": {
+                                                    "type": "integer",
+                                                    "minimum": 0,
+                                                },
                                                 "recovered": {"type": "boolean"},
                                                 "reviewer_service_identity_id": {
                                                     "type": "string",
@@ -1399,6 +1443,46 @@ def openapi_document() -> dict[str, object]:
                                                     "type": "string",
                                                     "format": "date-time",
                                                 },
+                                                "credential_metadata": {
+                                                    "type": "object",
+                                                    "additionalProperties": False,
+                                                    "properties": {
+                                                        "schema_version": {
+                                                            "type": "integer",
+                                                            "const": 1,
+                                                        },
+                                                        "bootstrap_request_sha256": {
+                                                            "type": "string",
+                                                            "pattern": "^[a-f0-9]{64}$",
+                                                        },
+                                                        "credential_set_id": {
+                                                            "type": "string",
+                                                            "format": "uuid",
+                                                        },
+                                                        "credential_set_generation": {
+                                                            "type": "integer",
+                                                            "minimum": 0,
+                                                        },
+                                                        "observed_at": {
+                                                            "type": "string",
+                                                            "format": "date-time",
+                                                        },
+                                                        "primary": deepcopy(
+                                                            bootstrap_credential_metadata_entry
+                                                        ),
+                                                        "reviewer": deepcopy(
+                                                            bootstrap_credential_metadata_entry
+                                                        ),
+                                                    },
+                                                    "required": [
+                                                        "schema_version",
+                                                        "bootstrap_request_sha256",
+                                                        "credential_set_id",
+                                                        "credential_set_generation",
+                                                        "observed_at",
+                                                        "primary",
+                                                    ],
+                                                },
                                             },
                                             "required": [
                                                 "organization_id",
@@ -1411,7 +1495,9 @@ def openapi_document() -> dict[str, object]:
                                                 "token",
                                                 "expires_at",
                                                 "bootstrap_request_sha256",
+                                                "credential_set_generation",
                                                 "recovered",
+                                                "credential_metadata",
                                             ],
                                         }
                                     }

@@ -40,12 +40,32 @@ from anva.acceptance.provenance import (
     attest_launch_manifest,
 )
 from anva.acceptance.state import ResumeState, load_state, save_state
-from anva.contracts.bootstrap_scope import parse_bootstrap_scope
+from anva.contracts.bootstrap_credentials import bootstrap_credential_set_id
+from anva.contracts.bootstrap_scope import (
+    ACCEPTANCE_INITIATOR_ACTIONS,
+    ACCEPTANCE_REVIEWER_ACTIONS,
+    ACTION_VALUES,
+    parse_bootstrap_scope,
+)
 from anva.contracts.validation import validate_payload
 
 TERMINAL_SYNC_STATES = frozenset({"COMPLETED", "PARTIALLY_COMPLETED", "FAILED", "CANCELLED"})
 REFERENCE_GRACE_SECONDS = 300
 COMMIT_PATTERN = re.compile(r"^[a-f0-9]{40}$")
+BOOTSTRAP_METADATA_FIELDS = frozenset(
+    {
+        "token_id",
+        "service_identity_id",
+        "repository_id",
+        "access_scope_id",
+        "allowed_actions",
+        "service_identity_active_at_issuance",
+        "token_active_at_issuance",
+        "revoked_at_issuance",
+        "expires_at",
+        "issued_at",
+    }
+)
 
 
 class AcceptanceRunnerError(ValueError):
@@ -780,6 +800,154 @@ class AcceptanceRunner:
     def _save(self, state: ResumeState) -> None:
         save_state(self.config.state_path, state)
 
+    def _validated_credential_metadata(
+        self,
+        payload: dict[str, object],
+        *,
+        repository_id: str,
+        access_scope_id: str,
+        primary_service_identity_id: str | None,
+        primary_token_id: str,
+        primary_expires_at: str,
+        reviewer_service_identity_id: str,
+        reviewer_token_id: str,
+        reviewer_expires_at: str,
+    ) -> dict[str, object]:
+        """Validate the closed, non-secret bootstrap credential attestation."""
+        metadata = payload.get("credential_metadata")
+        if not isinstance(metadata, dict) or set(metadata) != {
+            "schema_version",
+            "bootstrap_request_sha256",
+            "credential_set_id",
+            "credential_set_generation",
+            "observed_at",
+            "primary",
+            "reviewer",
+        }:
+            raise AcceptanceRunnerError("Bootstrap credential metadata is invalid")
+        generation = metadata.get("credential_set_generation")
+        if (
+            metadata.get("schema_version") != 1
+            or metadata.get("bootstrap_request_sha256") != payload.get("bootstrap_request_sha256")
+            or not isinstance(generation, int)
+            or isinstance(generation, bool)
+            or generation < 0
+            or payload.get("credential_set_generation") != generation
+        ):
+            raise AcceptanceRunnerError("Bootstrap credential metadata is invalid")
+        try:
+            uuid.UUID(_string(metadata, "credential_set_id"))
+            observed_at = datetime.fromisoformat(
+                _string(metadata, "observed_at").replace("Z", "+00:00")
+            )
+            if observed_at.utcoffset() is None:
+                raise ValueError
+        except ValueError as error:
+            raise AcceptanceRunnerError("Bootstrap credential metadata is invalid") from error
+        expected_actions = (
+            sorted(ACTION_VALUES)
+            if self.case.legacy_default
+            else sorted(ACCEPTANCE_INITIATOR_ACTIONS)
+        )
+        expected: dict[str, dict[str, object]] = {
+            "primary": {
+                "service_identity_id": primary_service_identity_id,
+                "token_id": primary_token_id,
+                "expires_at": primary_expires_at,
+                "allowed_actions": expected_actions,
+            },
+            "reviewer": {
+                "service_identity_id": reviewer_service_identity_id,
+                "token_id": reviewer_token_id,
+                "expires_at": reviewer_expires_at,
+                "allowed_actions": sorted(ACCEPTANCE_REVIEWER_ACTIONS),
+            },
+        }
+        validated: dict[str, object] = {}
+        issuance_times: dict[str, datetime] = {}
+        for name in ("primary", "reviewer"):
+            value = metadata.get(name)
+            if not isinstance(value, dict) or set(value) != BOOTSTRAP_METADATA_FIELDS:
+                raise AcceptanceRunnerError("Bootstrap credential metadata is invalid")
+            item = cast(dict[str, object], value)
+            expected_item = expected[name]
+            identifiers = (
+                "token_id",
+                "service_identity_id",
+                "repository_id",
+                "access_scope_id",
+            )
+            try:
+                for field in identifiers:
+                    uuid.UUID(_string(item, field))
+            except ValueError as error:
+                raise AcceptanceRunnerError("Bootstrap credential metadata is invalid") from error
+            actions = item.get("allowed_actions")
+            if (
+                not isinstance(actions, list)
+                or not all(isinstance(action, str) for action in actions)
+                or actions != sorted(set(actions))
+                or actions != expected_item["allowed_actions"]
+                or item.get("repository_id") != repository_id
+                or item.get("access_scope_id") != access_scope_id
+                or item.get("token_id") != expected_item["token_id"]
+                or (
+                    expected_item["service_identity_id"] is not None
+                    and item.get("service_identity_id") != expected_item["service_identity_id"]
+                )
+                or item.get("expires_at") != expected_item["expires_at"]
+                or item.get("service_identity_active_at_issuance") is not True
+                or item.get("token_active_at_issuance") is not True
+                or item.get("revoked_at_issuance") is not None
+            ):
+                raise AcceptanceRunnerError("Bootstrap credential metadata is invalid")
+            try:
+                parsed_expiry = datetime.fromisoformat(
+                    _string(item, "expires_at").replace("Z", "+00:00")
+                )
+                if parsed_expiry.utcoffset() is None:
+                    raise ValueError
+                issued_at = datetime.fromisoformat(
+                    _string(item, "issued_at").replace("Z", "+00:00")
+                )
+                if issued_at.utcoffset() is None or issued_at >= parsed_expiry:
+                    raise ValueError
+            except ValueError as error:
+                raise AcceptanceRunnerError("Bootstrap credential metadata is invalid") from error
+            validated[name] = deepcopy(item)
+            issuance_times[name] = issued_at
+        primary = cast(dict[str, object], validated["primary"])
+        reviewer = cast(dict[str, object], validated["reviewer"])
+        if (
+            primary["token_id"] == reviewer["token_id"]
+            or primary["service_identity_id"] == reviewer["service_identity_id"]
+        ):
+            raise AcceptanceRunnerError("Bootstrap reviewer credential is not independent")
+        if observed_at != max(issuance_times.values()) or str(
+            bootstrap_credential_set_id(
+                request_sha256=_string(metadata, "bootstrap_request_sha256"),
+                generation=generation,
+                primary_token_id=_string(primary, "token_id"),
+                primary_issued_at=issuance_times["primary"],
+                reviewer_token_id=_string(reviewer, "token_id"),
+                reviewer_issued_at=issuance_times["reviewer"],
+            )
+        ) != metadata.get("credential_set_id"):
+            raise AcceptanceRunnerError("Bootstrap credential metadata is invalid")
+        return {
+            "schema_version": 1,
+            "bootstrap_request_sha256": metadata["bootstrap_request_sha256"],
+            "credential_set_id": metadata["credential_set_id"],
+            "credential_set_generation": generation,
+            "observed_at": metadata["observed_at"],
+            **validated,
+        }
+
+    def _probe_bootstrap_credentials(self, primary_token: str, reviewer_token: str) -> None:
+        """Prove both issued bearers are live without invoking a domain operation."""
+        StreamableHTTPMCP(self.config.mcp_url, primary_token).probe()
+        StreamableHTTPMCP(self.config.mcp_url, reviewer_token).probe()
+
     def _bootstrap(self, bootstrap_secret: str, state: ResumeState) -> tuple[PublicAPI, str]:
         if not bootstrap_secret:
             raise AcceptanceRunnerError("Bootstrap secret is required for a fresh run")
@@ -802,6 +970,8 @@ class AcceptanceRunner:
         token_id = _string(response, "token_id")
         reviewer_service_identity_id = _string(response, "reviewer_service_identity_id")
         reviewer_token_id = _string(response, "reviewer_token_id")
+        expires_at = _string(response, "expires_at")
+        reviewer_expires_at = _string(response, "reviewer_expires_at")
         expected_bootstrap_mode = "LEGACY" if self.case.legacy_default else "SCOPED"
         if response.get("bootstrap_mode") != expected_bootstrap_mode:
             raise AcceptanceRunnerError("Bootstrap response mode does not match the request")
@@ -811,6 +981,18 @@ class AcceptanceRunner:
             raise AcceptanceRunnerError(
                 "Recovered bootstrap does not match the precommitted request"
             )
+        credential_metadata = self._validated_credential_metadata(
+            response,
+            repository_id=_string(response, "repository_id"),
+            access_scope_id=_string(response, "access_scope_id"),
+            primary_service_identity_id=service_identity_id,
+            primary_token_id=token_id,
+            primary_expires_at=expires_at,
+            reviewer_service_identity_id=reviewer_service_identity_id,
+            reviewer_token_id=reviewer_token_id,
+            reviewer_expires_at=reviewer_expires_at,
+        )
+        self._probe_bootstrap_credentials(token, reviewer_token)
         for key in (
             "organization_id",
             "repository_id",
@@ -828,16 +1010,19 @@ class AcceptanceRunner:
                 "run_id": state.run_id,
                 "bootstrap_request_sha256": state.hashes["bootstrap_request_sha256"],
                 "bootstrap_mode": expected_bootstrap_mode,
+                "credential_set_generation": credential_metadata["credential_set_generation"],
                 "organization_id": state.identities["organization_id"],
                 "repository_id": state.identities["repository_id"],
                 "access_scope_id": state.identities["access_scope_id"],
                 "reviewer_service_identity_id": state.identities["reviewer_service_identity_id"],
+                "service_identity_id": service_identity_id,
                 "token_id": token_id,
                 "reviewer_token_id": state.identities["reviewer_token_id"],
+                "credential_metadata": credential_metadata,
                 "anva_token": token,
                 "reviewer_token": reviewer_token,
-                "expires_at": _string(response, "expires_at"),
-                "reviewer_expires_at": _string(response, "reviewer_expires_at"),
+                "expires_at": expires_at,
+                "reviewer_expires_at": reviewer_expires_at,
             },
         )
         state.status = "PREPARING"
@@ -877,9 +1062,26 @@ class AcceptanceRunner:
                     "Bootstrap credential handoff has an invalid token identity"
                 ) from error
         token = _string(handoff, "anva_token")
-        _string(handoff, "reviewer_token")
-        _string(handoff, "expires_at")
-        _string(handoff, "reviewer_expires_at")
+        reviewer_token = _string(handoff, "reviewer_token")
+        expires_at = _string(handoff, "expires_at")
+        reviewer_expires_at = _string(handoff, "reviewer_expires_at")
+        # Older schema-v1 handoffs predate authoritative credential metadata. They
+        # remain resumable; once the field is present it must be complete and exact.
+        if "credential_metadata" in handoff:
+            if "credential_set_generation" not in handoff:
+                raise AcceptanceRunnerError("Bootstrap credential handoff does not match this run")
+            self._validated_credential_metadata(
+                handoff,
+                repository_id=state.identities["repository_id"],
+                access_scope_id=state.identities["access_scope_id"],
+                primary_service_identity_id=_string(handoff, "service_identity_id"),
+                primary_token_id=_string(handoff, "token_id"),
+                primary_expires_at=expires_at,
+                reviewer_service_identity_id=state.identities["reviewer_service_identity_id"],
+                reviewer_token_id=state.identities["reviewer_token_id"],
+                reviewer_expires_at=reviewer_expires_at,
+            )
+        self._probe_bootstrap_credentials(token, reviewer_token)
         state.status = "PREPARING"
         self._save(state)
         return PublicAPI(self.config.api_url, token), token

@@ -18,6 +18,9 @@ from anva.contract_limits import (
     MAX_CANVAS_QUERY_NODES,
 )
 from anva.contracts.bootstrap_scope import (
+    ACCEPTANCE_INITIATOR_ACTIONS,
+    ACCEPTANCE_REVIEWER_ACTIONS,
+    ACTION_VALUES,
     BOOTSTRAP_SCOPE_SCHEMA,
     acceptance_bootstrap_scope_payload,
 )
@@ -41,22 +44,40 @@ SHA256: Final[dict[str, str]] = {"type": "string", "pattern": "^[a-f0-9]{64}$"}
 COMMIT: Final[dict[str, str]] = {"type": "string", "pattern": "^[a-f0-9]{40}$"}
 DATE_TIME: Final[dict[str, str]] = {"type": "string", "format": "date-time"}
 
-BOOTSTRAP_COMMON_RESPONSE_PROPERTIES: Final[dict[str, object]] = {
-    "organization_id": UUID,
-    "user_id": UUID,
-    "membership_id": UUID,
-    "repository_id": UUID,
-    "service_identity_id": UUID,
-    "access_scope_id": UUID,
-    "token_id": UUID,
-    "token": {"type": "string", "minLength": 32, "maxLength": 512},
-    "expires_at": DATE_TIME,
-    "bootstrap_request_sha256": SHA256,
-    "recovered": {"type": "boolean"},
+BOOTSTRAP_CREDENTIAL_METADATA_ENTRY: Final[dict[str, object]] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "token_id": UUID,
+        "service_identity_id": UUID,
+        "repository_id": UUID,
+        "access_scope_id": UUID,
+        "allowed_actions": {
+            "type": "array",
+            "items": {"type": "string", "enum": list(ACTION_VALUES)},
+            "minItems": 1,
+            "maxItems": len(ACTION_VALUES),
+            "uniqueItems": True,
+        },
+        "service_identity_active_at_issuance": {"type": "boolean"},
+        "token_active_at_issuance": {"type": "boolean"},
+        "revoked_at_issuance": {"oneOf": [DATE_TIME, {"type": "null"}]},
+        "expires_at": DATE_TIME,
+        "issued_at": DATE_TIME,
+    },
+    "required": [
+        "token_id",
+        "service_identity_id",
+        "repository_id",
+        "access_scope_id",
+        "allowed_actions",
+        "service_identity_active_at_issuance",
+        "token_active_at_issuance",
+        "revoked_at_issuance",
+        "expires_at",
+        "issued_at",
+    ],
 }
-BOOTSTRAP_COMMON_RESPONSE_REQUIRED: Final[tuple[str, ...]] = tuple(
-    BOOTSTRAP_COMMON_RESPONSE_PROPERTIES
-)
 BOOTSTRAP_REVIEWER_RESPONSE_PROPERTIES: Final[dict[str, object]] = {
     "reviewer_service_identity_id": UUID,
     "reviewer_token_id": UUID,
@@ -124,10 +145,70 @@ def _closed(
     return schema
 
 
+BOOTSTRAP_PRIMARY_CREDENTIAL_METADATA: Final[dict[str, object]] = _closed(
+    {
+        "schema_version": {"type": "integer", "const": 1},
+        "bootstrap_request_sha256": SHA256,
+        "credential_set_id": UUID,
+        "credential_set_generation": {"type": "integer", "minimum": 0},
+        "observed_at": DATE_TIME,
+        "primary": deepcopy(BOOTSTRAP_CREDENTIAL_METADATA_ENTRY),
+    },
+    (
+        "schema_version",
+        "bootstrap_request_sha256",
+        "credential_set_id",
+        "credential_set_generation",
+        "observed_at",
+        "primary",
+    ),
+)
+BOOTSTRAP_REVIEWER_CREDENTIAL_METADATA: Final[dict[str, object]] = _closed(
+    {
+        "schema_version": {"type": "integer", "const": 1},
+        "bootstrap_request_sha256": SHA256,
+        "credential_set_id": UUID,
+        "credential_set_generation": {"type": "integer", "minimum": 0},
+        "observed_at": DATE_TIME,
+        "primary": deepcopy(BOOTSTRAP_CREDENTIAL_METADATA_ENTRY),
+        "reviewer": deepcopy(BOOTSTRAP_CREDENTIAL_METADATA_ENTRY),
+    },
+    (
+        "schema_version",
+        "bootstrap_request_sha256",
+        "credential_set_id",
+        "credential_set_generation",
+        "observed_at",
+        "primary",
+        "reviewer",
+    ),
+)
+
+BOOTSTRAP_COMMON_RESPONSE_PROPERTIES: Final[dict[str, object]] = {
+    "organization_id": UUID,
+    "user_id": UUID,
+    "membership_id": UUID,
+    "repository_id": UUID,
+    "service_identity_id": UUID,
+    "access_scope_id": UUID,
+    "token_id": UUID,
+    "token": {"type": "string", "minLength": 32, "maxLength": 512},
+    "expires_at": DATE_TIME,
+    "bootstrap_request_sha256": SHA256,
+    "credential_set_generation": {"type": "integer", "minimum": 0},
+    "recovered": {"type": "boolean"},
+    "credential_metadata": deepcopy(BOOTSTRAP_PRIMARY_CREDENTIAL_METADATA),
+}
+BOOTSTRAP_COMMON_RESPONSE_REQUIRED: Final[tuple[str, ...]] = tuple(
+    BOOTSTRAP_COMMON_RESPONSE_PROPERTIES
+)
+
+
 BOOTSTRAP_SCOPED_RESPONSE: Final[dict[str, object]] = _closed(
     {
         **deepcopy(BOOTSTRAP_COMMON_RESPONSE_PROPERTIES),
         **deepcopy(BOOTSTRAP_REVIEWER_RESPONSE_PROPERTIES),
+        "credential_metadata": deepcopy(BOOTSTRAP_REVIEWER_CREDENTIAL_METADATA),
         "bootstrap_mode": {
             "type": "string",
             "const": "SCOPED",
@@ -144,6 +225,7 @@ BOOTSTRAP_LEGACY_RESPONSE_WITH_REVIEWER: Final[dict[str, object]] = _closed(
     {
         **deepcopy(BOOTSTRAP_COMMON_RESPONSE_PROPERTIES),
         **deepcopy(BOOTSTRAP_REVIEWER_RESPONSE_PROPERTIES),
+        "credential_metadata": deepcopy(BOOTSTRAP_REVIEWER_CREDENTIAL_METADATA),
         "bootstrap_mode": {
             "type": "string",
             "const": "LEGACY",
@@ -1522,12 +1604,44 @@ HTTP_OPERATION_EXAMPLES: Final[dict[str, dict[str, object]]] = {
             "token": "example-only-opaque-value-never-issued-0001",
             "expires_at": "2026-08-10T12:00:00Z",
             "bootstrap_request_sha256": "1" * 64,
+            "credential_set_generation": 0,
             "recovered": False,
             "bootstrap_mode": "SCOPED",
             "reviewer_service_identity_id": _ids(8),
             "reviewer_token_id": _ids(9),
             "reviewer_token": "example-only-opaque-value-never-issued-0002",
             "reviewer_expires_at": "2026-08-10T12:00:00Z",
+            "credential_metadata": {
+                "schema_version": 1,
+                "bootstrap_request_sha256": "1" * 64,
+                "credential_set_id": _ids(10),
+                "credential_set_generation": 0,
+                "observed_at": "2026-08-03T12:00:00Z",
+                "primary": {
+                    "token_id": _ids(7),
+                    "service_identity_id": _ids(5),
+                    "repository_id": _ids(4),
+                    "access_scope_id": _ids(6),
+                    "allowed_actions": sorted(ACCEPTANCE_INITIATOR_ACTIONS),
+                    "service_identity_active_at_issuance": True,
+                    "token_active_at_issuance": True,
+                    "revoked_at_issuance": None,
+                    "expires_at": "2026-08-10T12:00:00Z",
+                    "issued_at": "2026-08-03T12:00:00Z",
+                },
+                "reviewer": {
+                    "token_id": _ids(9),
+                    "service_identity_id": _ids(8),
+                    "repository_id": _ids(4),
+                    "access_scope_id": _ids(6),
+                    "allowed_actions": sorted(ACCEPTANCE_REVIEWER_ACTIONS),
+                    "service_identity_active_at_issuance": True,
+                    "token_active_at_issuance": True,
+                    "revoked_at_issuance": None,
+                    "expires_at": "2026-08-10T12:00:00Z",
+                    "issued_at": "2026-08-03T12:00:00Z",
+                },
+            },
         },
     },
     "connectFilesystemSource": {

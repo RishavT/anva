@@ -133,6 +133,8 @@ def test_bootstrap_public_response_discriminator_requires_complete_reviewer_meta
 
     legacy_without_reviewer = deepcopy(missing_all)
     legacy_without_reviewer["bootstrap_mode"] = "LEGACY"
+    credential_metadata = cast(dict[str, object], legacy_without_reviewer["credential_metadata"])
+    credential_metadata.pop("reviewer")
     validator.validate(legacy_without_reviewer)
     legacy_with_reviewer = deepcopy(scoped)
     legacy_with_reviewer["bootstrap_mode"] = "LEGACY"

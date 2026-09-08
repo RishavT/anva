@@ -17,6 +17,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.views.decorators.http import require_http_methods
 
+from anva.contracts.bootstrap_credentials import bootstrap_credential_set_id
 from anva.contracts.validation import validate_payload
 from anva.core.exceptions import (
     AuthenticationError,
@@ -1049,6 +1050,32 @@ def bootstrap(request: HttpRequest) -> JsonResponse:
         idempotency_key=_optional_string(payload, "idempotency_key"),
         scope_payload=payload.get("scope"),
     )
+    observed_at = max(
+        result.issued_token.record.issued_at,
+        (
+            result.reviewer_issued_token.record.issued_at
+            if result.reviewer_issued_token is not None
+            else result.issued_token.record.issued_at
+        ),
+    )
+    if result.request_sha256 is None:
+        raise ValueError("Bootstrap result is missing its committed request hash")
+    credential_set_id = bootstrap_credential_set_id(
+        request_sha256=result.request_sha256,
+        generation=result.credential_set_generation,
+        primary_token_id=str(result.issued_token.record.id),
+        primary_issued_at=result.issued_token.record.issued_at,
+        reviewer_token_id=(
+            str(result.reviewer_issued_token.record.id)
+            if result.reviewer_issued_token is not None
+            else None
+        ),
+        reviewer_issued_at=(
+            result.reviewer_issued_token.record.issued_at
+            if result.reviewer_issued_token is not None
+            else None
+        ),
+    )
     response: dict[str, object] = {
         "organization_id": str(result.organization.id),
         "user_id": str(result.user.id),
@@ -1060,10 +1087,59 @@ def bootstrap(request: HttpRequest) -> JsonResponse:
         "token": result.issued_token.plaintext,
         "expires_at": result.issued_token.record.expires_at.isoformat(),
         "bootstrap_request_sha256": result.request_sha256,
+        "credential_set_generation": result.credential_set_generation,
         "recovered": result.recovered,
         "bootstrap_mode": "SCOPED" if "scope" in payload else "LEGACY",
+        "credential_metadata": {
+            "schema_version": 1,
+            "bootstrap_request_sha256": result.request_sha256,
+            "credential_set_id": str(credential_set_id),
+            "credential_set_generation": result.credential_set_generation,
+            "observed_at": observed_at.isoformat(),
+            "primary": {
+                "token_id": str(result.issued_token.record.id),
+                "service_identity_id": str(result.service_identity.id),
+                "repository_id": str(result.repository.id),
+                "access_scope_id": str(result.access_scope.id),
+                "allowed_actions": sorted(result.issued_token.record.allowed_actions),
+                "service_identity_active_at_issuance": result.service_identity.is_active,
+                "token_active_at_issuance": (
+                    result.service_identity.is_active
+                    and result.issued_token.record.revoked_at is None
+                    and result.issued_token.record.expires_at > timezone.now()
+                ),
+                "revoked_at_issuance": (
+                    result.issued_token.record.revoked_at.isoformat()
+                    if result.issued_token.record.revoked_at is not None
+                    else None
+                ),
+                "expires_at": result.issued_token.record.expires_at.isoformat(),
+                "issued_at": result.issued_token.record.issued_at.isoformat(),
+            },
+        },
     }
     if result.reviewer_service_identity is not None and result.reviewer_issued_token is not None:
+        credential_metadata = cast(dict[str, object], response["credential_metadata"])
+        credential_metadata["reviewer"] = {
+            "token_id": str(result.reviewer_issued_token.record.id),
+            "service_identity_id": str(result.reviewer_service_identity.id),
+            "repository_id": str(result.repository.id),
+            "access_scope_id": str(result.access_scope.id),
+            "allowed_actions": sorted(result.reviewer_issued_token.record.allowed_actions),
+            "service_identity_active_at_issuance": result.reviewer_service_identity.is_active,
+            "token_active_at_issuance": (
+                result.reviewer_service_identity.is_active
+                and result.reviewer_issued_token.record.revoked_at is None
+                and result.reviewer_issued_token.record.expires_at > timezone.now()
+            ),
+            "revoked_at_issuance": (
+                result.reviewer_issued_token.record.revoked_at.isoformat()
+                if result.reviewer_issued_token.record.revoked_at is not None
+                else None
+            ),
+            "expires_at": result.reviewer_issued_token.record.expires_at.isoformat(),
+            "issued_at": result.reviewer_issued_token.record.issued_at.isoformat(),
+        }
         response.update(
             {
                 "reviewer_service_identity_id": str(result.reviewer_service_identity.id),
