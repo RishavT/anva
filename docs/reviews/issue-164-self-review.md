@@ -23,12 +23,13 @@ credential-introspection boundary was added.
 
 ## Verification
 
-- Focused runner, boundary, and contract tests: 59 passed.
+- Focused runner boundary tests after final envelope binding: 45 passed.
 - Real PostgreSQL bootstrap and resume integration: 18 passed.
-- Format, Ruff, MyPy (113 source files), generated-contract validation (35 artifacts): passed.
-- P2 broad suite: 1,753 passed and 9 skipped; its sole unrelated canvas wall-clock timing failure
-  passed unchanged in isolation and is tracked by issue 167. The earlier unrelated near-deadline
-  failure remains tracked by issue 165, and retained-MinIO failures remain tracked by issue 163.
+- Format, Ruff, MyPy (114 source files), generated-contract validation (35 artifacts): passed.
+- Final stable-tree broad suite: 1,759 passed and 9 skipped. An earlier unrelated canvas wall-clock
+  timing failure passed unchanged in isolation and is tracked by issue 167. The earlier unrelated
+  near-deadline failure remains tracked by issue 165, and retained-MinIO failures remain tracked
+  by issue 163.
 
 ## Residual risk
 

@@ -44,6 +44,10 @@ or add a general credential-introspection endpoint. Metadata never contains a pl
 token digest. The official runner also authenticates both bearers through side-effect-free MCP
 capability discovery before publishing or recovering a usable handoff. Treat missing,
 contradictory, or failed-probe metadata as a failed bootstrap handoff.
+Each entry's exact `issued_at` is integrity-bound, and `observed_at` must equal the later issuance
+time. The deterministic credential-set ID covers the request hash, the matching top-level and
+metadata generation, both token IDs, and both issuance times. Older schema-v1 handoffs without
+metadata remain readable; once metadata exists, all of these relationships are mandatory.
 
 ## Issue and rotate
 

@@ -17,6 +17,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.views.decorators.http import require_http_methods
 
+from anva.contracts.bootstrap_credentials import bootstrap_credential_set_id
 from anva.contracts.validation import validate_payload
 from anva.core.exceptions import (
     AuthenticationError,
@@ -1057,20 +1058,22 @@ def bootstrap(request: HttpRequest) -> JsonResponse:
             else result.issued_token.record.issued_at
         ),
     )
-    credential_set_id = uuid.uuid5(
-        uuid.NAMESPACE_URL,
-        ":".join(
-            (
-                "anva-bootstrap-credential-set",
-                str(result.request_sha256),
-                str(result.credential_set_generation),
-                str(result.issued_token.record.id),
-                str(
-                    result.reviewer_issued_token.record.id
-                    if result.reviewer_issued_token is not None
-                    else "none"
-                ),
-            )
+    if result.request_sha256 is None:
+        raise ValueError("Bootstrap result is missing its committed request hash")
+    credential_set_id = bootstrap_credential_set_id(
+        request_sha256=result.request_sha256,
+        generation=result.credential_set_generation,
+        primary_token_id=str(result.issued_token.record.id),
+        primary_issued_at=result.issued_token.record.issued_at,
+        reviewer_token_id=(
+            str(result.reviewer_issued_token.record.id)
+            if result.reviewer_issued_token is not None
+            else None
+        ),
+        reviewer_issued_at=(
+            result.reviewer_issued_token.record.issued_at
+            if result.reviewer_issued_token is not None
+            else None
         ),
     )
     response: dict[str, object] = {
@@ -1084,6 +1087,7 @@ def bootstrap(request: HttpRequest) -> JsonResponse:
         "token": result.issued_token.plaintext,
         "expires_at": result.issued_token.record.expires_at.isoformat(),
         "bootstrap_request_sha256": result.request_sha256,
+        "credential_set_generation": result.credential_set_generation,
         "recovered": result.recovered,
         "bootstrap_mode": "SCOPED" if "scope" in payload else "LEGACY",
         "credential_metadata": {
@@ -1110,6 +1114,7 @@ def bootstrap(request: HttpRequest) -> JsonResponse:
                     else None
                 ),
                 "expires_at": result.issued_token.record.expires_at.isoformat(),
+                "issued_at": result.issued_token.record.issued_at.isoformat(),
             },
         },
     }
@@ -1133,6 +1138,7 @@ def bootstrap(request: HttpRequest) -> JsonResponse:
                 else None
             ),
             "expires_at": result.reviewer_issued_token.record.expires_at.isoformat(),
+            "issued_at": result.reviewer_issued_token.record.issued_at.isoformat(),
         }
         response.update(
             {

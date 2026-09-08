@@ -91,6 +91,7 @@ def openapi_document() -> dict[str, object]:
                 ]
             },
             "expires_at": {"type": "string", "format": "date-time"},
+            "issued_at": {"type": "string", "format": "date-time"},
         },
         "required": [
             "token_id",
@@ -102,6 +103,7 @@ def openapi_document() -> dict[str, object]:
             "token_active_at_issuance",
             "revoked_at_issuance",
             "expires_at",
+            "issued_at",
         ],
     }
     structured_errors: dict[str, object] = {
@@ -1420,6 +1422,10 @@ def openapi_document() -> dict[str, object]:
                                                     "type": "string",
                                                     "pattern": "^[a-f0-9]{64}$",
                                                 },
+                                                "credential_set_generation": {
+                                                    "type": "integer",
+                                                    "minimum": 0,
+                                                },
                                                 "recovered": {"type": "boolean"},
                                                 "reviewer_service_identity_id": {
                                                     "type": "string",
@@ -1489,6 +1495,7 @@ def openapi_document() -> dict[str, object]:
                                                 "token",
                                                 "expires_at",
                                                 "bootstrap_request_sha256",
+                                                "credential_set_generation",
                                                 "recovered",
                                                 "credential_metadata",
                                             ],

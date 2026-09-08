@@ -63,6 +63,7 @@ BOOTSTRAP_CREDENTIAL_METADATA_ENTRY: Final[dict[str, object]] = {
         "token_active_at_issuance": {"type": "boolean"},
         "revoked_at_issuance": {"oneOf": [DATE_TIME, {"type": "null"}]},
         "expires_at": DATE_TIME,
+        "issued_at": DATE_TIME,
     },
     "required": [
         "token_id",
@@ -74,6 +75,7 @@ BOOTSTRAP_CREDENTIAL_METADATA_ENTRY: Final[dict[str, object]] = {
         "token_active_at_issuance",
         "revoked_at_issuance",
         "expires_at",
+        "issued_at",
     ],
 }
 BOOTSTRAP_REVIEWER_RESPONSE_PROPERTIES: Final[dict[str, object]] = {
@@ -193,6 +195,7 @@ BOOTSTRAP_COMMON_RESPONSE_PROPERTIES: Final[dict[str, object]] = {
     "token": {"type": "string", "minLength": 32, "maxLength": 512},
     "expires_at": DATE_TIME,
     "bootstrap_request_sha256": SHA256,
+    "credential_set_generation": {"type": "integer", "minimum": 0},
     "recovered": {"type": "boolean"},
     "credential_metadata": deepcopy(BOOTSTRAP_PRIMARY_CREDENTIAL_METADATA),
 }
@@ -1601,6 +1604,7 @@ HTTP_OPERATION_EXAMPLES: Final[dict[str, dict[str, object]]] = {
             "token": "example-only-opaque-value-never-issued-0001",
             "expires_at": "2026-08-10T12:00:00Z",
             "bootstrap_request_sha256": "1" * 64,
+            "credential_set_generation": 0,
             "recovered": False,
             "bootstrap_mode": "SCOPED",
             "reviewer_service_identity_id": _ids(8),
@@ -1623,6 +1627,7 @@ HTTP_OPERATION_EXAMPLES: Final[dict[str, dict[str, object]]] = {
                     "token_active_at_issuance": True,
                     "revoked_at_issuance": None,
                     "expires_at": "2026-08-10T12:00:00Z",
+                    "issued_at": "2026-08-03T12:00:00Z",
                 },
                 "reviewer": {
                     "token_id": _ids(9),
@@ -1634,6 +1639,7 @@ HTTP_OPERATION_EXAMPLES: Final[dict[str, dict[str, object]]] = {
                     "token_active_at_issuance": True,
                     "revoked_at_issuance": None,
                     "expires_at": "2026-08-10T12:00:00Z",
+                    "issued_at": "2026-08-03T12:00:00Z",
                 },
             },
         },

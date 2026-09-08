@@ -40,6 +40,7 @@ from anva.acceptance.provenance import (
     attest_launch_manifest,
 )
 from anva.acceptance.state import ResumeState, load_state, save_state
+from anva.contracts.bootstrap_credentials import bootstrap_credential_set_id
 from anva.contracts.bootstrap_scope import (
     ACCEPTANCE_INITIATOR_ACTIONS,
     ACCEPTANCE_REVIEWER_ACTIONS,
@@ -62,6 +63,7 @@ BOOTSTRAP_METADATA_FIELDS = frozenset(
         "token_active_at_issuance",
         "revoked_at_issuance",
         "expires_at",
+        "issued_at",
     }
 )
 
@@ -830,6 +832,7 @@ class AcceptanceRunner:
             or not isinstance(generation, int)
             or isinstance(generation, bool)
             or generation < 0
+            or payload.get("credential_set_generation") != generation
         ):
             raise AcceptanceRunnerError("Bootstrap credential metadata is invalid")
         try:
@@ -861,6 +864,7 @@ class AcceptanceRunner:
             },
         }
         validated: dict[str, object] = {}
+        issuance_times: dict[str, datetime] = {}
         for name in ("primary", "reviewer"):
             value = metadata.get(name)
             if not isinstance(value, dict) or set(value) != BOOTSTRAP_METADATA_FIELDS:
@@ -903,9 +907,15 @@ class AcceptanceRunner:
                 )
                 if parsed_expiry.utcoffset() is None:
                     raise ValueError
+                issued_at = datetime.fromisoformat(
+                    _string(item, "issued_at").replace("Z", "+00:00")
+                )
+                if issued_at.utcoffset() is None or issued_at >= parsed_expiry:
+                    raise ValueError
             except ValueError as error:
                 raise AcceptanceRunnerError("Bootstrap credential metadata is invalid") from error
             validated[name] = deepcopy(item)
+            issuance_times[name] = issued_at
         primary = cast(dict[str, object], validated["primary"])
         reviewer = cast(dict[str, object], validated["reviewer"])
         if (
@@ -913,6 +923,17 @@ class AcceptanceRunner:
             or primary["service_identity_id"] == reviewer["service_identity_id"]
         ):
             raise AcceptanceRunnerError("Bootstrap reviewer credential is not independent")
+        if observed_at != max(issuance_times.values()) or str(
+            bootstrap_credential_set_id(
+                request_sha256=_string(metadata, "bootstrap_request_sha256"),
+                generation=generation,
+                primary_token_id=_string(primary, "token_id"),
+                primary_issued_at=issuance_times["primary"],
+                reviewer_token_id=_string(reviewer, "token_id"),
+                reviewer_issued_at=issuance_times["reviewer"],
+            )
+        ) != metadata.get("credential_set_id"):
+            raise AcceptanceRunnerError("Bootstrap credential metadata is invalid")
         return {
             "schema_version": 1,
             "bootstrap_request_sha256": metadata["bootstrap_request_sha256"],
@@ -989,6 +1010,7 @@ class AcceptanceRunner:
                 "run_id": state.run_id,
                 "bootstrap_request_sha256": state.hashes["bootstrap_request_sha256"],
                 "bootstrap_mode": expected_bootstrap_mode,
+                "credential_set_generation": credential_metadata["credential_set_generation"],
                 "organization_id": state.identities["organization_id"],
                 "repository_id": state.identities["repository_id"],
                 "access_scope_id": state.identities["access_scope_id"],
@@ -1046,6 +1068,8 @@ class AcceptanceRunner:
         # Older schema-v1 handoffs predate authoritative credential metadata. They
         # remain resumable; once the field is present it must be complete and exact.
         if "credential_metadata" in handoff:
+            if "credential_set_generation" not in handoff:
+                raise AcceptanceRunnerError("Bootstrap credential handoff does not match this run")
             self._validated_credential_metadata(
                 handoff,
                 repository_id=state.identities["repository_id"],

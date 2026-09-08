@@ -12,6 +12,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from typing import cast
 from unittest.mock import patch
@@ -39,6 +40,7 @@ from anva.contract_limits import (
     MAX_CANVAS_QUERY_NODES,
 )
 from anva.contracts.acceptance import ACCEPTANCE_HTTP_OPERATION_IDS
+from anva.contracts.bootstrap_credentials import bootstrap_credential_set_id
 from anva.contracts.bootstrap_scope import (
     ACCEPTANCE_INITIATOR_ACTIONS,
     ACCEPTANCE_REVIEWER_ACTIONS,
@@ -166,12 +168,26 @@ class FakeProduct:
                     "expires_at": "2026-08-04T12:00:00Z",
                     "reviewer_expires_at": "2026-08-04T12:00:00Z",
                     "bootstrap_request_sha256": request_hash,
+                    "credential_set_generation": 0,
                     "bootstrap_mode": "SCOPED" if "scope" in payload else "LEGACY",
                     "recovered": False,
                     "credential_metadata": {
                         "schema_version": 1,
                         "bootstrap_request_sha256": request_hash,
-                        "credential_set_id": _id(10),
+                        "credential_set_id": str(
+                            bootstrap_credential_set_id(
+                                request_sha256=request_hash,
+                                generation=0,
+                                primary_token_id=_id(7),
+                                primary_issued_at=datetime.fromisoformat(
+                                    "2026-08-03T12:00:00+00:00"
+                                ),
+                                reviewer_token_id=_id(9),
+                                reviewer_issued_at=datetime.fromisoformat(
+                                    "2026-08-03T12:00:00+00:00"
+                                ),
+                            )
+                        ),
                         "credential_set_generation": 0,
                         "observed_at": "2026-08-03T12:00:00Z",
                         "primary": {
@@ -184,6 +200,7 @@ class FakeProduct:
                             "token_active_at_issuance": True,
                             "revoked_at_issuance": None,
                             "expires_at": "2026-08-04T12:00:00Z",
+                            "issued_at": "2026-08-03T12:00:00Z",
                         },
                         "reviewer": {
                             "token_id": _id(9),
@@ -195,6 +212,7 @@ class FakeProduct:
                             "token_active_at_issuance": True,
                             "revoked_at_issuance": None,
                             "expires_at": "2026-08-04T12:00:00Z",
+                            "issued_at": "2026-08-03T12:00:00Z",
                         },
                     },
                 },
@@ -1458,6 +1476,12 @@ def test_bootstrap_reconcile_handles_legacy_or_rejects_invalid_primary_token_id(
         lambda metadata: cast(dict[str, object], metadata["primary"]).__setitem__(
             "token_active_at_issuance", False
         ),
+        lambda metadata: metadata.__setitem__("credential_set_id", _id(999)),
+        lambda metadata: metadata.__setitem__("credential_set_generation", 1),
+        lambda metadata: metadata.__setitem__("observed_at", "2026-08-03T12:00:01Z"),
+        lambda metadata: cast(dict[str, object], metadata["primary"]).__setitem__(
+            "issued_at", "2026-08-03T11:59:59Z"
+        ),
         lambda metadata: cast(dict[str, object], metadata["reviewer"]).__setitem__(
             "revoked_at_issuance", "2026-08-01T00:00:00Z"
         ),
@@ -1506,6 +1530,36 @@ def test_bootstrap_credential_metadata_tampering_fails_before_handoff(
     assert runner.config.credential_output is not None
     assert not runner.config.credential_output.exists()
     assert load_state(runner.config.state_path).status == "BOOTSTRAP_PREPARED"
+
+
+@pytest.mark.unit
+def test_bootstrap_top_level_generation_must_match_attested_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner, product = _runner(
+        tmp_path, monkeypatch, case_payload=deepcopy(EXAMPLES["acceptance-case"])
+    )
+    original_request = product.request
+
+    def tampered_bootstrap(
+        token: str | None,
+        method: str,
+        path: str,
+        payload: dict[str, object] | None,
+        content: bytes | None,
+    ) -> APIResponse:
+        response = original_request(token, method, path, payload, content)
+        if path == "/bootstrap":
+            tampered = deepcopy(response.payload)
+            tampered["credential_set_generation"] = 1
+            return APIResponse(response.status, tampered)
+        return response
+
+    monkeypatch.setattr(product, "request", tampered_bootstrap)
+    with pytest.raises(AcceptanceRunnerError, match="credential metadata"):
+        runner.start(bootstrap_secret="bootstrap-material", token=None)
+    assert runner.config.credential_output is not None
+    assert not runner.config.credential_output.exists()
 
 
 @pytest.mark.unit
@@ -1574,7 +1628,7 @@ def test_bootstrap_handoff_metadata_is_secret_free_and_tampering_fails_closed(
     primary = cast(dict[str, object], metadata["primary"])
     assert primary["allowed_actions"] == sorted(ACCEPTANCE_INITIATOR_ACTIONS)
     assert len(cast(list[str], primary["allowed_actions"])) == 15
-    primary["access_scope_id"] = _id(999)
+    handoff["credential_set_generation"] = 1
     runner.config.credential_output.write_text(json.dumps(handoff), encoding="utf-8")
     runner.config.credential_output.chmod(0o600)
 

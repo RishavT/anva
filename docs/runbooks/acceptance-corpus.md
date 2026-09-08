@@ -234,6 +234,8 @@ revoked immediately after a successful probe. A schema-version
 present, missing, extra, reordered, or contradictory values fail closed. For the scoped acceptance
 profile the primary list is exactly 15 actions (including `token.manage`) and the reviewer list is
 exactly `assurance.review`.
+Each exact `issued_at` participates in the deterministic credential-set ID, `observed_at` must be
+the later issuance time, and the response/handoff top-level generation must match the metadata.
 Use the reviewer credential only for the two reviewer phases:
 
 ```sh

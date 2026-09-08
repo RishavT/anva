@@ -13,6 +13,7 @@ from django.test import Client, override_settings
 from jsonschema import Draft202012Validator, FormatChecker
 
 from anva.contracts.acceptance import validate_acceptance_http_response
+from anva.contracts.bootstrap_credentials import bootstrap_credential_set_id
 from anva.contracts.bootstrap_scope import acceptance_bootstrap_scope_payload
 from anva.core.exceptions import AuthenticationError, ResourceNotFoundError
 from anva.core.models import (
@@ -199,6 +200,7 @@ def test_scoped_bootstrap_creates_only_explicit_records_bindings_and_action_gran
     assert metadata["schema_version"] == 1
     assert metadata["bootstrap_request_sha256"] == result["bootstrap_request_sha256"]
     assert metadata["credential_set_generation"] == 0
+    assert result["credential_set_generation"] == metadata["credential_set_generation"]
     uuid.UUID(metadata["credential_set_id"])
     primary_metadata = metadata["primary"]
     reviewer_metadata = metadata["reviewer"]
@@ -212,6 +214,7 @@ def test_scoped_bootstrap_creates_only_explicit_records_bindings_and_action_gran
         "token_active_at_issuance": True,
         "revoked_at_issuance": None,
         "expires_at": result["expires_at"],
+        "issued_at": primary_metadata["issued_at"],
     }
     assert len(primary_metadata["allowed_actions"]) == 15
     assert "token.manage" in primary_metadata["allowed_actions"]
@@ -225,6 +228,7 @@ def test_scoped_bootstrap_creates_only_explicit_records_bindings_and_action_gran
         "token_active_at_issuance": True,
         "revoked_at_issuance": None,
         "expires_at": result["reviewer_expires_at"],
+        "issued_at": reviewer_metadata["issued_at"],
     }
     assert primary_metadata["service_identity_id"] != reviewer_metadata["service_identity_id"]
     assert primary_metadata["token_id"] != reviewer_metadata["token_id"]
@@ -563,6 +567,11 @@ def test_exact_bootstrap_retry_revokes_and_reissues_only_precommitted_credential
     replacement_snapshot = replacement["credential_metadata"]
     assert original_snapshot["credential_set_generation"] == 0
     assert replacement_snapshot["credential_set_generation"] == 1
+    assert original["credential_set_generation"] == original_snapshot["credential_set_generation"]
+    assert (
+        replacement["credential_set_generation"]
+        == replacement_snapshot["credential_set_generation"]
+    )
     assert original_snapshot["credential_set_id"] != replacement_snapshot["credential_set_id"]
     assert (
         original_snapshot["bootstrap_request_sha256"]
@@ -570,6 +579,23 @@ def test_exact_bootstrap_retry_revokes_and_reissues_only_precommitted_credential
     )
     assert original_snapshot["primary"]["token_active_at_issuance"] is True
     assert original_snapshot["primary"]["revoked_at_issuance"] is None
+    for response, snapshot in ((original, original_snapshot), (replacement, replacement_snapshot)):
+        primary_record = RepositoryAccessToken.objects.get(id=response["token_id"])
+        reviewer_record = RepositoryAccessToken.objects.get(id=response["reviewer_token_id"])
+        assert (
+            snapshot["observed_at"]
+            == max(primary_record.issued_at, reviewer_record.issued_at).isoformat()
+        )
+        assert snapshot["credential_set_id"] == str(
+            bootstrap_credential_set_id(
+                request_sha256=response["bootstrap_request_sha256"],
+                generation=response["credential_set_generation"],
+                primary_token_id=response["token_id"],
+                primary_issued_at=primary_record.issued_at,
+                reviewer_token_id=response["reviewer_token_id"],
+                reviewer_issued_at=reviewer_record.issued_at,
+            )
+        )
     assert RepositoryAccessToken.objects.get(id=original["token_id"]).revoked_at is not None
     assert (
         RepositoryAccessToken.objects.get(id=original["reviewer_token_id"]).revoked_at is not None
