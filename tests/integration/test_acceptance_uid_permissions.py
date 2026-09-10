@@ -117,7 +117,7 @@ def test_uid_1000_can_use_private_acceptance_binds_but_an_unrelated_uid_cannot(
         assert "ANVA_BOOTSTRAP_SECRET" not in start_environment
 
         created = subprocess.run(  # noqa: S603 - executable resolved by shutil.which
-            [*compose, "create", "--no-build", "--no-deps", "acceptance-product-start"],
+            [*compose, "create", "--no-build", "acceptance-product-start"],
             check=False,
             capture_output=True,
             text=True,
