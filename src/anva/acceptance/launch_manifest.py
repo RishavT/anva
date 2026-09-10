@@ -525,12 +525,14 @@ def _validate_phase(
         environment = service.get("environment")
         if (
             not isinstance(environment, dict)
-            or environment.get("ANVA_BOOTSTRAP_SECRET") != ""
+            or "ANVA_BOOTSTRAP_SECRET" in environment
             or environment.get("ANVA_BOOTSTRAP_SECRET_FILE") != "/run/secrets/anva_bootstrap_secret"
         ):
             raise _reject(
                 "launch_runtime_mismatch", "Launch service bootstrap secret source differs"
             )
+    elif "secrets" in service:
+        raise _reject("launch_runtime_mismatch", f"Launch service {name} secrets differ")
 
 
 def generate_launch_manifest(

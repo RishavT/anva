@@ -199,7 +199,6 @@ def test_product_acceptance_phases_have_disjoint_hardened_mounts() -> None:
     assert services["acceptance-product-start"]["environment"] == {
         "ANVA_API_URL": "http://api:8000/api/v1",
         "ANVA_MCP_URL": "http://mcp:8001/mcp",
-        "ANVA_BOOTSTRAP_SECRET": "${ANVA_BOOTSTRAP_SECRET:-}",
         "ANVA_BOOTSTRAP_SECRET_FILE": "/run/secrets/anva_bootstrap_secret",
         "ANVA_ACCEPTANCE_TOKEN": "${ANVA_ACCEPTANCE_TOKEN:-}",
     }
@@ -712,6 +711,40 @@ def test_resolved_acceptance_compose_enforces_edge_backend_separation() -> None:
             "acceptance-backend",
             "acceptance-edge",
         }
+
+
+@pytest.mark.unit
+def test_acceptance_resolution_scrubs_legacy_bootstrap_value() -> None:
+    docker = shutil.which("docker")
+    env = shutil.which("env")
+    if docker is None or env is None:
+        pytest.skip("Docker CLI and env are required for resolved Compose validation")
+    environment = os.environ.copy() | {"ANVA_BOOTSTRAP_SECRET": "PRIVATE-LEGACY-CANARY"}
+    completed = subprocess.run(  # noqa: S603 - executables resolved by shutil.which
+        [
+            env,
+            "-u",
+            "ANVA_BOOTSTRAP_SECRET",
+            docker,
+            "compose",
+            "-f",
+            "compose.yaml",
+            "-f",
+            "compose.acceptance.yaml",
+            "--profile",
+            "acceptance",
+            "config",
+            "--format",
+            "json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    assert "PRIVATE-LEGACY-CANARY" not in completed.stdout
+    start = json.loads(completed.stdout)["services"]["acceptance-product-start"]
+    assert "ANVA_BOOTSTRAP_SECRET" not in start["environment"]
 
 
 @pytest.mark.unit

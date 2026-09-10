@@ -107,7 +107,6 @@ def _phase(name: str, canary_value: str) -> dict[str, object]:
         "volumes": volumes,
     }
     if name == "acceptance-product-start":
-        cast(dict[str, object], phase["environment"])["ANVA_BOOTSTRAP_SECRET"] = ""
         cast(dict[str, object], phase["environment"])["ANVA_BOOTSTRAP_SECRET_FILE"] = (
             "/run/secrets/anva_bootstrap_secret"  # noqa: S105 - a path, not a credential
         )
@@ -409,6 +408,16 @@ def test_schema_service_inventory_matches_runtime_and_old_valid_manifest_is_acce
                 dict[str, object],
                 cast(dict[str, object], value["services"])["acceptance-product-start"],
             ).__setitem__("secrets", []),
+            "launch_runtime_mismatch",
+        ),
+        (
+            lambda value: cast(
+                dict[str, object],
+                cast(dict[str, object], value["services"])["acceptance-review-request"],
+            ).__setitem__(
+                "secrets",
+                [{"source": "anva_bootstrap_secret", "target": "/run/secrets/other"}],
+            ),
             "launch_runtime_mismatch",
         ),
         (
