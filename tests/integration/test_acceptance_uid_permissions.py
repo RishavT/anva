@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import runpy
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
-from tests.unit.test_acceptance_runner_boundaries import _runner
 
 
 @pytest.mark.integration
@@ -244,7 +244,8 @@ def test_container_cli_reads_file_secret_and_creates_one_time_credentials(
     if executable is None or not Path("/.dockerenv").exists():
         pytest.skip("requires the project test container")
 
-    runner, _product = _runner(tmp_path, monkeypatch)
+    unit_boundaries = Path("tests/unit/test_acceptance_runner_boundaries.py").resolve()
+    runner, _product = runpy.run_path(str(unit_boundaries))["_runner"](tmp_path, monkeypatch)
     config = runner.config
     secret = tmp_path / "bootstrap.secret"
     secret.write_text("PRIVATE-FILE-CANARY", encoding="utf-8")
@@ -252,7 +253,6 @@ def test_container_cli_reads_file_secret_and_creates_one_time_credentials(
 
     probe = tmp_path / "probe"
     probe.mkdir()
-    unit_boundaries = Path("tests/unit/test_acceptance_runner_boundaries.py").resolve()
     (probe / "sitecustomize.py").write_text(
         "import runpy\n"
         "import django\n"
