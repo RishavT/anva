@@ -1222,8 +1222,10 @@ def _acceptance_request(arguments: argparse.Namespace) -> int:
             runner = AcceptanceRunner(config)
             command = str(arguments.acceptance_command)
             if command == "start":
+                from anva.config.bootstrap import load_bootstrap_secret
+
                 state = runner.start(
-                    bootstrap_secret=os.getenv("ANVA_BOOTSTRAP_SECRET"),
+                    bootstrap_secret=load_bootstrap_secret(),
                     token=os.getenv("ANVA_ACCEPTANCE_TOKEN"),
                 )
             elif command == "review-request":

@@ -189,6 +189,7 @@ services:
     environment:
       <<: *acceptance-environment
       ANVA_BOOTSTRAP_SECRET: ${ANVA_BOOTSTRAP_SECRET:-}
+      ANVA_BOOTSTRAP_SECRET_FILE: /run/secrets/anva_bootstrap_secret
       ANVA_ACCEPTANCE_TOKEN: ${ANVA_ACCEPTANCE_TOKEN:-}
     command:
       - anva
@@ -238,6 +239,8 @@ services:
         read_only: true
         bind:
           create_host_path: false
+    secrets:
+      - anva_bootstrap_secret
 
   acceptance-review-request:
     <<: *acceptance-product
