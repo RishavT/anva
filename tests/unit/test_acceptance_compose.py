@@ -196,6 +196,14 @@ def test_product_acceptance_phases_have_disjoint_hardened_mounts() -> None:
         "/acceptance/credentials",
         "/acceptance/launch/manifest.json",
     }
+    assert services["acceptance-product-start"]["environment"] == {
+        "ANVA_API_URL": "http://api:8000/api/v1",
+        "ANVA_MCP_URL": "http://mcp:8001/mcp",
+        "ANVA_BOOTSTRAP_SECRET": "${ANVA_BOOTSTRAP_SECRET:-}",
+        "ANVA_BOOTSTRAP_SECRET_FILE": "/run/secrets/anva_bootstrap_secret",
+        "ANVA_ACCEPTANCE_TOKEN": "${ANVA_ACCEPTANCE_TOKEN:-}",
+    }
+    assert services["acceptance-product-start"]["secrets"] == ["anva_bootstrap_secret"]
     assert targets["acceptance-review-request"] == {
         "/acceptance/state",
         "/acceptance/handoff",

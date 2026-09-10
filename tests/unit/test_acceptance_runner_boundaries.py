@@ -34,6 +34,7 @@ from anva.acceptance.runner import (
     _write_secret_handoff,
 )
 from anva.acceptance.state import ResumeState, load_state, save_state
+from anva.config.bootstrap import load_bootstrap_secret
 from anva.contract_limits import (
     MAX_CANVAS_QUERY_DEPTH,
     MAX_CANVAS_QUERY_EDGES,
@@ -627,7 +628,18 @@ def test_case_drives_query_commits_pr_and_public_payloads(
     _bind_case_evidence(case, head_commit)
     runner, product = _runner(tmp_path, monkeypatch, case_payload=case)
 
-    awaiting = runner.start(bootstrap_secret="bootstrap-material", token=None)
+    bootstrap_secret = tmp_path / "bootstrap.secret"
+    bootstrap_secret.write_text("bootstrap-material")
+    bootstrap_secret.chmod(0o400)
+    awaiting = runner.start(
+        bootstrap_secret=load_bootstrap_secret(
+            {
+                "ANVA_BOOTSTRAP_SECRET": "",
+                "ANVA_BOOTSTRAP_SECRET_FILE": str(bootstrap_secret),
+            }
+        ),
+        token=None,
+    )
 
     assert awaiting.status == "AWAITING_EXTERNAL_REVIEW"
     assert product.mcp_probe_tokens == [
@@ -640,6 +652,10 @@ def test_case_drives_query_commits_pr_and_public_payloads(
     assert awaiting.hashes["case_sha256"] == runner.case.sha256
     assert awaiting.identities["reviewer_service_identity_id"] == _id(8)
     assert awaiting.identities["reviewer_token_id"] == _id(9)
+    assert runner.config.credential_output is not None
+    credentials = json.loads(runner.config.credential_output.read_bytes())
+    assert credentials["anva_token"] == "initiator-token-material"  # noqa: S105
+    assert credentials["reviewer_token"] == "reviewer-token-material"  # noqa: S105
     assert any(
         path == f"/repositories/{_id(2)}/pull-requests/{pull_request_number}/manual-diff"
         for _method, path, _token, _payload in product.calls

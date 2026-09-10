@@ -115,6 +115,7 @@ def test_uid_1000_can_use_private_acceptance_binds_but_an_unrelated_uid_cannot(
             ),
             "acceptance-product-start": (
                 "from pathlib import Path;"
+                "Path('/run/secrets/anva_bootstrap_secret').read_text();"
                 "Path('/app/run/start').write_text('ok');"
                 "Path('/acceptance/state/start').write_text('ok');"
                 "Path('/acceptance/credentials/start').write_text('ok')"

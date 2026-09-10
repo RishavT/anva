@@ -10,6 +10,7 @@ import pytest
 from django.core.exceptions import ImproperlyConfigured
 
 import anva.config.settings as anva_settings
+from anva.config.bootstrap import BootstrapSecretError, load_bootstrap_secret
 from anva.config.settings import bootstrap_secret, database_settings, env_bool, env_int
 
 
@@ -129,7 +130,7 @@ def test_bootstrap_secret_rejects_foreign_owner_private_file(
     monkeypatch.delenv("ANVA_BOOTSTRAP_SECRET", raising=False)
     monkeypatch.setenv("ANVA_BOOTSTRAP_SECRET_FILE", str(secret))
     owner_uid = os.geteuid()
-    monkeypatch.setattr("anva.config.settings.os.geteuid", lambda: owner_uid + 1)
+    monkeypatch.setattr("anva.config.bootstrap.os.geteuid", lambda: owner_uid + 1)
 
     with pytest.raises(ImproperlyConfigured, match="unsafe"):
         bootstrap_secret()
@@ -147,6 +148,41 @@ def test_bootstrap_secret_rejects_direct_and_file(
 
     with pytest.raises(ImproperlyConfigured, match="mutually exclusive"):
         bootstrap_secret()
+
+
+@pytest.mark.unit
+def test_shared_bootstrap_loader_accepts_empty_legacy_value_with_protected_file(
+    tmp_path: Path,
+) -> None:
+    secret = tmp_path / "bootstrap.raw"
+    secret.write_text("file-only-secret")
+    secret.chmod(0o400)
+
+    assert (
+        load_bootstrap_secret(
+            {
+                "ANVA_BOOTSTRAP_SECRET": "",
+                "ANVA_BOOTSTRAP_SECRET_FILE": str(secret),
+            }
+        )
+        == "file-only-secret"
+    )
+
+
+@pytest.mark.unit
+def test_shared_bootstrap_loader_rejects_conflict_without_leaking_values(tmp_path: Path) -> None:
+    secret = tmp_path / "bootstrap.raw"
+    secret.write_text("PRIVATE-FILE-CANARY")
+    secret.chmod(0o400)
+
+    with pytest.raises(BootstrapSecretError, match="mutually exclusive") as raised:
+        load_bootstrap_secret(
+            {
+                "ANVA_BOOTSTRAP_SECRET": "PRIVATE-DIRECT-CANARY",
+                "ANVA_BOOTSTRAP_SECRET_FILE": str(secret),
+            }
+        )
+    assert "PRIVATE" not in str(raised.value)
 
 
 @pytest.mark.unit

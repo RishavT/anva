@@ -76,7 +76,7 @@ def _phase(name: str, canary_value: str) -> dict[str, object]:
             "bind": {"create_host_path": False},
         }
     )
-    return {
+    phase = {
         "image": IMAGE_REFERENCE,
         "user": "10001:10001",
         "read_only": True,
@@ -106,6 +106,18 @@ def _phase(name: str, canary_value: str) -> dict[str, object]:
         ],
         "volumes": volumes,
     }
+    if name == "acceptance-product-start":
+        cast(dict[str, object], phase["environment"])["ANVA_BOOTSTRAP_SECRET"] = ""
+        cast(dict[str, object], phase["environment"])["ANVA_BOOTSTRAP_SECRET_FILE"] = (
+            "/run/secrets/anva_bootstrap_secret"  # noqa: S105 - a path, not a credential
+        )
+        phase["secrets"] = [
+            {
+                "source": "anva_bootstrap_secret",
+                "target": "/run/secrets/anva_bootstrap_secret",
+            }
+        ]
+    return phase
 
 
 def _compose(canary_value: str = "PRIVATE-CANARY") -> dict[str, object]:
@@ -214,7 +226,7 @@ def _compose(canary_value: str = "PRIVATE-CANARY") -> dict[str, object]:
             "acceptance-edge": {"internal": True},
         },
         "volumes": {"acceptance-canonical": {}, "postgres-data": {}, "minio-data": {}},
-        "secrets": {"bootstrap": {"file": "/PRIVATE/PATH/bootstrap-secret"}},
+        "secrets": {"anva_bootstrap_secret": {"file": "/PRIVATE/PATH/bootstrap-secret"}},
     }
 
 
@@ -367,6 +379,36 @@ def test_schema_service_inventory_matches_runtime_and_old_valid_manifest_is_acce
                 dict[str, object],
                 cast(dict[str, object], value["services"])["acceptance-product-start"],
             ).__setitem__("user", "0:0"),
+            "launch_runtime_mismatch",
+        ),
+        (
+            lambda value: cast(
+                dict[str, object],
+                cast(
+                    dict[str, object],
+                    cast(dict[str, object], value["services"])["acceptance-product-start"],
+                )["environment"],
+            ).__setitem__("ANVA_BOOTSTRAP_SECRET", "PRIVATE-CANARY"),
+            "launch_runtime_mismatch",
+        ),
+        (
+            lambda value: cast(
+                dict[str, object],
+                cast(
+                    dict[str, object],
+                    cast(dict[str, object], value["services"])["acceptance-product-start"],
+                )["environment"],
+            ).__setitem__(
+                "ANVA_BOOTSTRAP_SECRET_FILE",
+                "/tmp/bootstrap",  # noqa: S108 - deliberately rejected test path
+            ),
+            "launch_runtime_mismatch",
+        ),
+        (
+            lambda value: cast(
+                dict[str, object],
+                cast(dict[str, object], value["services"])["acceptance-product-start"],
+            ).__setitem__("secrets", []),
             "launch_runtime_mismatch",
         ),
         (
