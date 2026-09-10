@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import os
-import stat
 from ipaddress import ip_address
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from django.core.exceptions import ImproperlyConfigured
+
+from anva.config.bootstrap import BootstrapSecretError, load_bootstrap_secret
 
 PACKAGE_DIR = Path(__file__).resolve().parents[1]
 
@@ -40,49 +41,10 @@ def env_int(name: str, *, default: int, minimum: int, maximum: int) -> int:
 
 def bootstrap_secret() -> str:
     """Read the bootstrap secret from one direct value or protected absolute file."""
-    direct = os.getenv("ANVA_BOOTSTRAP_SECRET")
-    raw_path = os.getenv("ANVA_BOOTSTRAP_SECRET_FILE")
-    if direct and raw_path:
-        raise ImproperlyConfigured(
-            "ANVA_BOOTSTRAP_SECRET and ANVA_BOOTSTRAP_SECRET_FILE are mutually exclusive"
-        )
-    if not raw_path:
-        return direct or "anva-local-bootstrap"
-    path = Path(raw_path)
-    if not path.is_absolute():
-        raise ImproperlyConfigured("ANVA_BOOTSTRAP_SECRET_FILE must be absolute")
     try:
-        info = path.lstat()
-        mode = stat.S_IMODE(info.st_mode)
-        if (
-            not stat.S_ISREG(info.st_mode)
-            or info.st_nlink != 1
-            or mode not in {0o400, 0o440, 0o444, 0o600}
-            or (mode == 0o600 and info.st_uid != os.geteuid())
-            or not 1 <= info.st_size <= 4096
-        ):
-            raise ImproperlyConfigured("ANVA_BOOTSTRAP_SECRET_FILE is unsafe")
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-        try:
-            opened = os.fstat(descriptor)
-            if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
-                raise ImproperlyConfigured("ANVA_BOOTSTRAP_SECRET_FILE changed during open")
-            value = os.read(descriptor, 4097)
-        finally:
-            os.close(descriptor)
-    except (OSError, UnicodeError) as error:
-        raise ImproperlyConfigured("ANVA_BOOTSTRAP_SECRET_FILE is unreadable") from error
-    if len(value) != info.st_size or b"\n" in value or b"\r" in value:
-        raise ImproperlyConfigured(
-            "ANVA_BOOTSTRAP_SECRET_FILE must contain one line without newline"
-        )
-    try:
-        decoded = value.decode("utf-8")
-    except UnicodeDecodeError as error:
-        raise ImproperlyConfigured("ANVA_BOOTSTRAP_SECRET_FILE must be UTF-8") from error
-    if not decoded or decoded != decoded.strip():
-        raise ImproperlyConfigured("ANVA_BOOTSTRAP_SECRET_FILE value is invalid")
-    return decoded
+        return load_bootstrap_secret(default="anva-local-bootstrap")
+    except BootstrapSecretError as error:
+        raise ImproperlyConfigured(str(error)) from error
 
 
 def database_settings(url: str) -> dict[str, str | int]:

@@ -98,6 +98,7 @@ PHASE_RUNTIME_KEYS = frozenset(
         "read_only",
         "restart",
         "security_opt",
+        "secrets",
         "tmpfs",
         "user",
         "volumes",
@@ -198,6 +199,7 @@ SAFE_RUNTIME_KEYS = (
     "read_only",
     "restart",
     "security_opt",
+    "secrets",
     "tmpfs",
     "user",
 )
@@ -512,6 +514,25 @@ def _validate_phase(
         if index + 1 >= len(command) or command[index + 1] != expected:
             raise _reject("launch_service_mismatch", f"Launch service {name} {flag} differs")
     _validate_mounts(name, service, launch_manifest_source=launch_manifest_source)
+    if name == "acceptance-product-start":
+        if service.get("secrets") != [
+            {
+                "source": "anva_bootstrap_secret",
+                "target": "/run/secrets/anva_bootstrap_secret",
+            }
+        ]:
+            raise _reject("launch_runtime_mismatch", "Launch service bootstrap secret differs")
+        environment = service.get("environment")
+        if (
+            not isinstance(environment, dict)
+            or "ANVA_BOOTSTRAP_SECRET" in environment
+            or environment.get("ANVA_BOOTSTRAP_SECRET_FILE") != "/run/secrets/anva_bootstrap_secret"
+        ):
+            raise _reject(
+                "launch_runtime_mismatch", "Launch service bootstrap secret source differs"
+            )
+    elif "secrets" in service:
+        raise _reject("launch_runtime_mismatch", f"Launch service {name} secrets differ")
 
 
 def generate_launch_manifest(

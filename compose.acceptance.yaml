@@ -45,6 +45,8 @@ services:
 
   migrate:
     user: "10001:10001"
+    environment:
+      ANVA_BOOTSTRAP_SECRET: ""
     networks: [acceptance-backend]
 
   acceptance-adapter:
@@ -124,6 +126,7 @@ services:
     user: "10001:10001"
     environment:
       ANVA_FILESYSTEM_ALLOWED_ROOTS: /app/acceptance/canonical/payload
+      ANVA_BOOTSTRAP_SECRET: ""
     volumes:
       - acceptance-canonical:/app/acceptance/canonical:ro
     networks: [acceptance-backend]
@@ -132,6 +135,7 @@ services:
     user: "10001:10001"
     environment:
       ANVA_FILESYSTEM_ALLOWED_ROOTS: /app/acceptance/canonical/payload
+      ANVA_BOOTSTRAP_SECRET: ""
     volumes:
       - acceptance-canonical:/app/acceptance/canonical:ro
     networks: [acceptance-backend, acceptance-edge]
@@ -139,6 +143,7 @@ services:
   cli:
     environment:
       ANVA_FILESYSTEM_ALLOWED_ROOTS: /app/acceptance/canonical/payload
+      ANVA_BOOTSTRAP_SECRET: ""
     volumes:
       - acceptance-canonical:/app/acceptance/canonical:ro
     networks: [acceptance-backend]
@@ -188,7 +193,7 @@ services:
     <<: *acceptance-product
     environment:
       <<: *acceptance-environment
-      ANVA_BOOTSTRAP_SECRET: ${ANVA_BOOTSTRAP_SECRET:-}
+      ANVA_BOOTSTRAP_SECRET_FILE: /run/secrets/anva_bootstrap_secret
       ANVA_ACCEPTANCE_TOKEN: ${ANVA_ACCEPTANCE_TOKEN:-}
     command:
       - anva
@@ -238,6 +243,8 @@ services:
         read_only: true
         bind:
           create_host_path: false
+    secrets:
+      - anva_bootstrap_secret
 
   acceptance-review-request:
     <<: *acceptance-product

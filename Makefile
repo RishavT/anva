@@ -686,7 +686,7 @@ acceptance-launch-manifest: acceptance-identity-preflight acceptance-case-valida
 	trap 'trap - HUP INT TERM; exit 129' HUP; \
 	trap 'trap - HUP INT TERM; exit 130' INT; \
 	trap 'trap - HUP INT TERM; exit 143' TERM; \
-	$(ACCEPTANCE_COMPOSE) --profile acceptance config --format json > "$$input_dir/resolved-compose.json"; \
+	env -u ANVA_BOOTSTRAP_SECRET $(ACCEPTANCE_COMPOSE) --profile acceptance config --format json > "$$input_dir/resolved-compose.json"; \
 	docker image inspect "$(ANVA_IMAGE_REF)" > "$$input_dir/image-inspect.json"; \
 	docker run --rm --network none --read-only --cap-drop ALL \
 		--security-opt no-new-privileges --user "$$(id -u):$$(id -g)" \
