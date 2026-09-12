@@ -137,9 +137,13 @@ def test_explicit_source_bodies_survive_noisy_fifty_item_packet(
 ) -> None:
     from dataclasses import replace
 
-    from anva.core.exceptions import RequiredContextBudgetError
+    from anva.core.exceptions import (
+        RequiredContextBudgetError,
+        RequiredSearchAnchorUnavailableError,
+    )
     from anva.core.services.context_packets import (
         PacketBudget,
+        RequiredSearchAnchor,
         _required_search_anchor_candidates,
         _select,
     )
@@ -208,6 +212,46 @@ def test_explicit_source_bodies_survive_noisy_fifty_item_packet(
         source_references=references,
     )
     assert len(candidates) == 2
+    provenance = ("https://example.test/issues/6", "tst-009:ember:requirements")
+    assert (
+        _required_search_anchor_candidates(
+            actor=actor,
+            repository_id=repository.id,
+            anchors=(),
+            visible_scope_ids=(scope.id,),
+            source_references=provenance,
+        )
+        == []
+    )
+    assert (
+        len(
+            _required_search_anchor_candidates(
+                actor=actor,
+                repository_id=repository.id,
+                anchors=(),
+                visible_scope_ids=(scope.id,),
+                source_references=(*references, *provenance),
+            )
+        )
+        == 2
+    )
+    citation = candidates[0].citations[0]
+    missing_anchor = RequiredSearchAnchor(
+        chunk_id=uuid.uuid4(),
+        content_hash=citation.source_content_hash,
+        access_scope_id=citation.access_scope_id,
+        source_location_id=citation.source_location_id,
+        source_observation_id=citation.source_observation_id,
+        access_snapshot_id=citation.access_snapshot_id,
+    )
+    with pytest.raises(RequiredSearchAnchorUnavailableError):
+        _required_search_anchor_candidates(
+            actor=actor,
+            repository_id=repository.id,
+            anchors=(missing_anchor,),
+            visible_scope_ids=(scope.id,),
+            source_references=references,
+        )
     noise = [
         replace(
             candidates[0],
@@ -977,14 +1021,11 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
             "external_key": "HC-482",
             "title": "Redact passenger contact fields",
             "summary": "Apply contact_redaction before passenger support event export.",
-            "source_references": ["work.md"],
         }
     )
     work_payload["requirements"][0]["normalized_text"] = (  # type: ignore[index]
         "Passenger email and telephone values are removed from support events."
     )
-    # The imported contract example points at an unrelated, uningested issue URL.
-    work_payload["requirements"][0]["source_references"] = ["work.md"]  # type: ignore[index]
     work = import_work_item(actor=actor, payload=work_payload)
 
     policy_payload = deepcopy(EXAMPLES["policy"])

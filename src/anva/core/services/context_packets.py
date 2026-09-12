@@ -1375,10 +1375,33 @@ def _required_search_anchor_candidates(
         if key in resolved_by_key:
             ambiguous_keys.add(key)
         resolved_by_key[key] = row
+    original_keys = {
+        (
+            anchor.chunk_id,
+            anchor.content_hash,
+            anchor.access_scope_id,
+            anchor.source_location_id,
+            anchor.source_observation_id,
+            anchor.access_snapshot_id,
+        )
+        for anchor in anchors
+    }
+    if not original_keys <= resolved_by_key.keys() or ambiguous_keys & original_keys:
+        raise RequiredSearchAnchorUnavailableError(
+            "One or more required search anchors are unavailable"
+        )
     if source_references:
         if len(resolved_by_key) > MAX_REQUIRED_SEARCH_ANCHORS:
             raise RequiredContextBudgetError("Required source excerpts exceed packet bound")
-        if resolved_references != set(source_references):
+        # Work provenance also permits external URLs and opaque identifiers. Only
+        # relative repository paths assert that a KB source must be available.
+        # Never probe hidden-source existence to classify external provenance.
+        required_references = {
+            reference
+            for reference in source_references
+            if ":" not in reference and ("/" in reference or "." in reference)
+        }
+        if not required_references <= resolved_references:
             raise RequiredContextBudgetError("One or more required sources are unavailable")
         anchors = tuple(
             RequiredSearchAnchor(
