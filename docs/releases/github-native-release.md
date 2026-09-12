@@ -1,5 +1,9 @@
 # GitHub-native v0.1.6 release
 
+This is the immutable v0.1.6 procedure and publication record. The active workflow
+now targets [the separately prepared v0.1.7 candidate](github-native-v0.1.7.md).
+Commands and exact identities below remain historical v0.1.6 instructions.
+
 ## Publication outcome
 
 This procedure completed successfully in protected run

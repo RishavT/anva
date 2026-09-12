@@ -27,7 +27,7 @@ from anva.contracts.catalog import EXAMPLES, SCHEMAS
 COMMIT = "d" * 40
 BUILD_INPUT = "b" * 64
 IMAGE_SHA = "e" * 64
-IMAGE_REFERENCE = "anva:0.1.6"
+IMAGE_REFERENCE = "anva:0.1.7"
 MANIFEST_PATH = Path("/protected/acceptance/launch-manifest.json")
 
 
@@ -354,7 +354,7 @@ def test_schema_service_inventory_matches_runtime_and_old_valid_manifest_is_acce
         expected_build_input_sha256="b" * 64,
         expected_package_sha256="c" * 64,
         expected_image_sha256="e" * 64,
-        expected_image_reference="anva:0.1.6",
+        expected_image_reference="anva:0.1.7",
         expected_service="acceptance-review-submit",
     )
 

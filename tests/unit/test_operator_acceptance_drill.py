@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from anva import __version__
 from anva.operator_drill import (
     AUTOMATED_SEQUENCE,
     DECISION_ROLES,
@@ -34,6 +35,7 @@ from anva.operator_drill import (
 DRILL_ID = "11111111-1111-4111-8111-111111111111"
 COMMIT = "d" * 40
 PUBLISHED_PRODUCT_SOURCE = "491cdd7830a7f4d6af7140f6a4744f95c80c46a9"
+CANDIDATE_SOURCE = "e" * 40
 IMAGE = "sha256:" + "2" * 64
 CORRELATION = "22222222-2222-4222-8222-222222222222"
 
@@ -101,11 +103,11 @@ def _create(tmp_path: Path) -> Path:
                 "--image-digest",
                 IMAGE,
                 "--product-version",
-                "0.1.6",
+                __version__,
                 "--product-source-commit",
-                PUBLISHED_PRODUCT_SOURCE,
+                CANDIDATE_SOURCE,
                 "--operator-source-commit",
-                PUBLISHED_PRODUCT_SOURCE,
+                CANDIDATE_SOURCE,
                 "--operator-cli-in-product",
                 "--output-dir",
                 str(tmp_path),
@@ -123,12 +125,8 @@ def test_next_image_contract_distinguishes_harness_from_operator_source(
     path = _create(tmp_path)
     header = json.loads(path.read_text().splitlines()[0])
     assert set(header["payload"]) == {"drill_id", "release_boundary", "runtime", "schema_version"}
-    assert (
-        header["payload"]["release_boundary"]["product_source_commit"] == PUBLISHED_PRODUCT_SOURCE
-    )
-    assert (
-        header["payload"]["release_boundary"]["operator_source_commit"] == PUBLISHED_PRODUCT_SOURCE
-    )
+    assert header["payload"]["release_boundary"]["product_source_commit"] == CANDIDATE_SOURCE
+    assert header["payload"]["release_boundary"]["operator_source_commit"] == CANDIDATE_SOURCE
     assert header["payload"]["runtime"]["source_revision"] == COMMIT
     assert header["payload"]["release_boundary"]["status"] == "ELIGIBLE_FOR_HUMAN_ACCEPTANCE"
     with pytest.raises(EvidenceRejectedError):
@@ -138,14 +136,14 @@ def test_next_image_contract_distinguishes_harness_from_operator_source(
 @pytest.mark.unit
 def test_generic_release_boundary_requires_product_and_operator_source_identity() -> None:
     eligible = record_release_boundary(
-        product_version="0.1.6",
+        product_version=__version__,
         product_source_commit=COMMIT,
         operator_source_commit=COMMIT,
         operator_cli_in_product=True,
     )
     assert eligible["status"] == "ELIGIBLE_FOR_HUMAN_ACCEPTANCE"
     assert eligible["product_source_commit"] == eligible["operator_source_commit"]
-    for version in ("0.1.0", "0.1.1", "1.0.0"):
+    for version in ("0.1.0", "0.1.1", "0.1.6", "1.0.0"):
         rejected = record_release_boundary(
             product_version=version,
             product_source_commit=COMMIT,
@@ -154,7 +152,7 @@ def test_generic_release_boundary_requires_product_and_operator_source_identity(
         )
         assert rejected["status"] == "NOT_ACCEPTED"
     stale_source = record_release_boundary(
-        product_version="0.1.6",
+        product_version=__version__,
         product_source_commit=PUBLISHED_PRODUCT_SOURCE,
         operator_source_commit=COMMIT,
         operator_cli_in_product=True,
@@ -170,10 +168,10 @@ def test_generic_release_boundary_requires_product_and_operator_source_identity(
 
 
 @pytest.mark.unit
-def test_tracked_template_requires_runtime_v016_identity() -> None:
+def test_tracked_template_requires_current_runtime_identity() -> None:
     root = Path(__file__).resolve().parents[2]
     template = json.loads((root / "deploy/drill/evidence-template.json").read_text())
-    assert template["product_version"] == "0.1.6"
+    assert template["product_version"] == __version__
     assert template["product_source_commit"] == "RUNTIME_REQUIRED_COMMIT"
     assert template["product_image_digest"] == "RUNTIME_REQUIRED_SHA256"
     assert template["release_run_id"] == "RUNTIME_REQUIRED_POSITIVE_INTEGER"
@@ -329,7 +327,7 @@ def _eligible_ledger_and_anchor(tmp_path: Path) -> tuple[Path, Path]:
         "operator_cli_in_product": True,
         "operator_source_commit": COMMIT,
         "product_source_commit": COMMIT,
-        "product_version": "0.1.6",
+        "product_version": __version__,
         "status": "ELIGIBLE_FOR_HUMAN_ACCEPTANCE",
     }
     path = tmp_path / "ledger.jsonl"

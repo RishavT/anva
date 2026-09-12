@@ -296,7 +296,7 @@ def test_tracked_evidence_guide_records_published_pending_release_boundary() -> 
         (ROOT / "deploy/drill/evidence-template.json").read_text(encoding="utf-8")
     )
 
-    assert guide["product_version"] == "0.1.6"
+    assert guide["product_version"] == "0.1.7"
     assert guide["product_source_commit"] == "RUNTIME_REQUIRED_COMMIT"
     assert guide["product_image_digest"] == "RUNTIME_REQUIRED_SHA256"
     assert guide["release_run_id"] == "RUNTIME_REQUIRED_POSITIVE_INTEGER"

@@ -28,14 +28,14 @@ V013_NOTES = ROOT / "docs" / "releases" / "v0.1.3.md"
 V014_NOTES = ROOT / "docs" / "releases" / "v0.1.4.md"
 
 
-def test_active_release_guidance_agrees_on_exact_v016_identity() -> None:
+def test_candidate_workflow_keeps_published_v016_install_guidance() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     for document in (INSTALL, RELEASE, READINESS, NOTES):
         text = document.read_text(encoding="utf-8")
         assert "v0.1.6" in text
-    assert "ANVA_VERSION: 0.1.6" in workflow
-    assert "default: v0.1.6" in workflow
-    assert "group: release-v0.1.6" in workflow
+    assert "ANVA_VERSION: 0.1.7" in workflow
+    assert "default: v0.1.7" in workflow
+    assert "group: release-v0.1.7" in workflow
     assert "ANVA_SOURCE_VERSION=0.1.6" in INSTALL.read_text(encoding="utf-8")
     assert "anva-install-0.1.6.tar.gz" in INSTALL.read_text(encoding="utf-8")
 
@@ -156,16 +156,31 @@ def test_published_docs_explain_build_stage_publication_status_semantics() -> No
     assert "build-stage" in notes
 
 
-def test_runtime_build_and_compose_defaults_agree_on_v016() -> None:
+def test_runtime_build_and_compose_defaults_agree_on_v017() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert project["project"]["version"] == "0.1.6"
-    assert '__version__ = "0.1.6"' in (ROOT / "src/anva/__init__.py").read_text()
-    assert "ANVA_VERSION ?= 0.1.6" in (ROOT / "Makefile").read_text()
-    assert "ARG ANVA_VERSION=0.1.6" in (ROOT / "Dockerfile").read_text()
+    assert project["project"]["version"] == "0.1.7"
+    assert '__version__ = "0.1.7"' in (ROOT / "src/anva/__init__.py").read_text()
+    assert "ANVA_VERSION ?= 0.1.7" in (ROOT / "Makefile").read_text()
+    assert "ARG ANVA_VERSION=0.1.7" in (ROOT / "Dockerfile").read_text()
     for name in ("compose.yaml", "compose.acceptance.yaml", "compose.acceptance.case.yaml"):
         text = (ROOT / name).read_text(encoding="utf-8")
         assert "ANVA_VERSION:-0.1.0" not in text
-        assert "ANVA_VERSION:-0.1.6" in text
+        assert "ANVA_VERSION:-0.1.7" in text
+
+
+def test_v017_candidate_records_are_pending_and_do_not_replay_old_approval() -> None:
+    notes = (ROOT / "docs/releases/v0.1.7.md").read_text()
+    checklist = (ROOT / "docs/releases/v0.1.7-checklist.md").read_text()
+    procedure = (ROOT / "docs/releases/github-native-v0.1.7.md").read_text()
+    assert "candidate preparation" in notes
+    assert "pending" in notes
+    assert "No v0.1.6 risk decision or approval authorizes v0.1.7" in notes
+    assert "- [x]" not in checklist
+    assert "all 31 committed public acceptance cases" in checklist
+    assert "context-free manual assurance review" in checklist
+    assert '-f tag=v0.1.7 -f source_commit="$ANVA_SOURCE_COMMIT"' in procedure
+    assert "consumer install guidance continues" in procedure
+    assert "published v0.1.6" in procedure
 
 
 def test_release_docs_require_separate_exact_source_and_human_risk_approval() -> None:

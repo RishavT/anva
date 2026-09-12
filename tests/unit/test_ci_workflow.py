@@ -10,6 +10,22 @@ COMPOSE = Path(__file__).parents[2] / "compose.yaml"
 
 
 @pytest.mark.unit
+def test_uid_lane_build_and_helper_use_canonical_project_version() -> None:
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["compose-checks"]["steps"]
+    command = next(
+        step["run"]
+        for step in steps
+        if step.get("name") == "Verify acceptance UID permissions on protected binds"
+    )
+    assert 'tomllib.load(open("pyproject.toml", "rb"))["project"]["version"]' in command
+    assert command.index("export ANVA_VERSION") < command.index("docker compose")
+    assert command.index("ANVA_VERSION=") < command.index("docker compose")
+    assert "--env ANVA_VERSION \\\n" in command
+    assert "--env ANVA_VERSION=" not in command
+
+
+@pytest.mark.unit
 def test_ci_runs_compose_with_the_checkout_owner_identity() -> None:
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     steps = workflow["jobs"]["compose-checks"]["steps"]

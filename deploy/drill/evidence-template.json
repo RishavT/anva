@@ -41,7 +41,7 @@
   },
   "product_image_digest": "RUNTIME_REQUIRED_SHA256",
   "product_source_commit": "RUNTIME_REQUIRED_COMMIT",
-  "product_version": "0.1.6",
+  "product_version": "0.1.7",
   "release_run_id": "RUNTIME_REQUIRED_POSITIVE_INTEGER",
   "release_status": "CANDIDATE_NOT_PUBLISHED_OPERATOR_ACCEPTANCE_FORBIDDEN",
   "schema_version": 3

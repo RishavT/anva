@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from anva import __version__
+
 
 @pytest.mark.integration
 def test_uid_1000_can_use_private_acceptance_binds_but_an_unrelated_uid_cannot(
@@ -64,7 +66,7 @@ def test_uid_1000_can_use_private_acceptance_binds_but_an_unrelated_uid_cannot(
     }
 
     repository = environment.get("ANVA_IMAGE_REPOSITORY", "anva")
-    version = environment.get("ANVA_VERSION", "0.1.6")
+    version = environment.get("ANVA_VERSION", __version__)
     image = f"{repository}:{version}"
 
     def protect_as(uid: int, gid: int) -> subprocess.CompletedProcess[str]:
@@ -73,6 +75,8 @@ def test_uid_1000_can_use_private_acceptance_binds_but_an_unrelated_uid_cannot(
                 docker,
                 "run",
                 "--rm",
+                "--network",
+                "none",
                 "--user",
                 "0:0",
                 "--volume",
@@ -206,6 +210,8 @@ def test_uid_1000_can_use_private_acceptance_binds_but_an_unrelated_uid_cannot(
                 docker,
                 "run",
                 "--rm",
+                "--network",
+                "none",
                 "--user",
                 "0:0",
                 "--volume",

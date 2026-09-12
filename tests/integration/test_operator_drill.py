@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from anva import __version__
 from anva.operator_drill import main
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -28,7 +29,7 @@ def test_closed_event_commands_round_trip(tmp_path: Path) -> None:
                 "--source-revision",
                 "d" * 40,
                 "--product-version",
-                "0.1.6",
+                __version__,
                 "--product-source-commit",
                 "d" * 40,
                 "--operator-source-commit",

@@ -22,6 +22,11 @@ post-publication verification are authoritative for publication.
 
 ## Current main and v0.1.7 preparation
 
+Candidate version defaults are aligned to v0.1.7. See the separate
+[candidate checklist](v0.1.7-checklist.md), [release notes](v0.1.7.md), and
+[publication procedure](github-native-v0.1.7.md). This preparation closes no
+publication or exact-candidate acceptance gate.
+
 Current source contains post-v0.1.6 fixes and documentation. None changes the
 immutable v0.1.6 tag, image, artifacts, risk decision, or operator ledger.
 `v0.1.7` is the next patch/fix-forward version. It is **not published** and has
