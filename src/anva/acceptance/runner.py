@@ -1748,7 +1748,29 @@ class AcceptanceRunner:
     def submit_review(
         self, *, reviewer_token: str, handoff_path: Path, result_path: Path
     ) -> ResumeState:
+        try:
+            return self._submit_review_once(
+                reviewer_token=reviewer_token, handoff_path=handoff_path, result_path=result_path
+            )
+        except (AcceptanceRunnerError, AcceptanceBoundaryError) as error:
+            reason_code, boundary_status = _failure_reason(error, stage="review_submission")
+            try:
+                _write_operator_diagnostic(
+                    self.config.state_path,
+                    run_id=self._diagnostic_run_id,
+                    stage="review_submission",
+                    reason_code=reason_code,
+                    boundary_status=boundary_status,
+                )
+            except OSError:
+                pass
+            raise
+
+    def _submit_review_once(
+        self, *, reviewer_token: str, handoff_path: Path, result_path: Path
+    ) -> ResumeState:
         state = self._load_matching_state()
+        self._diagnostic_run_id = state.run_id
         if state.status in {"EXTERNAL_REVIEW_SUBMITTED", "COMPLETE"}:
             if handoff_path.exists() or handoff_path.is_symlink():
                 _handoff, _result, digest = self._validated_review_inputs(
