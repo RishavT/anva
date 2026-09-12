@@ -125,12 +125,8 @@ def test_next_image_contract_distinguishes_harness_from_operator_source(
     path = _create(tmp_path)
     header = json.loads(path.read_text().splitlines()[0])
     assert set(header["payload"]) == {"drill_id", "release_boundary", "runtime", "schema_version"}
-    assert (
-        header["payload"]["release_boundary"]["product_source_commit"] == CANDIDATE_SOURCE
-    )
-    assert (
-        header["payload"]["release_boundary"]["operator_source_commit"] == CANDIDATE_SOURCE
-    )
+    assert header["payload"]["release_boundary"]["product_source_commit"] == CANDIDATE_SOURCE
+    assert header["payload"]["release_boundary"]["operator_source_commit"] == CANDIDATE_SOURCE
     assert header["payload"]["runtime"]["source_revision"] == COMMIT
     assert header["payload"]["release_boundary"]["status"] == "ELIGIBLE_FOR_HUMAN_ACCEPTANCE"
     with pytest.raises(EvidenceRejectedError):
