@@ -36,6 +36,8 @@ jobs:
           make ci
       - name: Verify acceptance UID permissions on protected binds
         run: |
+          export ANVA_VERSION
+          ANVA_VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
           docker compose -f compose.yaml -f compose.acceptance.yaml build acceptance-product-start
           compose_plugin="$(docker info --format '{{range .ClientInfo.Plugins}}{{if eq .Name "compose"}}{{.Path}}{{end}}{{end}}')"
           socket_gid="$(stat -c %g /var/run/docker.sock)"
@@ -45,7 +47,7 @@ jobs:
             --memory 2g \
             --cpus 2 \
             --env ANVA_IMAGE_REPOSITORY=anva \
-            --env ANVA_VERSION=0.1.6 \
+            --env ANVA_VERSION \
             --volume /var/run/docker.sock:/var/run/docker.sock \
             --volume /usr/bin/docker:/usr/bin/docker:ro \
             --volume "$compose_plugin":/usr/lib/docker/cli-plugins/docker-compose:ro \
