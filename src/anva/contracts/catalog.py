@@ -2413,13 +2413,13 @@ EXAMPLES: Final[dict[str, dict[str, object]]] = {
         "build_input_sha256": "b" * 64,
         "package_sha256": "c" * 64,
         "engine_image_id": f"sha256:{'e' * 64}",
-        "image_reference": "anva:0.1.6",
+        "image_reference": "anva:0.1.7",
         "resolved_compose_sha256": "a" * 64,
         "services": {
             name: {
                 "config_sha256": "f" * 64,
                 "engine_image_id": f"sha256:{'e' * 64}",
-                "image_reference": "anva:0.1.6",
+                "image_reference": "anva:0.1.7",
             }
             for name in LAUNCH_SERVICE_NAMES
         },

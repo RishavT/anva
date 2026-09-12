@@ -64,7 +64,7 @@ def test_uid_1000_can_use_private_acceptance_binds_but_an_unrelated_uid_cannot(
     }
 
     repository = environment.get("ANVA_IMAGE_REPOSITORY", "anva")
-    version = environment.get("ANVA_VERSION", "0.1.6")
+    version = environment.get("ANVA_VERSION", "0.1.7")
     image = f"{repository}:{version}"
 
     def protect_as(uid: int, gid: int) -> subprocess.CompletedProcess[str]:

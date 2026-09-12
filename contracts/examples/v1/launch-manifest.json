@@ -1,7 +1,7 @@
 {
   "build_input_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "engine_image_id": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-  "image_reference": "anva:0.1.6",
+  "image_reference": "anva:0.1.7",
   "kind": "anva-docker-launch",
   "package_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
   "product_commit": "dddddddddddddddddddddddddddddddddddddddd",
@@ -11,37 +11,37 @@
     "acceptance-product-finalize": {
       "config_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
       "engine_image_id": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-      "image_reference": "anva:0.1.6"
+      "image_reference": "anva:0.1.7"
     },
     "acceptance-product-start": {
       "config_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
       "engine_image_id": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-      "image_reference": "anva:0.1.6"
+      "image_reference": "anva:0.1.7"
     },
     "acceptance-review-request": {
       "config_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
       "engine_image_id": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-      "image_reference": "anva:0.1.6"
+      "image_reference": "anva:0.1.7"
     },
     "acceptance-review-submit": {
       "config_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
       "engine_image_id": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-      "image_reference": "anva:0.1.6"
+      "image_reference": "anva:0.1.7"
     },
     "api": {
       "config_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
       "engine_image_id": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-      "image_reference": "anva:0.1.6"
+      "image_reference": "anva:0.1.7"
     },
     "mcp": {
       "config_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
       "engine_image_id": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-      "image_reference": "anva:0.1.6"
+      "image_reference": "anva:0.1.7"
     },
     "worker": {
       "config_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
       "engine_image_id": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-      "image_reference": "anva:0.1.6"
+      "image_reference": "anva:0.1.7"
     }
   }
 }

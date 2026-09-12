@@ -1,10 +1,10 @@
 x-acceptance-product: &acceptance-product
-  image: ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.6}
+  image: ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.7}
   build:
     context: .
     target: runtime
     args:
-      ANVA_VERSION: ${ANVA_VERSION:-0.1.6}
+      ANVA_VERSION: ${ANVA_VERSION:-0.1.7}
       ANVA_REVISION: ${ANVA_REVISION:-unknown}
       ANVA_BUILD_INPUT_SHA256: ${ANVA_BUILD_INPUT_SHA256:-0000000000000000000000000000000000000000000000000000000000000000}
       ANVA_SOURCE: ${ANVA_SOURCE:-https://github.com/rishavt/anva}
@@ -50,12 +50,12 @@ services:
     networks: [acceptance-backend]
 
   acceptance-adapter:
-    image: ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.6}
+    image: ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.7}
     build:
       context: .
       target: runtime
       args:
-        ANVA_VERSION: ${ANVA_VERSION:-0.1.6}
+        ANVA_VERSION: ${ANVA_VERSION:-0.1.7}
         ANVA_REVISION: ${ANVA_REVISION:-unknown}
         ANVA_BUILD_INPUT_SHA256: ${ANVA_BUILD_INPUT_SHA256:-0000000000000000000000000000000000000000000000000000000000000000}
         ANVA_SOURCE: ${ANVA_SOURCE:-https://github.com/rishavt/anva}
@@ -149,12 +149,12 @@ services:
     networks: [acceptance-backend]
 
   acceptance-runner:
-    image: ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.6}
+    image: ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.7}
     build:
       context: .
       target: runtime
       args:
-        ANVA_VERSION: ${ANVA_VERSION:-0.1.6}
+        ANVA_VERSION: ${ANVA_VERSION:-0.1.7}
         ANVA_REVISION: ${ANVA_REVISION:-unknown}
         ANVA_BUILD_INPUT_SHA256: ${ANVA_BUILD_INPUT_SHA256:-0000000000000000000000000000000000000000000000000000000000000000}
         ANVA_SOURCE: ${ANVA_SOURCE:-https://github.com/rishavt/anva}
@@ -218,7 +218,7 @@ services:
       - --product-image-sha256
       - ${ANVA_IMAGE_SHA256:-invalid-unpinned-image}
       - --product-image-reference
-      - ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.6}
+      - ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.7}
       - --build-input-sha256
       - ${ANVA_BUILD_INPUT_SHA256:-invalid-unpinned-build-input}
       - --launch-manifest
@@ -274,7 +274,7 @@ services:
       - --product-image-sha256
       - ${ANVA_IMAGE_SHA256:-invalid-unpinned-image}
       - --product-image-reference
-      - ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.6}
+      - ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.7}
       - --build-input-sha256
       - ${ANVA_BUILD_INPUT_SHA256:-invalid-unpinned-build-input}
       - --launch-manifest
@@ -330,7 +330,7 @@ services:
       - --product-image-sha256
       - ${ANVA_IMAGE_SHA256:-invalid-unpinned-image}
       - --product-image-reference
-      - ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.6}
+      - ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.7}
       - --build-input-sha256
       - ${ANVA_BUILD_INPUT_SHA256:-invalid-unpinned-build-input}
       - --launch-manifest
@@ -388,7 +388,7 @@ services:
       - --product-image-sha256
       - ${ANVA_IMAGE_SHA256:-invalid-unpinned-image}
       - --product-image-reference
-      - ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.6}
+      - ${ANVA_IMAGE_REPOSITORY:-anva}:${ANVA_VERSION:-0.1.7}
       - --build-input-sha256
       - ${ANVA_BUILD_INPUT_SHA256:-invalid-unpinned-build-input}
       - --launch-manifest
