@@ -1277,12 +1277,22 @@ def _required_search_anchor_candidates(
     repository_id: uuid.UUID,
     anchors: tuple[RequiredSearchAnchor, ...],
     visible_scope_ids: tuple[uuid.UUID, ...] | list[uuid.UUID],
+    source_references: tuple[str, ...] = (),
 ) -> list[PacketCandidate]:
     """Resolve exact search identities in one permission-first, current-lineage query."""
-    if not anchors:
+    if not anchors and not source_references:
         return []
+    if len(source_references) > 50:
+        raise RequiredContextBudgetError("Required source references exceed packet bound")
     anchor_scope_ids = {anchor.access_scope_id for anchor in anchors} & set(visible_scope_ids)
+    if source_references:
+        anchor_scope_ids = set(visible_scope_ids)
     exact_identity = Q()
+    url_field = "source_observation__source_document__canonical_url"
+    for reference in source_references:
+        exact_identity |= Q(**{url_field: reference})
+        if "://" not in reference and not reference.startswith("/"):
+            exact_identity |= Q(**{f"{url_field}__endswith": "/" + reference})
     for anchor in anchors:
         exact_identity |= Q(
             source_chunk_id=anchor.chunk_id,
@@ -1340,7 +1350,20 @@ def _required_search_anchor_candidates(
     )
     resolved_by_key: dict[tuple[object, ...], SourceChunkVisibility] = {}
     ambiguous_keys: set[tuple[object, ...]] = set()
-    for row in rows:
+    resolved_references: set[str] = set()
+    for row in rows[: MAX_REQUIRED_SEARCH_ANCHORS + 1] if source_references else rows:
+        if source_references:
+            url = row.source_observation.source_document.canonical_url
+            resolved_references.update(
+                reference
+                for reference in source_references
+                if url == reference
+                or (
+                    "://" not in reference
+                    and not reference.startswith("/")
+                    and url.endswith("/" + reference)
+                )
+            )
         key = (
             row.source_chunk_id,
             row.source_chunk.content_hash,
@@ -1352,6 +1375,22 @@ def _required_search_anchor_candidates(
         if key in resolved_by_key:
             ambiguous_keys.add(key)
         resolved_by_key[key] = row
+    if source_references:
+        if len(resolved_by_key) > MAX_REQUIRED_SEARCH_ANCHORS:
+            raise RequiredContextBudgetError("Required source excerpts exceed packet bound")
+        if resolved_references != set(source_references):
+            raise RequiredContextBudgetError("One or more required sources are unavailable")
+        anchors = tuple(
+            RequiredSearchAnchor(
+                chunk_id=row.source_chunk_id,
+                content_hash=row.source_chunk.content_hash,
+                access_scope_id=row.access_scope_id,
+                source_location_id=row.source_location_id,
+                source_observation_id=row.source_observation_id,
+                access_snapshot_id=row.access_snapshot_id,
+            )
+            for row in resolved_by_key.values()
+        )
     requested_keys = {
         (
             anchor.chunk_id,
@@ -1425,14 +1464,18 @@ def _open_conflicts_for_assertions(
 ) -> QuerySet[AssertionConflict]:
     """Keep large assertion memberships in bounded PostgreSQL UUID-array binds."""
     ordered_selected_ids = sorted(selected_assertion_ids, key=str)
-    queryset = AssertionConflict.objects.filter(
-        organization_id=actor.organization_id,
-        status=AssertionConflict.Status.OPEN,
-    ).filter(
-        RawSQL(
-            "left_assertion_id = ANY(%s::uuid[]) AND right_assertion_id = ANY(%s::uuid[])",
-            (ordered_selected_ids, ordered_selected_ids),
-            output_field=BooleanField(),
+    queryset = (
+        AssertionConflict.objects.filter(
+            organization_id=actor.organization_id,
+            status=AssertionConflict.Status.OPEN,
+        )
+        .exclude(predicate="documents_heading")
+        .filter(
+            RawSQL(
+                "left_assertion_id = ANY(%s::uuid[]) AND right_assertion_id = ANY(%s::uuid[])",
+                (ordered_selected_ids, ordered_selected_ids),
+                output_field=BooleanField(),
+            )
         )
     )
     if not change_aware:
@@ -2290,6 +2333,7 @@ def _build_context_packet_bounded(
     budget: PacketBudget | None = None,
     retrieval_facets: tuple[RetrievalFacet, ...] | None = None,
     required_search_anchors: tuple[RequiredSearchAnchor, ...] | None = None,
+    required_source_references: tuple[str, ...] = (),
     deadline: float,
     publication_deadline: float | None = None,
     active_deadline: list[float] | None = None,
@@ -2323,6 +2367,29 @@ def _build_context_packet_bounded(
             cursor.execute("SET LOCAL statement_timeout = %s", (remaining_ms,))
             cursor.execute("SET LOCAL lock_timeout = %s", (1_000,))
             cursor.execute("SET LOCAL idle_in_transaction_session_timeout = %s", (5_000,))
+    # Use the existing exact-anchor request contract for server-resolved references.
+    anchored_chunks = None
+    if required_source_references:
+        anchored_chunks = _required_search_anchor_candidates(
+            actor=actor,
+            repository_id=repository_id,
+            anchors=search_anchors,
+            visible_scope_ids=visible_scopes,
+            source_references=required_source_references,
+        )
+        search_anchors = normalize_required_search_anchors(
+            tuple(
+                RequiredSearchAnchor(
+                    chunk_id=cast(uuid.UUID, candidate.source_chunk_id),
+                    content_hash=candidate.citations[0].source_content_hash,
+                    access_scope_id=candidate.citations[0].access_scope_id,
+                    source_location_id=candidate.citations[0].source_location_id,
+                    source_observation_id=candidate.citations[0].source_observation_id,
+                    access_snapshot_id=candidate.citations[0].access_snapshot_id,
+                )
+                for candidate in anchored_chunks
+            )
+        )
     normalized_request: dict[str, object] = {
         "task": normalized_task,
         "phase": normalized_phase,
@@ -2348,6 +2415,7 @@ def _build_context_packet_bounded(
     cache_key = _json_hash(
         {
             "request": normalized_request,
+            "structural_heading_conflicts": False,
             "actor_type": actor.actor_type,
             "actor_id": actor.actor_id,
             "repository_id": str(repository_id),
@@ -2379,12 +2447,13 @@ def _build_context_packet_bounded(
         return cached, False
 
     _set_remaining_statement_timeout(deadline)
-    anchored_chunks = _required_search_anchor_candidates(
-        actor=actor,
-        repository_id=repository_id,
-        anchors=search_anchors,
-        visible_scope_ids=visible_scopes,
-    )
+    if anchored_chunks is None:
+        anchored_chunks = _required_search_anchor_candidates(
+            actor=actor,
+            repository_id=repository_id,
+            anchors=search_anchors,
+            visible_scope_ids=visible_scopes,
+        )
 
     _set_remaining_statement_timeout(deadline)
     assertions = _assertion_candidates(
@@ -2736,6 +2805,7 @@ def _build_context_packet_in_transaction(
     budget: PacketBudget | None = None,
     retrieval_facets: tuple[RetrievalFacet, ...] | None = None,
     required_search_anchors: tuple[RequiredSearchAnchor, ...] | None = None,
+    required_source_references: tuple[str, ...] = (),
     before_commit: Callable[[ContextPacketRecord], None] | None = None,
 ) -> tuple[tuple[ContextPacketRecord, bool], _CommitDeadlineWatchdog]:
     """Build packet rows and arm a watchdog for the caller's immediate COMMIT."""
@@ -2756,6 +2826,7 @@ def _build_context_packet_in_transaction(
                 budget=budget,
                 retrieval_facets=retrieval_facets,
                 required_search_anchors=required_search_anchors,
+                required_source_references=required_source_references,
                 deadline=deadline,
                 publication_deadline=publication_deadline,
                 active_deadline=active_deadline,

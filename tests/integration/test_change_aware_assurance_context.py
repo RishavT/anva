@@ -130,6 +130,117 @@ def _tenant() -> tuple[Organization, Repository, AccessScope, Membership, ActorC
     return organization, repository, scope, membership, actor
 
 
+@pytest.mark.django_db(transaction=True)
+def test_explicit_source_bodies_survive_noisy_fifty_item_packet(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dataclasses import replace
+
+    from anva.core.exceptions import RequiredContextBudgetError
+    from anva.core.services.context_packets import (
+        PacketBudget,
+        _required_search_anchor_candidates,
+        _select,
+    )
+
+    organization, repository, scope, _membership, actor = _tenant()
+    sources = {
+        "docs/decisions/0007-transactional-outbox.md": (
+            "# ADR-0007: Deliver credit notifications through a transactional outbox\n"
+            "## Decision\nEvery event has a stable idempotency key and records delivery attempts.\n"
+            "The delivery adapter must receive that stored idempotency key on every call.\n"
+            "## Consequences\nAn ambiguous timeout may resend, so the gateway must deduplicate.\n"
+        ),
+        "docs/knowledge/incident-2026-041.md": (
+            "# INC-2026-041: Duplicate passenger messages\n"
+            "A worker timeout occurred after the notification gateway accepted 31 messages.\n"
+            "Twelve passengers received duplicate messages.\n"
+            "Actions: retain one outbox row and stable key on retry.\n"
+        ),
+    }
+    for path, body in sources.items():
+        target = tmp_path / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(body)
+    for index in range(60):
+        (tmp_path / f"archive-{index}.md").write_text(
+            f"# Outbox archive {index}\n## Decision\nUnrelated delivery key meeting notes.\n"
+        )
+    _sync(
+        actor=actor,
+        repository=repository,
+        scope=scope,
+        root=tmp_path,
+        monkeypatch=monkeypatch,
+        expected_documents=62,
+    )
+    assert not AssertionConflict.objects.filter(
+        organization=organization,
+        predicate="documents_heading",
+    ).exists()
+    from anva.core.services.ingestion import _retain_conflicts
+
+    decisions = [
+        _policy_assertion(
+            organization=organization,
+            path=path,
+            subject_key="decision:delivery-key",
+            value=value,
+            review_state=KnowledgeAssertion.ReviewState.HUMAN_CONFIRMED,
+            staleness_state="FRESH",
+        )
+        for path, value in zip(
+            sources, ("Retain the stored key", "Replace the stored key"), strict=True
+        )
+    ]
+    _retain_conflicts(decisions[1])
+    assert AssertionConflict.objects.filter(
+        organization=organization,
+        predicate="required_policy",
+    ).exists()
+    references = tuple(sources)
+    candidates = _required_search_anchor_candidates(
+        actor=actor,
+        repository_id=repository.id,
+        anchors=(),
+        visible_scope_ids=(scope.id,),
+        source_references=references,
+    )
+    assert len(candidates) == 2
+    noise = [
+        replace(
+            candidates[0],
+            item_key=f"noise:{index}",
+            required_search_anchor=False,
+            tier=0,
+            summary="Unrelated higher-ranked historical context",
+        )
+        for index in range(60)
+    ]
+    selection = _select([*noise, *candidates], PacketBudget(max_items=50))
+    selected_bodies = "\n".join(candidate.summary for candidate in selection.candidates)
+    assert "stored idempotency key on every call" in selected_bodies
+    assert "Twelve passengers received duplicate messages" in selected_bodies
+    assert len(selection.candidates) <= 50
+    assert all(candidate.citations for candidate in candidates)
+    with pytest.raises(RequiredContextBudgetError):
+        _select(candidates, PacketBudget(max_items=1))
+    # Revocation must never return the old body, even when the source was previously resolved.
+    SourceChunkVisibility.objects.filter(
+        organization=organization,
+        source_observation__source_document__relative_path=references[1],
+    ).update(state=SourceChunkVisibility.State.REVOKED, revoked_at=timezone.now())
+    with pytest.raises(RequiredContextBudgetError, match="unavailable"):
+        _required_search_anchor_candidates(
+            actor=actor,
+            repository_id=repository.id,
+            anchors=(),
+            visible_scope_ids=(scope.id,),
+            source_references=references,
+        )
+
+
 def _materialize_corpus(root: Path) -> None:
     fixture = cast(dict[str, object], json.loads(FIXTURE.read_text()))
     archive_templates = cast(list[str], fixture["archives"])
@@ -334,7 +445,8 @@ def test_conflict_scan_uses_bounded_array_parameters_at_declared_cap() -> None:
     assert candidates == []
     assert cast(Any, candidates).complete is True
     assert captured_parameters
-    assert {len(params) for params in captured_parameters} == {7}
+    # Heading exclusion adds one scalar bind; assertion IDs remain array-bound.
+    assert {len(params) for params in captured_parameters} == {8}
     array_parameters = [
         parameter
         for params in captured_parameters
@@ -865,11 +977,14 @@ def test_assurance_eval_keeps_change_context_and_conflict_ahead_of_archives(
             "external_key": "HC-482",
             "title": "Redact passenger contact fields",
             "summary": "Apply contact_redaction before passenger support event export.",
+            "source_references": ["work.md"],
         }
     )
     work_payload["requirements"][0]["normalized_text"] = (  # type: ignore[index]
         "Passenger email and telephone values are removed from support events."
     )
+    # The imported contract example points at an unrelated, uningested issue URL.
+    work_payload["requirements"][0]["source_references"] = ["work.md"]  # type: ignore[index]
     work = import_work_item(actor=actor, payload=work_payload)
 
     policy_payload = deepcopy(EXAMPLES["policy"])

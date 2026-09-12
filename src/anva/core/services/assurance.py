@@ -1832,6 +1832,26 @@ def _start_assurance_bound_in_transaction(
         phase="ASSURANCE",
         budget=PacketBudget(max_items=50, max_tokens=8_000, max_bytes=100_000),
         retrieval_facets=retrieval_facets,
+        required_source_references=tuple(
+            sorted(
+                {
+                    reference
+                    for references in (
+                        [
+                            work_revision.source_references,
+                            *Requirement.objects.filter(
+                                organization=work_revision.organization,
+                                work_item_revision=work_revision,
+                            ).values_list("source_references", flat=True),
+                        ]
+                        if work_revision is not None
+                        else []
+                    )
+                    for reference in references
+                    if isinstance(reference, str) and reference
+                }
+            )
+        ),
         before_commit=finalize_context,
     )
     watchdogs.append(watchdog)

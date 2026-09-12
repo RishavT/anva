@@ -23,6 +23,21 @@ revision, evaluator/prompt versions, and a SHA-256 delivery key are pinned into 
 unchanged canonical replay returns the existing run/task; a changed exact input retains and stales
 the previous current result.
 
+Explicit `source_references` on the pinned work revision and its requirements reserve
+substantive source chunks in the review packet. References resolve against current,
+authorized sources in the same repository, by exact canonical URL or relative path
+suffix; Anva does not fetch these references from the network. Document headings
+do not substitute for the source body or constitute contradictory decisions merely
+because their text differs.
+
+The existing 50-item, 8,000-token, 100,000-byte packet limits still apply, including
+mandatory policies. At most 50 references and 50 resolved source chunks are supported.
+Every chunk of each referenced source must fit: an oversized, missing, or unavailable
+source fails explicitly instead of silently supplying a partial document. Unavailable
+source errors do not distinguish absence from lack of permission. Reduce the governed
+source scope or correct its access/ingestion before retrying; do not increase evaluator
+permissions just to make a review pass.
+
 ## Manual evaluator
 
 Claim into a fresh, context-limited review process with a separate `assurance.review` principal.

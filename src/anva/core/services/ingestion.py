@@ -608,6 +608,9 @@ def _persist_relationships(
 
 
 def _retain_conflicts(assertion: KnowledgeAssertion) -> None:
+    # A document contains many headings; unequal headings are not competing facts.
+    if assertion.predicate == "documents_heading":
+        return
     contradictory = KnowledgeAssertion.objects.filter(
         organization=assertion.organization,
         access_scope=assertion.access_scope,
