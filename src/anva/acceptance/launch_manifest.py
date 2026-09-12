@@ -37,11 +37,11 @@ DEPENDENCY_IMAGES = {
         "a36250871de0833b8757561c72f2477ef1ddd1101afa4e617fb552e0de514c6b"
     ),
     "minio": (
-        "minio/minio:RELEASE.2025-07-23T15-54-02Z@sha256:"
+        "quay.io/minio/minio:RELEASE.2025-07-23T15-54-02Z@sha256:"
         "d249d1fb6966de4d8ad26c04754b545205ff15a62e4fd19ebd0f26fa5baacbc0"
     ),
     "minio-init": (
-        "minio/mc:RELEASE.2025-07-21T05-28-08Z@sha256:"
+        "quay.io/minio/mc:RELEASE.2025-07-21T05-28-08Z@sha256:"
         "fb8f773eac8ef9d6da0486d5dec2f42f219358bcb8de579d1623d518c9ebd4cc"
     ),
 }
