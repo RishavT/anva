@@ -1,0 +1,59 @@
+Using CPython 3.12.14 interpreter at: /app/.venv/bin/python
+Resolved 22 packages in 5.55s
+Downloading pygments (1.2MiB)
+Downloading ruff (12.4MiB)
+Downloading selenium (9.0MiB)
+ Downloading pygments
+ Downloading selenium
+ Downloading ruff
+Prepared 22 packages in 39.48s
+Installed 22 packages in 77ms
+Bytecode compiled 1012 files in 2.41s
+ + attrs==26.1.0
+ + certifi==2026.7.22
+ + h11==0.16.0
+ + idna==3.20
+ + iniconfig==2.3.1
+ + outcome==1.3.0.post0
+ + packaging==26.3
+ + pluggy==1.6.0
+ + pygments==2.21.0
+ + pysocks==1.7.1
+ + pytest==8.4.1
+ + pytest-django==4.11.1
+ + ruff==0.12.9
+ + selenium==4.34.2
+ + sniffio==1.3.1
+ + sortedcontainers==2.4.0
+ + trio==0.30.0
+ + trio-websocket==0.12.2
+ + typing-extensions==4.14.1
+ + urllib3==2.5.0
+ + websocket-client==1.8.0
+ + wsproto==1.3.2
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-8.4.1, pluggy-1.6.0 -- /app/.venv/bin/python
+cachedir: /tmp/pytest-cache
+django: version: 5.2.13, settings: anva.config.settings (from ini)
+rootdir: /workspace
+configfile: pyproject.toml
+plugins: django-4.11.1, anyio-4.14.2
+collecting ... collected 16 items / 3 deselected / 13 selected
+
+tests/browser/test_canvas_browser.py::test_canvas_path_wait_requires_submitted_trace[/app/canvas?view=old-True-2-False] PASSED [  7%]
+tests/browser/test_canvas_browser.py::test_canvas_path_wait_requires_submitted_trace[/app/canvas?path_from=old&path_to=target-True-2-False] PASSED [ 15%]
+tests/browser/test_canvas_browser.py::test_canvas_path_wait_requires_submitted_trace[/app/canvas?path_from=source&path_to=old-True-2-False] PASSED [ 23%]
+tests/browser/test_canvas_browser.py::test_canvas_path_wait_requires_submitted_trace[/other?path_from=source&path_to=target-True-2-False] PASSED [ 30%]
+tests/browser/test_canvas_browser.py::test_canvas_path_wait_requires_submitted_trace[/app/canvas?path_from=source&path_to=target-False-2-False] PASSED [ 38%]
+tests/browser/test_canvas_browser.py::test_canvas_path_wait_requires_submitted_trace[/app/canvas?path_from=source&path_to=target-True-1-False] PASSED [ 46%]
+tests/browser/test_canvas_browser.py::test_canvas_path_wait_requires_submitted_trace[/app/canvas?path_from=source&path_to=target-True-2-True] PASSED [ 53%]
+tests/browser/test_canvas_browser.py::test_canvas_path_wait_retries_navigation_races[error0] PASSED [ 61%]
+tests/browser/test_canvas_browser.py::test_canvas_path_wait_retries_navigation_races[error1] PASSED [ 69%]
+tests/browser/test_canvas_browser.py::test_canvas_path_wait_does_not_hide_browser_failure[non-navigation browser failure] PASSED [ 76%]
+tests/browser/test_canvas_browser.py::test_canvas_path_wait_does_not_hide_browser_failure[Node with given id does not belong to the document] PASSED [ 84%]
+tests/browser/test_canvas_browser.py::test_canvas_interactive_wait_predicate_retries_only_navigation_races PASSED [ 92%]
+tests/browser/test_canvas_browser.py::test_canvas_navigation_wait_does_not_accept_the_old_interactive_page PASSED [100%]
+
+======================= 13 passed, 3 deselected in 0.40s =======================
+All checks passed!
+1 file already formatted

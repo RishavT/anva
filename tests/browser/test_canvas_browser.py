@@ -9,10 +9,12 @@ import platform
 import uuid
 import warnings
 from datetime import timedelta
+from functools import partial
 from pathlib import Path
 from shutil import which
 from typing import cast
 from unittest.mock import Mock
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from django.utils import timezone
@@ -368,6 +370,77 @@ def _canvas_navigation_is_interactive(driver: webdriver.Chrome, *, previous_url:
     except WebDriverException:
         return False
     return _canvas_is_interactive(driver)
+
+
+def _canvas_path_results_ready(driver: webdriver.Chrome, *, source: str, target: str) -> bool:
+    """Read only the new document, and require the submitted trace before accepting results."""
+    try:
+        location = urlsplit(driver.current_url)
+        query = parse_qs(location.query)
+        if (
+            location.path != "/app/canvas"
+            or query.get("path_from") != [source]
+            or query.get("path_to") != [target]
+        ):
+            return False
+        return (
+            _canvas_is_interactive(driver)
+            and len(driver.find_elements(By.CSS_SELECTOR, ".canvas-path-result li")) >= 2
+        )
+    except (NoSuchElementException, StaleElementReferenceException):
+        return False
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "url,interactive,result_count,expected",
+    [
+        ("/app/canvas?view=old", True, 2, False),
+        ("/app/canvas?path_from=old&path_to=target", True, 2, False),
+        ("/app/canvas?path_from=source&path_to=old", True, 2, False),
+        ("/other?path_from=source&path_to=target", True, 2, False),
+        ("/app/canvas?path_from=source&path_to=target", False, 2, False),
+        ("/app/canvas?path_from=source&path_to=target", True, 1, False),
+        ("/app/canvas?path_from=source&path_to=target", True, 2, True),
+    ],
+)
+def test_canvas_path_wait_requires_submitted_trace(
+    url: str, interactive: bool, result_count: int, expected: bool
+) -> None:
+    driver = Mock(spec=webdriver.Chrome)
+    driver.current_url = f"http://web:8000{url}"
+    driver.find_element.return_value.get_attribute.return_value = str(interactive).lower()
+    driver.find_elements.return_value = [Mock() for _ in range(result_count)]
+    assert (
+        _canvas_path_results_ready(cast(webdriver.Chrome, driver), source="source", target="target")
+        is expected
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("error", [NoSuchElementException(), StaleElementReferenceException()])
+def test_canvas_path_wait_retries_navigation_races(error: Exception) -> None:
+    driver = Mock(spec=webdriver.Chrome)
+    driver.current_url = "http://web:8000/app/canvas?path_from=source&path_to=target"
+    driver.find_element.return_value.get_attribute.return_value = "true"
+    driver.find_elements.side_effect = [error, [Mock(), Mock()]]
+    typed_driver = cast(webdriver.Chrome, driver)
+    assert _canvas_path_results_ready(typed_driver, source="source", target="target") is False
+    assert _canvas_path_results_ready(typed_driver, source="source", target="target") is True
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "message",
+    ["non-navigation browser failure", "Node with given id does not belong to the document"],
+)
+def test_canvas_path_wait_does_not_hide_browser_failure(message: str) -> None:
+    driver = Mock(spec=webdriver.Chrome)
+    driver.current_url = "http://web:8000/app/canvas?path_from=source&path_to=target"
+    driver.find_element.return_value.get_attribute.return_value = "true"
+    driver.find_elements.side_effect = WebDriverException(message)
+    with pytest.raises(WebDriverException, match=message):
+        _canvas_path_results_ready(cast(webdriver.Chrome, driver), source="source", target="target")
 
 
 def test_canvas_interactive_wait_predicate_retries_only_navigation_races() -> None:
@@ -894,12 +967,8 @@ def test_organizational_canvas_interaction_no_js_and_responsive_evidence(
             Select(path_form.find_element(By.NAME, "path_from")).select_by_value(str(source.id))
             Select(path_form.find_element(By.NAME, "path_to")).select_by_value(str(target.id))
             path_form.find_element(By.CSS_SELECTOR, 'button[type="submit"]').click()
-            wait.until(expected_conditions.staleness_of(path_form))
             wait.until(
-                lambda current: len(
-                    current.find_elements(By.CSS_SELECTOR, ".canvas-path-result li")
-                )
-                >= 2
+                partial(_canvas_path_results_ready, source=str(source.id), target=str(target.id))
             )
             assert len(driver.find_elements(By.CSS_SELECTOR, ".canvas-path-result li")) >= 2
         path_result = driver.find_element(By.CSS_SELECTOR, ".canvas-path-result")
